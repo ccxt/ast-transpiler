@@ -76,6 +76,10 @@ const config = [
         language: "php",
         async: true
     },
+    {
+        language: "java",
+        async: true
+    },
 ]
 
 const result = transpiler.transpileDifferentLanguagesByPath(config as any, file);
@@ -86,11 +90,14 @@ const phpRes = `<?php\n${result[2].content}\n?>`;
 const pythonAsync = result[1].content;
 
 const csharp = result[0].content;
+const java = result[3].content;
+
 const PHP_OUTPUT = "./out/output.php";
 const PHP_SYNC_OUTPUT = "./out/output-sync.php";
 const PYTHON_OUTPUT = "./out/output.py";
 const PYTHON_SYNC_OUTPUT = "./out/output-sync.py";
 const CSHARP_OUTPUT = "./out/output.cs";
+const JAVA_OUTPUT = "./out/output.java";
 
 writeFileSync(PHP_OUTPUT, phpRes);
 // // writeFileSync(PYTHON_OUTPUT, pythonRes.content ?? "");
@@ -99,6 +106,8 @@ writeFileSync(PYTHON_OUTPUT, pythonAsync ?? "");
 // writeFileSync(PHP_SYNC_OUTPUT, phpSyncRes);
 
 writeFileSync(CSHARP_OUTPUT, csharp);
+
+writeFileSync(JAVA_OUTPUT, java);
 
 console.log("TRANSPILED!!");
 

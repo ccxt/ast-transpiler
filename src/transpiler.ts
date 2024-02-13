@@ -3,6 +3,7 @@ import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
 import { CSharpTranspiler } from './csharpTranspiler.js';
+import { JavaTranspiler } from './javaTranspiler.js';
 import * as path from "path";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
@@ -47,11 +48,13 @@ export default class Transpiler {
     pythonTranspiler: PythonTranspiler;
     phpTranspiler: PhpTranspiler;
     csharpTranspiler: CSharpTranspiler;
+    javaTranspiler: JavaTranspiler;
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
+        const javaConfig = config["java"] || {};
 
         if ("verbose" in config) {
             Logger.setVerboseMode(config['verbose']);
@@ -60,6 +63,7 @@ export default class Transpiler {
         this.pythonTranspiler = new PythonTranspiler(pythonConfig);
         this.phpTranspiler = new PhpTranspiler(phpConfig);
         this.csharpTranspiler = new CSharpTranspiler(csharpConfig);
+        this.javaTranspiler = new JavaTranspiler(javaConfig);
     }
 
     setVerboseMode(verbose: boolean) {
@@ -121,6 +125,9 @@ export default class Transpiler {
             break;
         case Languages.CSharp:
             transpiledContent = this.csharpTranspiler.printNode(global.src, -1);
+            break;
+        case Languages.Java:
+            transpiledContent = this.javaTranspiler.printNode(global.src, -1);
         }
         let imports = [];
         let exports = [];
@@ -217,8 +224,16 @@ export default class Transpiler {
         return this.transpile(Languages.CSharp, TranspilationMode.ByContent, content);
     }
 
+    transpileJava(content): ITranspiledFile {
+        return this.transpile(Languages.Java, TranspilationMode.ByContent, content);
+    }
+
     transpileCSharpByPath(path): ITranspiledFile {
         return this.transpile(Languages.CSharp, TranspilationMode.ByPath, path);
+    }
+
+    transpileJavaByPath(path): ITranspiledFile {
+        return this.transpile(Languages.Java, TranspilationMode.ByPath, path);
     }
 
     getFileImports(content: string): IFileImport[] {
@@ -263,6 +278,8 @@ export default class Transpiler {
             return Languages.Php;
         case "csharp":
             return Languages.CSharp;
+        case "java":
+            return Languages.Java;
         }
     }
 }
