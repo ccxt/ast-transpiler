@@ -3,11 +3,11 @@ import ts, { TypeChecker } from 'typescript';
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
-    'OBJECT_OPENING': 'new Dictionary<string, object>() {',
-    'ARRAY_OPENING_TOKEN': 'new List<object>() {',
+    'OBJECT_OPENING': 'new HashMap<String, Object>() {',
+    'ARRAY_OPENING_TOKEN': 'new ArrayList<Object>() {',
     'ARRAY_CLOSING_TOKEN': '}',
     'PROPERTY_ASSIGNMENT_TOKEN': ',',
-    'VAR_TOKEN': 'object', // object
+    'VAR_TOKEN': 'Object', // object
     'METHOD_TOKEN': '',
     'PROPERTY_ASSIGNMENT_OPEN': '{',
     'PROPERTY_ASSIGNMENT_CLOSE': '}',
@@ -89,7 +89,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
         this.FullPropertyAccessReplacements = {
             'JSON.parse': 'parseJson', // custom helper method
-            'console.log': 'Console.WriteLine',
+            'console.log':  'System.out.println',
             'Number.MAX_SAFE_INTEGER': 'Int32.MaxValue',
             'Math.min': 'Math.Min',
             'Math.max': 'Math.Max',
@@ -270,7 +270,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const parsedArg = node.arguments?.length > 0 ? node.arguments.map(n => this.printNode(n, identation).trimStart()).join(", ") : "";
             const target = this.printNode(elementAccess.expression, 0);
             const propName = this.printNode(elementAccess.argumentExpression, 0);
-            const argsArray = `new object[] { ${parsedArg} }`;
+            const argsArray = `new Object[] { ${parsedArg} }`;
             const open = this.DYNAMIC_CALL_OPEN;
             let statement = `${open}${target}, ${propName}, ${argsArray})`;
             statement = isAsync ? `((Task<object>)${statement})` : statement;
@@ -379,7 +379,7 @@ export class JavaTranspiler extends BaseTranspiler {
         case "boolean":
             return notOperator + `(${target} is bool)`;
         case "object":
-            return notOperator + `(${target} is IDictionary<string, object>)`;
+            return notOperator + `(${target} instanceof Map)`;
         case "function":
             return notOperator + `(${target} is Delegate)`;
         }
@@ -419,7 +419,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 const castExp = parsedType ? `(${parsedType})` : "";
 
                 // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = ((IList<object>)${syntheticName})[${index}]`;
+                const statement = this.getIden(identation) + `${e} = ((List<Object>)${syntheticName})[${index}]`;
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + ";\n";
                 } else {
@@ -500,7 +500,7 @@ export class JavaTranspiler extends BaseTranspiler {
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
                 // const parsedType = this.getTypeFromRawType(type);
-                const statement = this.getIden(identation) + `var ${e} = ((IList<object>) ${syntheticName})[${index}]`;
+                const statement = this.getIden(identation) + `var ${e} = ((List<Object>) ${syntheticName})[${index}]`;
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + ";\n";
                 } else {
@@ -542,7 +542,7 @@ export class JavaTranspiler extends BaseTranspiler {
             rawExpression = this.isStringType(type.flags) ? `((string)${leftSide}).Length` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
-            rawExpression = `((IList<object>)${leftSide}).Add`;
+            rawExpression = `((List<Object>)${leftSide}).Add`;
             break;
             // case 'push':
             //     rawExpression = `(List<object>${leftSide}).Add`s
@@ -643,7 +643,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
         if (type.kind === ts.SyntaxKind.ArrayType) {
             if (type.elementType.kind === ts.SyntaxKind.AnyKeyword) {
-                return `(IList<object>)(${this.printNode(node.expression, identation)})`;
+                return `(List<Object>)(${this.printNode(node.expression, identation)})`;
             }
             if (type.elementType.kind === ts.SyntaxKind.StringKeyword) {
                 return `(IList<string>)(${this.printNode(node.expression, identation)})`;
@@ -780,11 +780,11 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
+        return `new ArrayList<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return `new List<object>(((IDictionary<string,object>)${parsedArg}).Values)`;
+        return `new ArrayList<object>(((IDictionary<string,object>)${parsedArg}).Values)`;
     }
 
     printJsonParseCall(node, identation, parsedArg = undefined) {
@@ -816,7 +816,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return  `((IList<object>)${name}).Add(${parsedArg})`;
+        return  `((List<Object>)${name}).Add(${parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -840,7 +840,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `String.Join(${parsedArg}, ((IList<object>)${name}).ToArray())`;
+        return `String.Join(${parsedArg}, ((List<Object>)${name}).ToArray())`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -864,15 +864,15 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printShiftCall(node, identation, name = undefined) {
-        return `((IList<object>)${name}).First()`;
+        return `((List<Object>)${name}).First()`;
     }
 
     printReverseCall(node, identation, name = undefined) {
-        return `((IList<object>)${name}).Reverse()`;
+        return `((List<Object>)${name}).Reverse()`;
     }
 
     printPopCall(node, identation, name = undefined) {
-        return `((IList<object>)${name}).Last()`;
+        return `((List<Object>)${name}).Last()`;
     }
 
     printAssertCall(node, identation, parsedArgs) {
