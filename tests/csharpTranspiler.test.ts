@@ -898,7 +898,7 @@ describe('csharp transpiling tests', () => {
     });
     test('should convert delete', () => {
         const ts = "delete someObject[key];";
-        const csharp = "someObject.Remove(key);";
+        const csharp = "((IDictionary<string, object>)someObject.Remove((string)key);";
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     });
