@@ -441,7 +441,7 @@ describe('csharp transpiling tests', () => {
         "x[\"teste\"] = 1;";
         const csharp =
         "object x = new Dictionary<string, object>() {};\n" +
-        "((Dictionary<string, object>)x)[\"teste\"] = 1;";
+        "((IDictionary<string,object>)x)[\"teste\"] = 1;";
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -453,7 +453,7 @@ describe('csharp transpiling tests', () => {
         const csharp =
         "object a = new Dictionary<string, object>() {};\n" +
         "object b = getValue(a, \"teste\");\n" +
-        "((Dictionary<string, object>)a)[\"b\"] = getValue(a, \"teste\");"
+        "((IDictionary<string,object>)a)[\"b\"] = getValue(a, \"teste\");"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
