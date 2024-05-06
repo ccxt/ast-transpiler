@@ -76,6 +76,10 @@ const config = [
         language: "php",
         async: true
     },
+    {
+        language: "cpp",
+        async: true
+    }
 ]
 
 const result = transpiler.transpileDifferentLanguagesByPath(config as any, file);
@@ -92,6 +96,16 @@ const PYTHON_OUTPUT = "./out/output.py";
 const PYTHON_SYNC_OUTPUT = "./out/output-sync.py";
 const CSHARP_OUTPUT = "./out/output.cs";
 
+const cppRes = result[3].content;
+
+const cppImports = [
+    '#include <iostream>',
+    '#include <any>',
+    '#include <string>',
+    '#include <vector>'
+]
+const cppContentWithImports = cppImports.join("\n") + "\n" + cppRes;
+
 writeFileSync(PHP_OUTPUT, phpRes);
 // // writeFileSync(PYTHON_OUTPUT, pythonRes.content ?? "");
 writeFileSync(PYTHON_OUTPUT, pythonAsync ?? "");
@@ -99,6 +113,8 @@ writeFileSync(PYTHON_OUTPUT, pythonAsync ?? "");
 // writeFileSync(PHP_SYNC_OUTPUT, phpSyncRes);
 
 writeFileSync(CSHARP_OUTPUT, csharp);
+
+writeFileSync("./out/output.cpp", cppContentWithImports);
 
 console.log("TRANSPILED!!");
 

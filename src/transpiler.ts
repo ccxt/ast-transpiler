@@ -3,7 +3,7 @@ import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
 import { CSharpTranspiler } from './csharpTranspiler.js';
-import { CppTranspiler } from 'cppTranspiler.js';
+import { CppTranspiler } from './cppTranspiler.js';
 import * as path from "path";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
