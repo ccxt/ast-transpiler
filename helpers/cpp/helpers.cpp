@@ -295,3 +295,55 @@ std::any divide(const std::any& a, const std::any& b) {
 
     return std::any{};
 }
+
+
+bool isGreaterThan(const std::any& a, const std::any& b) {
+    if (a.has_value() && !b.has_value()) {
+        return true;
+    } else if (!a.has_value() || !b.has_value()) {
+        return false;
+    }
+
+    std::any norm_a = normalizeIntIfNeeded(a);
+    std::any norm_b = normalizeIntIfNeeded(b);
+
+    try {
+        if (norm_a.type() == typeid(int64_t) && norm_b.type() == typeid(int64_t)) {
+            return std::any_cast<int64_t>(norm_a) > std::any_cast<int64_t>(norm_b);
+        }
+
+        if (norm_a.type() == typeid(int) && norm_b.type() == typeid(int)) {
+            return std::any_cast<int>(norm_a) > std::any_cast<int>(norm_b);
+        }
+
+        if ((norm_a.type() == typeid(double) || norm_a.type() == typeid(int64_t)) &&
+            (norm_b.type() == typeid(double) || norm_b.type() == typeid(int64_t))) {
+            double a_val = (norm_a.type() == typeid(double)) ? std::any_cast<double>(norm_a) : static_cast<double>(std::any_cast<int64_t>(norm_a));
+            double b_val = (norm_b.type() == typeid(double)) ? std::any_cast<double>(norm_b) : static_cast<double>(std::any_cast<int64_t>(norm_b));
+            return a_val > b_val;
+        }
+
+        if (norm_a.type() == typeid(std::string) && norm_b.type() == typeid(std::string)) {
+            return std::any_cast<std::string>(norm_a) > std::any_cast<std::string>(norm_b);
+        }
+
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Bad any cast occurred." << std::endl;
+    }
+
+    return false;
+}
+
+bool isLessThan(const std::any& a, const std::any& b) {
+    return !isGreaterThan(a, b) && !isEqual(a, b);
+}
+
+// Function to check if a is greater than or equal to b
+bool isGreaterThanOrEqual(const std::any& a, const std::any& b) {
+    return isGreaterThan(a, b) || isEqual(a, b);
+}
+
+// Function to check if a is less than or equal to b
+bool isLessThanOrEqual(const std::any& a, const std::any& b) {
+    return isLessThan(a, b) || isEqual(a, b);
+}
