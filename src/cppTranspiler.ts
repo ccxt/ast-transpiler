@@ -3,8 +3,8 @@ import ts, { TypeChecker } from 'typescript';
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
-    'OBJECT_OPENING': 'new Dictionary<string, object>() {',
-    'ARRAY_OPENING_TOKEN': 'new List<object>() {',
+    'OBJECT_OPENING': 'std::unordered_map<std::string, std::any> {',
+    'ARRAY_OPENING_TOKEN': 'std::vector<std::any>{',
     'ARRAY_CLOSING_TOKEN': '}',
     'PROPERTY_ASSIGNMENT_TOKEN': ',',
     'VAR_TOKEN': 'std::any', // object
@@ -49,8 +49,10 @@ const parserConfig = {
     'MOD_WRAPPER_OPEN': 'mod(',
     'MOD_WRAPPER_CLOSE': ')',
     'FUNCTION_TOKEN': '',
+    'DEFAULT_PARAMETER_TYPE': 'std::any',
     'INFER_VAR_TYPE': false,
     'INFER_ARG_TYPE': false,
+    'UNDEFINED_TOKEN': 'NULL',
 };
 
 export class CppTranspiler extends BaseTranspiler {
@@ -67,7 +69,7 @@ export class CppTranspiler extends BaseTranspiler {
         this.asyncTranspiling = true;
         this.supportsFalsyOrTruthyValues = false;
         this.requiresCallExpressionCast = true;
-        this.id = "C++";
+        this.id = "c++";
 
 
         this.initConfig();
@@ -752,17 +754,11 @@ export class CppTranspiler extends BaseTranspiler {
 
         let returnType = this.printFunctionType(node);
 
-        let modifiers = this.printModifiers(node);
-        const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " ": "";
-        modifiers = modifiers ? modifiers + " " : defaultAccess; // tmp check this
-
-        modifiers = modifiers.indexOf("public") === -1 && modifiers.indexOf("private") === -1 && modifiers.indexOf("protected") === -1 ? defaultAccess + modifiers : modifiers;
-
         let parsedArgs = undefined;
         // c# only move this elsewhere (csharp transpiler)
         const methodOverride = this.getMethodOverride(node) as any;
         const isOverride = methodOverride !== undefined;
-        modifiers = isOverride ? modifiers + "override " : modifiers + "virtual ";
+        // modifiers = isOverride ? modifiers + "override " : modifiers + "virtual ";
 
         // infer parent return type
         if (isOverride && (returnType === "object" || returnType === "Task<object>")) {
@@ -797,7 +793,7 @@ export class CppTranspiler extends BaseTranspiler {
         returnType = returnType ? returnType + " " : returnType;
 
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-        const methodDef = this.getIden(identation) + modifiers + returnType + methodToken + name
+        const methodDef = this.getIden(identation) + returnType + methodToken + name
             + "(" + parsedArgs + ")";
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
@@ -1043,6 +1039,23 @@ export class CppTranspiler extends BaseTranspiler {
         // // const args = node.expression?.arguments.map(n => this.printNode(n, 0)).join(",");
         // // const throwExpression = ` ${newToken}${newExpression}${this.LEFT_PARENTHESIS}((string)${args})${this.RIGHT_PARENTHESIS}`;
         // return this.getIden(identation) + this.THROW_TOKEN + throwExpression + this.LINE_TERMINATOR;
+    }
+
+
+    castToDict(elem: string) {
+        return `std::any_cast<std::unordered_map<std::string, std::any>&>(${elem})`;
+    }
+
+    castToList(elem: string) {
+        return `std::any_cast<std::vector<std::any>&>(${elem})`;
+    }
+
+    castToString(elem: string) {
+        return `std::any_cast<std::string>(${elem})`;
+    }
+
+    castToInt(elem: string) {
+        return `std::any_cast<int>(${elem})`;
     }
 
     // printLeadingComments(node, identation) {

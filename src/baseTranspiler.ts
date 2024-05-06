@@ -1424,8 +1424,9 @@ class BaseTranspiler {
         if (!isLeftSideOfAssignment && this.ELEMENT_ACCESS_WRAPPER_OPEN && this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
             return `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${expressionAsString}, ${argumentAsString}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
         }
+        // to do dry this logic and move it to the proper class
         // cast order["test"] to ((Dictionariy<string, object>)order)["test"] or List<object>
-        if (isLeftSideOfAssignment && this.ELEMENT_ACCESS_WRAPPER_OPEN && this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
+        if (isLeftSideOfAssignment && (this.id === "C#" || this.id === "c++")) {
             const type = global.checker.getTypeAtLocation(argumentExpression);
             const isString = this.isStringType(type.flags);
 
@@ -1433,12 +1434,22 @@ class BaseTranspiler {
             if (type.flags === ts.TypeFlags.Union) {
                 isUnionString = this.isStringType(type?.types[0].flags);
             }
-
-            if (isString || isUnionString || type.flags === ts.TypeFlags.Any) { // default to string when unknown
-                const cast = ts.isStringLiteralLike(argumentExpression) ? "" : '(string)';
-                return `((IDictionary<string,object>)${expressionAsString})[${cast}${argumentAsString}]`;
+            if (this.id === "C#") {
+                if (isString || isUnionString || type.flags === ts.TypeFlags.Any) { // default to string when unknown
+                    const cast = ts.isStringLiteralLike(argumentExpression) ? "" : '(string)';
+                    return `((IDictionary<string,object>)${expressionAsString})[${cast}${argumentAsString}]`;
+                }
+                return `((${this.ARRAY_KEYWORD})${expressionAsString})[Convert.ToInt32(${argumentAsString})]`;
+            } else if (this.id === "c++") {
+                if (isString || isUnionString || type.flags === ts.TypeFlags.Any) { // default to string when unknown
+                    return `${this.castToDict(expressionAsString)}[${this.castToString(argumentAsString)}]`;
+                }
+                if (type.flags === ts.TypeFlags.Number || type.flags === ts.TypeFlags.NumberLiteral) {
+                    return `${this.castToList(expressionAsString)}[${(argumentAsString)}]`;
+                }
+                return `${this.castToList(expressionAsString)}[${this.castToInt(argumentAsString)}]`;
             }
-            return `((${this.ARRAY_KEYWORD})${expressionAsString})[Convert.ToInt32(${argumentAsString})]`;
+
         }
 
         return expressionAsString + "[" + argumentAsString + "]";
@@ -2054,6 +2065,22 @@ class BaseTranspiler {
         });
 
         return result;
+    }
+
+    castToDict(elem: string) {
+        return undefined;
+    }
+
+    castToList(elem: string) {
+        return undefined;
+    }
+
+    castToString(elem: string) {
+        return undefined;
+    }
+
+    castToInt(elem: string) {
+        return undefined;
     }
 }
 
