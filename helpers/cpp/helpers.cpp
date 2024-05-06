@@ -401,3 +401,32 @@ std::any mathMin(const std::any& a, const std::any& b) {
 
     return std::any{};
 }
+
+
+int getArrayLength(const std::any& value) {
+    if (!value.has_value()) {
+        return 0;
+    }
+
+    // Check for vector of std::any
+    if (value.type() == typeid(std::vector<std::any>)) {
+        return std::any_cast<const std::vector<std::any>&>(value).size();
+    }
+
+    // Check for vector of strings
+    if (value.type() == typeid(std::vector<std::string>)) {
+        return std::any_cast<const std::vector<std::string>&>(value).size();
+    }
+
+    // Check for vector of dict (custom type)
+    if (value.type() == typeid(std::vector<dict>)) {
+        return std::any_cast<const std::vector<dict>&>(value).size();
+    }
+
+    // Check for string
+    if (value.type() == typeid(std::string)) {
+        return std::any_cast<const std::string&>(value).length();
+    }
+
+    return 0;
+}
