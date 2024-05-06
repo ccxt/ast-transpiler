@@ -41,6 +41,7 @@ enum Languages {
     Python,
     Php,
     CSharp,
+    Cpp
 }
 
 enum TranspilationMode {
