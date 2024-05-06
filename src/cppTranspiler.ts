@@ -233,6 +233,32 @@ export class CppTranspiler extends BaseTranspiler {
         return this.transformIdentifier(idValue); // check this later
     }
 
+    printClass(node, identation) {
+
+        const classDefinition = this.printClassDefinition(node, identation);
+
+        const classBody = this.printClassBody(node, identation);
+
+        const classClosing = this.getBlockClose(identation);
+
+        return classDefinition + classBody + classClosing + ';';
+    }
+
+    printClassDefinition(node, identation) {
+        const className = node.name.escapedText;
+        const heritageClauses = node.heritageClauses;
+
+        let classInit = "";
+        const classOpening = this.getBlockOpen(identation);
+        if (heritageClauses !== undefined) {
+            const classExtends = heritageClauses[0].types[0].expression.escapedText;
+            classInit = this.getIden(identation) + "class " + className + ": public " + classExtends + classOpening;
+        } else {
+            classInit = this.getIden(identation) + "class " + className + classOpening;
+        }
+        return classInit;
+    }
+
     printConstructorDeclaration (node, identation) {
         const classNode = node.parent;
         const className = this.printNode(classNode.name, 0);
