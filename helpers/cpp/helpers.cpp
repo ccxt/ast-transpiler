@@ -418,10 +418,10 @@ int getArrayLength(const std::any& value) {
         return std::any_cast<const std::vector<std::string>&>(value).size();
     }
 
-    // Check for vector of dict (custom type)
-    if (value.type() == typeid(std::vector<dict>)) {
-        return std::any_cast<const std::vector<dict>&>(value).size();
-    }
+    // // Check for vector of dict (custom type)
+    // if (value.type() == typeid(std::vector<dict>)) {
+    //     return std::any_cast<const std::vector<dict>&>(value).size();
+    // }
 
     // Check for string
     if (value.type() == typeid(std::string)) {
