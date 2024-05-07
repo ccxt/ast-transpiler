@@ -643,3 +643,234 @@ std::any prefixUnaryPlus(std::any& a) {
     }
     return a;
 }
+
+std::string toString(const std::any& value) {
+    if (!value.has_value()) {
+        return "null";
+    }
+
+    try {
+        if (value.type() == typeid(int)) {
+            return std::to_string(std::any_cast<int>(value));
+        } else if (value.type() == typeid(double)) {
+            return std::to_string(std::any_cast<double>(value));
+        } else if (value.type() == typeid(std::string)) {
+            return std::any_cast<std::string>(value);
+        } else if (value.type() == typeid(bool)) {
+            return std::any_cast<bool>(value) ? "true" : "false";
+        } else {
+            return "Unsupported type";
+        }
+    } catch (const std::bad_any_cast&) {
+        return "Error casting";
+    }
+}
+
+std::string toUpper(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+    return result;
+}
+
+std::string toLower(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return result;
+}
+
+
+bool StartsWith(const std::string& str, const std::string& prefix) {
+    return str.rfind(prefix, 0) == 0;
+}
+
+bool startsWith(std::any str_any, std::any prefix_any) {
+    try {
+        // Cast std::any to std::string
+        std::string str = std::any_cast<std::string>(str_any);
+        std::string prefix = std::any_cast<std::string>(prefix_any);
+
+        // Check if str starts with prefix
+        return StartsWith(str, prefix);
+    } catch (const std::bad_any_cast&) {
+        // Handle incorrect type casts
+        std::cerr << "Invalid types for StartsWith function" << std::endl;
+        return false;
+    }
+}
+
+bool EndsWith(const std::string& str, const std::string& suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// Function to check if a std::any string ends with another std::any string
+bool endsWith(std::any str_any, std::any suffix_any) {
+    try {
+        // Cast std::any to std::string
+        std::string str = std::any_cast<std::string>(str_any);
+        std::string suffix = std::any_cast<std::string>(suffix_any);
+
+        // Check if str ends with suffix
+        return EndsWith(str, suffix);
+    } catch (const std::bad_any_cast&) {
+        // Handle incorrect type casts
+        std::cerr << "Invalid types for EndsWith function" << std::endl;
+        return false;
+    }
+}
+
+// Function to trim leading and trailing whitespace
+std::string trim(const std::string& str) {
+    auto start = str.begin();
+    while (start != str.end() && std::isspace(*start)) {
+        ++start;
+    }
+
+    auto end = str.end();
+    do {
+        --end;
+    } while (std::distance(start, end) > 0 && std::isspace(*end));
+
+    return std::string(start, end + 1);
+}
+
+// Function to trim a string from a std::any
+std::string trim(const std::any& value) {
+    try {
+        std::string str = std::any_cast<std::string>(value);
+        return trim(str);
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Invalid type for trim function" << std::endl;
+        return "";
+    }
+}
+
+
+std::any shift(std::any& container_any) {
+    try {
+        // Attempt to cast the std::any to a vector of std::any
+        auto& container = std::any_cast<std::vector<std::any>&>(container_any);
+
+        if (container.empty()) {
+            return std::any{};
+        }
+
+        // Retrieve the first element
+        std::any first = container.front();
+
+        // Remove the first element
+        container.erase(container.begin());
+
+        // Return the first element
+        return first;
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Error: Provided value is not a std::vector<std::any>" << std::endl;
+        return std::any{};
+    }
+}
+
+std::any pop(std::any& container_any) {
+    try {
+        // Attempt to cast the std::any to a vector of std::any
+        auto& container = std::any_cast<std::vector<std::any>&>(container_any);
+
+        if (container.empty()) {
+            return std::any{};
+        }
+
+        // Retrieve the last element
+        std::any last = container.back();
+
+        // Remove the last element
+        container.pop_back();
+
+        // Return the last element
+        return last;
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Error: Provided value is not a std::vector<std::any>" << std::endl;
+        return std::any{};
+    }
+}
+
+std::any reverse(std::any& container_any) {
+    try {
+        // Attempt to cast the std::any to a vector of std::any
+        auto& container = std::any_cast<std::vector<std::any>&>(container_any);
+
+        // Reverse the container in place
+        std::reverse(container.begin(), container.end());
+
+        // Return the reversed container as a std::any
+        return container;
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Error: Provided value is not a std::vector<std::any>" << std::endl;
+        return std::any{};
+    }
+}
+
+
+std::any join(const std::any& elements_any, const std::any& separator_any) {
+    try {
+        auto elements = std::any_cast<std::vector<std::string>>(elements_any);
+        auto separator = std::any_cast<std::string>(separator_any);
+
+        std::string result;
+        for (size_t i = 0; i < elements.size(); ++i) {
+            result += elements[i];
+            if (i < elements.size() - 1) {
+                result += separator;
+            }
+        }
+        return result;
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Invalid type(s) provided for join function" << std::endl;
+        return std::any{};
+    }
+}
+
+
+std::any split(const std::any& str_any, const std::any& delimiter_any) {
+    try {
+        auto str = std::any_cast<std::string>(str_any);
+        auto delimiter = std::any_cast<char>(delimiter_any);
+
+        std::vector<std::string> result;
+        std::string current;
+        for (char ch : str) {
+            if (ch == delimiter) {
+                result.push_back(current);
+                current.clear();
+            } else {
+                current += ch;
+            }
+        }
+        if (!current.empty()) {
+            result.push_back(current);
+        }
+        return result;
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Invalid type(s) provided for split function" << std::endl;
+        return std::any{};
+    }
+}
+
+std::any replace(const std::any& str_any, const std::any& target_any, const std::any& replacement_any) {
+    try {
+        std::string str = std::any_cast<std::string>(str_any);
+        std::string target = std::any_cast<std::string>(target_any);
+        std::string replacement = std::any_cast<std::string>(replacement_any);
+
+        size_t startPos = 0;
+        while ((startPos = str.find(target, startPos)) != std::string::npos) {
+            str.replace(startPos, target.length(), replacement);
+            startPos += replacement.length(); // Move past the last replacement
+        }
+
+        return str;
+    } catch (const std::bad_any_cast&) {
+        std::cerr << "Invalid type(s) provided for replace function" << std::endl;
+        return std::any{};
+    }
+}
