@@ -53,6 +53,9 @@ const parserConfig = {
     'INFER_VAR_TYPE': false,
     'INFER_ARG_TYPE': false,
     'UNDEFINED_TOKEN': 'NULL',
+    'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+    'ELEMENT_ACCESS_WRAPPER_CLOSE': ')',
+    'DEFAULT_RETURN_TYPE': 'std::any'
 };
 
 export class CppTranspiler extends BaseTranspiler {
@@ -93,7 +96,7 @@ export class CppTranspiler extends BaseTranspiler {
 
         this.FullPropertyAccessReplacements = {
             'JSON.parse': 'parseJson', // custom helper method
-            'console.log': 'Console.WriteLine',
+            'console.log': 'std::cout << ',
             'Number.MAX_SAFE_INTEGER': 'Int32.MaxValue',
             'Math.min': 'Math.Min',
             'Math.max': 'Math.Max',
@@ -293,6 +296,12 @@ export class CppTranspiler extends BaseTranspiler {
                 className +
                 "(" + args + ")" +
                 constructorBody;
+    }
+
+    printSuperToken(node, identation) {
+        // replace super with the parent class name
+        const parentClass = node.parent.parent;
+        return parentClass.name.escapedText;
     }
 
     printThisElementAccesssIfNeeded(node, identation) {
@@ -848,15 +857,15 @@ export class CppTranspiler extends BaseTranspiler {
     // check this out later
 
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
-        return `((${parsedArg} is IList<object>) || (${parsedArg}.GetType().IsGenericType && ${parsedArg}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))`;
+        return `isArray(${parsedArg})`;
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
+        return `getObjectKeys(${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return `new List<object>(((IDictionary<string,object>)${parsedArg}).Values)`;
+        return `getObjectValues(${parsedArg}))`;
     }
 
     printJsonParseCall(node, identation, parsedArg = undefined) {
@@ -872,27 +881,27 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printMathFloorCall(node, identation, parsedArg = undefined) {
-        return `(Math.Floor(Double.Parse((${parsedArg}).ToString())))`;
+        return `mathFloor(${parsedArg})`;
     }
 
     printMathRoundCall(node, identation, parsedArg = undefined) {
-        return `Math.Round(Convert.ToDouble(${parsedArg}))`;
+        return `mathRound(${parsedArg})`;
     }
 
     printMathCeilCall(node, identation, parsedArg = undefined) {
-        return `Math.Ceiling(Convert.ToDouble(${parsedArg}))`;
+        return `mathCeil(${parsedArg})`;
     }
 
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any) {
-        return `((${parsedArg} is int) || (${parsedArg} is long) || (${parsedArg} is Int32) || (${parsedArg} is Int64))`;
+        return `isInteger(${parsedArg})`;
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return  `((IList<object>)${name}).Add(${parsedArg})`;
+        return  `arrayPush(${name},${parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `${name}.Contains(${parsedArg})`;
+        return `includes(${name},${parsedArg})`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -900,23 +909,23 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `((string)${name}).StartsWith(((string)${parsedArg}))`;
+        return `startsWith(${name}, ${parsedArg})`;
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `((string)${name}).EndsWith(((string)${parsedArg}))`;
+        return `endsWith(${name}, ${parsedArg})`;
     }
 
     printTrimCall(node, identation, name = undefined) {
-        return `((string)${name}).Trim()`;
+        return `trim${name})`;
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `String.Join(${parsedArg}, ((IList<object>)${name}).ToArray())`;
+        return `join(${parsedArg},${name})`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `((string)${name}).Split(new [] {((string)${parsedArg})}, StringSplitOptions.None).ToList<object>()`;
+        return `split(${name}),${parsedArg})`;
     }
 
     printToFixedCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -924,27 +933,27 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printToStringCall(node, identation, name = undefined) {
-        return `((object)${name}).ToString()`;
+        return `toString(${name})`;
     }
 
     printToUpperCaseCall(node, identation, name = undefined) {
-        return `((string)${name}).ToUpper()`;
+        return `toUpperCase(${name})`;
     }
 
     printToLowerCaseCall(node, identation, name = undefined) {
-        return `((string)${name}).ToLower()`;
+        return `toLower(${name})`;
     }
 
     printShiftCall(node, identation, name = undefined) {
-        return `((IList<object>)${name}).First()`;
+        return `shift(${name})`;
     }
 
     printReverseCall(node, identation, name = undefined) {
-        return `${name} = (${name} as IList<object>).Reverse().ToList()`;
+        return `reverse(${name})`;
     }
 
     printPopCall(node, identation, name = undefined) {
-        return `((IList<object>)${name}).Last()`;
+        return `pop(${name})`;
     }
 
     printAssertCall(node, identation, parsedArgs) {
@@ -961,7 +970,7 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `((string)${name}).Replace((string)${parsedArg}, (string)${parsedArg2})`;
+        return `replace(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 
     printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
@@ -991,9 +1000,9 @@ export class CppTranspiler extends BaseTranspiler {
         const leftSide = this.printNode(operand, 0);
         const op = this.PostFixOperators[operator]; // todo: handle --
         if (op === '--') {
-            return `postFixDecrement(ref ${leftSide})`;
+            return `postFixDecrement(${leftSide})`;
         }
-        return `postFixIncrement(ref ${leftSide})`;
+        return `postFixIncrement(${leftSide})`;
     }
 
     printPrefixUnaryExpression(node, identation) {
@@ -1007,9 +1016,9 @@ export class CppTranspiler extends BaseTranspiler {
         }
         const leftSide = this.printNode(operand, 0);
         if (operator === ts.SyntaxKind.PlusToken) {
-            return `prefixUnaryPlus(ref ${leftSide})`;
+            return `prefixUnaryPlus(${leftSide})`;
         } else {
-            return `prefixUnaryNeg(ref ${leftSide})`;
+            return `prefixUnaryNeg(${leftSide})`;
         }
     }
 
@@ -1024,7 +1033,7 @@ export class CppTranspiler extends BaseTranspiler {
     printDeleteExpression(node, identation) {
         const object = this.printNode (node.expression.expression, 0);
         const key = this.printNode (node.expression.argumentExpression, 0);
-        return `((IDictionary<string,object>)${object}).Remove((string)${key})`;
+        return `deleteKey(${object},${key})`;
     }
 
     printThrowStatement(node, identation) {

@@ -1724,7 +1724,7 @@ class BaseTranspiler {
             } else if (ts.SyntaxKind.ThisKeyword === node.kind) {
                 return this.THIS_TOKEN;
             } else if (ts.SyntaxKind.SuperKeyword === node.kind) {
-                return this.SUPER_TOKEN;
+                return this.printSuperToken(node, identation);
             }else if (ts.isTryStatement(node)){
                 return this.printTryStatement(node, identation);
             } else if (ts.isPrefixUnaryExpression(node)) {
@@ -1771,6 +1771,10 @@ class BaseTranspiler {
         } catch (e) {
             throw new TranspilationError(this.id, e.messageText, node.getFullText(), node.pos, node.end);
         }
+    }
+
+    printSuperToken(node, identation) {
+        return this.SUPER_TOKEN;
     }
 
     getFileESMImports(node): IFileImport[] {
