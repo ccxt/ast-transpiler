@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
+// #include <nlohmann/json.hpp>
+
 
 
 std::any getValue(const std::any& value2, const std::any& key) {
@@ -429,4 +431,215 @@ int getArrayLength(const std::any& value) {
     }
 
     return 0;
+}
+
+std::any postFixIncrement(std::any& a) {
+    if (a.type() == typeid(int64_t)) {
+        a = std::any_cast<int64_t>(a) + 1;
+    } else if (a.type() == typeid(int)) {
+        a = std::any_cast<int>(a) + 1;
+    } else if (a.type() == typeid(double)) {
+        a = std::any_cast<double>(a) + 1;
+    } else if (a.type() == typeid(std::string)) {
+        a = std::any_cast<std::string>(a) + "1";
+    } else {
+        return std::any{};
+    }
+    return a;
+}
+
+// Function to decrement a numeric value
+std::any postFixDecrement(std::any& a) {
+    if (a.type() == typeid(int64_t)) {
+        a = std::any_cast<int64_t>(a) - 1;
+    } else if (a.type() == typeid(int)) {
+        a = std::any_cast<int>(a) - 1;
+    } else if (a.type() == typeid(double)) {
+        a = std::any_cast<double>(a) - 1;
+    } else {
+        return std::any{};
+    }
+    return a;
+}
+
+std::any mod(const std::any& a, const std::any& b) {
+    if (!a.has_value() || !b.has_value()) {
+        return std::any{};
+    }
+
+    std::any norm_a = normalizeIntIfNeeded(a);
+    std::any norm_b = normalizeIntIfNeeded(b);
+
+    try {
+        // Convert both values to double for modulus calculation
+        double a_val = std::any_cast<double>(std::any_cast<int>(norm_a));
+        double b_val = std::any_cast<double>(std::any_cast<int>(norm_b));
+
+        if (b_val == 0) {
+            std::cerr << "Division by zero error" << std::endl;
+            return std::any{};
+        }
+        return std::fmod(a_val, b_val);
+    } catch (const std::bad_any_cast&) {
+        return std::any{};
+    }
+}
+
+std::any parseInt(const std::any& a) {
+    try {
+        // Try to extract and convert to int64_t
+        if (a.type() == typeid(std::string)) {
+            int64_t parsedValue = std::stoll(std::any_cast<std::string>(a));
+            return parsedValue;
+        } else if (a.type() == typeid(int64_t)) {
+            return std::any_cast<int64_t>(a);
+        } else if (a.type() == typeid(int)) {
+            return static_cast<int64_t>(std::any_cast<int>(a));
+        }
+    } catch (const std::bad_any_cast& e) {
+        // Handle bad casting
+    } catch (const std::exception& e) {
+        // Handle conversion errors
+    }
+    return std::any{};
+}
+
+// Function to parse a float from a std::any object
+std::any parseFloat(const std::any& a) {
+    try {
+        // Try to extract and convert to double
+        if (a.type() == typeid(std::string)) {
+            double parsedValue = std::stod(std::any_cast<std::string>(a));
+            return parsedValue;
+        } else if (a.type() == typeid(double)) {
+            return std::any_cast<double>(a);
+        } else if (a.type() == typeid(int64_t)) {
+            return static_cast<double>(std::any_cast<int64_t>(a));
+        } else if (a.type() == typeid(int)) {
+            return static_cast<double>(std::any_cast<int>(a));
+        }
+    } catch (const std::bad_any_cast& e) {
+        // Handle bad casting
+    } catch (const std::exception& e) {
+        // Handle conversion errors
+    }
+    return std::any{};
+}
+
+
+bool isTrue(const std::any& value) {
+    if (!value.has_value()) {
+        return false;
+    }
+
+    std::any normalizedValue = normalizeIntIfNeeded(value);
+
+    if (normalizedValue.type() == typeid(bool)) {
+        return std::any_cast<bool>(normalizedValue);
+    } else if (normalizedValue.type() == typeid(int64_t)) {
+        return std::any_cast<int64_t>(normalizedValue) != 0;
+    } else if (normalizedValue.type() == typeid(double)) {
+        return std::any_cast<double>(normalizedValue) != 0.0;
+    } else if (normalizedValue.type() == typeid(std::string)) {
+        std::string strVal = std::any_cast<std::string>(normalizedValue);
+        return !strVal.empty() && strVal != "0" && strVal != "false" && strVal != "False" && strVal != "FALSE";
+    } else if (normalizedValue.type() == typeid(std::vector<std::any>)) {
+        return !std::any_cast<std::vector<std::any>>(normalizedValue).empty();
+    } else if (normalizedValue.type() == typeid(std::vector<std::string>)) {
+        return !std::any_cast<std::vector<std::string>>(normalizedValue).empty();
+    } else if (normalizedValue.type() == typeid(std::vector<int>)) {
+        return !std::any_cast<std::vector<int>>(normalizedValue).empty();
+    } else if (normalizedValue.type() == typeid(std::vector<int64_t>)) {
+        return !std::any_cast<std::vector<int64_t>>(normalizedValue).empty();
+    } else if (normalizedValue.type() == typeid(std::vector<double>)) {
+        return !std::any_cast<std::vector<double>>(normalizedValue).empty();
+    } else if (normalizedValue.type() == typeid(std::unordered_map<std::string, std::any>)) {
+        return true; // If the map has entries, it's considered "true"
+    }
+
+    return false;
+}
+
+// using json = nlohmann::json;
+
+// std::any parseJson(const std::any& jsonInput) {
+//     if (!jsonInput.has_value() || jsonInput.type() != typeid(std::string)) {
+//         return std::any{};
+//     }
+
+//     std::string jsonString = std::any_cast<std::string>(jsonInput);
+
+//     try {
+//         json parsedJson = json::parse(jsonString);
+
+//         if (parsedJson.is_array()) {
+//             // Return the JSON array as a std::vector
+//             std::vector<json> result = parsedJson.get<std::vector<json>>();
+//             return result;
+//         } else if (parsedJson.is_object()) {
+//             // Return the JSON object as a std::unordered_map
+//             std::unordered_map<std::string, json> result = parsedJson.get<std::unordered_map<std::string, json>>();
+//             return result;
+//         }
+//     } catch (const std::exception& e) {
+//         std::cerr << "Error parsing JSON: " << e.what() << std::endl;
+//     }
+
+//     return std::any{};
+// }
+
+// Function to add value to a
+std::any plusEqual(std::any a, std::any value) {
+    a = normalizeIntIfNeeded(a);
+    value = normalizeIntIfNeeded(value);
+
+    if (!value.has_value()) {
+        return std::any{};
+    }
+
+    try {
+        if (a.type() == typeid(int64_t)) {
+            a = std::any_cast<int64_t>(a) + std::any_cast<int64_t>(value);
+        } else if (a.type() == typeid(int)) {
+            a = std::any_cast<int>(a) + std::any_cast<int>(value);
+        } else if (a.type() == typeid(double)) {
+            a = std::any_cast<double>(a) + std::any_cast<double>(value);
+        } else if (a.type() == typeid(std::string)) {
+            a = std::any_cast<std::string>(a) + std::any_cast<std::string>(value);
+        } else {
+            return std::any{};
+        }
+    } catch (const std::bad_any_cast&) {
+        return std::any{};
+    }
+
+    return a;
+}
+
+// Function to negate the value
+std::any prefixUnaryNeg(std::any& a) {
+    if (a.type() == typeid(int64_t)) {
+        a = -std::any_cast<int64_t>(a);
+    } else if (a.type() == typeid(int)) {
+        a = -std::any_cast<int>(a);
+    } else if (a.type() == typeid(double)) {
+        a = -std::any_cast<double>(a);
+    } else {
+        return std::any{};
+    }
+    return a;
+}
+
+// Function to return the same value (prefix unary plus)
+std::any prefixUnaryPlus(std::any& a) {
+    if (a.type() == typeid(int64_t)) {
+        a = +std::any_cast<int64_t>(a);
+    } else if (a.type() == typeid(int)) {
+        a = +std::any_cast<int>(a);
+    } else if (a.type() == typeid(double)) {
+        a = +std::any_cast<double>(a);
+    } else {
+        return std::any{};
+    }
+    return a;
 }
