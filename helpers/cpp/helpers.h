@@ -33,9 +33,24 @@ std::any mod(const std::any& a, const std::any& b);
 std::any parseInt(const std::any& a);
 std::any parseFloat(const std::any& a);
 bool isTrue(const std::any& value);
-// std::any parseJson(const std::any& jsonInput);
+std::any parseJson(const std::any& jsonInput);
 std::any plusEqual(std::any a, std::any value);
 std::any prefixUnaryNeg(std::any& a);
 std::any prefixUnaryPlus(std::any& a);
+std::string toString(const std::any& value);
+std::string toUpper(const std::string& str);
+std::string toLower(const std::string& str);
+bool StartsWith(const std::string& str, const std::string& prefix);
+bool startsWith(std::any str_any, std::any prefix_any);
+bool EndsWith(const std::string& str, const std::string& suffix);
+bool endsWith(std::any str_any, std::any suffix_any);
+std::string trim(const std::string& str);
+std::string trim(const std::any& value);
+std::any shift(std::any& container_any);
+std::any pop(std::any& container_any);
+std::any reverse(std::any& container_any);
+std::any join(const std::any& elements_any, const std::any& separator_any);
+std::any split(const std::any& str_any, const std::any& delimiter_any);
+std::any replace(const std::any& str_any, const std::any& target_any, const std::any& replacement_any);
 
 #endif // GENERATED_HEADER_H
