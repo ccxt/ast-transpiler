@@ -1,10 +1,3 @@
-#include <iostream>
-#include <any>
-#include <string>
-#include <unordered_map>
-#include <vector>
-#include <algorithm>
-
 #ifndef GENERATED_HEADER_H
 #define GENERATED_HEADER_H
 
@@ -52,5 +45,11 @@ std::any reverse(std::any& container_any);
 std::any join(const std::any& elements_any, const std::any& separator_any);
 std::any split(const std::any& str_any, const std::any& delimiter_any);
 std::any replace(const std::any& str_any, const std::any& target_any, const std::any& replacement_any);
+bool isArray(const std::any& obj);
+double mathFloor(const std::any& value);
+double mathRound(const std::any& value);
+double mathCeil(const std::any& value);
+void arrayPush(std::any& arr, const std::any& value);
+bool includes(const std::any& container, const std::any& value);
 
 #endif // GENERATED_HEADER_H

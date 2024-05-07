@@ -4,6 +4,11 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
+#include <map>
+#include <type_traits>
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
 // #include <nlohmann/json.hpp>
 
 
@@ -872,5 +877,128 @@ std::any replace(const std::any& str_any, const std::any& target_any, const std:
     } catch (const std::bad_any_cast&) {
         std::cerr << "Invalid type(s) provided for replace function" << std::endl;
         return std::any{};
+    }
+}
+
+
+std::vector<std::string> getObjectKeys(const std::any& obj) {
+    std::vector<std::string> keys;
+
+    // Check if the object is a map-like structure
+    if (obj.has_value() && obj.type() == typeid(std::map<std::string, std::any>)) {
+        // Extract the map
+        auto mapObj = std::any_cast<std::map<std::string, std::any>>(obj);
+        // Extract keys from the map
+        for (const auto& pair : mapObj) {
+            keys.push_back(pair.first);
+        }
+    }
+
+    return keys;
+}
+
+std::vector<std::any> getObjectValues(const std::any& obj) {
+    std::vector<std::any> values;
+
+    // Check if the object is a map-like structure
+    if (obj.has_value() && obj.type() == typeid(std::map<std::string, std::any>)) {
+        // Extract the map
+        auto mapObj = std::any_cast<std::map<std::string, std::any>>(obj);
+
+        // Extract values from the map
+        for (const auto& pair : mapObj) {
+            values.push_back(pair.second);
+        }
+    }
+
+    return values;
+}
+
+
+template<typename T>
+struct is_std_vector : std::false_type {};
+
+template<typename T, typename Alloc>
+struct is_std_vector<std::vector<T, Alloc>> : std::true_type {};
+
+template<typename T>
+bool isArray(const std::any& obj) {
+    if (obj.has_value()) {
+        try {
+            if (std::any_cast<T>(&obj)) {
+                return true;
+            }
+        } catch (const std::bad_any_cast&) {}
+    }
+    return false;
+}
+
+double mathFloor(const std::any& value) {
+    try {
+        if (value.type() == typeid(int)) {
+            return std::any_cast<int>(value);
+        } else if (value.type() == typeid(double)) {
+            return std::floor(std::any_cast<double>(value));
+        } else {
+            throw std::invalid_argument("Unsupported type for mathFloor");
+        }
+    } catch (const std::bad_any_cast& e) {
+        throw std::invalid_argument("Invalid argument for mathFloor");
+    }
+}
+
+double mathRound(const std::any& value) {
+    try {
+        if (value.type() == typeid(int)) {
+            return std::any_cast<int>(value);
+        } else if (value.type() == typeid(double)) {
+            return std::round(std::any_cast<double>(value));
+        } else {
+            throw std::invalid_argument("Unsupported type for mathRound");
+        }
+    } catch (const std::bad_any_cast& e) {
+        throw std::invalid_argument("Invalid argument for mathRound");
+    }
+}
+
+double mathCeil(const std::any& value) {
+    try {
+        if (value.type() == typeid(int)) {
+            return std::any_cast<int>(value);
+        } else if (value.type() == typeid(double)) {
+            return std::ceil(std::any_cast<double>(value));
+        } else {
+            throw std::invalid_argument("Unsupported type for mathCeil");
+        }
+    } catch (const std::bad_any_cast& e) {
+        throw std::invalid_argument("Invalid argument for mathCeil");
+    }
+}
+
+
+void arrayPush(std::any& arr, const std::any& value) {
+    try {
+        if (arr.type() == typeid(std::vector<std::any>)) {
+            auto& vec = std::any_cast<std::vector<std::any>&>(arr);
+            vec.push_back(value);
+        } else {
+            throw std::invalid_argument("Unsupported type for arrayPush");
+        }
+    } catch (const std::bad_any_cast& e) {
+        throw std::invalid_argument("Invalid argument for arrayPush");
+    }
+}
+
+bool includes(const std::any& container, const std::any& value) {
+    try {
+        if (container.type() == typeid(std::vector<std::any>)) {
+            auto& vec = std::any_cast<std::vector<std::any>&>(container);
+            auto it = std::find(vec.begin(), vec.end(), value);
+            return it != vec.end();
+        } else {
+            throw std::invalid_argument("Unsupported type for includes");
+        }
+    } catch (const std::bad_any_cast& e) {
+        throw std::invalid_argument("Invalid argument for includes");
     }
 }
