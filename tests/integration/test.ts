@@ -8,11 +8,13 @@ const TS_TRANSPILABLE_FILE = "./tests/integration/source/transpilable.ts";
 const PY_TRANSPILABLE_FILE = "./tests/integration/py/transpilable.py";
 const PHP_TRANSPILABLE_FILE = "./tests/integration/php/transpilable.php";
 const CS_TRANSPILABLE_FILE = "./tests/integration/cs/transpilable.cs";
+const CPP_TRANSPILABLE_FILE = "./tests/integration/cpp/transpilable.cpp";
 
 const TS_FILE = "./tests/integration/source/init.ts";
 const PY_FILE = "./tests/integration/py/init.py";
 const PHP_FILE = "./tests/integration/php/init.php";
 const CS_FILE = "./tests/integration/cs";
+const CPP_FILE = "./tests/integration/cpp/helpers.cpp";
 
 const langConfig = [
     {
@@ -26,6 +28,10 @@ const langConfig = [
     },
     {
         language: "php",
+        async: true
+    },
+    {
+        language: "cpp",
         async: true
     },
 ]
@@ -49,9 +55,22 @@ function transpileTests() {
     let csharp = 'namespace tests;\n' + result[0].content;
     csharp = csharp.replace('class Test', 'partial class Test');
 
+    const cppImports = [
+        '#include <iostream>',
+        '#include <any>',
+        '#include <string>',
+        '#include <vector>',
+        '#include "helpers.h"',
+        '',
+        '',
+    ]
+
+    const cppContent = cppImports.join('\n') + result[3].content;
+
     writeFileSync(PHP_TRANSPILABLE_FILE, phpRes.toString());
     writeFileSync(PY_TRANSPILABLE_FILE, pythonAsync);
     writeFileSync(CS_TRANSPILABLE_FILE, csharp);
+    writeFileSync(CPP_TRANSPILABLE_FILE, cppContent);
 }
 
 function runCommand(command) {

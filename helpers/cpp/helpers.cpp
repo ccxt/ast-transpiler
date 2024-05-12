@@ -54,6 +54,36 @@ std::any getValue(const std::any& value2, const std::any& key) {
     return {};
 }
 
+bool areEqual(const std::any& a, const std::any& b) {
+    if (a.type() != b.type()) return false;
+
+    try {
+        if (a.type() == typeid(int)) {
+            return std::any_cast<int>(a) == std::any_cast<int>(b);
+        } else if (a.type() == typeid(int64_t)) {
+            return std::any_cast<int64_t>(a) == std::any_cast<int64_t>(b);
+        } else if (a.type() == typeid(double)) {
+            return std::any_cast<double>(a) == std::any_cast<double>(b);
+        } else if (a.type() == typeid(std::string)) {
+            return std::any_cast<std::string>(a) == std::any_cast<std::string>(b);
+        } else if (a.type() == typeid(std::vector<std::any>)) {
+            const auto& vecA = std::any_cast<const std::vector<std::any>&>(a);
+            const auto& vecB = std::any_cast<const std::vector<std::any>&>(b);
+            return vecA.size() == vecB.size() && std::equal(vecA.begin(), vecA.end(), vecB.begin(), [](const std::any& x, const std::any& y) { return areEqual(x, y); });
+        } else if (a.type() == typeid(std::vector<int64_t>)) {
+            const auto& vecA = std::any_cast<const std::vector<int64_t>&>(a);
+            const auto& vecB = std::any_cast<const std::vector<int64_t>&>(b);
+            return vecA == vecB;
+        } else if (a.type() == typeid(std::vector<std::string>)) {
+            const auto& vecA = std::any_cast<const std::vector<std::string>&>(a);
+            const auto& vecB = std::any_cast<const std::vector<std::string>&>(b);
+            return vecA == vecB;
+        }
+    } catch (const std::bad_any_cast&) {
+        return false; // Handle the case where type casting fails
+    }
+    return false;
+}
 
 bool inOp(const std::any& obj, const std::any& key) {
     if (!obj.has_value() || !key.has_value()) {
@@ -61,27 +91,26 @@ bool inOp(const std::any& obj, const std::any& key) {
     }
 
     try {
-        // Check if obj is a vector of any
+        // Use areEqual for std::vector<std::any>
         if (obj.type() == typeid(std::vector<std::any>)) {
             const auto& vec = std::any_cast<const std::vector<std::any>&>(obj);
-            return std::find(vec.begin(), vec.end(), key) != vec.end();
+            return std::any_of(vec.begin(), vec.end(), [&key](const std::any& element) { return areEqual(element, key); });
         }
 
-        // Check if obj is a vector of strings
+        // Optimized search for std::vector<std::string> and std::vector<int64_t>
         if (obj.type() == typeid(std::vector<std::string>)) {
             const auto& vec = std::any_cast<const std::vector<std::string>&>(obj);
             const std::string& strKey = std::any_cast<const std::string&>(key);
             return std::find(vec.begin(), vec.end(), strKey) != vec.end();
         }
 
-        // Check if obj is a vector of int64_t
         if (obj.type() == typeid(std::vector<int64_t>)) {
             const auto& vec = std::any_cast<const std::vector<int64_t>&>(obj);
             int64_t intKey = std::any_cast<int64_t>(key);
             return std::find(vec.begin(), vec.end(), intKey) != vec.end();
         }
 
-        // Check if obj is an unordered_map
+        // Check if key exists in an unordered_map
         if (obj.type() == typeid(std::unordered_map<std::string, std::any>)) {
             const auto& dict = std::any_cast<const std::unordered_map<std::string, std::any>&>(obj);
             const std::string& strKey = std::any_cast<const std::string&>(key);
@@ -91,8 +120,7 @@ bool inOp(const std::any& obj, const std::any& key) {
         return false; // Handle bad cast exceptions gracefully
     }
 
-    // Default return false if no conditions matched
-    return false;
+    return false; // Default return false if no conditions matched
 }
 
 bool isInteger(const std::any& a) {
@@ -133,58 +161,57 @@ bool isEqual(const std::any& a, const std::any& b) {
 }
 
 int getIndexOf(const std::any& collection, const std::any& target) {
-    // Check if collection is a vector of std::any
-    if (collection.type() == typeid(std::vector<std::any>)) {
-        const auto& vec = std::any_cast<const std::vector<std::any>&>(collection);
-        auto it = std::find(vec.begin(), vec.end(), target);
-        return it != vec.end() ? std::distance(vec.begin(), it) : -1;
-    }
+    if (!collection.has_value()) return -1;
 
-    // Check if collection is a vector of strings
-    if (collection.type() == typeid(std::vector<std::string>)) {
-        const auto& vec = std::any_cast<const std::vector<std::string>&>(collection);
-        try {
+    try {
+        // Check if collection is a vector of std::any
+        if (collection.type() == typeid(std::vector<std::any>)) {
+            const auto& vec = std::any_cast<const std::vector<std::any>&>(collection);
+            auto it = std::find_if(vec.begin(), vec.end(), [&target](const std::any& elem) { return areEqual(elem, target); });
+            return it != vec.end() ? std::distance(vec.begin(), it) : -1;
+        }
+
+        // Check if collection is a vector of strings
+        if (collection.type() == typeid(std::vector<std::string>)) {
+            const auto& vec = std::any_cast<const std::vector<std::string>&>(collection);
             const std::string& targetStr = std::any_cast<const std::string&>(target);
             auto it = std::find(vec.begin(), vec.end(), targetStr);
             return it != vec.end() ? std::distance(vec.begin(), it) : -1;
-        } catch (const std::bad_any_cast&) {
-            return -1;
         }
-    }
 
-    // Check if collection is a string
-    if (collection.type() == typeid(std::string)) {
-        try {
+        // Check if collection is a string
+        if (collection.type() == typeid(std::string)) {
             const std::string& str = std::any_cast<const std::string&>(collection);
             const std::string& targetStr = std::any_cast<const std::string&>(target);
             size_t pos = str.find(targetStr);
             return pos != std::string::npos ? static_cast<int>(pos) : -1;
-        } catch (const std::bad_any_cast&) {
-            return -1;
         }
+
+    } catch (const std::bad_any_cast&) {
+        return -1; // Handle bad cast exceptions gracefully
     }
 
     // If none of the conditions match, return -1
     return -1;
 }
 
-int getArrayLength(const std::any& value) {
-    if (!value.has_value()) {
-        return 0;
-    }
+// int getArrayLength(const std::any& value) {
+//     if (!value.has_value()) {
+//         return 0;
+//     }
 
-    if (value.type() == typeid(std::vector<std::any>)) {
-        return std::any_cast<std::vector<std::any>>(value).size();
-    } else if (value.type() == typeid(std::vector<std::string>)) {
-        return std::any_cast<std::vector<std::string>>(value).size();
-    } else if (value.type() == typeid(std::vector<int64_t>)) { // Equivalent of List<dict>
-        return std::any_cast<std::vector<int64_t>>(value).size();
-    } else if (value.type() == typeid(std::string)) {
-        return std::any_cast<std::string>(value).length();
-    } else {
-        return 0;
-    }
-}
+//     if (value.type() == typeid(std::vector<std::any>)) {
+//         return std::any_cast<std::vector<std::any>>(value).size();
+//     } else if (value.type() == typeid(std::vector<std::string>)) {
+//         return std::any_cast<std::vector<std::string>>(value).size();
+//     } else if (value.type() == typeid(std::vector<int64_t>)) { // Equivalent of List<dict>
+//         return std::any_cast<std::vector<int64_t>>(value).size();
+//     } else if (value.type() == typeid(std::string)) {
+//         return std::any_cast<std::string>(value).length();
+//     } else {
+//         return 0;
+//     }
+// }
 
 std::any normalizeIntIfNeeded(const std::any& value) {
     return value;
@@ -992,13 +1019,39 @@ void arrayPush(std::any& arr, const std::any& value) {
 bool includes(const std::any& container, const std::any& value) {
     try {
         if (container.type() == typeid(std::vector<std::any>)) {
-            auto& vec = std::any_cast<std::vector<std::any>&>(container);
-            auto it = std::find(vec.begin(), vec.end(), value);
-            return it != vec.end();
+            // Use const reference to get data from a const std::any reference
+            const auto& vec = std::any_cast<const std::vector<std::any>&>(container);
+            // You can now search for 'value', though you need to handle comparison differently
+            return std::find_if(vec.begin(), vec.end(), [&value](const std::any& elem) {
+                // This check requires that 'value' and 'elem' can be compared,
+                // which is another potential source of errors because std::any does not support comparison.
+                // You will need to implement a comparison mechanism similar to your 'areEqual' function.
+                return areEqual(elem, value); // Assuming 'areEqual' handles std::any comparisons.
+            }) != vec.end();
         } else {
             throw std::invalid_argument("Unsupported type for includes");
         }
     } catch (const std::bad_any_cast& e) {
         throw std::invalid_argument("Invalid argument for includes");
+    }
+}
+
+template<typename T>
+bool deleteKey(std::any& container, const T& key) {
+    try {
+        if (container.type() == typeid(std::vector<T>)) {
+            auto& vec = std::any_cast<std::vector<T>&>(container);
+            auto it = std::find(vec.begin(), vec.end(), key);
+            if (it != vec.end()) {
+                vec.erase(it);
+                return true;
+            } else {
+                return false; // Key not found
+            }
+        } else {
+            throw std::invalid_argument("Unsupported type for deleteKey");
+        }
+    } catch (const std::bad_any_cast& e) {
+        throw std::invalid_argument("Invalid argument for deleteKey");
     }
 }
