@@ -221,8 +221,16 @@ std::any normalizeIntIfNeeded(const std::any& value) {
 std::any add(const std::any& a, const std::any& b) {
     std::any norm_a = normalizeIntIfNeeded(a);
     std::any norm_b = normalizeIntIfNeeded(b);
+    
 
     try {
+
+        if (norm_a.type() == typeid(int) && norm_b.type() == typeid(int)) {
+            int middle  = (std::any_cast<int>(norm_a) + std::any_cast<int>(norm_b));
+            // return static_cast<int64_t>(middle);
+            return middle;
+        }
+
         // Add two int64_t values
         if (norm_a.type() == typeid(int64_t) && norm_b.type() == typeid(int64_t)) {
             return std::any_cast<int64_t>(norm_a) + std::any_cast<int64_t>(norm_b);
