@@ -56,7 +56,8 @@ const parserConfig = {
     'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
     'ELEMENT_ACCESS_WRAPPER_CLOSE': ')',
     'DEFAULT_RETURN_TYPE': 'std::any',
-    'THIS_TOKEN': 'this'
+    'THIS_TOKEN': 'this',
+    'NEW_TOKEN': '',
 };
 
 export class CppTranspiler extends BaseTranspiler {
@@ -600,7 +601,7 @@ export class CppTranspiler extends BaseTranspiler {
         }
         const parsedValue = this.printNode(declaration.initializer, identation).trimStart();
         if (parsedValue === this.UNDEFINED_TOKEN) {
-            let specificVarToken = "object";
+            let specificVarToken = "std::any";
             if (this.INFER_VAR_TYPE) {
                 const variableType = global.checker.typeToString(global.checker.getTypeAtLocation(declaration));
                 if (this.VariableTypeReplacements[variableType]) {
@@ -810,6 +811,9 @@ export class CppTranspiler extends BaseTranspiler {
         // c# only move this elsewhere (csharp transpiler)
         const methodOverride = this.getMethodOverride(node) as any;
         const isOverride = methodOverride !== undefined;
+        const isVirtual = !isOverride;
+        const virtualPrefix = isVirtual ? "virtual " : "";
+        const overrideSuffix = isOverride ? " override" : "";
         // modifiers = isOverride ? modifiers + "override " : modifiers + "virtual ";
 
         // infer parent return type
@@ -845,8 +849,8 @@ export class CppTranspiler extends BaseTranspiler {
         returnType = returnType ? returnType + " " : returnType;
 
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-        const methodDef = this.getIden(identation) + returnType + methodToken + name
-            + "(" + parsedArgs + ")";
+        const methodDef = this.getIden(identation) + virtualPrefix + returnType + methodToken + name
+            + "(" + parsedArgs + ")" + overrideSuffix;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
     }
@@ -1091,12 +1095,12 @@ export class CppTranspiler extends BaseTranspiler {
                     const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
                     const isClassDeclaration = declarations.find(l => l.kind === ts.SyntaxKind.InterfaceDeclaration ||  l.kind === ts.SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
-                        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
+                        return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText} (toString(${parsedArg})) ${this.LINE_TERMINATOR}`;
                     } else {
                         return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg});return null;`;
                     }
                 }
-                return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression} (${parsedArg}) ${this.LINE_TERMINATOR}`;
+                return this.getIden(identation) + `${this.THROW_TOKEN} ${newExpression} (${parsedArg}) ${this.LINE_TERMINATOR}`;
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
                 return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
             }
@@ -1109,7 +1113,6 @@ export class CppTranspiler extends BaseTranspiler {
         // // const throwExpression = ` ${newToken}${newExpression}${this.LEFT_PARENTHESIS}((string)${args})${this.RIGHT_PARENTHESIS}`;
         // return this.getIden(identation) + this.THROW_TOKEN + throwExpression + this.LINE_TERMINATOR;
     }
-
 
     castToDict(elem: string) {
         return `std::any_cast<std::unordered_map<std::string, std::any>&>(${elem})`;
