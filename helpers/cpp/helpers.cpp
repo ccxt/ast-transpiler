@@ -9,6 +9,8 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
+
 // #include <nlohmann/json.hpp>
 
 std::any getValue(const std::any &value2, const std::any &key)
@@ -1411,9 +1413,19 @@ bool deleteKey(std::any &container, const T &key)
     }
 }
 
-void insertAt(std::vector<std::any> &vec, size_t index, const std::any &value, const std::any &default_value = std::any())
+void insertAt(std::any &vec_any, size_t index, const std::any &value, const std::any &default_value = std::any())
 {
     // Resize the vector if the index is out of bounds
+
+    if (!vec_any.has_value() || vec_any.type() != typeid(std::vector<std::any>))
+    {
+        throw std::invalid_argument("Provided any is not a vector of std::any");
+    }
+
+    // Extract the vector from std::any
+    std::vector<std::any>& vec = std::any_cast<std::vector<std::any>&>(vec_any);
+
+
     if (index > vec.size())
     {
         vec.resize(index, default_value);
@@ -1456,30 +1468,34 @@ void setValue(std::any &target, const std::any &prop, const std::any &value)
         {
             auto &vec = std::any_cast<std::vector<std::any> &>(target);
             std::cout << "before";
-            size_t index = 0;
+            size_t index = -1;
             try
             {
                 // Attempt to cast to size_t will fail
                 index = std::any_cast<size_t>(prop);
-                std::cout << "index1: " << index << std::endl;
+                // std::cout << "index1: " << index << std::endl;
             }
             catch (const std::bad_any_cast &e)
             {
-                std::cout << "Error: " << e.what() << std::endl;
+                // std::cout << "Error: " << e.what() << std::endl;
             }
 
             try
             {
                 // Correctly cast to int
                 index = std::any_cast<int>(prop);
-                std::cout << "index2: " << index << std::endl;
+                // std::cout << "index2: " << index << std::endl;
             }
             catch (const std::bad_any_cast &e)
             {
                 std::cout << "Error: " << e.what() << std::endl;
             }
 
-            std::cout << "after";
+            if (index == -1) {
+                throw std::invalid_argument("Invalid index type for list");
+            }
+
+            // std::cout << "after" << std::endl;
             if (index >= vec.size())
             {
                 vec.resize(index + 1); // Resize the vector to accommodate the new index
@@ -1499,4 +1515,18 @@ void setValue(std::any &target, const std::any &prop, const std::any &value)
     {
         std::cerr << "Error: " << e.what() << std::endl;
     }
+}
+
+std::string getCurrentDate() {
+    // Get the current time
+    std::time_t t = std::time(nullptr);
+    // Convert it to tm structure
+    std::tm tm = *std::localtime(&t);
+
+    // Create a buffer to hold the formatted date
+    char buffer[11]; // "YYYY-MM-DD" + null terminator
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", &tm);
+
+    // Return the formatted string
+    return std::string(buffer);
 }
