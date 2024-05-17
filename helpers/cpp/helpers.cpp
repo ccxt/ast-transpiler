@@ -47,10 +47,26 @@ std::any getValue(const std::any &value2, const std::any &key)
             return it != dict.end() ? it->second : std::any{};
         }
 
+        if (value2.type() == typeid(std::map<std::string, std::any>))
+        {
+            const auto &dict = std::any_cast<const std::map<std::string, std::any> &>(value2);
+            const std::string &keyStr = std::any_cast<std::string>(key);
+            auto it = dict.find(keyStr);
+            return it != dict.end() ? it->second : std::any{};
+        }
+
+
         // Check if value2 is a vector (list)
         if (value2.type() == typeid(std::vector<std::any>))
         {
             const auto &vec = std::any_cast<const std::vector<std::any> &>(value2);
+            int index = std::any_cast<int>(key);
+            return index >= 0 && index < static_cast<int>(vec.size()) ? vec[index] : std::any{};
+        }
+
+        if (value2.type() == typeid(std::vector<std::string>))
+        {
+            const auto &vec = std::any_cast<const std::vector<std::string> &>(value2);
             int index = std::any_cast<int>(key);
             return index >= 0 && index < static_cast<int>(vec.size()) ? vec[index] : std::any{};
         }
@@ -1212,8 +1228,16 @@ std::vector<std::string> getObjectKeys(const std::any &obj)
         {
             keys.push_back(pair.first);
         }
+    } else if (obj.has_value() && obj.type() == typeid(std::unordered_map<std::string, std::any>))
+    {
+        // Extract the map
+        auto mapObj = std::any_cast<std::unordered_map<std::string, std::any>>(obj);
+        // Extract keys from the map
+        for (const auto &pair : mapObj)
+        {
+            keys.push_back(pair.first);
+        }
     }
-
     return keys;
 }
 
@@ -1383,18 +1407,33 @@ bool includes(const std::any &container, const std::any &value)
     }
 }
 
-template <typename T>
-bool deleteKey(std::any &container, const T &key)
+bool deleteKey(std::any &container, const std::any &key)
 {
     try
     {
-        if (container.type() == typeid(std::vector<T>))
+        if (container.type() == typeid(std::unordered_map<std::string, std::any>))
         {
-            auto &vec = std::any_cast<std::vector<T> &>(container);
-            auto it = std::find(vec.begin(), vec.end(), key);
-            if (it != vec.end())
+            auto &map = std::any_cast<std::unordered_map<std::string, std::any>&>(container);
+
+            std::string key_str;
+            if (key.type() == typeid(std::string))
             {
-                vec.erase(it);
+                key_str = std::any_cast<const std::string&>(key);
+            }
+            else if (key.type() == typeid(const char*))
+            {
+                key_str = std::any_cast<const char*>(key);
+            }
+            else
+            {
+                std::cerr << "Provided key type: " << key.type().name() << std::endl;
+                throw std::invalid_argument("Key type mismatch for unordered_map");
+            }
+
+            auto it = map.find(key_str);
+            if (it != map.end())
+            {
+                map.erase(it);
                 return true;
             }
             else
@@ -1412,6 +1451,7 @@ bool deleteKey(std::any &container, const T &key)
         throw std::invalid_argument("Invalid argument for deleteKey");
     }
 }
+
 
 void insertAt(std::any &vec_any, size_t index, const std::any &value, const std::any &default_value = std::any())
 {

@@ -54,4 +54,6 @@ bool includes(const std::any& container, const std::any& value);
 void setValue(std::any& target, const std::any& prop, const std::any& value);
 void insertAt(std::any& vec, size_t index, const std::any& value, const std::any& default_value = std::any());
 std::string getCurrentDate();
+std::vector<std::string> getObjectKeys(const std::any &obj);
+bool deleteKey(std::any &container, const std::any &key);
 #endif // GENERATED_HEADER_H
