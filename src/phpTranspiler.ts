@@ -238,6 +238,10 @@ export class PhpTranspiler extends BaseTranspiler {
         return `explode(${parsedArg}, ${name})`;
     }
 
+    printConcatCall(node: any, identation: any, name?: any, parsedArg?: any) {
+        return `array_merge (${name}, ${parsedArg})`;
+    }
+
     printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
         return `str_pad(${name}, ${parsedArg}, ${parsedArg2}, STR_PAD_RIGHT)`;
     }

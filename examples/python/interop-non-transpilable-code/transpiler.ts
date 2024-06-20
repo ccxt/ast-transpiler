@@ -5,14 +5,17 @@
 import { Transpiler } from '../../../src/transpiler.js';
 import { writeFileSync } from 'fs';
 
+import { fileURLToPath, pathToFileURL } from 'url';
+const __dirname = fileURLToPath (new URL ('.', import.meta.url));
+
+const FILE_INPUT = __dirname + "/input/index.ts";
+const FILE_OUTPUT = __dirname + "/output/index.py";
+
 const transpiler = new Transpiler({
     python: {
         uncamelcaseIdentifiers: true,   
     }
 });
-
-const FILE_INPUT = "./input/index.ts";
-const FILE_OUTPUT = "./output/index.py";
 
 const transpiledCode = transpiler.transpilePythonByPath(FILE_INPUT);
 

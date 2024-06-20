@@ -5,6 +5,12 @@
 import { Transpiler } from '../../../src/transpiler.js';
 import { writeFileSync } from 'fs';
 
+import { fileURLToPath, pathToFileURL } from 'url';
+const __dirname = fileURLToPath (new URL ('.', import.meta.url));
+
+const FILE_INPUT = __dirname + "/input/index.ts";
+const FILE_OUTPUT = __dirname + "/output/index.cs";
+
 const transpiler = new Transpiler({
     csharp: {
         parser: {
@@ -14,8 +20,6 @@ const transpiler = new Transpiler({
     }
 });
 
-const FILE_INPUT = "./input/index.ts";
-const FILE_OUTPUT = "./output/index.cs";
 
 const transpiledCode = transpiler.transpileCSharpByPath(FILE_INPUT);
 

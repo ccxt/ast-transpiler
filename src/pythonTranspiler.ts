@@ -141,6 +141,10 @@ export class PythonTranspiler extends BaseTranspiler {
         return `${name}.split(${parsedArg})`;
     }
 
+    printConcatCall(node: any, identation: any, name?: any, parsedArg?: any) {
+        return `${name} + ${parsedArg}`;
+    }
+
     printPopCall(node: any, identation: any, name?: any) {
         return `${name}.pop()`;
     }

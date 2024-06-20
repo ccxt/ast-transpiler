@@ -878,6 +878,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `((string)${name}).Split(new [] {((string)${parsedArg})}, StringSplitOptions.None).ToList<object>()`;
     }
 
+    printConcatCall(node, identation, name = undefined, parsedArg = undefined) {
+        return `${name}.Concat(${parsedArg}).ToList()`;
+    }
+
     printToFixedCall(node, identation, name = undefined, parsedArg = undefined) {
         return `toFixed(${name}, ${parsedArg})`;
     }
