@@ -149,7 +149,7 @@ export class PhpTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return `is_array(${parsedArg}) ? array_keys(${parsedArg}) : array()`;
+        return `is_array(${parsedArg}) ? array_keys(${parsedArg}) : get_object_vars(${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
