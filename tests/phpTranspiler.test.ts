@@ -546,7 +546,7 @@ describe('php transpiling tests', () => {
         "const yy = Object.values (x);"
         const php =
         "$x = array();\n" +
-        "$y = is_array($x) ? array_keys($x) : array();\n" +
+        "$y = is_array($x) ? array_keys($x) : get_object_vars($x);\n" +
         "$yy = is_array($x) ? array_values($x) : array();"
         const output = transpiler.transpilePhp(ts).content;
         expect(output).toBe(php);
