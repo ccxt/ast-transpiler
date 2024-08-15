@@ -19,9 +19,17 @@ class Test:
         instance = Second()
         print(instance.stringify_number(4))  # should print 4
         arr = [1, 2, 3, 4]
+        print(len(arr))  # should print 4
         first = arr[0]
         print(first)  # should print 1
         dict = {
             'a': 'b',
         }
         print(dict['a'])  # should print "b"
+        i = 0
+        for w in range(0, 10):
+                        i += 1
+        print(str(i))  # should print 10
+        list = [1, 2, 3, 4, 5]
+        list.reverse()
+        print(list[0])  # should print 5

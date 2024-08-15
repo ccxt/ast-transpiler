@@ -161,6 +161,9 @@ class BaseTranspiler {
 
     SPREAD_TOKEN = "...";
 
+    INFER_VAR_TYPE = false;
+    INFER_ARG_TYPE = false;
+
     SupportedKindNames = {};
     PostFixOperators = {};
     PrefixFixOperators = {};
@@ -174,6 +177,8 @@ class BaseTranspiler {
     CallExpressionReplacements = {};
     ReservedKeywordsReplacements = {};
     PropertyAccessRequiresParenthesisRemoval = [];
+    VariableTypeReplacements = {};
+    ArgTypeReplacements = {};
 
     FuncModifiers = {};
 
@@ -550,15 +555,21 @@ class BaseTranspiler {
         const initializer = node.initializer;
 
         let type = this.printParameterType(node);
-        type = type ? type + " " : "";
+        type = type ? type : "";
 
         if (defaultValue) {
             if (initializer) {
                 const customDefaultValue = this.printCustomDefaultValueIfNeeded(initializer);
                 const defaultValue = customDefaultValue ? customDefaultValue : this.printNode(initializer, 0);
+                if (type) {
+                    type = (defaultValue === "null" && type !== "object") ? type + "? ": type + " ";
+                }
                 return type + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + defaultValue;
             }
-            return type + name;
+            if (type === "") {
+                return name;
+            }
+            return type + " " + name;
         }
         return name;
     }
@@ -773,20 +784,17 @@ class BaseTranspiler {
             return "";
         }
 
-        const typeText = this.getType(node);
-        // if (typeText === this.BOOLEAN_KEYWORD) {
-        //     return typeText;
-        // }
-
-        return this.DEFAULT_PARAMETER_TYPE;
-
-        if (typeText === undefined || typeText === this.STRING_KEYWORD) {
-            // throw new FunctionReturnTypeError("Parameter type is not supported or undefined");
-            this.warn(node, node.getText(), "Parameter type not found, will default to: " + this.DEFAULT_PARAMETER_TYPE);
+        if (!this.INFER_ARG_TYPE) {
             return this.DEFAULT_PARAMETER_TYPE;
         }
-        return typeText;
 
+        const type = global.checker.typeToString(global.checker.getTypeAtLocation(node));
+
+        if (this.ArgTypeReplacements[type]) {
+            return this.ArgTypeReplacements[type];
+        }
+
+        return this.DEFAULT_PARAMETER_TYPE;
     }
 
     printFunctionType(node){
@@ -889,9 +897,17 @@ class BaseTranspiler {
         if (text in this.StringLiteralReplacements) {
             return this.StringLiteralReplacements[text];
         }
-        text = text.replaceAll("'", "\\" + "'");
-        text = text.replaceAll("\"", "\\" + "\"");
+        text = text.replaceAll("\b", "\\b");
+        text = text.replaceAll("\f", "\\f");
         text = text.replaceAll("\n", "\\n");
+        text = text.replaceAll("\r", "\\r");
+        text = text.replaceAll("\t", "\\t");
+        if (token === "'") {
+            text = text.replaceAll("\\\"", "\""); // unscape double quotes
+            text = text.replaceAll("'", "\\'"); // escape single quotes
+        } else if (token === "\"") {
+            text = text.replaceAll("\"", "\\\""); // escape double quotes
+        }
         return token + text + token;
     }
 
@@ -1159,8 +1175,6 @@ class BaseTranspiler {
                     return this.printToLowerCaseCall(node, identation, parsedLeftSide);
                 case "shift":
                     return this.printShiftCall(node, identation, parsedLeftSide);
-                case "reverse":
-                    return this.printReverseCall(node, identation, parsedLeftSide);
                 case "pop":
                     return this.printPopCall(node, identation, parsedLeftSide);
                 case "reverse":
@@ -1655,6 +1669,10 @@ class BaseTranspiler {
         return this.getIden(identation) + this.CONTINUE_TOKEN + this.LINE_TERMINATOR;
     }
 
+    printDeleteExpression (node, identation) {
+        return undefined;
+    }
+
     printNode(node, identation = 0): string {
 
         try {
@@ -1740,6 +1758,8 @@ class BaseTranspiler {
                 return this.printNullKeyword(node, identation);
             } else if (ts.isContinueStatement(node)) {
                 return this.printContinueStatement(node, identation);
+            } else if (ts.isDeleteExpression(node)) {
+                return this.printDeleteExpression(node, identation);
             }
 
             if (node.statements) {

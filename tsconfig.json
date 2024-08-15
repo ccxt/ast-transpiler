@@ -4,7 +4,7 @@
         "module": "Node16",
         "outDir": "./dist",
         "allowJs": true,
-        "target": "es2020",
+        "target": "es2021",
         "allowSyntheticDefaultImports": true,
         "esModuleInterop": true,
         "declaration": true

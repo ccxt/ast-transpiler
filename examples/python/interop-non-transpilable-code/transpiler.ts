@@ -2,7 +2,7 @@
 // Small POC showcasing how this library can be applied to real-world libraries
 // where not every code is transpilable
 
-import { Transpiler } from '../../src/transpiler.js';
+import { Transpiler } from '../../../src/transpiler.js';
 import { writeFileSync } from 'fs';
 
 const transpiler = new Transpiler({

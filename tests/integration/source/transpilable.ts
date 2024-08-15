@@ -42,6 +42,17 @@ class Test {
         }
         console.log(i.toString()); // should print 10
 
+        const list2 = [1,2,3,4,5];
+        list2.reverse();
+        console.log(list2[0]); // should print 5
+        
+        //should delete key from dict
+        const dict2 = {"a": 1, "b": 2};
+        delete dict2["a"];
+        const dictKeys = Object.keys(dict2);
+        console.log(dictKeys.length); // should print 1
+        console.log(dictKeys[0]); // should print "b"
+
     }
 }
 

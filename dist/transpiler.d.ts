@@ -169,6 +169,8 @@ declare class BaseTranspiler {
     PARSEINT_WRAPPER_CLOSE: string;
     DYNAMIC_CALL_OPEN: string;
     SPREAD_TOKEN: string;
+    INFER_VAR_TYPE: boolean;
+    INFER_ARG_TYPE: boolean;
     SupportedKindNames: {};
     PostFixOperators: {};
     PrefixFixOperators: {};
@@ -180,6 +182,8 @@ declare class BaseTranspiler {
     CallExpressionReplacements: {};
     ReservedKeywordsReplacements: {};
     PropertyAccessRequiresParenthesisRemoval: any[];
+    VariableTypeReplacements: {};
+    ArgTypeReplacements: {};
     FuncModifiers: {};
     uncamelcaseIdentifiers: any;
     asyncTranspiling: any;
@@ -314,6 +318,7 @@ declare class BaseTranspiler {
     printSpreadElement(node: any, identation: any): string;
     printNullKeyword(node: any, identation: any): string;
     printContinueStatement(node: any, identation: any): string;
+    printDeleteExpression(node: any, identation: any): any;
     printNode(node: any, identation?: number): string;
     getFileESMImports(node: any): IFileImport[];
     isCJSRequireStatement(node: any): boolean;
@@ -345,6 +350,7 @@ declare class PythonTranspiler extends BaseTranspiler {
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
     printShiftCall(node: any, identation: any, name?: any): string;
+    printReverseCall(node: any, identation: any, name?: any): string;
     printArrayPushCall(node: any, identation: any, name: any, parsedArg: any): string;
     printToStringCall(node: any, identation: any, name?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -371,6 +377,7 @@ declare class PythonTranspiler extends BaseTranspiler {
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printConditionalExpression(node: any, identation: any): string;
+    printDeleteExpression(node: any, identation: any): string;
     getCustomOperatorIfAny(left: any, right: any, operator: any): "is" | "is not";
 }
 
@@ -386,6 +393,7 @@ declare class PhpTranspiler extends BaseTranspiler {
     getCustomOperatorIfAny(left: any, right: any, operator: any): "." | ".=";
     printLengthProperty(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
+    printReverseCall(node: any, identation: any, name?: any): string;
     printShiftCall(node: any, identation: any, name?: any): string;
     printToLowerCaseCall(node: any, identation: any, name?: any): string;
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
@@ -413,6 +421,7 @@ declare class PhpTranspiler extends BaseTranspiler {
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
+    printDeleteExpression(node: any, identation: any): string;
     getExceptionalAccessTokenIfAny(node: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -480,6 +489,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
     printConditionalExpression(node: any, identation: any): string;
+    printDeleteExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
 }
 

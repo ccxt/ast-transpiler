@@ -149,6 +149,10 @@ export class PythonTranspiler extends BaseTranspiler {
         return `${name}.pop(0)`;
     }
 
+    printReverseCall(node, identation, name = undefined) {
+        return `${name}.reverse()`;
+    }
+
     printArrayPushCall(node, identation, name, parsedArg) {
         return `${name}.append(${parsedArg})`;
     }
@@ -365,6 +369,11 @@ export class PythonTranspiler extends BaseTranspiler {
         const whenFalse = this.printNode(node.whenFalse, 0);
 
         return this.getIden(identation) + whenTrue + " if " + condition + " else " + whenFalse;
+    }
+
+    printDeleteExpression(node, identation) {
+        const expression = this.printNode (node.expression);
+        return `del ${expression}`;
     }
 
     getCustomOperatorIfAny(left, right, operator) {

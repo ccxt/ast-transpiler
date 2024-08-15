@@ -441,7 +441,7 @@ describe('csharp transpiling tests', () => {
         "x[\"teste\"] = 1;";
         const csharp =
         "object x = new Dictionary<string, object>() {};\n" +
-        "((Dictionary<string, object>)x)[\"teste\"] = 1;";
+        "((IDictionary<string,object>)x)[\"teste\"] = 1;";
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -453,7 +453,7 @@ describe('csharp transpiling tests', () => {
         const csharp =
         "object a = new Dictionary<string, object>() {};\n" +
         "object b = getValue(a, \"teste\");\n" +
-        "((Dictionary<string, object>)a)[\"b\"] = getValue(a, \"teste\");"
+        "((IDictionary<string,object>)a)[\"b\"] = getValue(a, \"teste\");"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -893,6 +893,18 @@ describe('csharp transpiling tests', () => {
     test('should convert date.now()', () => {
         const ts = "Date.now();";
         const csharp = "(new DateTimeOffset(DateTime.UtcNow)).ToUnixTimeMilliseconds();";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    });
+    test('should convert delete', () => {
+        const ts = "delete someObject[key];";
+        const csharp = "((IDictionary<string,object>)someObject).Remove((string)key);";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    });
+    test('string literal', () => {
+        const ts = "const x = \"foo, 'single', \\\"double\\\" \\t \\n \\r \\b \\f \";";
+        const csharp = "object x = \"foo, 'single', \\\"double\\\" \\t \\n \\r \\b \\f \";";
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     });

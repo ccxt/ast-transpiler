@@ -524,7 +524,7 @@ describe('php transpiling tests', () => {
         "$listFirst = $myList[0];\n" +
         "$myList[] = 4;\n" +
         "array_pop($myList);\n" +
-        "array_reverse($myList);\n" +
+        "$myList = array_reverse($myList);\n" +
         "array_shift($myList);"
         const output = transpiler.transpilePhp(ts).content;
         expect(output).toBe(php);
@@ -815,6 +815,18 @@ describe('php transpiling tests', () => {
         const php = readFileSync ('./tests/files/output/php/test1.php', "utf8");
         const output = transpiler.transpilePhpByPath('./tests/files/input/test1.ts').content;
         transpiler.setPhpUncamelCaseIdentifiers(false);
+        expect(output).toBe(php);
+    });
+    test('should convert delete', () => {
+        const ts = "delete someObject[key];";
+        const php = "unset($someObject[$key]);";
+        const output = transpiler.transpilePhp(ts).content;
+        expect(output).toBe(php);
+    });
+    test('string literal', () => {
+        const ts = "const x = \"foo, 'single', \\\"double\\\" \\t \\n \\r \\b \\f \";";
+        const php = "$x = 'foo, \\\'single\\\', \"double\" \\t \\n \\r \\b \\f ';";
+        const output = transpiler.transpilePhp(ts).content;
         expect(output).toBe(php);
     });
   });

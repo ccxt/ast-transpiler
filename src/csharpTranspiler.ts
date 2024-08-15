@@ -49,6 +49,8 @@ const parserConfig = {
     'MOD_WRAPPER_OPEN': 'mod(',
     'MOD_WRAPPER_CLOSE': ')',
     'FUNCTION_TOKEN': '',
+    'INFER_VAR_TYPE': false,
+    'INFER_ARG_TYPE': false,
 };
 
 export class CSharpTranspiler extends BaseTranspiler {
@@ -115,6 +117,28 @@ export class CSharpTranspiler extends BaseTranspiler {
             'internal': 'intern',
             'event': 'eventVar',
             'fixed': 'fixedVar',
+        };
+
+        this.VariableTypeReplacements = {
+            'string': 'string',
+            'Str': 'string',
+            'number': 'double',
+            'Int': 'Int64',
+            'Num': 'double',
+            'Dict': 'Dictionary<string, object>',
+            'Strings': 'List<string>',
+            'List': 'List<object>',
+        };
+
+        this.ArgTypeReplacements = {
+            'string': 'string',
+            'Str': 'string',
+            'number': 'double',
+            'Int': 'Int64',
+            'Num': 'double',
+            'Dict': 'Dictionary<string, object>',
+            'Strings': 'List<string>',
+            'List': 'List<object>',
         };
 
         this.binaryExpressionsWrappers = {
@@ -513,7 +537,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
 
         const isNew = declaration.initializer && (declaration.initializer.kind === ts.SyntaxKind.NewExpression);
-        const varToken = isNew ? 'var ' : 'object ' ;
+        const varToken = isNew ? 'var ' : this.VAR_TOKEN + ' ' ;
 
         // handle default undefined initialization
         if (declaration.initializer === undefined) {
@@ -522,7 +546,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const parsedValue = this.printNode(declaration.initializer, identation).trimStart();
         if (parsedValue === this.UNDEFINED_TOKEN) {
-            return this.getIden(identation) + "object " + this.printNode(declaration.name) + " = " + parsedValue;
+            let specificVarToken = "object";
+            if (this.INFER_VAR_TYPE) {
+                const variableType = global.checker.typeToString(global.checker.getTypeAtLocation(declaration));
+                if (this.VariableTypeReplacements[variableType]) {
+                    specificVarToken = this.VariableTypeReplacements[variableType] + '?';
+                }
+            }
+            return this.getIden(identation) + specificVarToken + " " + this.printNode(declaration.name) + " = " + parsedValue;
         }
         return this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
     }
@@ -868,7 +899,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printReverseCall(node, identation, name = undefined) {
-        return `((IList<object>)${name}).Reverse()`;
+        return `${name} = (${name} as IList<object>).Reverse().ToList()`;
     }
 
     printPopCall(node, identation, name = undefined) {
@@ -947,6 +978,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         const whenFalse = this.printNode(node.whenFalse, 0);
 
         return `((bool) ${condition})` + " ? " + whenTrue + " : " + whenFalse;
+    }
+
+    printDeleteExpression(node, identation) {
+        const object = this.printNode (node.expression.expression, 0);
+        const key = this.printNode (node.expression.argumentExpression, 0);
+        return `((IDictionary<string,object>)${object}).Remove((string)${key})`;
     }
 
     printThrowStatement(node, identation) {
