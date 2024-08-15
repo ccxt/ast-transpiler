@@ -153,7 +153,7 @@ export class PhpTranspiler extends BaseTranspiler {
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return `is_array(${parsedArg}) ? array_values(${parsedArg}) : array()`;
+        return `is_array(${parsedArg}) ? array_values(${parsedArg}) : array_values(get_object_vars(${parsedArg}))`;
     }
 
     printJsonParseCall(node, identation, parsedArg?) {
