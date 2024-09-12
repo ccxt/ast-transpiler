@@ -17,6 +17,10 @@ const transpiler = new Transpiler({
             "ELEMENT_ACCESS_WRAPPER_CLOSE": ")",
             'VAR_TOKEN': 'var',
         }
+    },
+    go: {
+        wrapThisCalls: false,
+        wrapCallMethods: ["name", "f"]
     }
 });
 
@@ -69,7 +73,7 @@ const config = [
         async: true
     },
 
-        {
+    {
         language: "python",
         async: true
     },
