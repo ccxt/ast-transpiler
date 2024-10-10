@@ -1,6 +1,6 @@
 
 # AST-Transpiler
-[![Build](https://github.com/carlosmiei/ast-transpiler/actions/workflows/node.js.yml/badge.svg?branch=master)](https://github.com/carlosmiei/ast-transpiler/actions/workflows/node.js.yml)
+[![Build](https://github.com/ccxt/ast-transpiler/actions/workflows/node.js.yml/badge.svg)](https://github.com/ccxt/ast-transpiler/actions/workflows/node.js.yml)
 ![Jest coverage](./badges/coverage-jest%20coverage.svg)
 ![Functions](./badges/coverage-functions.svg)
 ![Lines](./badges/coverage-lines.svg)
