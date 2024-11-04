@@ -108,7 +108,7 @@ export class PhpTranspiler extends BaseTranspiler {
                     ts.isPropertyDeclaration(valueDecl) ||
                     (ts.isParameter(valueDecl) && ts.isParameter(node.parent))
                 ) {
-                    if (type === undefined && typeRaw?.intrinsicName === 'number') {
+                    if (type === 'object' && typeRaw?.intrinsicName === 'number') {
                         type = 'float';
                     }
                     return `${type} $${identifier}`;
