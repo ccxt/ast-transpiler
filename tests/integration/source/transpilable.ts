@@ -8,6 +8,10 @@ class Second {
 
 class Test {
 
+    strprop: string = "test";
+    numprop: number = 1;
+    boolprop: boolean = false;
+
     public test() {
         var a = 1;
         var b = 2;
@@ -63,6 +67,11 @@ class Test {
         const both = firstConcat.concat(secondConcat);
         console.log(both.length); // should print 4
         console.log(both[2]); // should print "c"
+    }
+
+    someMethod(arg1: boolean, arg2: number) {
+        const res = arg1;
+        console.log(res);
     }
 }
 
