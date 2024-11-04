@@ -102,11 +102,15 @@ export class PhpTranspiler extends BaseTranspiler {
             }
             // add type support to variable
             if (this.supportVariableType) {
-                const type = this.getTypeFromRawType(global.checker.getTypeAtLocation(node));
+                const typeRaw = global.checker.getTypeAtLocation(node);
+                let type = this.getTypeFromRawType(typeRaw);
                 if (
                     ts.isPropertyDeclaration(valueDecl) ||
                     (ts.isParameter(valueDecl) && ts.isParameter(node.parent))
                 ) {
+                    if (type === undefined && typeRaw?.intrinsicName === 'number') {
+                        type = 'float';
+                    }
                     return `${type} $${identifier}`;
                 }
             }
