@@ -68,6 +68,7 @@ function transpileTests() {
     let csharp = 'namespace tests;\n' + result[0].content;
     csharp = csharp.replace('class Test', 'partial class Test');
 
+
     const goImports = [
         '\n',
         'import (',
