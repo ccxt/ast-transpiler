@@ -99,6 +99,14 @@ export class PhpTranspiler extends BaseTranspiler {
                     return `'${identifier}'`;  // Transpile function reference as string
                 }
             }
+            // add type support to variable
+            const type = this.getTypeFromRawType(global.checker.getTypeAtLocation(node));
+            if (
+                ts.isPropertyDeclaration(valueDecl) ||
+                (ts.isParameter(valueDecl) && ts.isParameter(node.parent))
+            ) {
+                return `${type} $${identifier}`;
+            }
         }
 
         // below is commented, due to : https://github.com/ccxt/ast-transpiler/pull/15
