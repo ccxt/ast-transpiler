@@ -100,12 +100,14 @@ export class PhpTranspiler extends BaseTranspiler {
                 }
             }
             // add type support to variable
-            const type = this.getTypeFromRawType(global.checker.getTypeAtLocation(node));
-            if (
-                ts.isPropertyDeclaration(valueDecl) ||
-                (ts.isParameter(valueDecl) && ts.isParameter(node.parent))
-            ) {
-                return `${type} $${identifier}`;
+            if (this.supportVariableType) {
+                const type = this.getTypeFromRawType(global.checker.getTypeAtLocation(node));
+                if (
+                    ts.isPropertyDeclaration(valueDecl) ||
+                    (ts.isParameter(valueDecl) && ts.isParameter(node.parent))
+                ) {
+                    return `${type} $${identifier}`;
+                }
             }
         }
 
