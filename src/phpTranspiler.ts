@@ -52,6 +52,7 @@ export class PhpTranspiler extends BaseTranspiler {
         super(config);
         this.id = "php";
         this.asyncTranspiling = config['async'] ?? true;
+        this.supportVariableType = config['supportVariableType'] ?? false;
         this.uncamelcaseIdentifiers = config['uncamelcaseIdentifiers'] ?? false;
         this.removeVariableDeclarationForFunctionExpression = config['removeFunctionAssignToVariable'] ?? false;
         this.includeFunctionNameInFunctionExpressionDeclaration = config['includeFunctionNameInFunctionExpressionDeclaration'] ?? false;
@@ -126,6 +127,13 @@ export class PhpTranspiler extends BaseTranspiler {
         return identifier;
     }
 
+    getTypeFromRawType(type) {
+        const typeValue = super.getTypeFromRawType(type);
+        if (typeValue === undefined && type?.symbol?.escapedName) {
+            return type.symbol.escapedName;
+        }
+        return typeValue;
+    }
 
     getCustomOperatorIfAny(left, right, operator) {
         const STRING_CONCAT = '.';
