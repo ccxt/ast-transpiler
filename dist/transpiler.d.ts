@@ -527,6 +527,7 @@ declare class GoTranspiler extends BaseTranspiler {
     transformFunctionNameIfNeeded(name: any): string;
     printPropertyDeclaration(node: any, identation: any): string;
     printStruct(node: any, indentation: any): string;
+    printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
     printPropertyAccessModifiers(node: any): string;
     printMethodDeclaration(node: any, identation: any): string;

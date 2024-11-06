@@ -179,10 +179,11 @@ export class GoTranspiler extends BaseTranspiler {
         return this.capitalize(name);
     }
 
+
     printPropertyDeclaration(node, identation) {
         // let modifiers = this.printModifiers(node);
         // modifiers = modifiers ? modifiers + " " : modifiers;
-        const name = this.printNode(node.name, 0);
+        const name = this.capitalize(this.printNode(node.name, 0));
         let type = 'interface{}';
         if (node.type === undefined) {
             type = 'interface{}';
@@ -190,15 +191,17 @@ export class GoTranspiler extends BaseTranspiler {
             type = 'string';
         } else if (node.type.kind === SyntaxKind.NumberKeyword) {
             type = 'int';
-        } else if (node.type.kind === SyntaxKind.BooleanKeyword) {
+        } else if (node.type.kind === SyntaxKind.BooleanKeyword || (ts as any).isBooleanLiteral(node)) {
             type = 'bool';
         } else if (node.type.kind === SyntaxKind.ArrayType) {
             type = '[]interface{}';
         }
         if (node.initializer) {
             // we have to save the value and initialize it later
-            // const initializer = this.printNode(node.initializer, 0);
-            // return this.getIden(identation) + modifiers + name + " = " + initializer + this.LINE_TERMINATOR;
+            let initializer = this.printNode(node.initializer, 0);
+            // quick fix
+            initializer = initializer.replaceAll('"', '');
+            return this.getIden(identation) + name + ' ' + type + ' ' + `\`default:"${initializer}"\`` + this.LINE_TERMINATOR;
         }
         return this.getIden(identation) + name + ' ' + type + this.LINE_TERMINATOR;
     }
@@ -218,9 +221,22 @@ export class GoTranspiler extends BaseTranspiler {
         return `type ${className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
     }
 
+    printNewStructMethod(node){
+        const className = node.name.escapedText;
+        return `
+func New${this.capitalize(className)}() ${(className)} {
+   p := ${className}{}
+   setDefaults(&p)
+   return p
+}\n`;
+
+    }
+
     printClass(node, identation) {
 
         const struct = this.printStruct(node, identation);
+
+        const newMethod = this.printNewStructMethod(node);
 
         this.className = node.name.escapedText;
 
@@ -233,7 +249,7 @@ export class GoTranspiler extends BaseTranspiler {
         // const classClosing = this.getBlockClose(identation);
 
         // return classDefinition + classBody + classClosing;
-        return struct + "\n" + classMethods;
+        return struct + "\n" + newMethod  + "\n" + classMethods;
     }
 
     printPropertyAccessModifiers (node) {
@@ -384,6 +400,15 @@ export class GoTranspiler extends BaseTranspiler {
             });
 
             return arrayBindingStatement;
+        }
+
+        if (declaration?.initializer?.kind=== ts.SyntaxKind.AwaitExpression) {
+            const parsedName = this.printNode(declaration.name, 0);
+            const parsedInitializer = this.printNode(declaration.initializer, 0);
+            return `
+${this.getIden(identation)}${parsedName}:= ${parsedInitializer}
+${this.getIden(identation)}PanicOnError(${parsedName})`;
+
         }
 
         const isNew = declaration.initializer && (declaration.initializer.kind === ts.SyntaxKind.NewExpression);
@@ -807,11 +832,11 @@ export class GoTranspiler extends BaseTranspiler {
                 functionBody = super.printFunctionBody(node, identation);
             } else {
                 functionBody = node.body.statements.map(statement => {
-                    if (statement.kind === ts.SyntaxKind.ReturnStatement) {
-                        if (statement?.expression) {
-                            return this.getIden(identation) + "ch <-" + this.printNode(statement.expression) + '\n' + this.getIden(identation) + "return " + this.printNode(statement.expression);
-                        }
-                    }
+                    // if (statement.kind === ts.SyntaxKind.ReturnStatement) {
+                    //     if (statement?.expression) {
+                    //         return this.getIden(identation) + "ch <-" + this.printNode(statement.expression) + '\n' + this.getIden(identation) + "return " + this.printNode(statement.expression);
+                    //     }
+                    // }
                     return this.printNode(statement, identation);
                 }).join("\n");
 
@@ -825,36 +850,73 @@ export class GoTranspiler extends BaseTranspiler {
 
                 const trimmedLine = line.trim();
 
-                if(trimmedLine.startsWith("return") && trimmedLine !== "return") {
-                    const returnIndentation = line.indexOf("return");
-                    let channelReturn = this.getIden(returnIndentation) + "ch <-" + line.replace("return", "").trimStart();
-                    if (trimmedLine === "return nil") {
-                        channelReturn = this.getIden(returnIndentation) + "ch <- nil\n" + this.getIden(returnIndentation) + "return nil";
-                        // it's hard because we don't want to remove the treturns from the emulated try-catches we have that are also functions
-                        // with return statements
-                    }
-                    return channelReturn;
-                }
+                // should we do this inside printReturn statement?
+                // if(trimmedLine.startsWith("return") && trimmedLine !== "return") {
+                //     const returnIndentation = line.indexOf("return")/4 + this.getIden(1);
+                //     let channelReturn = this.getIden(returnIndentation) + "ch <-" + line.replace("return", "").trimStart();
+                //     if (trimmedLine === "return nil") {
+                //         channelReturn = this.getIden(returnIndentation) + "ch <- nil\n" + this.getIden(returnIndentation) + "return nil";
+                //         // it's hard because we don't want to remove the treturns from the emulated try-catches we have that are also functions
+                //         // with return statements
+                //     }
+                //     return channelReturn;
+                // }
                 return this.getIden(identation+2) + line;
             }).join("\n");
             let shouldAddLastReturn = true;
 
-            const bodySplit = bodyWithIndentationExtraAndNoReturn.split("\n");
+            // const bodySplit = bodyWithIndentationExtraAndNoReturn.split("\n");
+            const bodySplit = functionBodySplit;
             const lastLine = bodySplit[bodySplit.length - 1];
             if (lastLine.trim().startsWith("return") || lastLine.trim().startsWith("panic")) {
                 shouldAddLastReturn = false;
             }
 
             const lastReturn = shouldAddLastReturn ? this.getIden(identation+2) + "return nil" : "";
+            // const hasCatchInside = bodySplit.indexOf("recover()") > -1;
+            // if ((1+1 == 2) || hasCatchInside) {
             functionBody = `{
-${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-${this.getIden(identation + 1)}go func() interface{} {
-${this.getIden(identation + 2)}defer close(ch)
-${bodyWithIndentationExtraAndNoReturn}
-${lastReturn}
-${this.getIden(identation + 1)}}()
-${this.getIden(identation + 1)}return ch
-${this.getIden(identation)}}`;
+        ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
+        ${this.getIden(identation + 1)}go func() interface{} {
+        ${this.getIden(identation + 2)}defer close(ch)
+        ${this.getIden(identation + 2)}defer ReturnPanicError(ch)
+        ${bodyWithIndentationExtraAndNoReturn}
+        ${lastReturn}
+        ${this.getIden(identation + 1)}}()
+        ${this.getIden(identation + 1)}return ch
+        ${this.getIden(identation)}}`;
+            // } else {
+            // functionBody = `{
+            // ${id1}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
+            // ${id1}var panicError interface{} = nil
+            // ${id1}var wg sync.WaitGroup
+            // ${id1}wg.Add(1)
+            // ${id1}go func() interface{} {
+            // ${id2}defer wg.Done()
+            // ${id2}defer close(ch)
+            // ${id2}defer func() {
+            // ${id3}if r := recover(); r != nil {
+            // ${id4}panicError = r
+            // ${id4}return
+            // ${id3}}
+            // ${id2}}()
+            // ${bodySplit}
+            // ${lastReturn}
+            // ${id1}}()
+            // ${id1}wg.Wait()
+            // ${id1}if panicError != nil {
+            // ${id2}panic(panicError)
+            // ${id1}}
+            // ${id1}return ch
+            // ${id}}`;
+            // }
+
+            // to do fix this later
+            // we can't pass nil to the channel when we just want to
+            // return from the try catch, otherwise the channel will close with nil
+            // instead of the proper result
+            functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\snil(\s*\})/gm, "$1return nil$2");
+
         }
 
         return functionBody;
@@ -870,6 +932,88 @@ ${this.getIden(identation)}}`;
         const right = node.right.escapedText;
         return this.getIden(identation) + `IsInstance(${left}, ${right})`;
     }
+
+    getRandomNameSuffix() {
+        return Math.floor(Math.random() * 1000000).toString();
+    }
+
+    printExpressionStatement(node, identation) {
+
+        if (node?.expression?.kind === ts.SyntaxKind.AsExpression) {
+            node = node.expression;
+        }
+        if (node.expression.kind !== ts.SyntaxKind.AwaitExpression) {
+            return super.printExpressionStatement(node, identation);
+        }
+
+        const exprStm = this.printNode(node.expression, identation);
+
+        const returnRandName = "retRes" + this.getRandomNameSuffix();
+
+        // const expStatement =this.getIden(identation) + exprStm + this.LINE_TERMINATOR;
+
+        const expStatement = `
+${this.getIden(identation)}${returnRandName} := ${exprStm}
+${this.getIden(identation)}PanicOnError(${returnRandName})`;
+        return this.printNodeCommentsIfAny(node, identation, expStatement);
+    }
+
+    isInsideAsyncFunction(returnStatementNode) {
+        let currentNode = returnStatementNode;
+
+        while (currentNode) {
+            // Check if the current node is a function or method
+            if (ts.isFunctionDeclaration(currentNode) ||
+              ts.isFunctionExpression(currentNode) ||
+              ts.isArrowFunction(currentNode) ||
+              ts.isMethodDeclaration(currentNode)) {
+                return currentNode.modifiers && currentNode.modifiers.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword);
+            }
+            // Move up the tree to the parent node
+            currentNode = currentNode.parent;
+        }
+
+        // Return false if no async function or method is found
+        return false;
+    }
+
+    printReturnStatement(node, identation) {
+
+        const isAsyncFunction = this.isInsideAsyncFunction(node);
+        // if (node?.expression?.kind !== ts.SyntaxKind.AwaitExpression) {
+        //     return super.printReturnStatement(node, identation);
+        // }
+        if (!isAsyncFunction) {
+            return super.printReturnStatement(node, identation);
+        }
+
+        const leadingComment = this.printLeadingComments(node, identation);
+        let trailingComment = this.printTraillingComment(node, identation);
+        trailingComment = trailingComment ? " " + trailingComment : trailingComment;
+        const exp =  node.expression;
+        let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
+        rightPart = rightPart.trim();
+
+        if (node?.expression?.kind === ts.SyntaxKind.AsExpression) {
+            node = node.expression;
+        }
+
+        if (node?.expression?.kind === ts.SyntaxKind.AwaitExpression) {
+            const returnRandName = "retRes" + this.getRandomNameSuffix();
+            rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+            // return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+            return `
+    ${this.getIden(identation)}${returnRandName} := ${rightPart}
+    ${this.getIden(identation)}PanicOnError(${returnRandName})
+    ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
+    ${this.getIden(identation)}return ${returnRandName}`;
+        }
+
+        return `
+${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
+${this.getIden(identation)}return ${rightPart}`;
+    }
+
 
     printAsExpression(node, identation) {
         const type = node.type;
@@ -1198,12 +1342,19 @@ ${this.getIden(identation)}}`;
 
         if (operatorToken.kind === ts.SyntaxKind.EqualsToken) {
             // handle test['a'] = 1;
+            const elementAccess = left;
+            const rightSide = this.printNode(right, 0);
             if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                const elementAccess = left;
                 const leftSide = this.printNode(elementAccess.expression, 0);
-                const rightSide = this.printNode(right, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
                 return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
+            }
+
+            if (right?.kind === ts.SyntaxKind.AwaitExpression) {
+                const leftParsed = this.printNode(left, 0);
+                return `
+${leftParsed} = ${rightSide}
+${this.getIden(identation)}PanicOnError(${leftParsed})`;
             }
         }
 
@@ -1280,18 +1431,20 @@ ${this.getIden(identation)}}`;
         const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
         const catchDeclaration = this.printNode(node.catchClause.variableDeclaration.name, 0);
 
+        const catchBodyHashReturn = catchBody.indexOf("return") > -1;
+        const returNil = "return nil";
         const className = this.className;
-        const catchBlock = `
+        const catchBlock =`
 {		ret__ := func(this *${className}) (ret_ interface{}) {
 		defer func() {
-			if e := recover().(interface{}); e != nil {
+			if e := recover(); e != nil {
                 if e == "break" {
 				    return
 			    }
 				ret_ = func(this *${className}) interface{} {
 					// catch block:
                     ${catchBody}
-					return nil
+                    ${returNil}
 				}(this)
 			}
 		}()
@@ -1327,7 +1480,7 @@ ${this.getIden(identation)}}`;
         let expression = node.expression?.escapedText;
         expression = expression ? expression : this.printNode(node.expression); // new Exception or new exact[string] check this out
         if (node.arguments.length === 0) {
-            return `new(${expression})`;
+            return `New${this.capitalize(expression)}()`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
         const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";

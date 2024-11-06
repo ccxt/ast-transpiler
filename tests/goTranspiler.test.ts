@@ -49,11 +49,18 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}";
         const go =
-        "type Test struct {\n" +
-        "\n" +
-        "}\n" +
-        "func  (this *Test) Main() interface{}  {\n" +
-        "    return 1\n" +
+        "type Test struct {\n"+
+        "\n"+
+        "}\n"+
+        "\n"+
+        "func NewTest() Test {\n"+
+        "   p := Test{}\n"+
+        "   setDefaults(&p)\n"+
+        "   return p\n"+
+        "}\n"+
+        "\n"+
+        "func  (this *Test) Main() interface{}  {\n"+
+        "    return 1\n"+
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -94,35 +101,42 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}";
         const go =
-        "type A struct {\n"+
-        "\n"+
-        "}\n"+
-        "func  (this *A) Main() interface{}  {\n"+
-        "    \n"+
-        "    {		ret__ := func(this *A) (ret_ interface{}) {\n"+
-        "    		defer func() {\n"+
-        "    			if e := recover().(interface{}); e != nil {\n"+
-        "                    if e == \"break\" {\n"+
-        "    				    return\n"+
-        "    			    }\n"+
-        "    				ret_ = func(this *A) interface{} {\n"+
-        "    					// catch block:\n"+
-        "                                return 2\n"+
-        "    					return nil\n"+
-        "    				}(this)\n"+
-        "    			}\n"+
-        "    		}()\n"+
-        "    		// try block:\n"+
-        "                    if IsTrue(IsEqual(1, Add(1, 1))) {\n"+
-        "                return 1\n"+
-        "            }\n"+
-        "    		return nil\n"+
-        "    	}(this)\n"+
-        "    	if ret__ != nil {\n"+
-        "    		return ret__\n"+
-        "    	}\n"+
-        "    }\n"+
-        "}";
+    "type A struct {\n"+
+    "\n"+
+    "}\n"+
+    "\n"+
+    "func NewA() A {\n"+
+    "   p := A{}\n"+
+    "   setDefaults(&p)\n"+
+    "   return p\n"+
+    "}\n"+
+    "\n"+
+    "func  (this *A) Main() interface{}  {\n"+
+    "    \n"+
+    "    {		ret__ := func(this *A) (ret_ interface{}) {\n"+
+    "    		defer func() {\n"+
+    "    			if e := recover().(interface{}); e != nil {\n"+
+    "                    if e == \"break\" {\n"+
+    "    				    return\n"+
+    "    			    }\n"+
+    "    				ret_ = func(this *A) interface{} {\n"+
+    "    					// catch block:\n"+
+    "                                return 2\n"+
+    "    					return nil\n"+
+    "    				}(this)\n"+
+    "    			}\n"+
+    "    		}()\n"+
+    "    		// try block:\n"+
+    "                    if IsTrue(IsEqual(1, Add(1, 1))) {\n"+
+    "                return 1\n"+
+    "            }\n"+
+    "    		return nil\n"+
+    "    	}(this)\n"+
+    "    	if ret__ != nil {\n"+
+    "    		return ret__\n"+
+    "    	}\n"+
+    "    }\n"+
+    "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
     });

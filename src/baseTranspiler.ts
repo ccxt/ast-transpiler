@@ -373,7 +373,7 @@ class BaseTranspiler {
     }
 
     getIden (num) {
-        return this.DEFAULT_IDENTATION.repeat(num);
+        return this.DEFAULT_IDENTATION.repeat(parseInt(num));
     }
 
     getBlockOpen(identation){

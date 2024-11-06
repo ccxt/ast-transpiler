@@ -3355,7 +3355,7 @@ var GoTranspiler = class extends BaseTranspiler {
     return this.capitalize(name);
   }
   printPropertyDeclaration(node, identation) {
-    const name = this.printNode(node.name, 0);
+    const name = this.capitalize(this.printNode(node.name, 0));
     let type = "interface{}";
     if (node.type === void 0) {
       type = "interface{}";
@@ -3363,12 +3363,15 @@ var GoTranspiler = class extends BaseTranspiler {
       type = "string";
     } else if (node.type.kind === SyntaxKind3.NumberKeyword) {
       type = "int";
-    } else if (node.type.kind === SyntaxKind3.BooleanKeyword) {
+    } else if (node.type.kind === SyntaxKind3.BooleanKeyword || _typescript2.default.isBooleanLiteral(node)) {
       type = "bool";
     } else if (node.type.kind === SyntaxKind3.ArrayType) {
       type = "[]interface{}";
     }
     if (node.initializer) {
+      let initializer = this.printNode(node.initializer, 0);
+      initializer = initializer.replaceAll('"', "");
+      return this.getIden(identation) + name + " " + type + ` \`default:"${initializer}"\`` + this.LINE_TERMINATOR;
     }
     return this.getIden(identation) + name + " " + type + this.LINE_TERMINATOR;
   }
@@ -3385,12 +3388,23 @@ var GoTranspiler = class extends BaseTranspiler {
 ${heritageName}${propDeclarations.map((member) => this.printNode(member, indentation + 1)).join("\n")}
 }`;
   }
+  printNewStructMethod(node) {
+    const className = node.name.escapedText;
+    return `
+func New${this.capitalize(className)}() ${className} {
+   p := ${className}{}
+   setDefaults(&p)
+   return p
+}
+`;
+  }
   printClass(node, identation) {
     const struct = this.printStruct(node, identation);
+    const newMethod = this.printNewStructMethod(node);
     this.className = node.name.escapedText;
     const methods = node.members.filter((member) => member.kind === SyntaxKind3.MethodDeclaration);
     const classMethods = methods.map((method) => this.printMethodDeclaration(method, identation)).join("\n");
-    return struct + "\n" + classMethods;
+    return struct + "\n" + newMethod + "\n" + classMethods;
   }
   printPropertyAccessModifiers(node) {
     return "";
@@ -4115,7 +4129,7 @@ ${this.getIden(identation)}}`;
     let expression = _optionalChain([node, 'access', _149 => _149.expression, 'optionalAccess', _150 => _150.escapedText]);
     expression = expression ? expression : this.printNode(node.expression);
     if (node.arguments.length === 0) {
-      return `new(${expression})`;
+      return `New${this.capitalize(expression)}()`;
     }
     const args = node.arguments.map((n) => this.printNode(n, identation)).join(", ");
     const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
