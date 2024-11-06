@@ -875,7 +875,7 @@ describe('php transpiling tests', () => {
         const output = transpiler.transpilePhp(ts).content;
         expect(output).toBe(php);
     });
-    test.only('should transpile file from path', () => {
+    test('should transpile file from path', () => {
         transpiler.setPhpUncamelCaseIdentifiers(true);
         const php = readFileSync ('./tests/files/output/php/test1.php', "utf8");
         const output = transpiler.transpilePhpByPath('./tests/files/input/test1.ts').content;
