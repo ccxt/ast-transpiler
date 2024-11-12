@@ -101,7 +101,7 @@ export class PhpTranspiler extends BaseTranspiler {
             }
         }
 
-        // below is commented, due to failing tests ( https://github.com/ccxt/ast-transpiler/pull/15
+        // below is commented, due to : https://github.com/ccxt/ast-transpiler/pull/15
         //
         // If the identifier is a function parameter (callback), it should remain a variable with `$` prefix
         // if (node.parent && (ts.isParameter(node.parent) || (ts.isCallExpression(node.parent) && ts.isIdentifier(node)))) {
