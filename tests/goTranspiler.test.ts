@@ -148,4 +148,10 @@ describe('go transpiling tests', () => {
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(result);
     });
+    test('should convert replaceAll', () => {
+        const ts = "y.replaceAll(z, a)";
+        const result = "Replace(y, z, a)";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toBe(result);
+    });
 });
