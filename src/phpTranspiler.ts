@@ -66,7 +66,7 @@ export class PhpTranspiler extends BaseTranspiler {
         // const propertyAccessRemoval = config['PropertyAccessRequiresParenthesisRemoval'] ?? [];
         // this.PropertyAccessRequiresParenthesisRemoval.push(...propertyAccessRemoval);
 
-        this.AWAIT_WRAPPER_OPEN = config['AWAIT_WRAPPER_OPEN'] ?? "Async\\await(";
+        this.AWAIT_WRAPPER_OPEN = config['AWAIT_WRAPPER_OPEN'] ?? "\\React\\Async\\await(";
         this.AWAIT_WRAPPER_CLOSE = config['AWAIT_WRAPPER_CLOSE'] ??  ")";
     }
 
@@ -197,7 +197,7 @@ export class PhpTranspiler extends BaseTranspiler {
     }
 
     printPromiseAllCall(node, identation, parsedArg = undefined) {
-        return `Promise\\all(${parsedArg})`;
+        return `\\React\\Promise\\all(${parsedArg})`;
     }
 
     printMathCeilCall(node, identation, parsedArg = undefined) {
@@ -472,7 +472,7 @@ export class PhpTranspiler extends BaseTranspiler {
             'Math.pow': 'pow',
             'Math.min': 'min',
             'Math.max': 'max',
-            // 'Promise.all': 'Promise\\all',
+            // 'Promise.all': '\\React\\Promise\\all',
         };
 
         this.CallExpressionReplacements = {
