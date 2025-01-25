@@ -10,6 +10,10 @@ class Second {
 
 class Test {
 
+    strprop: string = "test";
+    numprop: number = 1;
+    boolprop: boolean = false;
+
     public test() {
         var a = 1;
         var b = 2;
@@ -75,6 +79,11 @@ class Test {
         const baseString = "aabba";
         const replacedAllString = baseString.replaceAll("a", "");
         console.log(replacedAllString); // should print "bb"
+    }
+
+    someMethod(arg1: boolean, arg2: number) {
+        const res = arg1;
+        console.log(res);
     }
 }
 
