@@ -635,7 +635,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 // case "JSON.parse":
                 //     return `json_decode(${parsedArg}, $as_associative_array = true)`;
                 case "Math.abs":
-                    return `Math.Abs(Convert.ToDouble(${parsedArg}))`;
+                    return `mathAbs(${parsedArg})`;
                 }
             } else if (args.length === 2)
             {
@@ -647,7 +647,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 case "Math.max":
                     return `mathMax(${parsedArg1}, ${parsedArg2})`;
                 case "Math.pow":
-                    return `Math.Pow(Convert.ToDouble(${parsedArg1}), Convert.ToDouble(${parsedArg2}))`;
+                    return `MathPow(${parsedArg1}, ${parsedArg2})`;
                 }
             }
             const leftSide = node.expression?.expression;
