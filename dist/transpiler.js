@@ -3679,7 +3679,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const parsedArg = this.printNode(args[0], 0);
         switch (expressionText) {
           case "Math.abs":
-            return `Math.Abs(Convert.ToDouble(${parsedArg}))`;
+            return `mathAbs(${parsedArg})`;
         }
       } else if (args.length === 2) {
         const parsedArg1 = this.printNode(args[0], 0);
@@ -3690,7 +3690,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
           case "Math.max":
             return `mathMax(${parsedArg1}, ${parsedArg2})`;
           case "Math.pow":
-            return `Math.Pow(Convert.ToDouble(${parsedArg1}), Convert.ToDouble(${parsedArg2}))`;
+            return `MathPow(${parsedArg1}, ${parsedArg2})`;
         }
       }
       const leftSide = node.expression?.expression;
