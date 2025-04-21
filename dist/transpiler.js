@@ -3429,6 +3429,10 @@ func New${this.capitalize(className)}() ${className} {
   printPropertyAccessModifiers(node) {
     return "";
   }
+  printSpreadElement(node, identation) {
+    const expression = this.printNode(node.expression, 0);
+    return this.getIden(identation) + expression + this.SPREAD_TOKEN;
+  }
   printMethodDeclaration(node, identation) {
     const className = node.parent.name.escapedText;
     let methodDef = this.printMethodDefinition(node, identation);
@@ -3887,6 +3891,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   getRandomNameSuffix() {
     return Math.floor(Math.random() * 1e6).toString();
   }
+  getLineBasedSuffix(node) {
+    const { line, character } = global.src.getLineAndCharacterOfPosition(node.getStart());
+    return `${line}${character}`;
+  }
   printExpressionStatement(node, identation) {
     if (node?.expression?.kind === ts5.SyntaxKind.AsExpression) {
       node = node.expression;
@@ -3895,7 +3903,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return super.printExpressionStatement(node, identation);
     }
     const exprStm = this.printNode(node.expression, identation);
-    const returnRandName = "retRes" + this.getRandomNameSuffix();
+    const returnRandName = "retRes" + this.getLineBasedSuffix(node);
     const expStatement = `
 ${this.getIden(identation)}${returnRandName} := ${exprStm}
 ${this.getIden(identation)}PanicOnError(${returnRandName})`;
@@ -3926,7 +3934,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
       node = node.expression;
     }
     if (node?.expression?.kind === ts5.SyntaxKind.AwaitExpression) {
-      const returnRandName = "retRes" + this.getRandomNameSuffix();
+      const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
       rightPart = rightPart ? " " + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
       return `
     ${this.getIden(identation)}${returnRandName} := ${rightPart}

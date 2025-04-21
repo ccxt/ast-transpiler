@@ -148,4 +148,14 @@ describe('go transpiling tests', () => {
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(result);
     });
+    test('should transpile spread operator when passed to function', () => {
+        const ts =
+            "const x = [1,2,3]\n" +
+            "foo(...x)";
+        const go =
+            "var x interface{} = []interface{}{1, 2, 3}\n" +
+            "Foo(x...)";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toBe(go);
+    });
 });

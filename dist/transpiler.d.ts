@@ -534,6 +534,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
     printPropertyAccessModifiers(node: any): string;
+    printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     printFunctionDeclaration(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
@@ -560,6 +561,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printAwaitExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
     getRandomNameSuffix(): string;
+    getLineBasedSuffix(node: any): string;
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): boolean;
     printReturnStatement(node: any, identation: any): string;
