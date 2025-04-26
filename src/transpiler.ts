@@ -7,6 +7,7 @@ import * as path from "path";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
+import { RustTranspiler } from './rustTranspiler.js';
 
 const __dirname_mock = currentPath;
 
@@ -49,12 +50,14 @@ export default class Transpiler {
     phpTranspiler: PhpTranspiler;
     csharpTranspiler: CSharpTranspiler;
     goTranspiler: GoTranspiler;
+    rustTranspiler: RustTranspiler;
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
         const goConfig = config["go"] || {};
+        const rustConfig = config["rust"] || {};
 
         if ("verbose" in config) {
             Logger.setVerboseMode(config['verbose']);
@@ -64,6 +67,7 @@ export default class Transpiler {
         this.phpTranspiler = new PhpTranspiler(phpConfig);
         this.csharpTranspiler = new CSharpTranspiler(csharpConfig);
         this.goTranspiler = new GoTranspiler(goConfig);
+        this.rustTranspiler = new RustTranspiler(rustConfig);
     }
 
     setVerboseMode(verbose: boolean) {
@@ -113,6 +117,9 @@ export default class Transpiler {
 
         let transpiledContent = undefined;
         switch(lang) {
+        case Languages.Rust:
+                transpiledContent = this.rustTranspiler.printNode(global.src, -1);
+                break;
         case Languages.Python:
             this.pythonTranspiler.asyncTranspiling = !sync;
             transpiledContent = this.pythonTranspiler.printNode(global.src, -1);
@@ -212,6 +219,13 @@ export default class Transpiler {
     transpilePythonByPath(path): ITranspiledFile {
         return this.transpile(Languages.Python, TranspilationMode.ByPath, path, !this.pythonTranspiler.asyncTranspiling);
     }
+    transpileRust(content): ITranspiledFile {
+        return this.transpile(Languages.Rust, TranspilationMode.ByContent, content);
+    }
+
+    transpileRustByPath(path): ITranspiledFile {
+        return this.transpile(Languages.Rust, TranspilationMode.ByPath, path);
+    }
 
     transpilePhp(content): ITranspiledFile {
         return this.transpile(Languages.Php, TranspilationMode.ByContent, content, !this.phpTranspiler.asyncTranspiling);
@@ -282,6 +296,8 @@ export default class Transpiler {
             return Languages.CSharp;
         case "go":
             return Languages.Go;
+        case "rust":
+            return Languages.Rust;
         }
     }
 }

@@ -41,7 +41,8 @@ enum Languages {
     Python,
     Php,
     CSharp,
-    Go
+    Go,
+    Rust
 }
 
 enum TranspilationMode {

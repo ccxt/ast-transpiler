@@ -17,8 +17,11 @@ function unCamelCase (s: string): string | undefined {
 // function extend (...args) {
 //     Object.assign ({}, ...args);
 // }
-
+function isUpperCase(x) {
+    return x && x.length > 0 && x[0] === x.toUpperCase()[0];
+}
 export {
     regexAll,
     unCamelCase,
+    isUpperCase
 };
