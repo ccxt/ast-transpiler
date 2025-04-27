@@ -118,8 +118,8 @@ export default class Transpiler {
         let transpiledContent = undefined;
         switch(lang) {
         case Languages.Rust:
-                transpiledContent = this.rustTranspiler.printNode(global.src, -1);
-                break;
+            transpiledContent = this.rustTranspiler.printNode(global.src, -1);
+            break;
         case Languages.Python:
             this.pythonTranspiler.asyncTranspiling = !sync;
             transpiledContent = this.pythonTranspiler.printNode(global.src, -1);

@@ -23,14 +23,14 @@ beforeAll(() => {
     transpiler = new Transpiler(config);
 })
 
-describe('csharp transpiling tests', () => {
+describe('rust transpiling tests', () => {
     test('basic variable declaration', () => {
         const ts = "const x = 1;"
-        const csharp = "let x = 1;"
+        const csharp = "let x: i32 = 1;"
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(csharp);
     });
-    test('basic while loop', () => {
+    test('basic while true loop', () => {
         const ts =
         "while (true) {\n" +
         "    const x = 1;\n" +
@@ -38,23 +38,22 @@ describe('csharp transpiling tests', () => {
         "}"
         
         const csharp =
-        'loop  {\n    let x = 1;\n    break;\n}'
+        'loop  {\n    let x: i32 = 1;\n    break;\n}'
        
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(csharp);
     });
-    // test('basic for loop', () => {
-    //     const ts =
-    //     "for (let i = 0; i < 10; i++) {\n" +
-    //     "    break;\n" +
-    //     "}"
-    //     const csharp =
-    //     "for (object i = 0; isLessThan(i, 10); i++)\n{\n" +
-    //     "    break;\n" +
-    //     "}"
-    //     const output = transpiler.transpileRust(ts).content;
-    //     expect(output).toBe(csharp);
-    // });
+    test('basic for loop', () => {
+        const ts =
+        "for (let i = 0; i < 10; i++) {\n" +
+        "    break;\n" +
+        "}"
+        const csharp =
+       'let mut i: i32 = 0;\n'+
+       'while i < 10 {\n    break;\n    i+=1\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(csharp);
+    });
     test('basic method declaration', () => {
         const ts =
         "class T {\n" +
@@ -70,6 +69,7 @@ describe('csharp transpiling tests', () => {
         "        Console.WriteLine(\"Hello\");\n" +
         "    }\n" +
         "}"
+        
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(csharp);
     });

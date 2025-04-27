@@ -62,8 +62,8 @@ const parserConfig = {
     GREATER_THAN_TOKEN: ">",
     GREATER_THAN_EQUALS_TOKEN: ">=",
     LESS_THAN_EQUALS_TOKEN: "<=",
-    PLUS_PLUS_TOKEN: "",            // Rust 不支持 ++
-    MINUS_MINUS_TOKEN: "",          // Rust 不支持 --
+    PLUS_PLUS_TOKEN: "+=1",            // Rust 不支持 ++
+    MINUS_MINUS_TOKEN: "-=1",          // Rust 不支持 --
     CONSTRUCTOR_TOKEN: "fn new",    // Rust 的构造函数惯例
     SUPER_CALL_TOKEN: "",           // Rust 无继承机制
     WHILE_TOKEN: "while",
@@ -96,10 +96,10 @@ const parserConfig = {
     BOOLEAN_KEYWORD: "bool",
 
     ARRAY_KEYWORD: "Vec<Object>",
-    OBJECT_KEYWORD: "HashMap<String, Object>",
+    OBJECT_KEYWORD: "Box<dyn Any>",
     DEFAULT_RETURN_TYPE: "()",       // 默认返回空元组
-    DEFAULT_PARAMETER_TYPE: "Object",
-    DEFAULT_TYPE: "Object",
+    DEFAULT_PARAMETER_TYPE: "",
+    DEFAULT_TYPE: "Default_Type",
 
     // 以下包装器均为空（Rust 不需要特殊语法包装）
     FALSY_WRAPPER_OPEN: "",
@@ -147,9 +147,9 @@ const parserConfig = {
 
 export class RustTranspiler extends BaseTranspiler {
     currentStruct: string | null = null;
-
+    nextLine="\n";
     constructor(config = {}) {
-        super(Object.assign({}, parserConfig, config));
+        super({"parser":Object.assign({}, parserConfig, config['parser'])});
         this.id = "rust";
         this.initConfig();
     }
@@ -177,13 +177,101 @@ export class RustTranspiler extends BaseTranspiler {
             'string': 'String',
             'boolean': 'bool',
             'object':'Box<dyn Any>'
-          
 
         };
+
+    }
+
+
+
+    printClassBody(node, identation) {
+        // const parsedMembers = node.members.map(m => this.printNode(m, identation+1));
+
+        const parsedMembers = [];
+        node.members.forEach( (m, index) => {
+            const parsedNode = this.printNode(m, identation+1);
+            if (m.kind  === ts.SyntaxKind.PropertyDeclaration || index === 0) {
+                parsedMembers.push(parsedNode);
+            } else {
+                parsedMembers.push("\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode);
+            }
+        });
+        return parsedMembers.join("\n");
+    }
+
+    printClassDefinition(node, identation) {
+        const className = node.name.escapedText;
+        const heritageClauses = node.heritageClauses;
+        this.currentStruct = className;
+        `struct ${className} {\n${node.members
+            .filter((m: any) => ts.isPropertyDeclaration(m))
+            .map((m: any) => this.printNode(m, identation + 1))
+            .join("\n")}\n}\n\nimpl ${className} {`;
+
+        let classInit = "";
+        const classOpening = this.getBlockOpen(identation);
+        if (heritageClauses !== undefined) {
+            const classExtends = heritageClauses[0].types[0].expression.escapedText;
+            classInit = this.getIden(identation) + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
+        } else {
+            classInit = this.getIden(identation) + "class " + className + classOpening;
+        }
+        return classInit;
+    }
+    
+    printClass(node, identation) {
+        const classDefinition = this.printClassDefinition(node, identation);
+
+        const classBody = this.printClassBody(node, identation);
+
+        const classClosing = this.getBlockClose(identation);
+
+        return classDefinition + classBody + classClosing;
+    }
+    printMethodParameters(node: any) {
+        const params = super.printMethodParameters(node)
+            .replace(/self, /, '')
+            .replace(/: object/g, ': &self');
+        return params;
+    }
+    getTypeFromInitializer(initializer: any): string {
+        if (initializer && ts.isNumericLiteral(initializer)){
+            const num = Number(initializer.text);
+            if (Number.isInteger(num)) {
+                if (Number(initializer) < -2147483648 || Number( initializer) > 2147483647) {
+                    return "i64";
+                }
+                else{
+                    return 'i32';
+                }
+            }
+            return "f64";
+        }
+        return "";
+    }
+    printVariableStatement(node: any, identation: any) {
+        return this.printVariableDeclarationList(node.declarationList, identation);
+        const is_const = (node.declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
+        const is_let = (node.declarationList.flags & ts.NodeFlags.Let) !== 0;
+        const declarations = node.declarationList.declarations
+            .map((d: any) => {
+                let typeText = this.getType(d);
+                if (typeText===this.DEFAULT_TYPE){ typeText = this.getTypeFromInitializer(d.initializer);}
+                if( is_const){
+                    return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
+                    };`;
+                }
+                else{
+                    return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
+                    };`;
+                }
+
+            });
+        return declarations.join('\n');
     }
     printWhileStatement(node, identation) {
         const loopExpression = node.expression;
-        let whileStm =''
+        let whileStm ='';
         const expression = this.printNode(loopExpression, 0);
         if (expression === this.TRUE_KEYWORD){
             whileStm = this.getIden(identation) +
@@ -197,35 +285,20 @@ export class RustTranspiler extends BaseTranspiler {
                     this.printBlock(node.statement, identation);}
         return this.printNodeCommentsIfAny(node, identation, whileStm);
     }
-    
-    printClassDefinition(node: any, identation: any): string {
-        const className = node.name.escapedText;
-        this.currentStruct = className;
-        return `struct ${className} {\n${node.members
-            .filter((m: any) => ts.isPropertyDeclaration(m))
-            .map((m: any) => this.printNode(m, identation + 1))
-            .join("\n")}\n}\n\nimpl ${className} {`;
-    }
+    printForStatement(node, identation) {
+        const initializer = this.printNode(node.initializer, identation);
+        const condition = this.printNode(node.condition, 0);
+        const incrementor = this.printNode(node.incrementor, identation+1);
+        const blockOpen = this.getBlockOpen(identation);
+        const blockClose = this.getBlockClose(identation);
+        const statements_ary = node.statement.statements.map((s) => this.printNode(s, identation+1));
+        statements_ary.push(incrementor);
+        const statements =statements_ary.join("\n");
 
-    printMethodParameters(node: any) {
-        const params = super.printMethodParameters(node)
-            .replace(/self, /, '')
-            .replace(/: object/g, ': &self');
-        return params;
-    }
+        const forStm = this.getIden(identation) + initializer+"\n"+this.getIden(identation)+
+                this.WHILE_TOKEN + " " + condition + blockOpen + statements + blockClose;
 
-    printVariableStatement(node: any, identation: any) {
-        const declarations = node.declarationList.declarations
-            .map((d: any) => {
-                const typeText = this.getType(d);
-                // if (typeText === this.DEFAULT_TYPE){
-                //     return `${this.getIden(identation)}let ${d.name.escapedText} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                //     };`;
-                // }
-                return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                    };`;
-            });
-        return declarations.join('\n');
+        return this.printNodeCommentsIfAny(node, identation, forStm);
     }
     printFunctionDeclaration(node, identation) {
         const name = this.printNode(node.name, 0);
@@ -278,16 +351,24 @@ export class RustTranspiler extends BaseTranspiler {
         return type ? this.VariableTypeReplacements[type] || type : null;
     }
     printVariableDeclarationList(node, identation) {
-        const declarations = node.declarations;
-        const result = [];
-        declarations.forEach((declaration) => {
-            const name = this.printNode(declaration.name, 0);
-            const initializer = declaration.initializer
-                ? ` = ${this.printNode(declaration.initializer, 0)}`
-                : '';
-            result.push(`${this.getIden(identation)}let ${name}${initializer};`);
-        });
-        return result.join('\n');
+        const declarationList = node;
+        const is_const = (declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
+        const is_let = (declarationList.flags & ts.NodeFlags.Let) !== 0;
+        const declarations = declarationList.declarations
+            .map((d: any) => {
+                let typeText = this.getType(d);
+                if (typeText===this.DEFAULT_TYPE){ typeText = this.getTypeFromInitializer(d.initializer);}
+                if( is_const){
+                    return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
+                    };`;
+                }
+                else{
+                    return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
+                    };`;
+                }
+
+            });
+        return declarations.join('\n');
     }
 
 
@@ -306,39 +387,9 @@ export class RustTranspiler extends BaseTranspiler {
         return statements;
     }
 
-    transformPropertyAcessExpressionIfNeeded(node) {
-        const expression = node.expression;
-        const leftSide = this.printNode(expression, 0);
-        const rightSide = node.name.escapedText;
-
-        let rawExpression = undefined;
-
-        switch (rightSide) {
-            case 'length':
-                rawExpression = `${leftSide}.len()`;
-                break;
-        }
-
-        return rawExpression;
-    }
-
-  
-
-    capitalizeFirstLetter(l) {
-        return l.charAt(0).toUpperCase() + l.slice(1);
-    }
-
-    isUndefined(node) {
-
-        return node.type === 'Identifier' && node.name === 'undefined';
-    }
 
     uncapitalizeFirstLetter(l) {
         return l.charAt(0).toLowerCase() + l.slice(1);
-    }
-
-    functionIsAsync(node) {
-        return this.isAsyncFunction(node)
     }
 
     isAllCaps(x) {
@@ -356,73 +407,7 @@ export class RustTranspiler extends BaseTranspiler {
     unCamelCamelCase(x) {
         return !x || x.length === 0 || isUpperCase(x) ? x : unCamelCase(x);
     }
-
-    getFunctionNameFromCallee(node) {
-        switch (node.type) {
-            case "MemberExpression":
-                if (node.property.type !== 'Identifier') {
-                    throw new Error("Unexpected MemberExpression");
-                }
-                return node.property.name;
-            case "Identifier":
-                return node.name;
-            default:
-                throw new Error("Unexpected callee type");
-        }
-    }
-
-    transformIdentifier(name) {
-        switch (name) {
-            case 'type':
-                return "r#type";
-
-            default:
-                return this.unCamelCamelCase(name);
-        }
-    }
-
-    quoteString(str) {
-        return str.includes('"') ? `r#"${str}"#` : `"${str}"`;
-    }
-
-    getCalleeFunctionName(node) {
-        if (node.type !== 'CallExpression') {
-            throw new Error("Unexpected node type");
-        }
-        switch (node.callee.type) {
-            case "MemberExpression":
-                if (node.callee.property.type !== 'Identifier') {
-                    throw new Error("Unexpected MemberExpression");
-                }
-                return node.callee.property.name;
-            case "Identifier":
-                return node.callee.name;
-            default:
-                throw new Error("Unexpected callee type");
-        }
-    }
-
-    getReturnType(node) {
-        if (node.type !== 'CallExpression') {
-            throw new Error("Unexpected node type");
-        }
-
-        const fname = this.getCalleeFunctionName(node);
-        switch (fname) {
-            case 'stringEquals':
-            case 'stringEq':
-            case 'stringGt':
-            case 'stringGe':
-            case 'stringLt':
-            case 'stringLe':
-                return 'bool';
-
-            default:
-                return 'value';
-        }
-    }
-
-    
+  
 }
 
 
