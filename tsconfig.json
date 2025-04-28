@@ -1,7 +1,7 @@
 {
     "compilerOptions": {
         "baseUrl": "./src",
-        "module": "Node16",
+        "module": "NodeNext",
         "outDir": "./dist",
         "allowJs": true,
         "target": "es2021",
@@ -9,7 +9,7 @@
         "esModuleInterop": true,
         "declaration": true
     },
-        "include": [
+    "include": [
         "./src/**/*"
     ]
 }

@@ -1,7 +1,7 @@
 // rustTranspiler.ts
 import { BaseTranspiler } from "./baseTranspiler.js";
 import ts from 'typescript';
-import { regexAll, unCamelCase,isUpperCase } from "./utils.js";
+import { regexAll, unCamelCase, isUpperCase } from "./utils.js";
 
 const SyntaxKind = ts.SyntaxKind;
 const parserConfig = {
@@ -146,10 +146,12 @@ const parserConfig = {
 
 
 export class RustTranspiler extends BaseTranspiler {
-    currentStruct: string | null = null;
-    nextLine="\n";
+
+    nextLine = "\n";
+    className: string | null = null;
+    heritageClauses = null;
     constructor(config = {}) {
-        super({"parser":Object.assign({}, parserConfig, config['parser'])});
+        super({ "parser": Object.assign({}, parserConfig, config['parser']) });
         this.id = "rust";
         this.initConfig();
     }
@@ -176,7 +178,7 @@ export class RustTranspiler extends BaseTranspiler {
             'number': 'f64',
             'string': 'String',
             'boolean': 'bool',
-            'object':'Box<dyn Any>'
+            'object': 'Box<dyn Any>'
 
         };
 
@@ -184,64 +186,56 @@ export class RustTranspiler extends BaseTranspiler {
 
 
 
-    printClassBody(node, identation) {
-        // const parsedMembers = node.members.map(m => this.printNode(m, identation+1));
+    // printClassBody(node, identation) {
+    //     // const parsedMembers = node.members.map(m => this.printNode(m, identation+1));
 
-        const parsedMembers = [];
-        node.members.forEach( (m, index) => {
-            const parsedNode = this.printNode(m, identation+1);
-            if (m.kind  === ts.SyntaxKind.PropertyDeclaration || index === 0) {
-                parsedMembers.push(parsedNode);
-            } else {
-                parsedMembers.push("\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode);
-            }
-        });
-        return parsedMembers.join("\n");
-    }
+    //     const parsedMembers = [];
+    //     node.members.forEach( (m, index) => {
+    //         const parsedNode = this.printNode(m, identation+1);
+    //         if (m.kind  === ts.SyntaxKind.PropertyDeclaration || index === 0) {
+    //             parsedMembers.push(parsedNode);
+    //         } else {
+    //             parsedMembers.push("\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode);
+    //         }
+    //     });
+    //     return parsedMembers.join("\n");
+    // }
 
-    printClassDefinition(node, identation) {
-        const className = node.name.escapedText;
-        const heritageClauses = node.heritageClauses;
-        this.currentStruct = className;
-        `struct ${className} {\n${node.members
-            .filter((m: any) => ts.isPropertyDeclaration(m))
-            .map((m: any) => this.printNode(m, identation + 1))
-            .join("\n")}\n}\n\nimpl ${className} {`;
+    // printClassDefinition(node, identation) {
+    //     const className = node.name.escapedText;
+    //     const heritageClauses = node.heritageClauses;
+    //     this.currentStruct = className;
+    //     `struct ${className} {\n${node.members
+    //         .filter((m: any) => ts.isPropertyDeclaration(m))
+    //         .map((m: any) => this.printNode(m, identation + 1))
+    //         .join("\n")}\n}\n\nimpl ${className} {`;
 
-        let classInit = "";
-        const classOpening = this.getBlockOpen(identation);
-        if (heritageClauses !== undefined) {
-            const classExtends = heritageClauses[0].types[0].expression.escapedText;
-            classInit = this.getIden(identation) + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
-        } else {
-            classInit = this.getIden(identation) + "class " + className + classOpening;
-        }
-        return classInit;
-    }
-    
-    printClass(node, identation) {
-        const classDefinition = this.printClassDefinition(node, identation);
+    //     let classInit = "";
+    //     const classOpening = this.getBlockOpen(identation);
+    //     if (heritageClauses !== undefined) {
+    //         const classExtends = heritageClauses[0].types[0].expression.escapedText;
+    //         classInit = this.getIden(identation) + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
+    //     } else {
+    //         classInit = this.getIden(identation) + "class " + className + classOpening;
+    //     }
+    //     return classInit;
+    // }
 
-        const classBody = this.printClassBody(node, identation);
 
-        const classClosing = this.getBlockClose(identation);
-
-        return classDefinition + classBody + classClosing;
-    }
     printMethodParameters(node: any) {
         const params = super.printMethodParameters(node)
             .replace(/self, /, '')
             .replace(/: object/g, ': &self');
         return params;
     }
-    getTypeFromInitializer(initializer: any): string {
-        if (initializer && ts.isNumericLiteral(initializer)){
+    getNumberTypeFromInitializer(initializer: any): string {
+        if (initializer && ts.isNumericLiteral(initializer)) {
             const num = Number(initializer.text);
             if (Number.isInteger(num)) {
-                if (Number(initializer) < -2147483648 || Number( initializer) > 2147483647) {
+                if (Number(initializer) < -2147483648 || Number(initializer) > 2147483647) {
                     return "i64";
                 }
-                else{
+                else {
                     return 'i32';
                 }
             }
@@ -251,52 +245,52 @@ export class RustTranspiler extends BaseTranspiler {
     }
     printVariableStatement(node: any, identation: any) {
         return this.printVariableDeclarationList(node.declarationList, identation);
-        const is_const = (node.declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
-        const is_let = (node.declarationList.flags & ts.NodeFlags.Let) !== 0;
-        const declarations = node.declarationList.declarations
-            .map((d: any) => {
-                let typeText = this.getType(d);
-                if (typeText===this.DEFAULT_TYPE){ typeText = this.getTypeFromInitializer(d.initializer);}
-                if( is_const){
-                    return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                    };`;
-                }
-                else{
-                    return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                    };`;
-                }
+        // const is_const = (node.declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
+        // const is_let = (node.declarationList.flags & ts.NodeFlags.Let) !== 0;
+        // const declarations = node.declarationList.declarations
+        //     .map((d: any) => {
+        //         let typeText = this.getType(d);
+        //         if (typeText===this.DEFAULT_TYPE){ typeText = this.getNumberTypeFromInitializer(d.initializer);}
+        //         if( is_const){
+        //             return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
+        //             };`;
+        //         }
+        //         else{
+        //             return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
+        //             };`;
+        //         }
 
-            });
-        return declarations.join('\n');
+        //     });
+        // return declarations.join('\n');
     }
     printWhileStatement(node, identation) {
         const loopExpression = node.expression;
-        let whileStm ='';
+        let whileStm = '';
         const expression = this.printNode(loopExpression, 0);
-        if (expression === this.TRUE_KEYWORD){
+        if (expression === this.TRUE_KEYWORD) {
             whileStm = this.getIden(identation) +
-                    "loop " +
-                    this.printBlock(node.statement, identation);
+                "loop " + this.printBlock(node.statement, identation);
         }
-        else{
+        else {
             whileStm = this.getIden(identation) +
-                    this.WHILE_TOKEN + " " +
-                    this.CONDITION_OPENING + expression + this.CONDITION_CLOSE +
-                    this.printBlock(node.statement, identation);}
+                this.WHILE_TOKEN + " " +
+                this.CONDITION_OPENING + expression + this.CONDITION_CLOSE +
+                this.printBlock(node.statement, identation);
+        }
         return this.printNodeCommentsIfAny(node, identation, whileStm);
     }
     printForStatement(node, identation) {
         const initializer = this.printNode(node.initializer, identation);
         const condition = this.printNode(node.condition, 0);
-        const incrementor = this.printNode(node.incrementor, identation+1);
+        const incrementor = this.printNode(node.incrementor, identation + 1);
         const blockOpen = this.getBlockOpen(identation);
         const blockClose = this.getBlockClose(identation);
-        const statements_ary = node.statement.statements.map((s) => this.printNode(s, identation+1));
+        const statements_ary = node.statement.statements.map((s) => this.printNode(s, identation + 1));
         statements_ary.push(incrementor);
-        const statements =statements_ary.join("\n");
+        const statements = statements_ary.join("\n");
 
-        const forStm = this.getIden(identation) + initializer+"\n"+this.getIden(identation)+
-                this.WHILE_TOKEN + " " + condition + blockOpen + statements + blockClose;
+        const forStm = this.getIden(identation) + initializer + "\n" + this.getIden(identation) +
+            this.WHILE_TOKEN + " " + condition + blockOpen + statements + blockClose;
 
         return this.printNodeCommentsIfAny(node, identation, forStm);
     }
@@ -308,6 +302,54 @@ export class RustTranspiler extends BaseTranspiler {
             : '';
         const body = this.printFunctionBody(node.body, identation + 1);
         return `${this.getIden(identation)}fn ${name}(${parameters})${returnType} ${parserConfig.BLOCK_OPENING_TOKEN}\n${body}\n${this.getIden(identation)}${parserConfig.BLOCK_CLOSING_TOKEN}`;
+    }
+    printStruct(node, indentation) {
+        const className = node.name.escapedText;
+
+        // check if we have heritage
+        let heritageNames = '';
+        if (node?.heritageClauses?.length > 0) {
+            heritageNames = node.heritageClauses.map(heritage => {
+                const heritageType = heritage.types[0];
+                heritageNames = this.getIden(indentation + 1) + heritageType.expression.escapedText;
+            }).join('\n');
+
+
+        }
+
+        const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
+        return `struct ${className}{\n${heritageNames}\n${propDeclarations.map(member => this.printNode(member, indentation + 1)).join("\n")}\n}`;
+    }
+
+    printNewStructMethod(node) {
+        const className = node.name.escapedText;
+        return `
+func New${this.capitalize(className)}() ${(className)} {
+   p := ${className}{}
+   setDefaults(&p)
+   return p
+}\n`;
+
+    }
+
+    printClass(node, identation) {
+
+        const struct = this.printStruct(node, identation);
+
+        const newMethod = this.printNewStructMethod(node);
+
+        this.className = node.name.escapedText;
+
+        const methods = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
+        const classMethods = methods.map(method => this.printMethodDeclaration(method, identation)).join("\n");
+        // const classDefinition = this.printClassDefinition(node, identation);
+
+        // const classBody = this.printClassBody(node, identation);
+
+        // const classClosing = this.getBlockClose(identation);
+
+        // return classDefinition + classBody + classClosing;
+        return struct + "\n" + newMethod + "\n" + classMethods;
     }
 
 
@@ -357,14 +399,14 @@ export class RustTranspiler extends BaseTranspiler {
         const declarations = declarationList.declarations
             .map((d: any) => {
                 let typeText = this.getType(d);
-                if (typeText===this.DEFAULT_TYPE){ typeText = this.getTypeFromInitializer(d.initializer);}
-                if( is_const){
+                if (typeText === this.DEFAULT_TYPE) { typeText = this.getNumberTypeFromInitializer(d.initializer); }
+                if (is_const) {
                     return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                    };`;
+                        };`;
                 }
-                else{
+                else {
                     return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                    };`;
+                        };`;
                 }
 
             });
@@ -407,7 +449,7 @@ export class RustTranspiler extends BaseTranspiler {
     unCamelCamelCase(x) {
         return !x || x.length === 0 || isUpperCase(x) ? x : unCamelCase(x);
     }
-  
+
 }
 
 
