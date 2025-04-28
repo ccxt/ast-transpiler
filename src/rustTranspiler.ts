@@ -95,7 +95,7 @@ const parserConfig = {
     VOID_KEYWORD: "()",              // 空元组表示 void
     BOOLEAN_KEYWORD: "bool",
 
-    ARRAY_KEYWORD: "Vec<Object>",
+    ARRAY_KEYWORD: "vec!",
     OBJECT_KEYWORD: "Box<dyn Any>",
     DEFAULT_RETURN_TYPE: "()",       // 默认返回空元组
     DEFAULT_PARAMETER_TYPE: "",
@@ -183,53 +183,11 @@ export class RustTranspiler extends BaseTranspiler {
         };
 
     }
-
-
-
-    // printClassBody(node, identation) {
-    //     // const parsedMembers = node.members.map(m => this.printNode(m, identation+1));
-
-    //     const parsedMembers = [];
-    //     node.members.forEach( (m, index) => {
-    //         const parsedNode = this.printNode(m, identation+1);
-    //         if (m.kind  === ts.SyntaxKind.PropertyDeclaration || index === 0) {
-    //             parsedMembers.push(parsedNode);
-    //         } else {
-    //             parsedMembers.push("\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode);
-    //         }
-    //     });
-    //     return parsedMembers.join("\n");
-    // }
-
-    // printClassDefinition(node, identation) {
-    //     const className = node.name.escapedText;
-    //     const heritageClauses = node.heritageClauses;
-    //     this.currentStruct = className;
-    //     `struct ${className} {\n${node.members
-    //         .filter((m: any) => ts.isPropertyDeclaration(m))
-    //         .map((m: any) => this.printNode(m, identation + 1))
-    //         .join("\n")}\n}\n\nimpl ${className} {`;
-
-    //     let classInit = "";
-    //     const classOpening = this.getBlockOpen(identation);
-    //     if (heritageClauses !== undefined) {
-    //         const classExtends = heritageClauses[0].types[0].expression.escapedText;
-    //         classInit = this.getIden(identation) + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
-    //     } else {
-    //         classInit = this.getIden(identation) + "class " + className + classOpening;
-    //     }
-    //     return classInit;
-    // }
-
-
-    printMethodParameters(node: any) {
-        const params = super.printMethodParameters(node)
-            .replace(/self, /, '')
-            .replace(/: object/g, ': &self');
-        return params;
-    }
-    getNumberTypeFromInitializer(initializer: any): string {
-        if (initializer && ts.isNumericLiteral(initializer)) {
+    getType(node: any): string | null {
+        let t = super.getType(node);
+        t=t ? this.VariableTypeReplacements[t] || t : null;
+        const initializer = node.initializer;
+        if (initializer && t === this.DEFAULT_TYPE && ts.isNumericLiteral(initializer)) {
             const num = Number(initializer.text);
             if (Number.isInteger(num)) {
                 if (Number(initializer) < -2147483648 || Number(initializer) > 2147483647) {
@@ -241,27 +199,29 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return "f64";
         }
-        return "";
+        return t;
+    }
+
+
+    printVariableDeclarationList(node, identation) {
+        const declarationList = node;
+        const is_const = (declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
+        const is_let = (declarationList.flags & ts.NodeFlags.Let) !== 0;
+        const declarations = declarationList.declarations
+            .map((d: any) => {
+                const typeText = this.getType(d);
+                if (is_const) {
+                    return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'};`;
+                }
+                else {
+                    return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'};`;
+                }
+
+            });
+        return declarations.join('\n');
     }
     printVariableStatement(node: any, identation: any) {
         return this.printVariableDeclarationList(node.declarationList, identation);
-        // const is_const = (node.declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
-        // const is_let = (node.declarationList.flags & ts.NodeFlags.Let) !== 0;
-        // const declarations = node.declarationList.declarations
-        //     .map((d: any) => {
-        //         let typeText = this.getType(d);
-        //         if (typeText===this.DEFAULT_TYPE){ typeText = this.getNumberTypeFromInitializer(d.initializer);}
-        //         if( is_const){
-        //             return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-        //             };`;
-        //         }
-        //         else{
-        //             return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-        //             };`;
-        //         }
-
-        //     });
-        // return declarations.join('\n');
     }
     printWhileStatement(node, identation) {
         const loopExpression = node.expression;
@@ -294,62 +254,127 @@ export class RustTranspiler extends BaseTranspiler {
 
         return this.printNodeCommentsIfAny(node, identation, forStm);
     }
+    getFunctionType(node, async = true){
+        // use type checker to do it here
+        const type = global.checker.getReturnTypeOfSignature(global.checker.getSignatureFromDeclaration(node));
+
+        const parsedTtype = this.getTypeFromRawType(type);
+
+        if (parsedTtype === this.PROMISE_TYPE_KEYWORD) {
+            if (type.resolvedTypeArguments.length === 0) {
+                return this.PROMISE_TYPE_KEYWORD;
+            }
+            if (type.resolvedTypeArguments.length === 1 && type.resolvedTypeArguments[0].flags === ts.TypeFlags.Void) {
+                return this.PROMISE_TYPE_KEYWORD;
+            }
+
+            const insideTypes = type.resolvedTypeArguments.map(type => this.getTypeFromRawType(type));
+            if (insideTypes.length === 1) {
+                if (async) {
+                    return insideTypes[0];
+                } else {
+                    return insideTypes[0];
+                }
+            }
+            else if (insideTypes.length > 1) {
+                return `(${insideTypes.join(', ')})`;
+            }
+            else{
+                return undefined;
+            }
+        }
+        return parsedTtype;
+    }
+    printFunctionDefinition(node, identation) {
+        let name = node.name?.escapedText ?? "";
+        name = this.transformFunctionNameIfNeeded(name);
+
+        const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
+
+        let modifiers = this.printModifiers(node);
+        modifiers = modifiers ? modifiers + " " : modifiers;
+
+        let returnType = this.printFunctionType(node);
+        returnType = returnType ? returnType + " " : returnType;
+
+        const fnKeyword = this.FUNCTION_TOKEN ? this.FUNCTION_TOKEN + " " : "";
+        if (ts.isFunctionDeclaration(node)){
+            modifiers = modifiers + "pub ";
+        }
+        let functionDef = `${this.getIden(identation)}${modifiers} `;
+        if (this.includeFunctionNameInFunctionExpressionDeclaration ||  !ts.isFunctionExpression(node)) {
+            functionDef += `${fnKeyword}${name}`;
+        }
+        if(returnType){
+            functionDef +=` (${parsedArgs})->${returnType}`;
+        }
+        else{
+            functionDef +=` (${parsedArgs})`;
+        }
+
+        return functionDef;
+    }
+    printFunctionBody(node, identation) {
+        return this.printBlock(node.body, identation);
+    }
+
     printFunctionDeclaration(node, identation) {
-        const name = this.printNode(node.name, 0);
-        const parameters = node.parameters.map((param) => this.printParameter(param)).join(', ');
-        const returnType = node.type
-            ? ` -> ${this.printNode(node.type, 0)}`
-            : '';
-        const body = this.printFunctionBody(node.body, identation + 1);
-        return `${this.getIden(identation)}fn ${name}(${parameters})${returnType} ${parserConfig.BLOCK_OPENING_TOKEN}\n${body}\n${this.getIden(identation)}${parserConfig.BLOCK_CLOSING_TOKEN}`;
+        if (ts.isArrowFunction(node)) {
+            const parameters = node.parameters.map(param => this.printParameter(param)).join(", ");
+            const body = this.printNode(node.body);
+            return `|${parameters}| -> ${body}`;
+        }
+        let functionDef = this.printFunctionDefinition(node, identation);
+        const funcBody = this.printFunctionBody(node.body, identation);
+        functionDef += funcBody;
+
+        return this.printNodeCommentsIfAny(node, identation, functionDef);
+    }
+
+
+    printMethodDeclaration(node, identation) {
+
+        let methodDef = this.printFunctionDefinition(node, identation);
+
+        const funcBody = this.printFunctionBody(node, identation);
+
+        methodDef += funcBody;
+
+        return methodDef;
     }
     printStruct(node, indentation) {
         const className = node.name.escapedText;
 
         // check if we have heritage
-        let heritageNames = '';
+        let structDefindName = `${this.getIden(indentation)}struct`;
         if (node?.heritageClauses?.length > 0) {
-            heritageNames = node.heritageClauses.map(heritage => {
+            const heritageNames = node.heritageClauses.map(heritage => {
                 const heritageType = heritage.types[0];
-                heritageNames = this.getIden(indentation + 1) + heritageType.expression.escapedText;
-            }).join('\n');
-
+                return heritageType.expression.escapedText;
+            }).join(', ');
+            structDefindName = `${this.getIden(indentation)}#[inherit((${heritageNames})]\n`+structDefindName;
 
         }
 
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
-        return `struct ${className}{\n${heritageNames}\n${propDeclarations.map(member => this.printNode(member, indentation + 1)).join("\n")}\n}`;
+        return `${structDefindName} ${className}{\n${propDeclarations.map(member => this.printNode(member, indentation + 1)).join("\n")}\n}`;
     }
 
-    printNewStructMethod(node) {
+    printStructMethod(node,identation) {
         const className = node.name.escapedText;
-        return `
-func New${this.capitalize(className)}() ${(className)} {
-   p := ${className}{}
-   setDefaults(&p)
-   return p
-}\n`;
-
+        const method_nodes = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
+        const methods = method_nodes.map(method => this.printMethodDeclaration(method, identation+1)).join("\n");
+        const structmethoddef = `${this.getIden(identation)}impl ${className} {\n${methods}\n}\n`;
+        return structmethoddef;
     }
 
     printClass(node, identation) {
 
-        const struct = this.printStruct(node, identation);
+        const structdef = this.printStruct(node, identation);
 
-        const newMethod = this.printNewStructMethod(node);
+        const methoddef = this.printStructMethod(node,identation);
 
-        this.className = node.name.escapedText;
-
-        const methods = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
-        const classMethods = methods.map(method => this.printMethodDeclaration(method, identation)).join("\n");
-        // const classDefinition = this.printClassDefinition(node, identation);
-
-        // const classBody = this.printClassBody(node, identation);
-
-        // const classClosing = this.getBlockClose(identation);
-
-        // return classDefinition + classBody + classClosing;
-        return struct + "\n" + newMethod + "\n" + classMethods;
+        return structdef + "\n" + methoddef +"\n";
     }
 
 
@@ -388,30 +413,8 @@ func New${this.capitalize(className)}() ${(className)} {
         return `${this.getIden(identation)}if ${condition} ${thenBlock}${elseBlock}`;
     }
 
-    getType(node: any): string | null {
-        const type = super.getType(node);
-        return type ? this.VariableTypeReplacements[type] || type : null;
-    }
-    printVariableDeclarationList(node, identation) {
-        const declarationList = node;
-        const is_const = (declarationList.flags & ts.NodeFlags.Const) !== 0; // 关键修改点[1,3](@ref)
-        const is_let = (declarationList.flags & ts.NodeFlags.Let) !== 0;
-        const declarations = declarationList.declarations
-            .map((d: any) => {
-                let typeText = this.getType(d);
-                if (typeText === this.DEFAULT_TYPE) { typeText = this.getNumberTypeFromInitializer(d.initializer); }
-                if (is_const) {
-                    return `${this.getIden(identation)}let ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                        };`;
-                }
-                else {
-                    return `${this.getIden(identation)}let mut ${d.name.escapedText}${typeText ? `: ${typeText}` : ''} = ${d.initializer ? this.printNode(d.initializer, 0) : 'Value::Null'
-                        };`;
-                }
 
-            });
-        return declarations.join('\n');
-    }
+   
 
 
 
@@ -423,11 +426,7 @@ func New${this.capitalize(className)}() ${(className)} {
         return `${name}${type}`;
     }
 
-    printFunctionBody(node, identation) {
-        if (!node) return '';
-        const statements = node.statements.map((statement) => this.printNode(statement, identation)).join('\n');
-        return statements;
-    }
+  
 
 
     uncapitalizeFirstLetter(l) {

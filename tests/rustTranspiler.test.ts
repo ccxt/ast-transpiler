@@ -104,24 +104,24 @@ describe('rust transpiling tests', () => {
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(cs);
     });
-    // test('basic basic declaration with default parameters', () => {
-    //     const ts = 
-    //     "class T {\n" +
-    //     "    test(s: string): void {\n" +
-    //     "        console.log(\"Hello\")\n" +
-    //     "    }\n" +
-    //     "}"
-    //     const csharp =
-    //     "class T\n" +
-    //     "{\n" +
-    //     "    public virtual void test(string s)\n" +
-    //     "    {\n" +
-    //     "        Console.WriteLine(\"Hello\");\n" +
-    //     "    }\n" +
-    //     "}"
-    //     const output = transpiler.transpileRust(ts).content;
-    //     expect(output).toBe(csharp);
-    // });
+    test('basic basic declaration with default parameters', () => {
+        const ts = 
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        console.log(\"Hello\")\n" +
+        "    }\n" +
+        "}"
+        const csharp =
+        "class T\n" +
+        "{\n" +
+        "    public virtual void test(string s)\n" +
+        "    {\n" +
+        "        Console.WriteLine(\"Hello\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(csharp);
+    });
     test('basic class inheritance', () => {
         const ts =
         "class t extends ParentClass {\n" +
