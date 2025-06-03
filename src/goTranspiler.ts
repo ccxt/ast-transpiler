@@ -208,17 +208,22 @@ export class GoTranspiler extends BaseTranspiler {
 
     printStruct(node, indentation) {
         const className = node.name.escapedText;
+        let tokens = [
+            `type ${className} struct {`
+        ];
 
         // check if we have heritage
         let heritageName = '';
         if (node?.heritageClauses?.length > 0) {
             const heritage = node.heritageClauses[0];
             const heritageType = heritage.types[0];
-            heritageName = this.getIden(indentation+1) + heritageType.expression.escapedText + '\n';
+            heritageName = this.getIden(indentation+1) + heritageType.expression.escapedText;
+            tokens.push(heritageName);
         }
-
-        const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
-        return `type ${className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
+        const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration).map((member) => this.printNode(member, indentation + 1));
+        tokens = tokens.concat(propDeclarations);
+        tokens.push('}');
+        return tokens.join('\n');
     }
 
     printNewStructMethod(node){
