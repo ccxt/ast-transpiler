@@ -221,7 +221,7 @@ export class GoTranspiler extends BaseTranspiler {
             tokens.push(heritageName);
         }
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration).map((member) => this.printNode(member, indentation + 1));
-        tokens = tokens.concat(propDeclarations)
+        tokens = tokens.concat(propDeclarations);
         tokens.push('}');
         return tokens.join('\n');
     }
