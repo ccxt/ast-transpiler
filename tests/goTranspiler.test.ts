@@ -51,7 +51,6 @@ describe('go transpiling tests', () => {
         "}";
         const go =
         "type Test struct {\n"+
-        "\n"+
         "}\n"+
         "\n"+
         "func NewTest() Test {\n"+
@@ -85,6 +84,30 @@ describe('go transpiling tests', () => {
         "if IsTrue(a) {\n" +
         "    var f interface{} = 1\n" +
         "}"
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toBe(go);
+    });
+    test('class extends declaration', () => {
+        const ts =
+        "class Toyota extends Car {\n" +
+        "    main() {\n" +
+        "        return 1\n" +
+        "    }\n" +
+        "}";
+        const go =
+        "type Toyota struct {\n"+
+        "    Car\n"+
+        "}\n"+
+        "\n"+
+        "func NewToyota() Toyota {\n"+
+        "   p := Toyota{}\n"+
+        "   setDefaults(&p)\n"+
+        "   return p\n"+
+        "}\n"+
+        "\n"+
+        "func  (this *Toyota) Main() interface{}  {\n"+
+        "    return 1\n"+
+        "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
     });
