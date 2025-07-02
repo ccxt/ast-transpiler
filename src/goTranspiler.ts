@@ -72,6 +72,7 @@ export class GoTranspiler extends BaseTranspiler {
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
     className: string;
+    ws: boolean;
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -94,6 +95,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.applyUserOverrides(config);
         this.wrapThisCalls = config['wrapThisCalls'] ?? false;
         this.wrapCallMethods = config['wrapCallMethods'] ?? [];
+        this.ws = config['ws'] ?? false;
     }
 
     initConfig() {
@@ -233,7 +235,6 @@ func New${this.capitalize(className)}() ${(className)} {
     }
 
     printClass(node, identation) {
-
         const struct = this.printStruct(node, identation);
 
         const newMethod = this.printNewStructMethod(node);
@@ -396,6 +397,12 @@ func New${this.capitalize(className)}() ${(className)} {
     printFunctionType(node){
         const typeText = this.getFunctionType(node);
         if (typeText === 'void') {
+            // // If the function is async (returns a Promise in TS) but declared void, emit a typed channel
+            // if (this.isAsyncFunction(node)) {
+            //     // Ensure element type is present; some edge cases yield '<- chan' only
+            //     const elementType = this.DEFAULT_RETURN_TYPE || 'interface{}';
+            //     return `<- chan ${elementType}`;
+            // }
             return "";
         }
         if (typeText === undefined || (typeText !== this.VOID_KEYWORD && typeText !== this.PROMISE_TYPE_KEYWORD)) {
@@ -410,7 +417,17 @@ func New${this.capitalize(className)}() ${(className)} {
             return res;
         }
         if (typeText === this.PROMISE_TYPE_KEYWORD) {
-            return `<- chan`;
+            return `<- chan interface{}`;
+        }
+
+        // move any trailing array brackets "[]" to directly precede the element type
+        if (typeText && typeText.endsWith('[]')) {
+            const core = typeText.substring(0, typeText.length - 2); // drop []
+            const lastBracketPos = core.lastIndexOf(']');
+            if (lastBracketPos !== -1) {
+                // insert [] right after the last ']'
+                return core.substring(0, lastBracketPos + 1) + '[]' + core.substring(lastBracketPos + 1);
+            }
         }
         return typeText;
     }
@@ -571,12 +588,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
 
     printElementAccessExpressionExceptionIfAny(node) {
-        // convert this[method] into this.call(method) or this.callAsync(method)
-    //    if (node?.expression?.kind === ts.SyntaxKind.ThisKeyword) {
-    //         const isAsyncDecl = node?.parent?.kind === ts.SyntaxKind.AwaitExpression;
-    //         const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
-    //         return open.replace('(', '');
-    //    }
+        // Fix malformed Split(...) element access where the index arg is mistakenly placed
+        // inside the Split call. We force the correct pattern: GetValue(Split(str, sep), idx)
+        const tsKind = ts.SyntaxKind;
+        if (node.expression.kind === tsKind.CallExpression) {
+            const callExp = node.expression;
+            const calleeText = callExp.expression.getText();
+            if (calleeText.endsWith('.split') || calleeText.toLowerCase().includes('split')) {
+                // print Split call normally (should already close with ))
+                let splitCall = this.printNode(callExp, 0).trim();
+                if (!splitCall.endsWith(')')) {
+                    splitCall += ')';
+                }
+                const idxArg = this.printNode(node.argumentExpression, 0);
+                return `GetValue(${splitCall}, ${idxArg})`;
+            }
+        }
+        // default: no exception
+        return undefined;
     }
 
     printWrappedUnknownThisProperty(node) {
@@ -710,41 +739,67 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         const op = node.operatorToken.kind;
 
+        // ---------------------------------------------------------------
+        // Array destructuring assignment:  [a, b] = foo()
+        // Transforms into:
+        // __tmpX := foo()
+        // a = GetValue(__tmpX, 0)
+        // b = GetValue(__tmpX, 1)
+        // ---------------------------------------------------------------
+        if (op === ts.SyntaxKind.EqualsToken &&
+            left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            const elems = (left.elements as any[]);
+            const tmpVar = `__tmp${this.getRandomNameSuffix()}`;
+            const rhs   = this.printNode(right, 0);
+
+            // build extraction lines
+            const assignments = elems.map((el, idx) => {
+                const leftName = this.printNode(el, 0);
+                return `${leftName} = GetValue(${tmpVar}, ${idx})`;
+            }).join(`\n${this.getIden(identation)}`);
+
+            return `${tmpVar} := ${rhs}\n${this.getIden(identation)}${assignments}`;
+        }
+
+        // ---------------------------------------------------------------
+        // Go-style setter for element-access assignments:  a[b] = v
+        // ---------------------------------------------------------------
+        if (op === ts.SyntaxKind.EqualsToken &&
+            left.kind === ts.SyntaxKind.ElementAccessExpression) {
+            // Collect base container and all keys (inner-most key is last).
+            const keys: any[] = [];
+            let baseExpr: any = null;
+            let cur: any = left;
+            while (ts.isElementAccessExpression(cur)) {
+                keys.unshift(cur.argumentExpression);          // prepend
+                const expr = cur.expression;
+                if (!ts.isElementAccessExpression(expr)) {
+                    baseExpr = expr;
+                    break;
+                }
+                cur = expr;
+            }
+
+            const containerStr = this.printNode(baseExpr, 0);
+            const keyStrs      = keys.map(k => this.printNode(k, 0));
+
+            // Build GetValue(GetValue( ... )) chain for all but the last key.
+            let acc = containerStr;
+            for (let i = 0; i < keyStrs.length - 1; i++) {
+                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            }
+
+            const lastKey = keyStrs[keyStrs.length - 1];
+            const rhs     = this.printNode(right, 0);
+
+            return `SetValue(${acc}, ${lastKey}, ${rhs})`;
+        }
+
         if (left.kind === ts.SyntaxKind.TypeOfExpression) {
             const typeOfExpression = this.handleTypeOfInsideBinaryExpression(node, identation);
             if (typeOfExpression) {
                 return typeOfExpression;
             }
-        }
-
-        // handle: [x,d] = this.method()
-        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
-            const arrayBindingPatternElements = left.elements;
-            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
-            const syntheticName = parsedArrayBindingElements.join("") + "Variable";
-
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
-
-            parsedArrayBindingElements.forEach((e, index) => {
-                // const type = this.getType(node);
-                // const parsedType = this.getTypeFromRawType(type);
-                const leftElement = arrayBindingPatternElements[index];
-                const leftType = global.checker.getTypeAtLocation(leftElement);
-                const parsedType = this.getTypeFromRawType(leftType);
-
-                const castExp = parsedType ? `(${parsedType})` : "";
-
-                // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName},${index})`;
-                if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
-                } else {
-                    // printStatement adds the last ;
-                    arrayBindingStatement += statement;
-                }
-            });
-
-            return arrayBindingStatement;
         }
 
         if (op === ts.SyntaxKind.InKeyword) {
@@ -1067,6 +1122,10 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
     ${this.getIden(identation)}return nil`;
             // ${this.getIden(identation)}return ${returnRandName}`;
+        }
+
+        if (rightPart.length === 0) {
+            return `\n${this.getIden(identation)}return nil`;
         }
 
         return `
@@ -1393,99 +1452,6 @@ ${this.getIden(identation)}return nil`;
         // return this.getIden(identation) + this.THROW_TOKEN + throwExpression + this.LINE_TERMINATOR;
     }
 
-    printBinaryExpression(node, identation) {
-
-        const {left, right, operatorToken} = node;
-
-        const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
-        if (customBinaryExp) {
-            return customBinaryExp;
-        }
-
-        if (operatorToken.kind == ts.SyntaxKind.InstanceOfKeyword) {
-            return this.printInstanceOfExpression(node, identation);
-        }
-
-        if (operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-            // handle test['a'] = 1;
-            const elementAccess = left;
-            const rightSide = this.printNode(right, 0);
-            if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                const leftSide = this.printNode(elementAccess.expression, 0);
-                const propName = this.printNode(elementAccess.argumentExpression, 0);
-                return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
-            }
-
-            if (right?.kind === ts.SyntaxKind.AwaitExpression || rightSide.startsWith('<-this.callInternal')) {
-                const leftParsed = this.printNode(left, 0);
-                return `
-${leftParsed} = ${rightSide}
-${this.getIden(identation)}PanicOnError(${leftParsed})`;
-            }
-        }
-
-        const op = operatorToken.kind;
-        // handle: [x,d] = this.method()
-        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
-            const arrayBindingPatternElements = left.elements;
-            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
-            const syntheticName = parsedArrayBindingElements.join("") + "Variable";
-
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
-
-            parsedArrayBindingElements.forEach((e, index) => {
-                // const type = this.getType(node);
-                // const parsedType = this.getTypeFromRawType(type);
-                const leftElement = arrayBindingPatternElements[index];
-                const leftType = global.checker.getTypeAtLocation(leftElement);
-                const parsedType = this.getTypeFromRawType(leftType);
-
-                const castExp = parsedType ? `(${parsedType})` : "";
-
-                // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}),${index})`;
-                if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
-                } else {
-                    // printStatement adds the last ;
-                    arrayBindingStatement += statement;
-                }
-            });
-
-            return arrayBindingStatement;
-        }
-
-        let operator = this.SupportedKindNames[operatorToken.kind];
-
-
-        let leftVar = undefined;
-        let rightVar = undefined;
-
-        // c# wrapper
-        if (operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken || operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) {
-            if (this.COMPARISON_WRAPPER_OPEN) {
-                leftVar = this.printNode(left, 0);
-                rightVar = this.printNode(right, identation);
-                return `${this.COMPARISON_WRAPPER_OPEN}${leftVar}, ${rightVar}${this.COMPARISON_WRAPPER_CLOSE}`;
-            }
-        }
-
-        // check if boolean operators || and && because of the falsy values
-        if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
-            leftVar = this.printCondition(left, 0);
-            rightVar = this.printCondition(right, identation);
-        }  else {
-            leftVar = this.printNode(left, 0);
-            rightVar = this.printNode(right, identation);
-        }
-
-        const customOperator = this.getCustomOperatorIfAny(left, right, operatorToken);
-
-        operator = customOperator ? customOperator : operator;
-
-        return leftVar +" "+ operator + " " + rightVar.trim();
-    }
-
     printTryStatement(node, identation) {
         // const tryBody = this.printNode(node.tryBlock, 0);
         let tryBody = node.tryBlock.statements.map((s) => {
@@ -1497,8 +1463,16 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
         const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
         const catchDeclaration = this.printNode(node.catchClause.variableDeclaration.name, 0);
 
-        const catchBodyHashReturn = catchBody.indexOf("return") > -1;
+        const catchLines = catchBody.split("\n").map(l => l.trim()).filter(Boolean);
+        const catchLastLine = catchLines.length ? catchLines[catchLines.length - 1] : "";
+        const catchBodyEndsWithReturn = catchLastLine.startsWith("return");
+
+        const tryLines = tryBody.split("\n").map(l => l.trim()).filter(Boolean);
+        const tryLastLine = tryLines.length ? tryLines[tryLines.length - 1] : "";
+        const tryBodyEndsWithReturn = tryLastLine.startsWith("return");
+
         const returNil = "return nil";
+
         const className = this.className;
         const catchBlock =`
 {		ret__ := func(this *${className}) (ret_ interface{}) {
@@ -1510,20 +1484,25 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
 				ret_ = func(this *${className}) interface{} {
 					// catch block:
                     ${catchBody}
-                    ${returNil}
+                    ${catchBodyEndsWithReturn ? "" : returNil}
 				}(this)
 			}
 		}()
 		// try block:
         ${tryBody}
-		return nil
+        ${tryBodyEndsWithReturn ? "" : returNil}          // <- only when needed
 	}(this)
-	if ret__ != nil {
+	${tryBodyEndsWithReturn 
+    ? `if ret__ != nil {
 		return ret__
-	}
+	}`
+    : ""}
 }`;
         // add identation
-        const indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
+        let indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
+        if (!this.isInsideVoidFunction(node)) {
+            indentedBlock += "\n" + this.getIden(identation) + "return nil";
+        }
         // const catchCondOpen = this.CONDITION_OPENING ? this.CONDITION_OPENING : " ";
 
         return indentedBlock;
@@ -1550,6 +1529,74 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
         return 'New' + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+    }
+
+    /**
+     * Override the default element-access printer with a version that walks the
+     * entire `x[y][z]` chain and builds a properly nested sequence of helper
+     * calls.  This removes the root cause of the unbalanced-parenthesis bug
+     * without any post-processing or regex hacks.
+     */
+    printElementAccessExpression(node, identation) {
+        // Maintain original special-case handling first.
+        const special = this.printElementAccessExpressionExceptionIfAny(node);
+        if (special) {
+            return special;
+        }
+
+        // If the expression is on the *left* side of an assignment we defer to
+        // the base implementation, because that path needs casting/setter
+        // semantics that are language-specific.
+        const isLeftSide = node.parent?.kind === ts.SyntaxKind.BinaryExpression &&
+                           (node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken ||
+                            node.parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) &&
+                           node.parent.left === node;
+
+        if (isLeftSide) {
+            return super.printElementAccessExpression(node, identation);
+        }
+
+        // Collect the full access chain, e.g. for a[b][c] we gather
+        //   base = a, keys = [b, c]
+        const keys: any[] = [];
+        let baseExpr = null;
+        let current = node as any;
+        // Walk down while the *expression* is another ElementAccessExpression.
+        while (ts.isElementAccessExpression(current)) {
+            keys.unshift(current.argumentExpression); // prepend
+            const expr = current.expression;
+            if (!ts.isElementAccessExpression(expr)) {
+                // Reached the base container.
+                baseExpr = expr;
+                break;
+            }
+            current = expr;
+        }
+
+        const containerStr = this.printNode(baseExpr, 0);
+        const keyStrs = keys.map(k => this.printNode(k, 0));
+
+        // Now build nested helpers.
+        let acc = containerStr;
+        keyStrs.forEach(k => {
+            acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        });
+
+        return acc;
+    }
+
+    /** Utility: returns true if the current node is inside a function that
+     *  declares *no* return value (void) in TypeScript source. */
+    isInsideVoidFunction(node) {
+        let cur = node.parent;
+        while (cur) {
+            if (ts.isFunctionLike(cur)) {
+                if (!cur.type) return true; // no explicit type => void
+                return cur.type.kind === ts.SyntaxKind.VoidKeyword;
+            }
+            cur = cur.parent;
+        }
+        return true; // default to void to be safe
     }
 }
 

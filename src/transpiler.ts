@@ -57,7 +57,7 @@ export default class Transpiler {
         const goConfig = config["go"] || {};
 
         if ("verbose" in config) {
-            Logger.setVerboseMode(config['verbose']);
+            Logger.setVerboseMode(Boolean(config['verbose']));
         }
 
         this.pythonTranspiler = new PythonTranspiler(pythonConfig);
