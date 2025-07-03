@@ -231,6 +231,16 @@ func New${this.capitalize(className)}() ${(className)} {
    setDefaults(&p)
    return p
 }\n`;
+        // TO remove `return copies lock value: github.com/ccxt/ccxt/go/v4.bitvavoWs contains github.com/ccxt/ccxt/go/v4.bitvavo contains github.com/ccxt/ccxt/go/v4.Exchange contains sync.Mutex`
+        // change the return value to
+        //
+        //         return `
+        // func New${this.capitalize(className)}() *${(className)} {
+        //    p := ${className}{}
+        //    setDefaults(&p)
+        //    return &p
+        // }\n`;
+        //
 
     }
 
@@ -739,13 +749,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         const op = node.operatorToken.kind;
 
-        // ---------------------------------------------------------------
-        // Array destructuring assignment:  [a, b] = foo()
-        // Transforms into:
+        
+        // [a, b] = foo()
+        //
+        // Transforms into
+        //
         // __tmpX := foo()
         // a = GetValue(__tmpX, 0)
         // b = GetValue(__tmpX, 1)
-        // ---------------------------------------------------------------
         if (op === ts.SyntaxKind.EqualsToken &&
             left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
             const elems = (left.elements as any[]);
@@ -761,9 +772,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `${tmpVar} := ${rhs}\n${this.getIden(identation)}${assignments}`;
         }
 
-        // ---------------------------------------------------------------
         // Go-style setter for element-access assignments:  a[b] = v
-        // ---------------------------------------------------------------
         if (op === ts.SyntaxKind.EqualsToken &&
             left.kind === ts.SyntaxKind.ElementAccessExpression) {
             // Collect base container and all keys (inner-most key is last).
@@ -793,6 +802,43 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const rhs     = this.printNode(right, 0);
 
             return `SetValue(${acc}, ${lastKey}, ${rhs})`;
+        }
+
+        // Go-style setter for element-access compound assignments:  a[b] += v
+        if (op === ts.SyntaxKind.PlusEqualsToken &&
+            left.kind === ts.SyntaxKind.ElementAccessExpression) {
+            console.log("DEBUG: Handling += with element access");
+            // Collect base container and all keys (inner-most key is last).
+            const keys: any[] = [];
+            let baseExpr: any = null;
+            let cur: any = left;
+            while (ts.isElementAccessExpression(cur)) {
+                keys.unshift(cur.argumentExpression);          // prepend
+                const expr = cur.expression;
+                if (!ts.isElementAccessExpression(expr)) {
+                    baseExpr = expr;
+                    break;
+                }
+                cur = expr;
+            }
+
+            const containerStr = this.printNode(baseExpr, 0);
+            const keyStrs      = keys.map(k => this.printNode(k, 0));
+
+            // Build GetValue(GetValue( ... )) chain for all but the last key.
+            let acc = containerStr;
+            for (let i = 0; i < keyStrs.length - 1; i++) {
+                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            }
+
+            const lastKey = keyStrs[keyStrs.length - 1];
+            const rhs     = this.printNode(right, 0);
+
+            // For +=, we need to get the current value, add to it, then set it back
+            const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            const result = `SetValue(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
+            console.log("DEBUG: Generated result:", result);
+            return result;
         }
 
         if (left.kind === ts.SyntaxKind.TypeOfExpression) {
@@ -1265,7 +1311,11 @@ ${this.getIden(identation)}return nil`;
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return  `AppendToArray(&${name},${parsedArg})`;
+        return  `AppendToArraySafe(${name}, ${parsedArg})`;
+        // works with:
+        //  func AppendToArray(slicePtr *interface{}, element interface{})
+        //  func AppendToArrayValue(slice interface{}, element interface{}) interface{}
+        //  func AppendToArraySafe(slice interface{}, element interface{}) interface{}
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -1317,7 +1367,7 @@ ${this.getIden(identation)}return nil`;
     }
 
     printShiftCall(node, identation, name = undefined) {
-        return `Shift(${name}))`;
+        return `Shift(${name})`;
     }
 
     printReverseCall(node, identation, name = undefined) {
@@ -1472,10 +1522,10 @@ ${this.getIden(identation)}return nil`;
         const tryBodyEndsWithReturn = tryLastLine.startsWith("return");
 
         const returNil = "return nil";
-
         const className = this.className;
+        const isVoid   = this.isInsideVoidFunction(node);
         const catchBlock =`
-{		ret__ := func(this *${className}) (ret_ interface{}) {
+{		${isVoid ? '' : 'ret__ :='} func(this *${className}) (ret_ interface{}) {
 		defer func() {
 			if e := recover(); e != nil {
                 if e == "break" {
@@ -1490,24 +1540,23 @@ ${this.getIden(identation)}return nil`;
 		}()
 		// try block:
         ${tryBody}
-        ${tryBodyEndsWithReturn ? "" : returNil}          // <- only when needed
+		${tryBodyEndsWithReturn ? "" : returNil}
 	}(this)
-	${tryBodyEndsWithReturn 
-    ? `if ret__ != nil {
-		return ret__
-	}`
-    : ""}
+    ${!isVoid
+        ? `
+            if ret__ != nil {
+                return ret__
+            }
+            return nil`
+        : ''
+}
 }`;
         // add identation
-        let indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
-        if (!this.isInsideVoidFunction(node)) {
-            indentedBlock += "\n" + this.getIden(identation) + "return nil";
-        }
+        const indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
         // const catchCondOpen = this.CONDITION_OPENING ? this.CONDITION_OPENING : " ";
 
         return indentedBlock;
     }
-
 
     printPrefixUnaryExpression(node, identation) {
         const {operand, operator} = node;
@@ -1533,9 +1582,7 @@ ${this.getIden(identation)}return nil`;
 
     /**
      * Override the default element-access printer with a version that walks the
-     * entire `x[y][z]` chain and builds a properly nested sequence of helper
-     * calls.  This removes the root cause of the unbalanced-parenthesis bug
-     * without any post-processing or regex hacks.
+     * entire `x[y][z]` chain and builds a properly nested sequence of helper calls
      */
     printElementAccessExpression(node, identation) {
         // Maintain original special-case handling first.
@@ -1544,20 +1591,10 @@ ${this.getIden(identation)}return nil`;
             return special;
         }
 
-        // If the expression is on the *left* side of an assignment we defer to
-        // the base implementation, because that path needs casting/setter
-        // semantics that are language-specific.
-        const isLeftSide = node.parent?.kind === ts.SyntaxKind.BinaryExpression &&
-                           (node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken ||
-                            node.parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) &&
-                           node.parent.left === node;
+        // Always process element access expressions the same way
+        // The binary expression handler will override this for assignments
 
-        if (isLeftSide) {
-            return super.printElementAccessExpression(node, identation);
-        }
-
-        // Collect the full access chain, e.g. for a[b][c] we gather
-        //   base = a, keys = [b, c]
+        // For right-side access, build the full nested chain
         const keys: any[] = [];
         let baseExpr = null;
         let current = node as any;
@@ -1585,18 +1622,13 @@ ${this.getIden(identation)}return nil`;
         return acc;
     }
 
-    /** Utility: returns true if the current node is inside a function that
-     *  declares *no* return value (void) in TypeScript source. */
-    isInsideVoidFunction(node) {
-        let cur = node.parent;
-        while (cur) {
+    isInsideVoidFunction(node: ts.Node): boolean {
+        for (let cur = node.parent; cur; cur = cur.parent) {
             if (ts.isFunctionLike(cur)) {
-                if (!cur.type) return true; // no explicit type => void
-                return cur.type.kind === ts.SyntaxKind.VoidKeyword;
+                return cur.type === undefined || cur.type.kind === ts.SyntaxKind.VoidKeyword;
             }
-            cur = cur.parent;
         }
-        return true; // default to void to be safe
+        return true;          // default-to-void if uncertain
     }
 }
 

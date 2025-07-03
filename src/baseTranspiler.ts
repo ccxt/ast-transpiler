@@ -1792,10 +1792,10 @@ class BaseTranspiler {
                 return this.printTryStatement(node, identation);
             } else if (ts.isPrefixUnaryExpression(node)) {
                 return this.printPrefixUnaryExpression(node, identation);
-            } else if (ts.isNewExpression(node)) {
-                return this.printNewExpression(node, identation);
             } else if (ts.isThrowStatement(node)) {
                 return this.printThrowStatement(node, identation);
+            } else if (ts.isNewExpression(node)) {
+                return this.printNewExpression(node, identation);
             } else if (ts.isAwaitExpression(node)) {
                 return this.printAwaitExpression(node, identation);
             } else if (ts.isConditionalExpression(node)) {
