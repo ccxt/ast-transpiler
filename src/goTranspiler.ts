@@ -72,7 +72,8 @@ export class GoTranspiler extends BaseTranspiler {
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
     className: string;
-    ws: boolean;
+    classNameMap: { [key: string]: string };
+    DEFAULT_RETURN_TYPE = 'interface{}';
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -87,15 +88,13 @@ export class GoTranspiler extends BaseTranspiler {
         this.wrapThisCalls = false;
         this.id = "Go";
         this.className = "undefined";
-
-
+        this.classNameMap = config['classNameMap'] ?? {};
         this.initConfig();
 
         // user overrides
         this.applyUserOverrides(config);
         this.wrapThisCalls = config['wrapThisCalls'] ?? false;
         this.wrapCallMethods = config['wrapCallMethods'] ?? [];
-        this.ws = config['ws'] ?? false;
     }
 
     initConfig() {
@@ -209,7 +208,6 @@ export class GoTranspiler extends BaseTranspiler {
     }
 
     printStruct(node, indentation) {
-        const className = node.name.escapedText;
 
         // check if we have heritage
         let heritageName = '';
@@ -220,14 +218,13 @@ export class GoTranspiler extends BaseTranspiler {
         }
 
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
-        return `type ${className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
+        return `type ${this.className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
     }
 
     printNewStructMethod(node){
-        const className = node.name.escapedText;
         return `
-func New${this.capitalize(className)}() ${(className)} {
-   p := ${className}{}
+func New${this.capitalize(this.className)}() ${(this.className)} {
+   p := ${this.className}{}
    setDefaults(&p)
    return p
 }\n`;
@@ -245,11 +242,13 @@ func New${this.capitalize(className)}() ${(className)} {
     }
 
     printClass(node, identation) {
-        const struct = this.printStruct(node, identation);
-
-        const newMethod = this.printNewStructMethod(node);
-
         this.className = node.name.escapedText;
+        if (this.classNameMap[this.className]) {
+            this.className = this.classNameMap[this.className];
+        }
+
+        const struct = this.printStruct(node, identation);
+        const newMethod = this.printNewStructMethod(node);
 
         const methods = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
         const classMethods = methods.map(method => this.printMethodDeclaration(method, identation)).join("\n");
@@ -273,9 +272,6 @@ func New${this.capitalize(className)}() ${(className)} {
     }
 
     printMethodDeclaration(node, identation) {
-
-        const className = node.parent.name.escapedText;
-
 
         let methodDef = this.printMethodDefinition(node, identation);
 
@@ -303,7 +299,6 @@ func New${this.capitalize(className)}() ${(className)} {
     }
 
     printMethodDefinition(node, identation) {
-        const className = node.parent.name.escapedText;
         let name = node.name.escapedText;
         name = this.transformMethodNameIfNeeded(name);
 
@@ -316,7 +311,7 @@ func New${this.capitalize(className)}() ${(className)} {
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
         // const methodDef = this.getIden(identation) + returnType + methodToken + name
         //     + "(" + parsedArgs + ")";
-        const structReceiver = `(${this.THIS_TOKEN} *${className})`;
+        const structReceiver = `(${this.THIS_TOKEN} *${this.className})`;
         const methodDef = this.getIden(identation) + methodToken + " " + structReceiver + " " + name + "(" + parsedArgs + ") " + returnType;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
@@ -749,14 +744,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         const op = node.operatorToken.kind;
 
-        
-        // [a, b] = foo()
-        //
-        // Transforms into
-        //
+        // ---------------------------------------------------------------
+        // Array destructuring assignment:  [a, b] = foo()
+        // Transforms into:
         // __tmpX := foo()
         // a = GetValue(__tmpX, 0)
         // b = GetValue(__tmpX, 1)
+        // ---------------------------------------------------------------
         if (op === ts.SyntaxKind.EqualsToken &&
             left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
             const elems = (left.elements as any[]);
@@ -772,7 +766,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `${tmpVar} := ${rhs}\n${this.getIden(identation)}${assignments}`;
         }
 
+        // ---------------------------------------------------------------
         // Go-style setter for element-access assignments:  a[b] = v
+        // ---------------------------------------------------------------
         if (op === ts.SyntaxKind.EqualsToken &&
             left.kind === ts.SyntaxKind.ElementAccessExpression) {
             // Collect base container and all keys (inner-most key is last).
@@ -804,10 +800,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `SetValue(${acc}, ${lastKey}, ${rhs})`;
         }
 
+        // ---------------------------------------------------------------
         // Go-style setter for element-access compound assignments:  a[b] += v
+        // ---------------------------------------------------------------
         if (op === ts.SyntaxKind.PlusEqualsToken &&
             left.kind === ts.SyntaxKind.ElementAccessExpression) {
-            console.log("DEBUG: Handling += with element access");
             // Collect base container and all keys (inner-most key is last).
             const keys: any[] = [];
             let baseExpr: any = null;
@@ -837,7 +834,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // For +=, we need to get the current value, add to it, then set it back
             const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
             const result = `SetValue(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
-            console.log("DEBUG: Generated result:", result);
             return result;
         }
 
@@ -1522,16 +1518,15 @@ ${this.getIden(identation)}return nil`;
         const tryBodyEndsWithReturn = tryLastLine.startsWith("return");
 
         const returNil = "return nil";
-        const className = this.className;
         const isVoid   = this.isInsideVoidFunction(node);
         const catchBlock =`
-{		${isVoid ? '' : 'ret__ :='} func(this *${className}) (ret_ interface{}) {
+{		${isVoid ? '' : 'ret__ :='} func(this *${this.className}) (ret_ interface{}) {
 		defer func() {
 			if e := recover(); e != nil {
                 if e == "break" {
 				    return
 			    }
-				ret_ = func(this *${className}) interface{} {
+				ret_ = func(this *${this.className}) interface{} {
 					// catch block:
                     ${catchBody}
                     ${catchBodyEndsWithReturn ? "" : returNil}
@@ -1582,7 +1577,9 @@ ${this.getIden(identation)}return nil`;
 
     /**
      * Override the default element-access printer with a version that walks the
-     * entire `x[y][z]` chain and builds a properly nested sequence of helper calls
+     * entire `x[y][z]` chain and builds a properly nested sequence of helper
+     * calls.  This removes the root cause of the unbalanced-parenthesis bug
+     * without any post-processing or regex hacks.
      */
     printElementAccessExpression(node, identation) {
         // Maintain original special-case handling first.
