@@ -797,7 +797,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const lastKey = keyStrs[keyStrs.length - 1];
             const rhs     = this.printNode(right, 0);
 
-            return `SetValue(${acc}, ${lastKey}, ${rhs})`;
+            return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
 
         // ---------------------------------------------------------------
@@ -833,7 +833,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             // For +=, we need to get the current value, add to it, then set it back
             const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
-            const result = `SetValue(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
+            const result = `AddElementToObject(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
             return result;
         }
 
