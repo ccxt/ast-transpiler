@@ -1306,8 +1306,15 @@ ${this.getIden(identation)}return nil`;
         return `IsInt(${parsedArg})`;
     }
 
-    printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return  `AppendToArraySafe(${name}, ${parsedArg})`;
+    printArrayPushCall(node, identation, name: string | undefined = undefined, parsedArg = undefined) {
+        if (name?.includes('(')) {
+            return `
+                value := ${name}
+                AppendToArray(&value, ${parsedArg})
+            `;
+        } else {
+            return  `AppendToArray(&${name}, ${parsedArg})`;
+        }
         // works with:
         //  func AppendToArray(slicePtr *interface{}, element interface{})
         //  func AppendToArrayValue(slice interface{}, element interface{}) interface{}
