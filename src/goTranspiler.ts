@@ -134,6 +134,8 @@ export class GoTranspiler extends BaseTranspiler {
             // 'string': 'str',
             // 'params': 'parameters',
             'type': 'typeVar',
+            'error': 'err',
+            'time': 'timeVar'
             // 'internal': 'intern',
             // 'event': 'eventVar',
             // 'fixed': 'fixedVar',
@@ -214,7 +216,11 @@ export class GoTranspiler extends BaseTranspiler {
         if (node?.heritageClauses?.length > 0) {
             const heritage = node.heritageClauses[0];
             const heritageType = heritage.types[0];
-            heritageName = this.getIden(indentation+1) + heritageType.expression.escapedText + '\n';
+            let heritageEscapedText = heritageType.expression.escapedText;
+            if (this.classNameMap[heritageEscapedText]) {
+                heritageEscapedText = this.classNameMap[heritageEscapedText];
+            }
+            heritageName = this.getIden(indentation+1) + heritageEscapedText + '\n';
         }
 
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
@@ -223,10 +229,10 @@ export class GoTranspiler extends BaseTranspiler {
 
     printNewStructMethod(node){
         return `
-func New${this.capitalize(this.className)}() ${(this.className)} {
-   p := ${this.className}{}
-   setDefaults(&p)
-   return p
+func New${this.capitalize(this.className)}() *${(this.className)} {
+    p := &${this.className}{}
+    setDefaults(p)
+    return p
 }\n`;
         // TO remove `return copies lock value: github.com/ccxt/ccxt/go/v4.bitvavoWs contains github.com/ccxt/ccxt/go/v4.bitvavo contains github.com/ccxt/ccxt/go/v4.Exchange contains sync.Mutex`
         // change the return value to
@@ -754,7 +760,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (op === ts.SyntaxKind.EqualsToken &&
             left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
             const elems = (left.elements as any[]);
-            const returnRandName = "retRes" + this.getLineBasedSuffix(node)
+            const returnRandName = "retRes" + this.getLineBasedSuffix(node);
             const rhs   = this.printNode(right, 0);
 
             // build extraction lines
@@ -1370,6 +1376,98 @@ ${this.getIden(identation)}return nil`;
         return `Reverse(${name})`;
     }
 
+    printBinaryExpression(node, identation) {
+        const {left, right, operatorToken} = node;
+
+        const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
+        if (customBinaryExp) {
+            return customBinaryExp;
+        }
+
+        if (operatorToken.kind == ts.SyntaxKind.InstanceOfKeyword) {
+            return this.printInstanceOfExpression(node, identation);
+        }
+
+        if (operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            // handle test['a'] = 1;
+            const elementAccess = left;
+            const rightSide = this.printNode(right, 0);
+            if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
+                const leftSide = this.printNode(elementAccess.expression, 0);
+                const propName = this.printNode(elementAccess.argumentExpression, 0);
+                return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
+            }
+
+            if (right?.kind === ts.SyntaxKind.AwaitExpression || rightSide.startsWith('<-this.callInternal')) {
+                const leftParsed = this.printNode(left, 0);
+                return `
+    ${leftParsed} = ${rightSide}
+    ${this.getIden(identation)}PanicOnError(${leftParsed})`;
+            }
+        }
+
+        const op = operatorToken.kind;
+        // handle: [x,d] = this.method()
+        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            const arrayBindingPatternElements = left.elements;
+            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
+            const syntheticName = parsedArrayBindingElements.join("") + "Variable";
+
+            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
+
+            parsedArrayBindingElements.forEach((e, index) => {
+                // const type = this.getType(node);
+                // const parsedType = this.getTypeFromRawType(type);
+                const leftElement = arrayBindingPatternElements[index];
+                const leftType = global.checker.getTypeAtLocation(leftElement);
+                const parsedType = this.getTypeFromRawType(leftType);
+
+                const castExp = parsedType ? `(${parsedType})` : "";
+
+                // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
+                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}),${index})`;
+                if (index < parsedArrayBindingElements.length - 1) {
+                    arrayBindingStatement += statement + ";\n";
+                } else {
+                    // printStatement adds the last ;
+                    arrayBindingStatement += statement;
+                }
+            });
+
+            return arrayBindingStatement;
+        }
+
+        let operator = this.SupportedKindNames[operatorToken.kind];
+
+
+        let leftVar = undefined;
+        let rightVar = undefined;
+
+        // c# wrapper
+        if (operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken || operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) {
+            if (this.COMPARISON_WRAPPER_OPEN) {
+                leftVar = this.printNode(left, 0);
+                rightVar = this.printNode(right, identation);
+                return `${this.COMPARISON_WRAPPER_OPEN}${leftVar}, ${rightVar}${this.COMPARISON_WRAPPER_CLOSE}`;
+            }
+        }
+
+        // check if boolean operators || and && because of the falsy values
+        if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+            leftVar = this.printCondition(left, 0);
+            rightVar = this.printCondition(right, identation);
+        }  else {
+            leftVar = this.printNode(left, 0);
+            rightVar = this.printNode(right, identation);
+        }
+
+        const customOperator = this.getCustomOperatorIfAny(left, right, operatorToken);
+
+        operator = customOperator ? customOperator : operator;
+
+        return leftVar +" "+ operator + " " + rightVar.trim();
+    }
+
     printPopCall(node, identation, name = undefined) {
         return `Pop(${name}))`;
     }
@@ -1498,99 +1596,6 @@ ${this.getIden(identation)}return nil`;
         // return this.getIden(identation) + this.THROW_TOKEN + throwExpression + this.LINE_TERMINATOR;
     }
 
-    printBinaryExpression(node, identation) {
-
-        const {left, right, operatorToken} = node;
-
-        const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
-        if (customBinaryExp) {
-            return customBinaryExp;
-        }
-
-        if (operatorToken.kind == ts.SyntaxKind.InstanceOfKeyword) {
-            return this.printInstanceOfExpression(node, identation);
-        }
-
-        if (operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-            // handle test['a'] = 1;
-            const elementAccess = left;
-            const rightSide = this.printNode(right, 0);
-            if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                const leftSide = this.printNode(elementAccess.expression, 0);
-                const propName = this.printNode(elementAccess.argumentExpression, 0);
-                return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
-            }
-
-            if (right?.kind === ts.SyntaxKind.AwaitExpression || rightSide.startsWith('<-this.callInternal')) {
-                const leftParsed = this.printNode(left, 0);
-                return `
-    ${leftParsed} = ${rightSide}
-    ${this.getIden(identation)}PanicOnError(${leftParsed})`;
-            }
-        }
-
-        const op = operatorToken.kind;
-        // handle: [x,d] = this.method()
-        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
-            const arrayBindingPatternElements = left.elements;
-            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
-            const syntheticName = parsedArrayBindingElements.join("") + "Variable";
-
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
-
-            parsedArrayBindingElements.forEach((e, index) => {
-                // const type = this.getType(node);
-                // const parsedType = this.getTypeFromRawType(type);
-                const leftElement = arrayBindingPatternElements[index];
-                const leftType = global.checker.getTypeAtLocation(leftElement);
-                const parsedType = this.getTypeFromRawType(leftType);
-
-                const castExp = parsedType ? `(${parsedType})` : "";
-
-                // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}),${index})`;
-                if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
-                } else {
-                    // printStatement adds the last ;
-                    arrayBindingStatement += statement;
-                }
-            });
-
-            return arrayBindingStatement;
-        }
-
-        let operator = this.SupportedKindNames[operatorToken.kind];
-
-
-        let leftVar = undefined;
-        let rightVar = undefined;
-
-        // c# wrapper
-        if (operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken || operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) {
-            if (this.COMPARISON_WRAPPER_OPEN) {
-                leftVar = this.printNode(left, 0);
-                rightVar = this.printNode(right, identation);
-                return `${this.COMPARISON_WRAPPER_OPEN}${leftVar}, ${rightVar}${this.COMPARISON_WRAPPER_CLOSE}`;
-            }
-        }
-
-        // check if boolean operators || and && because of the falsy values
-        if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
-            leftVar = this.printCondition(left, 0);
-            rightVar = this.printCondition(right, identation);
-        }  else {
-            leftVar = this.printNode(left, 0);
-            rightVar = this.printNode(right, identation);
-        }
-
-        const customOperator = this.getCustomOperatorIfAny(left, right, operatorToken);
-
-        operator = customOperator ? customOperator : operator;
-
-        return leftVar +" "+ operator + " " + rightVar.trim();
-    }
-
     printTryStatement(node, identation) {
         // const tryBody = this.printNode(node.tryBlock, 0);
         let tryBody = node.tryBlock.statements.map((s) => {
@@ -1646,7 +1651,6 @@ ${this.getIden(identation)}return nil`;
         return indentedBlock;
     }
 
-
     printPrefixUnaryExpression(node, identation) {
         const {operand, operator} = node;
         if (operator === ts.SyntaxKind.ExclamationToken) {
@@ -1666,8 +1670,7 @@ ${this.getIden(identation)}return nil`;
             return `New${this.capitalize(expression)}()`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
-        const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-        return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+        return 'New' + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
 
     /**

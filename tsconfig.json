@@ -10,7 +10,8 @@
         "declaration": true,
         "declarationMap": true,
         "sourceMap": true,
-        "rootDir": "./src"
+        "rootDir": "./src",
+        "skipLibCheck": true
     },
     "include": [
         "./src/**/*"

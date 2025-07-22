@@ -32,6 +32,8 @@
     "publishPackage": "sh publish.sh && git push && git push --tags && npm publish"
   },
   "devDependencies": {
+    "@types/eslint": "^8.56.12",
+    "@types/estree": "^1.0.8",
     "@types/jest": "^29.2.0",
     "@types/node": "^18.11.4",
     "@typescript-eslint/eslint-plugin": "^5.42.0",
