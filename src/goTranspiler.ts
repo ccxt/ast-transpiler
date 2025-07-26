@@ -758,17 +758,36 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // ---------------------------------------------------------------
         if (op === ts.SyntaxKind.EqualsToken &&
             left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
-            const elems = (left.elements as any[]);
-            const returnRandName = "retRes" + this.getLineBasedSuffix(node);
-            const rhs   = this.printNode(right, 0);
+            // const elems = (left.elements as any[]);
+            // const returnRandName = "retRes" + this.getLineBasedSuffix(node);
+            // const rhs   = this.printNode(right, 0);
 
-            // build extraction lines
-            const assignments = elems.map((el, idx) => {
-                const leftName = this.printNode(el, 0);
-                return `${leftName} = GetValue(${returnRandName}, ${idx})`;
-            }).join(`\n${this.getIden(identation)}`);
+            // // build extraction lines
+            // const assignments = elems.map((el, idx) => {
+            //     const leftName = this.printNode(el, 0);
+            //     return `${leftName} = GetValue(${returnRandName}, ${idx})`;
+            // }).join(`\n${this.getIden(identation)}`);
 
-            return `${returnRandName} := ${rhs}\n${this.getIden(identation)}${assignments}`;
+            // return `${returnRandName} := ${rhs}\n${this.getIden(identation)}${assignments}`;
+            //
+            const arrayBindingPatternElements = left.elements;
+            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
+            const syntheticName = parsedArrayBindingElements.join("") + "Variable";
+
+            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
+
+            parsedArrayBindingElements.forEach((e, index) => {
+
+                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName},${index})`;
+                if (index < parsedArrayBindingElements.length - 1) {
+                    arrayBindingStatement += statement + ";\n";
+                } else {
+                    // printStatement adds the last ;
+                    arrayBindingStatement += statement;
+                }
+            });
+
+            return arrayBindingStatement;
         }
 
         // ---------------------------------------------------------------
