@@ -1,4 +1,3 @@
-import { off } from "process";
 import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from 'typescript';
 
@@ -1023,6 +1022,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 shouldAddLastReturn = false;
             }
 
+            // Check if the function body ends with a conditional that has returns in all branches
+            if (node.body && this.blockEndsWithConditionalReturn(node.body.statements)) {
+                shouldAddLastReturn = false;
+            }
+
             const lastReturn = shouldAddLastReturn ? this.getIden(identation+2) + "return nil" : "";
             // const hasCatchInside = bodySplit.indexOf("recover()") > -1;
             // if ((1+1 == 2) || hasCatchInside) {
@@ -1605,45 +1609,50 @@ ${this.getIden(identation)}return nil`;
 
         // const catchBody = this.printNode(node.catchClause.block, 0);
         const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-        const catchDeclaration = this.printNode(node.catchClause.variableDeclaration.name, 0);
 
         const catchLines = catchBody.split("\n").map(l => l.trim()).filter(Boolean);
         const catchLastLine = catchLines.length ? catchLines[catchLines.length - 1] : "";
-        const catchBodyEndsWithReturn = catchLastLine.startsWith("return");
+        const catchBodyEndsWithReturn = catchLastLine.startsWith("return")
+            || catchLastLine.startsWith("panic")
+            || catchLastLine.startsWith("throw new")
+            || this.blockEndsWithConditionalReturn(node.catchClause.block.statements);
 
         const tryLines = tryBody.split("\n").map(l => l.trim()).filter(Boolean);
         const tryLastLine = tryLines.length ? tryLines[tryLines.length - 1] : "";
-        const tryBodyEndsWithReturn = tryLastLine.startsWith("return");
+        const tryBodyEndsWithReturn = tryLastLine.startsWith("return")
+            || tryLastLine.startsWith("panic")
+            || tryLastLine.startsWith("throw new")
+            || this.blockEndsWithConditionalReturn(node.tryBlock.statements);
 
         const returNil = "return nil";
         const isVoid   = this.isInsideVoidFunction(node);
         const catchBlock =`
-{		${isVoid ? '' : 'ret__ :='} func(this *${this.className}) (ret_ interface{}) {
-		defer func() {
-			if e := recover(); e != nil {
-                if e == "break" {
-				    return
-			    }
-				ret_ = func(this *${this.className}) interface{} {
-					// catch block:
-                    ${catchBody}
-                    ${catchBodyEndsWithReturn ? "" : returNil}
-				}(this)
-			}
-		}()
-		// try block:
-        ${tryBody}
-		${tryBodyEndsWithReturn ? "" : returNil}
-	}(this)
+    {		
+        ${isVoid ? '' : 'ret__ :='} func(this *${this.className}) (ret_ interface{}) {
+		    defer func() {
+                if e := recover(); e != nil {
+                    if e == "break" {
+                        return
+                    }
+                    ret_ = func(this *${this.className}) interface{} {
+                        // catch block:
+                        ${catchBody}
+                        ${catchBodyEndsWithReturn ? "" : returNil}
+                    }(this)
+                }
+            }()
+		    // try block:
+            ${tryBody}
+		    ${tryBodyEndsWithReturn ? "" : returNil}
+	    }(this)
     ${!isVoid
         ? `
             if ret__ != nil {
                 return ret__
             }
             return nil`
-        : ''
-}
-}`;
+        : ''}
+        }`;
         // add identation
         const indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
         // const catchCondOpen = this.CONDITION_OPENING ? this.CONDITION_OPENING : " ";
@@ -1725,6 +1734,72 @@ ${this.getIden(identation)}return nil`;
         }
         return true;          // default-to-void if uncertain
     }
+
+    /**
+     * Check if a block or statement contains a return statement or throws an error
+     */
+    hasReturnInBlock(statement: ts.Statement): boolean {
+        if (ts.isBlock(statement)) {
+            // Check each statement in the block
+            for (const stmt of statement.statements) {
+                if (ts.isReturnStatement(stmt)) {
+                    return true;
+                }
+                if (ts.isThrowStatement(stmt)) {
+                    return true;
+                }
+                if (ts.isIfStatement(stmt)) {
+                    // Check if this if statement has returns in all branches (only if it has an else)
+                    const ifHasReturn = this.hasReturnInBlock(stmt.thenStatement);
+                    if (stmt.elseStatement) {
+                        const elseHasReturn = this.hasReturnInBlock(stmt.elseStatement);
+                        return ifHasReturn && elseHasReturn;
+                    }
+                }
+                // Recursively check nested blocks
+                if (ts.isBlock(stmt)) {
+                    if (this.hasReturnInBlock(stmt)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } else if (ts.isReturnStatement(statement)) {
+            return true;
+        } else if (ts.isThrowStatement(statement)) {
+            return true;
+        } else if (ts.isIfStatement(statement)) {
+            // Check if this if statement has returns in all branches (including else if chains)
+            const ifHasReturn = this.hasReturnInBlock(statement.thenStatement);
+            if (statement.elseStatement) {
+                const elseHasReturn = this.hasReturnInBlock(statement.elseStatement);
+                return ifHasReturn && elseHasReturn;
+            }
+            return false; // No else statement, so execution can continue
+        }
+        return false;
+    }
+
+    /**
+     * Check if the last statement in a block is a conditional with returns in all branches
+     */
+    blockEndsWithConditionalReturn(statements: ts.NodeArray<ts.Statement>): boolean {
+        if (statements.length === 0) {
+            return false;
+        }
+
+        const lastStatement = statements[statements.length - 1];
+        if (ts.isIfStatement(lastStatement)) {
+            // Check if this if statement has returns in all branches (only if it has an else)
+            const ifHasReturn = this.hasReturnInBlock(lastStatement.thenStatement);
+            if (lastStatement.elseStatement) {
+                const elseHasReturn = this.hasReturnInBlock(lastStatement.elseStatement);
+                return ifHasReturn && elseHasReturn;
+            }
+        }
+        return false;
+    }
+
 }
 
 
