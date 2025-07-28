@@ -1622,6 +1622,7 @@ ${this.getIden(identation)}return nil`;
 
     printTryStatement(node, identation) {
         // const tryBody = this.printNode(node.tryBlock, 0);
+
         let tryBody = node.tryBlock.statements.map((s) => {
             return this.printNode(s, identation + 1);
         }).join("\n");
@@ -1646,9 +1647,12 @@ ${this.getIden(identation)}return nil`;
 
         const returNil = "return nil";
         const isVoid   = this.isInsideVoidFunction(node);
+
+        const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
+
         const catchBlock =`
     {		
-        ${isVoid ? '' : 'ret__ :='} func(this *${this.className}) (ret_ interface{}) {
+        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func(this *${this.className}) (ret_ interface{}) {
 		    defer func() {
                 if e := recover(); e != nil {
                     if e == "break" {
@@ -1665,7 +1669,7 @@ ${this.getIden(identation)}return nil`;
             ${tryBody}
 		    ${tryBodyEndsWithReturn ? "" : returNil}
 	    }(this)
-    ${!isVoid
+    ${nodeEndsWithReturn
         ? `
             if ret__ != nil {
                 return ret__
@@ -1699,6 +1703,10 @@ ${this.getIden(identation)}return nil`;
             return `New${this.capitalize(expression)}()`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
+        if (expression.endsWith('Error')) {
+            const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
+            return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+        }
         return 'New' + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
 
@@ -1760,42 +1768,28 @@ ${this.getIden(identation)}return nil`;
      */
     hasReturnInBlock(statement: ts.Statement): boolean {
         if (ts.isBlock(statement)) {
-            // Check each statement in the block
-            for (const stmt of statement.statements) {
-                if (ts.isReturnStatement(stmt)) {
-                    return true;
-                }
-                if (ts.isThrowStatement(stmt)) {
-                    return true;
-                }
-                if (ts.isIfStatement(stmt)) {
-                    // Check if this if statement has returns in all branches (only if it has an else)
-                    const ifHasReturn = this.hasReturnInBlock(stmt.thenStatement);
-                    if (stmt.elseStatement) {
-                        const elseHasReturn = this.hasReturnInBlock(stmt.elseStatement);
-                        return ifHasReturn && elseHasReturn;
-                    }
-                }
-                // Recursively check nested blocks
-                if (ts.isBlock(stmt)) {
-                    if (this.hasReturnInBlock(stmt)) {
-                        return true;
-                    }
-                }
+            // A sequence of statements returns on all control paths if the last statement returns on all control paths
+            if (statement.statements.length === 0) {
+                return false;
             }
-            return false;
+            return this.hasReturnInBlock(statement.statements[statement.statements.length - 1]);
         } else if (ts.isReturnStatement(statement)) {
             return true;
         } else if (ts.isThrowStatement(statement)) {
             return true;
         } else if (ts.isIfStatement(statement)) {
-            // Check if this if statement has returns in all branches (including else if chains)
+            // An if statement returns on all control paths if both the "if" and "else" branches return on all control paths
             const ifHasReturn = this.hasReturnInBlock(statement.thenStatement);
             if (statement.elseStatement) {
                 const elseHasReturn = this.hasReturnInBlock(statement.elseStatement);
                 return ifHasReturn && elseHasReturn;
             }
             return false; // No else statement, so execution can continue
+        } else if (ts.isTryStatement(statement)) {
+            // A try statement returns on all control paths if both try and catch blocks return on all control paths
+            const tryHasReturn = this.hasReturnInBlock(statement.tryBlock);
+            const catchHasReturn = this.hasReturnInBlock(statement.catchClause.block);
+            return tryHasReturn && catchHasReturn;
         }
         return false;
     }
@@ -1817,8 +1811,15 @@ ${this.getIden(identation)}return nil`;
                 return ifHasReturn && elseHasReturn;
             }
         }
+        if (ts.isTryStatement(lastStatement)) {
+            // Check if this try statement has returns in both try and catch blocks
+            const tryHasReturn = this.hasReturnInBlock(lastStatement.tryBlock);
+            const catchHasReturn = this.hasReturnInBlock(lastStatement.catchClause.block);
+            return tryHasReturn && catchHasReturn;
+        }
         return false;
     }
+
 
 }
 
