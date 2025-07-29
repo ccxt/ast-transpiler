@@ -54,10 +54,10 @@ describe('go transpiling tests', () => {
         "\n"+
         "}\n"+
         "\n"+
-        "func NewTest() Test {\n"+
-        "   p := Test{}\n"+
-        "   setDefaults(&p)\n"+
-        "   return p\n"+
+        "func NewTest() *Test {\n"+
+        "    p := &Test{}\n"+
+        "    setDefaults(p)\n"+
+        "    return p\n"+
         "}\n"+
         "\n"+
         "func  (this *Test) Main() interface{}  {\n"+
