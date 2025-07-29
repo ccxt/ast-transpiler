@@ -524,6 +524,10 @@ declare class GoTranspiler extends BaseTranspiler {
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
     className: string;
+    classNameMap: {
+        [key: string]: string;
+    };
+    DEFAULT_RETURN_TYPE: string;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
@@ -547,7 +551,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printConstructorDeclaration(node: any, identation: any): string;
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
-    printElementAccessExpressionExceptionIfAny(node: any): void;
+    printElementAccessExpressionExceptionIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any): string;
     transformMethodNameIfNeeded(name: string): string;
     transformCallExpressionName(name: string): string;
@@ -578,7 +582,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printMathRoundCall(node: any, identation: any, parsedArg?: any): string;
     printMathCeilCall(node: any, identation: any, parsedArg?: any): string;
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
-    printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    printArrayPushCall(node: any, identation: any, name?: string | undefined, parsedArg?: any): string;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -609,6 +613,22 @@ declare class GoTranspiler extends BaseTranspiler {
     printTryStatement(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
+    /**
+     * Override the default element-access printer with a version that walks the
+     * entire `x[y][z]` chain and builds a properly nested sequence of helper
+     * calls.  This removes the root cause of the unbalanced-parenthesis bug
+     * without any post-processing or regex hacks.
+     */
+    printElementAccessExpression(node: any, identation: any): string;
+    isInsideVoidFunction(node: ts.Node): boolean;
+    /**
+     * Check if a block or statement contains a return statement or throws an error
+     */
+    hasReturnInBlock(statement: ts.Statement): boolean;
+    /**
+     * Check if the last statement in a block is a conditional with returns in all branches
+     */
+    blockEndsWithConditionalReturn(statements: ts.NodeArray<ts.Statement>): boolean;
 }
 
 declare class Transpiler {
