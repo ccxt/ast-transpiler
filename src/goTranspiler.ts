@@ -1704,8 +1704,7 @@ ${this.getIden(identation)}return nil`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
         if (expression.endsWith('Error')) {
-            const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-            return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+            return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
         }
         return 'New' + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
