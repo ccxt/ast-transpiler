@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import ts, { TypeChecker } from 'typescript';
+import ts, { BinaryExpression, TypeChecker } from 'typescript';
 
 const SyntaxKind = ts.SyntaxKind;
 
@@ -133,7 +133,7 @@ export class GoTranspiler extends BaseTranspiler {
             // 'string': 'str',
             // 'params': 'parameters',
             'type': 'typeVar',
-            'error': 'err',
+            'error': 'e',
             'time': 'timeVar'
             // 'internal': 'intern',
             // 'event': 'eventVar',
@@ -1104,9 +1104,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `(<-${expression})`;
     }
 
-    printInstanceOfExpression(node, identation) {
-        const left = node.left.escapedText;
-        const right = node.right.escapedText;
+    printInstanceOfExpression(node: BinaryExpression, identation: number): string {
+        const left = this.printNode (node.left);
+        const right = this.printNode (node.right);
         return this.getIden(identation) + `IsInstance(${left}, ${right})`;
     }
 
