@@ -133,8 +133,6 @@ export class GoTranspiler extends BaseTranspiler {
             // 'string': 'str',
             // 'params': 'parameters',
             'type': 'typeVar',
-            'error': 'e',
-            'time': 'timeVar'
             // 'internal': 'intern',
             // 'event': 'eventVar',
             // 'fixed': 'fixedVar',
@@ -1620,7 +1618,7 @@ ${this.getIden(identation)}return nil`;
         return leftVar +" "+ operator + " " + rightVar.trim();
     }
 
-    printTryStatement(node, identation) {
+    printTryStatement(node, identation: number) {
         // const tryBody = this.printNode(node.tryBlock, 0);
 
         let tryBody = node.tryBlock.statements.map((s) => {
@@ -1649,13 +1647,13 @@ ${this.getIden(identation)}return nil`;
         const isVoid   = this.isInsideVoidFunction(node);
 
         const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
-
+        const errorName = node.catchClause.variableDeclaration.name.escapedText;
         const catchBlock =`
     {		
         ${nodeEndsWithReturn ? 'ret__ :=' : ''} func(this *${this.className}) (ret_ interface{}) {
 		    defer func() {
-                if e := recover(); e != nil {
-                    if e == "break" {
+                if ${errorName} := recover(); ${errorName} != nil {
+                    if ${errorName} == "break" {
                         return
                     }
                     ret_ = func(this *${this.className}) interface{} {
