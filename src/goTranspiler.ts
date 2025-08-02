@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import ts, { BinaryExpression, TypeChecker } from 'typescript';
+import ts, { BinaryExpression, CallExpression, TypeChecker } from 'typescript';
 
 const SyntaxKind = ts.SyntaxKind;
 
@@ -1333,8 +1333,14 @@ ${this.getIden(identation)}return nil`;
         return `IsInt(${parsedArg})`;
     }
 
-    printArrayPushCall(node, identation, name: string | undefined = undefined, parsedArg = undefined) {
-        return  `AppendToArray(&${name}, ${parsedArg})`;
+    printArrayPushCall(node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
+        let returnValue = '';
+        let returnRandName = name;
+        if (name?.startsWith('GetValue')) {
+            returnRandName = "retRes" + this.getLineBasedSuffix(node);
+            returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
+        }
+        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
         // works with:
         //  func AppendToArray(slicePtr *interface{}, element interface{})
         //  func AppendToArrayValue(slice interface{}, element interface{}) interface{}
