@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import ts, { TypeChecker } from 'typescript';
+import ts, { BinaryExpression, CallExpression, TypeChecker } from 'typescript';
 
 const SyntaxKind = ts.SyntaxKind;
 
@@ -133,8 +133,6 @@ export class GoTranspiler extends BaseTranspiler {
             // 'string': 'str',
             // 'params': 'parameters',
             'type': 'typeVar',
-            'error': 'err',
-            'time': 'timeVar'
             // 'internal': 'intern',
             // 'event': 'eventVar',
             // 'fixed': 'fixedVar',
@@ -1104,9 +1102,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `(<-${expression})`;
     }
 
-    printInstanceOfExpression(node, identation) {
-        const left = node.left.escapedText;
-        const right = node.right.escapedText;
+    printInstanceOfExpression(node: BinaryExpression, identation: number): string {
+        const left = this.printNode (node.left);
+        const right = this.printNode (node.right);
         return this.getIden(identation) + `IsInstance(${left}, ${right})`;
     }
 
@@ -1335,8 +1333,14 @@ ${this.getIden(identation)}return nil`;
         return `IsInt(${parsedArg})`;
     }
 
-    printArrayPushCall(node, identation, name: string | undefined = undefined, parsedArg = undefined) {
-        return  `AppendToArray(&${name}, ${parsedArg})`;
+    printArrayPushCall(node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
+        let returnValue = '';
+        let returnRandName = name;
+        if (name?.startsWith('GetValue')) {
+            returnRandName = "retRes" + this.getLineBasedSuffix(node);
+            returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
+        }
+        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
         // works with:
         //  func AppendToArray(slicePtr *interface{}, element interface{})
         //  func AppendToArrayValue(slice interface{}, element interface{}) interface{}
@@ -1620,7 +1624,7 @@ ${this.getIden(identation)}return nil`;
         return leftVar +" "+ operator + " " + rightVar.trim();
     }
 
-    printTryStatement(node, identation) {
+    printTryStatement(node, identation: number) {
         // const tryBody = this.printNode(node.tryBlock, 0);
 
         let tryBody = node.tryBlock.statements.map((s) => {
@@ -1649,13 +1653,13 @@ ${this.getIden(identation)}return nil`;
         const isVoid   = this.isInsideVoidFunction(node);
 
         const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
-
+        const errorName = node.catchClause.variableDeclaration.name.escapedText;
         const catchBlock =`
     {		
         ${nodeEndsWithReturn ? 'ret__ :=' : ''} func(this *${this.className}) (ret_ interface{}) {
 		    defer func() {
-                if e := recover(); e != nil {
-                    if e == "break" {
+                if ${errorName} := recover(); ${errorName} != nil {
+                    if ${errorName} == "break" {
                         return
                     }
                     ret_ = func(this *${this.className}) interface{} {
@@ -1704,8 +1708,7 @@ ${this.getIden(identation)}return nil`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
         if (expression.endsWith('Error')) {
-            const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-            return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+            return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
         }
         return 'New' + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
