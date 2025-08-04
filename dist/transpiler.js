@@ -3341,9 +3341,7 @@ var GoTranspiler = class extends BaseTranspiler {
     };
     this.CallExpressionReplacements = {};
     this.ReservedKeywordsReplacements = {
-      "type": "typeVar",
-      "error": "err",
-      "time": "timeVar"
+      "type": "typeVar"
     };
     this.binaryExpressionsWrappers = {
       [ts5.SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
@@ -3959,8 +3957,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     return `(<-${expression})`;
   }
   printInstanceOfExpression(node, identation) {
-    const left = node.left.escapedText;
-    const right = node.right.escapedText;
+    const left = this.printNode(node.left);
+    const right = this.printNode(node.right);
     return this.getIden(identation) + `IsInstance(${left}, ${right})`;
   }
   getRandomNameSuffix() {
@@ -4104,7 +4102,14 @@ ${this.getIden(identation)}return nil`;
     return `IsInt(${parsedArg})`;
   }
   printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
-    return `AppendToArray(&${name}, ${parsedArg})`;
+    let returnValue = "";
+    let returnRandName = name;
+    if (name?.startsWith("GetValue")) {
+      returnRandName = "retRes" + this.getLineBasedSuffix(node);
+      returnValue = `${returnRandName} := ${name}
+${this.getIden(identation)}`;
+    }
+    return `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Contains(${name},${parsedArg})`;
@@ -4298,12 +4303,13 @@ ${this.getIden(identation)}return nil`;
     const returNil = "return nil";
     const isVoid = this.isInsideVoidFunction(node);
     const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
+    const errorName = node.catchClause.variableDeclaration.name.escapedText;
     const catchBlock = `
     {		
         ${nodeEndsWithReturn ? "ret__ :=" : ""} func(this *${this.className}) (ret_ interface{}) {
 		    defer func() {
-                if e := recover(); e != nil {
-                    if e == "break" {
+                if ${errorName} := recover(); ${errorName} != nil {
+                    if ${errorName} == "break" {
                         return
                     }
                     ret_ = func(this *${this.className}) interface{} {
@@ -4344,8 +4350,7 @@ ${this.getIden(identation)}return nil`;
     }
     const args = node.arguments.map((n) => this.printNode(n, identation)).join(", ");
     if (expression.endsWith("Error")) {
-      const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-      return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+      return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
     return "New" + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
   }

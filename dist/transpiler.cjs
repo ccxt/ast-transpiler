@@ -3335,9 +3335,7 @@ var GoTranspiler = class extends BaseTranspiler {
     };
     this.CallExpressionReplacements = {};
     this.ReservedKeywordsReplacements = {
-      "type": "typeVar",
-      "error": "err",
-      "time": "timeVar"
+      "type": "typeVar"
     };
     this.binaryExpressionsWrappers = {
       [_typescript2.default.SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
@@ -3953,8 +3951,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     return `(<-${expression})`;
   }
   printInstanceOfExpression(node, identation) {
-    const left = node.left.escapedText;
-    const right = node.right.escapedText;
+    const left = this.printNode(node.left);
+    const right = this.printNode(node.right);
     return this.getIden(identation) + `IsInstance(${left}, ${right})`;
   }
   getRandomNameSuffix() {
@@ -4098,7 +4096,14 @@ ${this.getIden(identation)}return nil`;
     return `IsInt(${parsedArg})`;
   }
   printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
-    return `AppendToArray(&${name}, ${parsedArg})`;
+    let returnValue = "";
+    let returnRandName = name;
+    if (_optionalChain([name, 'optionalAccess', _150 => _150.startsWith, 'call', _151 => _151("GetValue")])) {
+      returnRandName = "retRes" + this.getLineBasedSuffix(node);
+      returnValue = `${returnRandName} := ${name}
+${this.getIden(identation)}`;
+    }
+    return `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Contains(${name},${parsedArg})`;
@@ -4190,14 +4195,14 @@ ${this.getIden(identation)}return nil`;
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _150 => _150.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _152 => _152.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(","), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = global.checker.getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([global, 'access', _151 => _151.checker, 'access', _152 => _152.getDeclaredTypeOfSymbol, 'call', _153 => _153(symbol), 'access', _154 => _154.symbol, 'optionalAccess', _155 => _155.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([global, 'access', _153 => _153.checker, 'access', _154 => _154.getDeclaredTypeOfSymbol, 'call', _155 => _155(symbol), 'access', _156 => _156.symbol, 'optionalAccess', _157 => _157.declarations]), () => ( []));
           const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
           } else {
@@ -4228,7 +4233,7 @@ ${this.getIden(identation)}return nil`;
         const propName = this.printNode(elementAccess.argumentExpression, 0);
         return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
       }
-      if (_optionalChain([right, 'optionalAccess', _156 => _156.kind]) === _typescript2.default.SyntaxKind.AwaitExpression || rightSide.startsWith("<-this.callInternal")) {
+      if (_optionalChain([right, 'optionalAccess', _158 => _158.kind]) === _typescript2.default.SyntaxKind.AwaitExpression || rightSide.startsWith("<-this.callInternal")) {
         const leftParsed = this.printNode(left, 0);
         return `
     ${leftParsed} = ${rightSide}
@@ -4292,12 +4297,13 @@ ${this.getIden(identation)}return nil`;
     const returNil = "return nil";
     const isVoid = this.isInsideVoidFunction(node);
     const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
+    const errorName = node.catchClause.variableDeclaration.name.escapedText;
     const catchBlock = `
     {		
         ${nodeEndsWithReturn ? "ret__ :=" : ""} func(this *${this.className}) (ret_ interface{}) {
 		    defer func() {
-                if e := recover(); e != nil {
-                    if e == "break" {
+                if ${errorName} := recover(); ${errorName} != nil {
+                    if ${errorName} == "break" {
                         return
                     }
                     ret_ = func(this *${this.className}) interface{} {
@@ -4331,15 +4337,14 @@ ${this.getIden(identation)}return nil`;
     return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
   }
   printNewExpression(node, identation) {
-    let expression = _optionalChain([node, 'access', _157 => _157.expression, 'optionalAccess', _158 => _158.escapedText]);
+    let expression = _optionalChain([node, 'access', _159 => _159.expression, 'optionalAccess', _160 => _160.escapedText]);
     expression = expression ? expression : this.printNode(node.expression);
     if (node.arguments.length === 0) {
       return `New${this.capitalize(expression)}()`;
     }
     const args = node.arguments.map((n) => this.printNode(n, identation)).join(", ");
     if (expression.endsWith("Error")) {
-      const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-      return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+      return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
     return "New" + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
   }

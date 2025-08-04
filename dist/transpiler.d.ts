@@ -1,4 +1,4 @@
-import ts from 'typescript';
+import ts, { BinaryExpression, CallExpression } from 'typescript';
 
 interface IInput {
     language: Languages;
@@ -563,7 +563,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printCustomDefaultValueIfNeeded(node: any): any;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
-    printInstanceOfExpression(node: any, identation: any): string;
+    printInstanceOfExpression(node: BinaryExpression, identation: number): string;
     getRandomNameSuffix(): string;
     getLineBasedSuffix(node: any): string;
     printExpressionStatement(node: any, identation: any): string;
@@ -582,7 +582,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printMathRoundCall(node: any, identation: any, parsedArg?: any): string;
     printMathCeilCall(node: any, identation: any, parsedArg?: any): string;
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
-    printArrayPushCall(node: any, identation: any, name?: string | undefined, parsedArg?: any): string;
+    printArrayPushCall(node: CallExpression, identation: number, name?: string | undefined, parsedArg?: string | undefined): string;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -610,7 +610,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): string;
-    printTryStatement(node: any, identation: any): string;
+    printTryStatement(node: any, identation: number): string;
     printPrefixUnaryExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     /**
