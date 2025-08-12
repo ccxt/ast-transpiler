@@ -1266,7 +1266,7 @@ var BaseTranspiler = class {
       return this.getIden(identation) + this.printNode(node.expression, 0);
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.ArrowFunction) {
-      return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression.body, 0) + this.RIGHT_PARENTHESIS;
+      return "";
     }
     return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression, 0) + this.RIGHT_PARENTHESIS;
   }
