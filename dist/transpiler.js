@@ -1271,6 +1271,9 @@ var BaseTranspiler = class {
     if (node.expression.kind === ts.SyntaxKind.AsExpression) {
       return this.getIden(identation) + this.printNode(node.expression, 0);
     }
+    if (node.expression.kind === ts.SyntaxKind.ArrowFunction) {
+      return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression.body, 0) + this.RIGHT_PARENTHESIS;
+    }
     return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression, 0) + this.RIGHT_PARENTHESIS;
   }
   printBooleanLiteral(node) {
