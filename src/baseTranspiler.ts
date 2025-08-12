@@ -1580,7 +1580,7 @@ class BaseTranspiler {
         }
         if (node.expression.kind === ts.SyntaxKind.ArrowFunction) {
             // ignore arrowFunctions inside parenthesis
-            return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression.body, 0) + this.RIGHT_PARENTHESIS;
+            return "";
         }
         return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression, 0) + this.RIGHT_PARENTHESIS;
     }
