@@ -1657,7 +1657,7 @@ ${this.getIden(identation)}return nil`;
         const classPrefix = this.className !== 'undefined' ? `(this *${this.className})` : "()";
         const thisWord = this.className !== 'undefined' ? "this" : "";
         const catchBlock =`
-    {		
+    {
         ${nodeEndsWithReturn ? 'ret__ :=' : ''} func${classPrefix} (ret_ interface{}) {
 		    defer func() {
                 if ${errorName} := recover(); ${errorName} != nil {
