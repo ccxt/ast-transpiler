@@ -1654,25 +1654,27 @@ ${this.getIden(identation)}return nil`;
 
         const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
         const errorName = node.catchClause.variableDeclaration.name.escapedText;
+        const classPrefix = this.className !== 'undefined' ? `(this *${this.className})` : "()";
+        const thisWord = this.className !== 'undefined' ? "this" : "";
         const catchBlock =`
-    {		
-        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func(this *${this.className}) (ret_ interface{}) {
+    {
+        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func${classPrefix} (ret_ interface{}) {
 		    defer func() {
                 if ${errorName} := recover(); ${errorName} != nil {
                     if ${errorName} == "break" {
                         return
                     }
-                    ret_ = func(this *${this.className}) interface{} {
+                    ret_ = func${classPrefix} interface{} {
                         // catch block:
                         ${catchBody}
                         ${catchBodyEndsWithReturn ? "" : returNil}
-                    }(this)
+                    }(${thisWord})
                 }
             }()
 		    // try block:
             ${tryBody}
 		    ${tryBodyEndsWithReturn ? "" : returNil}
-	    }(this)
+	    }(${thisWord})
     ${nodeEndsWithReturn
         ? `
             if ret__ != nil {
