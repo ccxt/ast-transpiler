@@ -5,6 +5,7 @@ const parserConfig = {
     ELSEIF_TOKEN: "else if",
     // Objects in Java: we'll use double-brace initialization so property puts work
     OBJECT_OPENING: "new java.util.HashMap<String, Object>() {{",
+    OBJECT_CLOSING: "}}",
     // Arrays in Java: emit Arrays.asList(...) wrapped by ArrayList
     ARRAY_OPENING_TOKEN: "new java.util.ArrayList<Object>(java.util.Arrays.asList(",
     ARRAY_CLOSING_TOKEN: "))",
@@ -12,46 +13,48 @@ const parserConfig = {
     PROPERTY_ASSIGNMENT_TOKEN: ";",
     VAR_TOKEN: "var", // Java 10+ local var
     METHOD_TOKEN: "",
-    PROPERTY_ASSIGNMENT_OPEN: "put(",
+    PROPERTY_ASSIGNMENT_OPEN: "Helpers.put(",
     PROPERTY_ASSIGNMENT_CLOSE: ")",
     SUPER_TOKEN: "super",
     SUPER_CALL_TOKEN: "super",
-    FALSY_WRAPPER_OPEN: "isTrue(",
+    FALSY_WRAPPER_OPEN: "Helpers.isTrue(",
     FALSY_WRAPPER_CLOSE: ")",
-    COMPARISON_WRAPPER_OPEN: "isEqual(",
+    COMPARISON_WRAPPER_OPEN: "Helpers.isEqual(",
     COMPARISON_WRAPPER_CLOSE: ")",
     UKNOWN_PROP_WRAPPER_OPEN: "this.call(",
     UNKOWN_PROP_WRAPPER_CLOSE: ")",
     UKNOWN_PROP_ASYNC_WRAPPER_OPEN: "this.callAsync(",
     UNKOWN_PROP_ASYNC_WRAPPER_CLOSE: ")",
-    DYNAMIC_CALL_OPEN: "callDynamically(",
-    EQUALS_EQUALS_WRAPPER_OPEN: "isEqual(",
+    DYNAMIC_CALL_OPEN: "Helpers.callDynamically(",
+    EQUALS_EQUALS_WRAPPER_OPEN: "Helpers.isEqual(",
     EQUALS_EQUALS_WRAPPER_CLOSE: ")",
-    DIFFERENT_WRAPPER_OPEN: "!isEqual(",
+    DIFFERENT_WRAPPER_OPEN: "!Helpers.isEqual(",
     DIFFERENT_WRAPPER_CLOSE: ")",
-    GREATER_THAN_WRAPPER_OPEN: "isGreaterThan(",
+    GREATER_THAN_WRAPPER_OPEN: "Helpers.isGreaterThan(",
     GREATER_THAN_WRAPPER_CLOSE: ")",
-    GREATER_THAN_EQUALS_WRAPPER_OPEN: "isGreaterThanOrEqual(",
+    GREATER_THAN_EQUALS_WRAPPER_OPEN: "Helpers.isGreaterThanOrEqual(",
     GREATER_THAN_EQUALS_WRAPPER_CLOSE: ")",
-    LESS_THAN_WRAPPER_OPEN: "isLessThan(",
+    LESS_THAN_WRAPPER_OPEN: "Helpers.isLessThan(",
     LESS_THAN_WRAPPER_CLOSE: ")",
-    LESS_THAN_EQUALS_WRAPPER_OPEN: "isLessThanOrEqual(",
+    LESS_THAN_EQUALS_WRAPPER_OPEN: "Helpers.isLessThanOrEqual(",
     LESS_THAN_EQUALS_WRAPPER_CLOSE: ")",
-    PLUS_WRAPPER_OPEN: "add(",
+    PLUS_WRAPPER_OPEN: "Helpers.add(",
     PLUS_WRAPPER_CLOSE: ")",
-    MINUS_WRAPPER_OPEN: "subtract(",
+    MINUS_WRAPPER_OPEN: "Helpers.subtract(",
     MINUS_WRAPPER_CLOSE: ")",
-    ARRAY_LENGTH_WRAPPER_OPEN: "getArrayLength(",
+    ARRAY_LENGTH_WRAPPER_OPEN: "Helpers.getArrayLength(",
     ARRAY_LENGTH_WRAPPER_CLOSE: ")",
-    DIVIDE_WRAPPER_OPEN: "divide(",
+    DIVIDE_WRAPPER_OPEN: "Helpers.divide(",
     DIVIDE_WRAPPER_CLOSE: ")",
-    MULTIPLY_WRAPPER_OPEN: "multiply(",
+    MULTIPLY_WRAPPER_OPEN: "Helpers.multiply(",
     MULTIPLY_WRAPPER_CLOSE: ")",
-    INDEXOF_WRAPPER_OPEN: "getIndexOf(",
+    INDEXOF_WRAPPER_OPEN: "Helpers.getIndexOf(",
     INDEXOF_WRAPPER_CLOSE: ")",
-    MOD_WRAPPER_OPEN: "mod(",
+    MOD_WRAPPER_OPEN: "Helpers.mod(",
     MOD_WRAPPER_CLOSE: ")",
     FUNCTION_TOKEN: "",
+    ELEMENT_ACCESS_WRAPPER_OPEN: 'Helpers.GetValue(',
+    ELEMENT_ACCESS_WRAPPER_CLOSE: ')',
     INFER_VAR_TYPE: false,
     INFER_ARG_TYPE: false,
 };
@@ -203,7 +206,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printSuperCallInsideConstructor(_node, _identation) {
-    // Java allows "super(...)" as the first line; we already inject it when needed.
+        // Java allows "super(...)" as the first line; we already inject it when needed.
         return "";
     }
 
@@ -226,19 +229,19 @@ export class JavaTranspiler extends BaseTranspiler {
             let isBuiltIn = undefined;
             if (decl.length > 0) {
                 isBuiltIn =
-          decl[0].getSourceFile().fileName.indexOf("typescript") > -1;
+                    decl[0].getSourceFile().fileName.indexOf("typescript") > -1;
             }
 
             if (isBuiltIn !== undefined && !isBuiltIn) {
                 const isInsideNewExpression =
-          node?.parent?.kind === ts.SyntaxKind.NewExpression;
+                    node?.parent?.kind === ts.SyntaxKind.NewExpression;
                 const isInsideCatch =
-          node?.parent?.kind === ts.SyntaxKind.ThrowStatement;
+                    node?.parent?.kind === ts.SyntaxKind.ThrowStatement;
                 const isLeftSide =
-          node?.parent?.name === node || node?.parent?.left === node;
+                    node?.parent?.name === node || node?.parent?.left === node;
                 const isCallOrPropertyAccess =
-          node?.parent?.kind === ts.SyntaxKind.PropertyAccessExpression ||
-          node?.parent?.kind === ts.SyntaxKind.ElementAccessExpression;
+                    node?.parent?.kind === ts.SyntaxKind.PropertyAccessExpression ||
+                    node?.parent?.kind === ts.SyntaxKind.ElementAccessExpression;
                 if (!isLeftSide && !isCallOrPropertyAccess && !isInsideCatch && !isInsideNewExpression) {
                     const symbol = (global as any).checker.getSymbolAtLocation(node);
                     let isClassDeclaration = false;
@@ -251,7 +254,7 @@ export class JavaTranspiler extends BaseTranspiler {
                             const importedSymbol = (global as any).checker.getAliasedSymbol(symbol);
                             if (
                                 importedSymbol?.declarations[0]?.kind ===
-                ts.SyntaxKind.ClassDeclaration
+                                ts.SyntaxKind.ClassDeclaration
                             ) {
                                 isClassDeclaration = true;
                             }
@@ -295,7 +298,7 @@ export class JavaTranspiler extends BaseTranspiler {
         });
 
         const header =
-      this.getIden(identation) + className + "(" + args + ")";
+            this.getIden(identation) + className + "(" + args + ")";
         if (!hasSuperCall) {
             return header + constructorBody;
         }
@@ -305,7 +308,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     injectLeadingInBody(body, firstLine) {
-    // body is "{\n  ...\n}"
+        // body is "{\n  ...\n}"
         const lines = body.split("\n");
         if (lines.length >= 2) {
             lines.splice(1, 0, this.getIden(1) + firstLine);
@@ -314,15 +317,15 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printDynamicCall(node, identation) {
-    // Use reflection helper exactly like before; Java runtime should provide callDynamically(Object, String, Object[])
+        // Use reflection helper exactly like before; Java runtime should provide callDynamically(Object, String, Object[])
         const elementAccess = node.expression;
         if (elementAccess?.kind === ts.SyntaxKind.ElementAccessExpression) {
             const parsedArg =
-        node.arguments?.length > 0
-            ? node.arguments
-                .map((n) => this.printNode(n, identation).trimStart())
-                .join(", ")
-            : "";
+                node.arguments?.length > 0
+                    ? node.arguments
+                        .map((n) => this.printNode(n, identation).trimStart())
+                        .join(", ")
+                    : "";
             const target = this.printNode(elementAccess.expression, 0);
             const propName = this.printNode(elementAccess.argumentExpression, 0);
             const argsArray = `new Object[] { ${parsedArg} }`;
@@ -331,6 +334,25 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return undefined;
     }
+
+    // printElementAccessExpressionExceptionIfAny(node) {
+    //     const tsKind = ts.SyntaxKind;
+    //     if (node.expression.kind === tsKind.CallExpression) {
+    //         const callExp = node.expression;
+    //         const calleeText = callExp.expression.getText();
+    //         if (calleeText.endsWith('.split') || calleeText.toLowerCase().includes('split')) {
+    //             // print Split call normally (should already close with ))
+    //             let splitCall = this.printNode(callExp, 0).trim();
+    //             if (!splitCall.endsWith(')')) {
+    //                 splitCall += ')';
+    //             }
+    //             const idxArg = this.printNode(node.argumentExpression, 0);
+    //             return `GetValue(${splitCall}, ${idxArg})`;
+    //         }
+    //     }
+    //     // default: no exception
+    //     return undefined;
+    // }
 
     printWrappedUnknownThisProperty(node) {
         const type = (global as any).checker.getResolvedSignature(node);
@@ -378,7 +400,7 @@ export class JavaTranspiler extends BaseTranspiler {
             // wrap unknown property this.X calls
             if (
                 leftSideText === this.THIS_TOKEN ||
-        leftSide.getFullText().indexOf("(this as any)") > -1
+                leftSide.getFullText().indexOf("(this as any)") > -1
             ) {
                 const res = this.printWrappedUnknownThisProperty(node);
                 if (res) return res;
@@ -400,8 +422,8 @@ export class JavaTranspiler extends BaseTranspiler {
         const expression = left.expression;
 
         const isDifferentOperator =
-      op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
-      op === ts.SyntaxKind.ExclamationEqualsToken;
+            op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+            op === ts.SyntaxKind.ExclamationEqualsToken;
         const notOperator = isDifferentOperator ? this.NOT_TOKEN : "";
 
         const target = this.printNode(expression, 0);
@@ -415,7 +437,7 @@ export class JavaTranspiler extends BaseTranspiler {
         case "object":
             return `${notOperator}(${target} instanceof java.util.Map)`;
         case "function":
-        // no universal Function type in Java; treat as any Method/Callable
+            // no universal Function type in Java; treat as any Method/Callable
             return `${notOperator}(${target} instanceof java.util.concurrent.Callable)`;
         }
         return undefined;
@@ -437,7 +459,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // destructuring: [a,b] = this.method()
         if (
             op === ts.SyntaxKind.EqualsToken &&
-      left.kind === ts.SyntaxKind.ArrayLiteralExpression
+            left.kind === ts.SyntaxKind.ArrayLiteralExpression
         ) {
             const arrayBindingPatternElements = left.elements;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) =>
@@ -446,12 +468,12 @@ export class JavaTranspiler extends BaseTranspiler {
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
             let arrayBindingStatement =
-        `var ${syntheticName} = ${this.printNode(right, 0)};\n`;
+                `var ${syntheticName} = ${this.printNode(right, 0)};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 const statement =
-          this.getIden(identation) +
-          `${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+                    this.getIden(identation) +
+                    `${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + ";\n";
                 } else {
@@ -492,8 +514,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
         if (
             this.removeVariableDeclarationForFunctionExpression &&
-      declaration?.initializer &&
-      ts.isFunctionExpression(declaration.initializer)
+            declaration?.initializer &&
+            ts.isFunctionExpression(declaration.initializer)
         ) {
             return this.printNode(declaration.initializer, identation).trimEnd();
         }
@@ -508,15 +530,15 @@ export class JavaTranspiler extends BaseTranspiler {
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
             let arrayBindingStatement =
-        `${this.getIden(identation)}var ${syntheticName} = ${this.printNode(
-            declaration.initializer,
-            0
-        )};\n`;
+                `${this.getIden(identation)}var ${syntheticName} = ${this.printNode(
+                    declaration.initializer,
+                    0
+                )};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 const statement =
-          this.getIden(identation) +
-          `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+                    this.getIden(identation) +
+                    `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + ";\n";
                 } else {
@@ -528,18 +550,18 @@ export class JavaTranspiler extends BaseTranspiler {
         }
 
         const isNew =
-      declaration?.initializer &&
-      declaration.initializer.kind === ts.SyntaxKind.NewExpression;
+            declaration?.initializer &&
+            declaration.initializer.kind === ts.SyntaxKind.NewExpression;
         const varToken = isNew ? "var " : this.VAR_TOKEN + " ";
 
         // handle `let x;`
         if (!declaration.initializer) {
             return (
                 this.getIden(identation) +
-        "Object " +
-        this.printNode(declaration.name) +
-        " = " +
-        this.UNDEFINED_TOKEN
+                "Object " +
+                this.printNode(declaration.name) +
+                " = " +
+                this.UNDEFINED_TOKEN
             );
         }
 
@@ -556,19 +578,19 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             return (
                 this.getIden(identation) +
-        specificVarToken +
-        " " +
-        this.printNode(declaration.name) +
-        " = " +
-        parsedValue
+                specificVarToken +
+                " " +
+                this.printNode(declaration.name) +
+                " = " +
+                parsedValue
             );
         }
         return (
             this.getIden(identation) +
-      varToken +
-      this.printNode(declaration.name) +
-      " = " +
-      parsedValue
+            varToken +
+            this.printNode(declaration.name) +
+            " = " +
+            parsedValue
         );
     }
 
@@ -600,9 +622,9 @@ export class JavaTranspiler extends BaseTranspiler {
     printCustomDefaultValueIfNeeded(node) {
         if (
             ts.isArrayLiteralExpression(node) ||
-      ts.isObjectLiteralExpression(node) ||
-      ts.isStringLiteral(node) ||
-      (ts as any).isBooleanLiteral(node)
+            ts.isObjectLiteralExpression(node) ||
+            ts.isStringLiteral(node) ||
+            (ts as any).isBooleanLiteral(node)
         ) {
             return this.UNDEFINED_TOKEN;
         }
@@ -613,8 +635,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
         if (
             node?.escapedText === "undefined" &&
-      (global as any).checker.getTypeAtLocation(node?.parent)?.flags ===
-        ts.TypeFlags.Number
+            (global as any).checker.getTypeAtLocation(node?.parent)?.flags ===
+            ts.TypeFlags.Number
         ) {
             return this.UNDEFINED_TOKEN;
         }
@@ -623,7 +645,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printFunctionBody(node, identation) {
-    // keep your existing default param initializer logic, but swap C# types for Java
+        // keep your existing default param initializer logic, but swap C# types for Java
         const funcParams = node.parameters;
         const initParams = [];
         if (funcParams.length > 0) {
@@ -695,8 +717,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
             if (initParams.length > 0) {
                 const defaultInitializers =
-          initParams.map((l) => this.getIden(identation + 1) + l).join("\n") +
-          "\n";
+                    initParams.map((l) => this.getIden(identation + 1) + l).join("\n") +
+                    "\n";
                 const bodyParts = firstStatement.split("\n");
                 const commentPart = bodyParts.filter((line) => this.isComment(line));
                 const isComment = commentPart.length > 0;
@@ -708,7 +730,7 @@ export class JavaTranspiler extends BaseTranspiler {
                         .filter((line) => !this.isComment(line))
                         .join("\n");
                     firstStatement =
-            commentPartString + "\n" + defaultInitializers + firstStmNoComment;
+                        commentPartString + "\n" + defaultInitializers + firstStmNoComment;
                 } else {
                     firstStatement = defaultInitializers + firstStatement;
                 }
@@ -769,7 +791,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (defaultValue) {
             if (initializer) {
                 const customDefaultValue =
-          this.printCustomDefaultValueIfNeeded(initializer);
+                    this.printCustomDefaultValueIfNeeded(initializer);
                 const def = customDefaultValue
                     ? customDefaultValue
                     : this.printNode(initializer, 0);
@@ -782,7 +804,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printArrayLiteralExpression(node) {
-    // For Java: new ArrayList<>(Arrays.asList(elem1, elem2, ...))
+        // For Java: new ArrayList<>(Arrays.asList(elem1, elem2, ...))
         const elements = node.elements.map((e) => this.printNode(e)).join(", ");
         return `${this.ARRAY_OPENING_TOKEN}${elements}${this.ARRAY_CLOSING_TOKEN}`;
     }
@@ -797,11 +819,11 @@ export class JavaTranspiler extends BaseTranspiler {
         const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " " : "";
         modifiers = modifiers ? modifiers + " " : defaultAccess;
         modifiers =
-      modifiers.indexOf("public") === -1 &&
-      modifiers.indexOf("private") === -1 &&
-      modifiers.indexOf("protected") === -1
-          ? defaultAccess + modifiers
-          : modifiers;
+            modifiers.indexOf("public") === -1 &&
+                modifiers.indexOf("private") === -1 &&
+                modifiers.indexOf("protected") === -1
+                ? defaultAccess + modifiers
+                : modifiers;
 
         let parsedArgs = undefined;
 
@@ -838,14 +860,14 @@ export class JavaTranspiler extends BaseTranspiler {
 
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
         const signature =
-      this.getIden(identation) +
-      modifiers +
-      returnType +
-      methodToken +
-      name +
-      "(" +
-      parsedArgs +
-      ")";
+            this.getIden(identation) +
+            modifiers +
+            returnType +
+            methodToken +
+            name +
+            "(" +
+            parsedArgs +
+            ")";
 
         return this.printNodeCommentsIfAny(node, identation, signature);
     }
@@ -863,15 +885,15 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printJsonParseCall(_node, _identation, parsedArg = undefined) {
-        return `parseJson(${parsedArg})`;
+        return `Helpers.parseJson(${parsedArg})`;
     }
 
     printJsonStringifyCall(_node, _identation, parsedArg = undefined) {
-        return `json(${parsedArg})`;
+        return `Helpers.json(${parsedArg})`;
     }
 
     printPromiseAllCall(_node, _identation, parsedArg = undefined) {
-        return `promiseAll(${parsedArg})`;
+        return `Helpers.promiseAll(${parsedArg})`;
     }
 
     printMathFloorCall(_node, _identation, parsedArg = undefined) {
@@ -919,7 +941,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printJoinCall(_node, _identation, name = undefined, parsedArg = undefined) {
-    // assumes List<String>
+        // assumes List<String>
         return `String.join((String)${parsedArg}, (java.util.List<String>)${name})`;
     }
 
@@ -928,7 +950,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printConcatCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `concat(${name}, ${parsedArg})`;
+        return `Helpers.concat(${name}, ${parsedArg})`;
     }
 
     printToFixedCall(_node, _identation, name = undefined, parsedArg = undefined) {
@@ -967,24 +989,24 @@ export class JavaTranspiler extends BaseTranspiler {
         if (parsedArg2 === undefined) {
             parsedArg2 = "null";
         }
-        return `slice(${name}, ${parsedArg}, ${parsedArg2})`;
+        return `Helpers.slice(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 
     printReplaceCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `((String)${name}).replace((String)${parsedArg}, (String)${parsedArg2})`;
+        return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
     }
 
     printReplaceAllCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `((String)${name}).replace((String)${parsedArg}, (String)${parsedArg2})`;
+        return `Helpers.replaceAll((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
     }
 
     printPadEndCall(_node, _identation, name, parsedArg, parsedArg2) {
-    // You can point this to a runtime helper if you have one
-        return `padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
+        // You can point this to a runtime helper if you have one
+        return `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
     }
 
     printPadStartCall(_node, _identation, name, parsedArg, parsedArg2) {
-        return `padStart((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
+        return `Helpers.padStart((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
     }
 
     printDateNowCall(_node, _identation) {
@@ -1042,10 +1064,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (node.expression.kind === ts.SyntaxKind.Identifier) {
             return (
                 this.getIden(identation) +
-        this.THROW_TOKEN +
-        " " +
-        this.printNode(node.expression, 0) +
-        this.LINE_TERMINATOR
+                this.THROW_TOKEN +
+                " " +
+                this.printNode(node.expression, 0) +
+                this.LINE_TERMINATOR
             );
         }
         if (node.expression.kind === ts.SyntaxKind.NewExpression) {
@@ -1058,27 +1080,27 @@ export class JavaTranspiler extends BaseTranspiler {
                 const symbol = (global as any).checker.getSymbolAtLocation(expression.expression);
                 if (symbol) {
                     const declarations =
-            (global as any).checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                        (global as any).checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
                     const isClassDeclaration = declarations.find(
                         (l) =>
                             l.kind === ts.SyntaxKind.InterfaceDeclaration ||
-              l.kind === ts.SyntaxKind.ClassDeclaration
+                            l.kind === ts.SyntaxKind.ClassDeclaration
                     );
                     if (isClassDeclaration) {
                         return (
                             this.getIden(identation) +
-              `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText}(${parsedArg}) ${this.LINE_TERMINATOR}`
+                            `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText}(${parsedArg}) ${this.LINE_TERMINATOR}`
                         );
                     } else {
                         return (
                             this.getIden(identation) +
-              `throwDynamicException(${id.escapedText}, ${parsedArg});return null;`
+                            `throwDynamicException(${id.escapedText}, ${parsedArg});return null;`
                         );
                     }
                 }
                 return (
                     this.getIden(identation) +
-          `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression}(${parsedArg}) ${this.LINE_TERMINATOR}`
+                    `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression}(${parsedArg}) ${this.LINE_TERMINATOR}`
                 );
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
                 return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
