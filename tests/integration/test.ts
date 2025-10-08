@@ -9,6 +9,7 @@ const PY_TRANSPILABLE_FILE = "./tests/integration/py/transpilable.py";
 const PHP_TRANSPILABLE_FILE = "./tests/integration/php/transpilable.php";
 const CS_TRANSPILABLE_FILE = "./tests/integration/cs/transpilable.cs";
 const GO_TRANSPILABLE_FILE = "./tests/integration/go/transpilable.go";
+const JAVA_TRANSPILABLE_FILE = "./tests/integration/java/app/src/main/java/org/example/Transpilable.java";
 
 
 const TS_FILE = "./tests/integration/source/init.ts";
@@ -16,14 +17,15 @@ const PY_FILE = "./tests/integration/py/init.py";
 const PHP_FILE = "./tests/integration/php/init.php";
 const CS_FILE = "./tests/integration/cs";
 const GO_FILE = "./tests/integration/go";
+const JAVA_FILE = "./tests/integration/java/"
+
 
 const langConfig = [
     {
         language: "csharp",
         async: true
     },
-
-        {
+    {
         language: "python",
         async: true
     },
@@ -34,6 +36,9 @@ const langConfig = [
     {
         language: "go",
         async: true
+    },
+    {
+        language: "java",
     },
 ]
 
@@ -56,6 +61,7 @@ function transpileTests() {
     let csharp = 'namespace tests;\n' + result[0].content;
     csharp = csharp.replace('class Test', 'partial class Test');
 
+    const java = `package org.example;\n` + result[4].content;
 
     const goImports = [
         '\n',
@@ -70,6 +76,7 @@ function transpileTests() {
     writeFileSync(PY_TRANSPILABLE_FILE, pythonAsync);
     writeFileSync(CS_TRANSPILABLE_FILE, csharp);
     writeFileSync(GO_TRANSPILABLE_FILE, go);
+    writeFileSync(JAVA_TRANSPILABLE_FILE, java);
 }
 
 function runCommand(command) {
@@ -133,6 +140,14 @@ async function runGO() {
     return result;
 }
 
+async function runJava() {
+    // ./tests/integration/java/gradlew -p ./tests/integration/java/ run
+    const command = JAVA_FILE + "gradlew -p" + JAVA_FILE + " run";
+    const result = await runCommand(command);
+    console.log(blue("Executed JAVA"))
+    return result;
+}
+
 async function main() {
     transpileTests();
 
@@ -141,10 +156,11 @@ async function main() {
         runPHP(),
         runPy(),
         runCS(),
-        runGO()
+        runGO(),
+        runJava(),
     ];
     const results = await Promise.all(promises);
-    const [ts, php, py, cs, go]: any = results;
+    const [ts, php, py, cs, go, java]: any = results;
 
     let success = true;
     if (php !== ts) {
@@ -165,10 +181,14 @@ async function main() {
         compareOutputs("GO", ts, go);
     }
 
+    if (java !== ts) {
+        success = false;
+        compareOutputs("JAVA", ts, java);
+    }
+
     if (success) {
         console.log(green("Integration tests passed!"));
     }
-
 }
 
 

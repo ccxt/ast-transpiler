@@ -2,6 +2,9 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from "typescript";
 
 const parserConfig = {
+    DEFAULT_PARAMETER_TYPE: "Object",
+    DEFAULT_RETURN_TYPE: "Object",
+    DEFAULT_TYPE: "Object",
     ELSEIF_TOKEN: "else if",
     // Objects in Java: we'll use double-brace initialization so property puts work
     OBJECT_OPENING: "new java.util.HashMap<String, Object>() {{",
@@ -10,11 +13,11 @@ const parserConfig = {
     ARRAY_OPENING_TOKEN: "new java.util.ArrayList<Object>(java.util.Arrays.asList(",
     ARRAY_CLOSING_TOKEN: "))",
     // For object literal properties we'll emit: put(key, value);
-    PROPERTY_ASSIGNMENT_TOKEN: ";",
+    PROPERTY_ASSIGNMENT_TOKEN: ",",
     VAR_TOKEN: "var", // Java 10+ local var
     METHOD_TOKEN: "",
-    PROPERTY_ASSIGNMENT_OPEN: "Helpers.put(",
-    PROPERTY_ASSIGNMENT_CLOSE: ")",
+    PROPERTY_ASSIGNMENT_OPEN: "put(",
+    PROPERTY_ASSIGNMENT_CLOSE: ");",
     SUPER_TOKEN: "super",
     SUPER_CALL_TOKEN: "super",
     FALSY_WRAPPER_OPEN: "Helpers.isTrue(",
