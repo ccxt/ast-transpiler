@@ -81,6 +81,9 @@ const config = [
         language: "go",
         async: true
     },
+    {
+        language: "java",
+    }
 ]
 
 const result = transpiler.transpileDifferentLanguagesByPath(config as any, file);
@@ -96,6 +99,7 @@ const PHP_SYNC_OUTPUT = "./out/output-sync.php";
 const PYTHON_OUTPUT = "./out/output.py";
 const PYTHON_SYNC_OUTPUT = "./out/output-sync.py";
 const CSHARP_OUTPUT = "./out/output.cs";
+const JAVA_OUTPUT = "./out/output.java";
 
 const GO_OUTPUT = "./out/output.go";
 const go = result[3].content;
@@ -108,6 +112,8 @@ writeFileSync(PYTHON_OUTPUT, pythonAsync ?? "");
 
 writeFileSync(CSHARP_OUTPUT, csharp);
 writeFileSync(GO_OUTPUT, go);
+
+writeFileSync(JAVA_OUTPUT, result[4].content);
 
 console.log("TRANSPILED!!");
 

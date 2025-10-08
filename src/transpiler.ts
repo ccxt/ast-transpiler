@@ -7,6 +7,7 @@ import * as path from "path";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
+import { JavaTranspiler } from './javaTranspiler.js';
 
 const __dirname_mock = currentPath;
 
@@ -49,12 +50,14 @@ export default class Transpiler {
     phpTranspiler: PhpTranspiler;
     csharpTranspiler: CSharpTranspiler;
     goTranspiler: GoTranspiler;
+    javaTranspiler: JavaTranspiler;
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
         const goConfig = config["go"] || {};
+        const javaConfig = config["java"] || {};
 
         if ("verbose" in config) {
             Logger.setVerboseMode(Boolean(config['verbose']));
@@ -64,6 +67,7 @@ export default class Transpiler {
         this.phpTranspiler = new PhpTranspiler(phpConfig);
         this.csharpTranspiler = new CSharpTranspiler(csharpConfig);
         this.goTranspiler = new GoTranspiler(goConfig);
+        this.javaTranspiler = new JavaTranspiler(javaConfig);
     }
 
     setVerboseMode(verbose: boolean) {
@@ -128,6 +132,9 @@ export default class Transpiler {
             break;
         case Languages.Go:
             transpiledContent = this.goTranspiler.printNode(global.src, -1);
+            break;
+        case Languages.Java:
+            transpiledContent = this.javaTranspiler.printNode(global.src, -1);
             break;
         }
         let imports = [];
@@ -282,6 +289,8 @@ export default class Transpiler {
             return Languages.CSharp;
         case "go":
             return Languages.Go;
+        case "java":
+            return Languages.Java;
         }
     }
 }
