@@ -2,6 +2,8 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from "typescript";
 
 const parserConfig = {
+    STRING_KEYWORD: "String",
+    BOOLEAN_KEYWORD: "boolean",
     DEFAULT_PARAMETER_TYPE: "Object",
     DEFAULT_RETURN_TYPE: "Object",
     DEFAULT_TYPE: "Object",
@@ -1135,5 +1137,19 @@ export class JavaTranspiler extends BaseTranspiler {
     printObjectLiteralBody(node, identation) {
         const body =  node.properties.map((p) => this.printNode(p, identation+1)).join("\n");
         return body;
+    }
+
+    printForStatement(node, identation) {
+        const initializer = this.printNode(node.initializer, 0).replace('Object ', 'var ');
+        const condition = this.printNode(node.condition, 0);
+        const incrementor = this.printNode(node.incrementor, 0);
+
+        const forStm = this.getIden(identation) +
+                this.FOR_TOKEN + " " +
+                this.CONDITION_OPENING +
+                initializer + "; " + condition + "; " + incrementor +
+                this.CONDITION_CLOSE +
+                this.printBlock(node.statement, identation);
+        return this.printNodeCommentsIfAny(node, identation, forStm);
     }
 }
