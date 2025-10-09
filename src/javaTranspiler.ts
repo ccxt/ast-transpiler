@@ -14,7 +14,7 @@ const parserConfig = {
     ARRAY_CLOSING_TOKEN: "))",
     // For object literal properties we'll emit: put(key, value);
     PROPERTY_ASSIGNMENT_TOKEN: ",",
-    VAR_TOKEN: "var", // Java 10+ local var
+    VAR_TOKEN: "Object", // Java 10+ local var
     METHOD_TOKEN: "",
     PROPERTY_ASSIGNMENT_OPEN: "put(",
     PROPERTY_ASSIGNMENT_CLOSE: ");",
@@ -1130,5 +1130,10 @@ export class JavaTranspiler extends BaseTranspiler {
             }
         }
         return modifiers + " " + typeText + " ";
+    }
+
+    printObjectLiteralBody(node, identation) {
+        const body =  node.properties.map((p) => this.printNode(p, identation+1)).join("\n");
+        return body;
     }
 }
