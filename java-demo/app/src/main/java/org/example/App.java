@@ -6,10 +6,15 @@ package org.example;
 
 public class App {
 
+    public String a = "a";
+    public String b = "b";
+    public boolean c = false;
 
     public void aa()
     {
         var a = 1;
+        Object b = 2;
+        System.out.println("HEREEEE::" + a);
         var data = new java.util.HashMap<String, Object>() {{
             put( "1", 1 );
             put( "2", 2 );
@@ -40,8 +45,13 @@ public class App {
     }
 
     public static void main(String[] args) {
-        var app = new App();
-        System.out.println(app.getGreeting());
-        app.test();
+        System.out.println(new App().getGreeting());
+        // var app = new App();
+        // System.out.println(app.getGreeting());
+        // app.test();
+        // app.aa();
+        // for (var i = 0; i < 5; ((int) i)++) {
+        //     System.out.println("i: " + i);
+        // }
     }
 }

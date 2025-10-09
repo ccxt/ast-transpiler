@@ -144,7 +144,7 @@ async function runJava() {
     // ./tests/integration/java/gradlew -p ./tests/integration/java/ run
     const buildCommand = JAVA_FILE + "gradlew -p" + JAVA_FILE + " build";
     await runCommand(buildCommand);
-    const run = JAVA_FILE + "gradlew -p" + JAVA_FILE + "-q --console=plain run";
+    const run = JAVA_FILE + "gradlew -p" + JAVA_FILE + " -q --console=plain run";
     const result = await runCommand(run);
     console.log(blue("Executed JAVA"))
     return result;

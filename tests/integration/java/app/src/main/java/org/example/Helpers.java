@@ -645,4 +645,19 @@ public class Helpers {
         if (o instanceof String) return Float.parseFloat((String) o);
         return Float.parseFloat(String.valueOf(o));
     }
+
+
+    public static String replaceAll(Object baseString, Object search, Object replacement) {
+        if (baseString == null) {
+            return null;
+        }
+        String s     = String.valueOf(baseString);
+        String find  = (search == null) ? "" : String.valueOf(search);
+        if (find.isEmpty()) {
+            // Avoid weird behavior of replacing "" (would insert between every char)
+            return s;
+        }
+        String repl  = (replacement == null) ? "" : String.valueOf(replacement);
+        return s.replace(find, repl); // literal (non-regex) replacement
+    }
 }
