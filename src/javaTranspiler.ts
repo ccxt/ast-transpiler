@@ -759,7 +759,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const type = node.type;
 
         if (type.kind === ts.SyntaxKind.AnyKeyword) {
-            return `((${this.VariableTypeReplacements.object})${this.printNode(
+            return `((${this.VariableTypeReplacements['object']})${this.printNode(
                 node.expression,
                 identation
             )})`;
