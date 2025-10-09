@@ -151,6 +151,7 @@ async function runJava() {
         return result;
     } catch (e) {
         console.error(red("Error running JAVA:"), e);
+        throw e;
     }
 
 }
