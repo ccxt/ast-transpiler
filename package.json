@@ -43,7 +43,8 @@
     "test-jest": "^1.0.1",
     "ts-jest": "^29.0.3",
     "ts-node": "^10.9.1",
-    "tsup": "^6.4.0"
+    "tsup": "^6.4.0",
+    "tsx": "^4.20.6"
   },
   "dependencies": {
     "colorette": "^2.0.19",
