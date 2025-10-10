@@ -236,6 +236,14 @@ export default class Transpiler {
         return this.transpile(Languages.CSharp, TranspilationMode.ByPath, path);
     }
 
+    transpileJava(content): ITranspiledFile {
+        return this.transpile(Languages.Java, TranspilationMode.ByContent, content);
+    }
+
+    transpileJavaByPath(path): ITranspiledFile {
+        return this.transpile(Languages.Java, TranspilationMode.ByPath, path);
+    }
+
     transpileGoByPath(path): ITranspiledFile {
         return this.transpile(Languages.Go, TranspilationMode.ByPath, path);
     }
