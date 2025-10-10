@@ -101,6 +101,26 @@ function runCommand(command) {
     });
 }
 
+function runCommandJava(command) {
+    return new Promise((resolve, reject) => {
+        exec(command, (error, stdout, stderr) => {
+            if (stderr !== undefined || stderr !== null) {
+                stderr = stderr.replace('Debugger attached.\nWaiting for the debugger to disconnect...\n', '');
+            }
+            if (stderr.startsWith("Debugger listening") && stderr.includes("For help, see: https://nodejs.org/en/docs/inspector")) {
+                stderr = undefined;
+            }
+            if (error) {
+                reject(error);
+                return;
+            }
+            if (stderr) console.error(stderr);
+
+            resolve(stdout.trim());
+        });
+    });
+}
+
 async function runTS() {
     const command = "node --no-warnings --loader ts-node/esm " + TS_FILE;
     const result = await runCommand(command);
@@ -144,9 +164,9 @@ async function runJava() {
     try {
         // ./tests/integration/java/gradlew -p ./tests/integration/java/ run
         const buildCommand = JAVA_FILE + "gradlew -p" + JAVA_FILE + " build";
-        await runCommand(buildCommand);
+        await runCommandJava(buildCommand);
         const run = JAVA_FILE + "gradlew -p" + JAVA_FILE + " -q --console=plain run";
-        const result = await runCommand(run);
+        const result = await runCommandJava(run);
         console.log(blue("Executed JAVA"))
         return result;
     } catch (e) {
