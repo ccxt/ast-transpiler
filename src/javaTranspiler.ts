@@ -2,6 +2,9 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from "typescript";
 
 const parserConfig = {
+
+    ARRAY_KEYWORD: "java.util.List<Object>",
+    OBJECT_KEYWORD: "java.util.Map<String, Object>",
     STRING_KEYWORD: "String",
     BOOLEAN_KEYWORD: "boolean",
     DEFAULT_PARAMETER_TYPE: "Object",
@@ -489,19 +492,53 @@ export class JavaTranspiler extends BaseTranspiler {
             return arrayBindingStatement;
         }
 
+        // ---------------------------------------------------------------
+        // setter for element-access assignments:  a[b] = v
+        // ---------------------------------------------------------------
+        if (op === ts.SyntaxKind.EqualsToken &&
+                    left.kind === ts.SyntaxKind.ElementAccessExpression) {
+            // Collect base container and all keys (inner-most key is last).
+            const keys: any[] = [];
+            let baseExpr: any = null;
+            let cur: any = left;
+            while (ts.isElementAccessExpression(cur)) {
+                keys.unshift(cur.argumentExpression);          // prepend
+                const expr = cur.expression;
+                if (!ts.isElementAccessExpression(expr)) {
+                    baseExpr = expr;
+                    break;
+                }
+                cur = expr;
+            }
+
+            const containerStr = this.printNode(baseExpr, 0);
+            const keyStrs      = keys.map(k => this.printNode(k, 0));
+
+            // Build GetValue(GetValue( ... )) chain for all but the last key.
+            let acc = containerStr;
+            for (let i = 0; i < keyStrs.length - 1; i++) {
+                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            }
+
+            const lastKey = keyStrs[keyStrs.length - 1];
+            const rhs     = this.printNode(right, 0);
+
+            return `Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
+        }
+
         if (op === ts.SyntaxKind.InKeyword) {
-            return `inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+            return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
         const leftText = this.printNode(left, 0);
         const rightText = this.printNode(right, 0);
 
         if (op === ts.SyntaxKind.PlusEqualsToken) {
-            return `${leftText} = add(${leftText}, ${rightText})`;
+            return `${leftText} = Helpers.add(${leftText}, ${rightText})`;
         }
 
         if (op === ts.SyntaxKind.MinusEqualsToken) {
-            return `${leftText} = subtract(${leftText}, ${rightText})`;
+            return `${leftText} = Helpers.subtract(${leftText}, ${rightText})`;
         }
 
         if (op in this.binaryExpressionsWrappers) {

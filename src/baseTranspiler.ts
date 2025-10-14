@@ -1501,13 +1501,20 @@ class BaseTranspiler {
                 if (this.id === "C#") {
                     const cast = ts.isStringLiteralLike(argumentExpression) ? "" : '(string)';
                     return `((IDictionary<string,object>)${expressionAsString})[${cast}${argumentAsString}]`;
+                } else if (this.id === "Java") {
+                    return `((java.util.HashMap<String, Object>)${expressionAsString}).get(${argumentAsString})`;
                 }
                 // if (this.id === "Go") {
                 //     return `AddElementToObject(${expressionAsString}, ${argumentAsString})`;
                 // }
 
             }
-            return `((${this.ARRAY_KEYWORD})${expressionAsString})[Convert.ToInt32(${argumentAsString})]`;
+            if (this.id === "C#") {
+                return `((${this.ARRAY_KEYWORD})${expressionAsString})[Convert.ToInt32(${argumentAsString})]`;
+            } else if (this.id === "Java") {
+                return `((java.util.List<Object>)${expressionAsString}).get(Helpers.toInt(${argumentAsString}))`;
+            }
+
         }
 
         return expressionAsString + "[" + argumentAsString + "]";
