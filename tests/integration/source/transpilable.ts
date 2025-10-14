@@ -10,6 +10,16 @@ class Second {
 
 class Test {
 
+    public functionWithOptionals(a: string, c: number | undefined = undefined, d = 1) {
+        console.log(a);
+        if (c !== undefined) {
+            console.log(c);
+        }
+        if (d !== undefined) {
+            console.log(d);
+        }
+    }
+
     public test() {
         var a = 1;
         var b = 2;
@@ -75,6 +85,10 @@ class Test {
         const baseString = "aabba";
         const replacedAllString = baseString.replaceAll("a", "");
         console.log(replacedAllString); // should print "bb"
+
+        this.functionWithOptionals("hello");
+        this.functionWithOptionals("hello", 5);
+        this.functionWithOptionals("hello", 5, 1);
     }
 }
 

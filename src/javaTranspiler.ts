@@ -662,61 +662,16 @@ export class JavaTranspiler extends BaseTranspiler {
             const remainingString = remaining
                 .map((statement) => this.printNode(statement, identation + 1))
                 .join("\n");
-            funcParams.forEach((param) => {
+            let offSetIndex = 0;
+            funcParams.forEach((param, i) => {
                 const initializer = param.initializer;
                 if (initializer) {
-                    if (ts.isArrayLiteralExpression(initializer)) {
-                        initParams.push(
-                            `${this.printNode(param.name, 0)} = (${this.printNode(
-                                param.name,
-                                0
-                            )} != null) ? ${this.printNode(param.name, 0)} : new java.util.ArrayList<Object>();`
-                        );
-                    }
-                    if (ts.isObjectLiteralExpression(initializer)) {
-                        initParams.push(
-                            `${this.printNode(param.name, 0)} = (${this.printNode(
-                                param.name,
-                                0
-                            )} != null) ? ${this.printNode(
-                                param.name,
-                                0
-                            )} : new java.util.HashMap<String, Object>();`
-                        );
-                    }
-                    if (ts.isNumericLiteral(initializer)) {
-                        initParams.push(
-                            `${this.printNode(param.name, 0)} = (${this.printNode(
-                                param.name,
-                                0
-                            )} != null) ? ${this.printNode(param.name, 0)} : ${this.printNode(
-                                initializer,
-                                0
-                            )};`
-                        );
-                    }
-                    if (ts.isStringLiteral(initializer)) {
-                        initParams.push(
-                            `${this.printNode(param.name, 0)} = (${this.printNode(
-                                param.name,
-                                0
-                            )} != null) ? ${this.printNode(param.name, 0)} : ${this.printNode(
-                                initializer,
-                                0
-                            )};`
-                        );
-                    }
-                    if ((ts as any).isBooleanLiteral(initializer)) {
-                        initParams.push(
-                            `${this.printNode(param.name, 0)} = (${this.printNode(
-                                param.name,
-                                0
-                            )} != null) ? ${this.printNode(param.name, 0)} : ${this.printNode(
-                                initializer,
-                                0
-                            )};`
-                        );
-                    }
+                    const index = i + offSetIndex;
+                    // index = index < 0 ? 0 : i - 1;
+                    const paramName = this.printNode(param.name, 0);
+                    initParams.push(`Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)});`);
+                } else {
+                    offSetIndex--;
                 }
             });
 
@@ -806,6 +761,17 @@ export class JavaTranspiler extends BaseTranspiler {
             return type + " " + name;
         }
         return name;
+    }
+
+    printMethodParameters(node) {
+        const params = node.parameters.map(param => this.printParameter(param));
+        const hasOptionalParameter = node.parameters.some(p => p.initializer !== undefined || p.questionToken !== undefined);
+        if (!hasOptionalParameter) {
+            return params.join(", ");
+        }
+        const paramsWithOptional = params.filter(param => param.indexOf('=') === -1);
+        paramsWithOptional.push('Object... optionalArgs');
+        return paramsWithOptional.join(", ");
     }
 
     printArrayLiteralExpression(node) {
