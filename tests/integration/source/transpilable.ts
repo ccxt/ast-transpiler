@@ -89,6 +89,14 @@ class Test {
         this.functionWithOptionals("hello");
         this.functionWithOptionals("hello", 5);
         this.functionWithOptionals("hello", 5, 1);
+
+        const list3 = ["empty"]
+        list3[0] = "first"
+        console.log(list3[0]) // should print "first"
+
+        const dict3 = {}
+        dict3["key"] = "value"
+        console.log(dict3["key"]) // should print "value"
     }
 }
 
