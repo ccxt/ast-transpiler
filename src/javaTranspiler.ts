@@ -2,7 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from "typescript";
 
 const parserConfig = {
-
+    PROMISE_TYPE_KEYWORD: "java.util.concurrent.CompletableFuture",
     ARRAY_KEYWORD: "java.util.List<Object>",
     OBJECT_KEYWORD: "java.util.Map<String, Object>",
     STRING_KEYWORD: "String",
@@ -113,6 +113,8 @@ export class JavaTranspiler extends BaseTranspiler {
         };
 
         this.CallExpressionReplacements = {
+            'parseInt': "Helpers.parseInt",
+            "parseFloat": "Helpers.parseFloat",
             // Add ad-hoc function call rewrites here if you need them
         };
 
@@ -689,6 +691,7 @@ export class JavaTranspiler extends BaseTranspiler {
     printFunctionBody(node, identation) {
         // keep your existing default param initializer logic, but swap C# types for Java
         const funcParams = node.parameters;
+        const isAsync = this.isAsyncFunction(node);
         const initParams = [];
         if (funcParams.length > 0) {
             const body = node.body.statements;
@@ -735,6 +738,15 @@ export class JavaTranspiler extends BaseTranspiler {
             const blockOpen = this.getBlockOpen(identation);
             const blockClose = this.getBlockClose(identation);
             firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
+
+            if (isAsync) {
+                const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
+                const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
+                    body + "\n" +
+                    this.getIden(identation + 1) + "});\n";
+                return blockOpen + asyncBody + blockClose;
+
+            }
             return blockOpen + firstStatement + remainingString + blockClose;
         }
 
@@ -745,6 +757,11 @@ export class JavaTranspiler extends BaseTranspiler {
         const left = node.left.escapedText;
         const right = node.right.escapedText;
         return this.getIden(identation) + `${left} instanceof ${right}`;
+    }
+
+    printAwaitExpression(node, identation) {
+        const expression = this.printNode(node.expression, identation);
+        return `(${expression}).join()`;
     }
 
     printAsExpression(node, identation) {
@@ -823,21 +840,21 @@ export class JavaTranspiler extends BaseTranspiler {
 
         let returnType = this.printFunctionType(node);
 
-        let modifiers = this.printModifiers(node);
+        // let modifiers = this.printModifiers(node);
         const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " " : "";
-        modifiers = modifiers ? modifiers + " " : defaultAccess;
-        modifiers =
-            modifiers.indexOf("public") === -1 &&
-                modifiers.indexOf("private") === -1 &&
-                modifiers.indexOf("protected") === -1
-                ? defaultAccess + modifiers
-                : modifiers;
+        const modifiers = defaultAccess;
+        // modifiers = modifiers ? modifiers + " " : defaultAccess;
+        // modifiers =
+        //     modifiers.indexOf("public") === -1 &&
+        //         modifiers.indexOf("private") === -1 &&
+        //         modifiers.indexOf("protected") === -1
+        //         ? defaultAccess + modifiers
+        //         : modifiers;
 
         let parsedArgs = undefined;
 
         const methodOverride = (this.getMethodOverride(node) as any);
         const isOverride = methodOverride !== undefined;
-        modifiers = isOverride ? modifiers + "override " : modifiers; // harmless in Java output; strip if you prefer
 
         if (isOverride && (returnType === "Object" || returnType === "java.util.concurrent.CompletableFuture<Object>")) {
             returnType = this.printFunctionType(methodOverride);
