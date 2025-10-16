@@ -1,11 +1,14 @@
 package org.example;
 
-import java.lang.reflect.*;
+import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.text.NumberFormat;
-import java.text.ParseException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -659,5 +662,47 @@ public class Helpers {
         }
         String repl  = (replacement == null) ? "" : String.valueOf(replacement);
         return s.replace(find, repl); // literal (non-regex) replacement
+    }
+
+    public static Object getArg(Object[] v, int index, Object def) {
+        if (v.length <= index) {
+            return def;
+        }
+        return v[index];
+    }
+
+
+    @SuppressWarnings("unchecked")
+    public static void addElementToObject(Object target, Object... args) {
+        if (target instanceof Map<?, ?> map) {
+            if (args.length != 2)
+                throw new IllegalArgumentException("Map requires (key, value)");
+            ((Map<Object, Object>) map).put(args[0], args[1]);
+            return;
+        }
+
+        if (target instanceof List<?> list) {
+            List<Object> l = (List<Object>) list;
+            if (args.length == 1) {
+                l.add(args[0]); // append
+                return;
+            }
+            if (args.length == 2 && args[0] instanceof Integer idx) {
+                int i = idx;
+                if (i < 0 || i > l.size()) {
+                    throw new IndexOutOfBoundsException("Index " + i + " out of bounds [0," + l.size() + "]");
+                }
+                l.add(i, args[1]);
+                return;
+            }
+            throw new IllegalArgumentException(
+                "List requires (value) to append or (index(Integer), value) to insert");
+        }
+
+        throw new IllegalArgumentException("Target is neither Map nor List: " + typeName(target));
+    }
+
+    private static String typeName(Object o) {
+        return (o == null) ? "null" : o.getClass().getName();
     }
 }
