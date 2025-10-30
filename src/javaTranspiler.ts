@@ -126,6 +126,7 @@ export class JavaTranspiler extends BaseTranspiler {
             internal: "intern",
             event: "eventVar",
             fixed: "fixedVar",
+            final: "finalVar",
             // add Java keywords if you need to avoid collisions (e.g., enum, assert)
         };
 
@@ -220,6 +221,15 @@ export class JavaTranspiler extends BaseTranspiler {
         return "";
     }
 
+    printNumericLiteral(node) {
+        const javaMax = 2147483647;
+        const nodeText = node.text;
+        if (Number(nodeText) > javaMax && Number.isInteger(Number(nodeText))) {
+            return `${nodeText}L`;
+        }
+        return node.text;
+    }
+
     printIdentifier(node) {
         let idValue = node.text ?? node.escapedText;
 
@@ -271,8 +281,7 @@ export class JavaTranspiler extends BaseTranspiler {
                         }
                     }
                     if (isClassDeclaration) {
-                        // No direct typeof(class) in Java. Keep original text (no wrapping).
-                        return `${idValue}`;
+                        return `${idValue}.class`;
                     }
                 }
             }
@@ -390,18 +399,18 @@ export class JavaTranspiler extends BaseTranspiler {
                 const parsedArg = this.printNode(args[0], 0);
                 switch (expressionText) {
                 case "Math.abs":
-                    return `Math.abs(Double.parseDouble((${parsedArg}).toString()))`;
+                    return `Herlpers.mathAbs(Double.parseDouble((${parsedArg}).toString()))`;
                 }
             } else if (args.length === 2) {
                 const parsedArg1 = this.printNode(args[0], 0);
                 const parsedArg2 = this.printNode(args[1], 0);
                 switch (expressionText) {
                 case "Math.min":
-                    return `mathMin(${parsedArg1}, ${parsedArg2})`;
+                    return `Helpers.mathMin(${parsedArg1}, ${parsedArg2})`;
                 case "Math.max":
-                    return `mathMax(${parsedArg1}, ${parsedArg2})`;
+                    return `Helpers.mathMax(${parsedArg1}, ${parsedArg2})`;
                 case "Math.pow":
-                    return `Math.pow(Double.parseDouble(${parsedArg1}.toString()), Double.parseDouble(${parsedArg2}.toString()))`;
+                    return `Helpers.mathPow(Double.parseDouble(${parsedArg1}.toString()), Double.parseDouble(${parsedArg2}.toString()))`;
                 }
             }
             const leftSide = node.expression?.expression;
@@ -1155,7 +1164,8 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printObjectLiteralBody(node, identation) {
-        const body =  node.properties.map((p) => this.printNode(p, identation+1)).join("\n");
+        const name = this.currentClassName;
+        const body =  node.properties.map((p) => this.printNode(p, identation+1)).map(l => l.replaceAll('this.', `${name}.this.`)).join("\n");
         return body;
     }
 

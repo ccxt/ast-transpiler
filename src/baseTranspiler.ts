@@ -183,6 +183,8 @@ class BaseTranspiler {
     FuncModifiers = {};
     defaultPropertyAccess = 'public';
 
+    currentClassName = "";
+
     uncamelcaseIdentifiers;
     asyncTranspiling;
     requiresReturnType;
@@ -1328,6 +1330,7 @@ class BaseTranspiler {
 
     printClassDefinition(node, identation) {
         const className = node.name.escapedText;
+        this.currentClassName = className;
         const heritageClauses = node.heritageClauses;
 
         let classInit = "";

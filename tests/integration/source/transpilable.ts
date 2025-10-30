@@ -20,6 +20,20 @@ class Test {
         }
     }
 
+    public getValue(x) {
+        return x;
+    }
+
+    public testJavaScope() {
+        const newObject = {
+            'a': this.getValue(5),
+            'b': this.getValue(this.getValue(this.getValue(2)))
+        };
+
+        console.log(newObject['a']); // should print 5
+        console.log(newObject['b']); // should print 2
+    }
+
     public test() {
         var a = 1;
         var b = 2;
@@ -97,6 +111,8 @@ class Test {
         const dict3 = {}
         dict3["key"] = "value"
         console.log(dict3["key"]) // should print "value"
+
+        this.testJavaScope();
     }
 }
 
