@@ -1076,7 +1076,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (operator === ts.SyntaxKind.PlusToken) {
             return `+(${leftSide})`;
         } else if (operator === ts.SyntaxKind.MinusToken) {
-            return `-(${leftSide})`;
+            return `Helpers.opNeg(${leftSide})`;
         }
         return super.printPrefixUnaryExpression(node, identation);
     }
@@ -1123,7 +1123,7 @@ export class JavaTranspiler extends BaseTranspiler {
                     if (isClassDeclaration) {
                         return (
                             this.getIden(identation) +
-                            `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText}(${parsedArg}) ${this.LINE_TERMINATOR}`
+                            `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText}((String)${parsedArg}) ${this.LINE_TERMINATOR}`
                         );
                     } else {
                         return (
