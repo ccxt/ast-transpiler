@@ -176,6 +176,7 @@ class BaseTranspiler {
 
     CallExpressionReplacements = {};
     ReservedKeywordsReplacements = {};
+    ReassignedVars = {};
     PropertyAccessRequiresParenthesisRemoval = [];
     VariableTypeReplacements = {};
     ArgTypeReplacements = {};

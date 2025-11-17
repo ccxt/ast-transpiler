@@ -118,6 +118,7 @@ export class JavaTranspiler extends BaseTranspiler {
             // Add ad-hoc function call rewrites here if you need them
         };
 
+
         this.ReservedKeywordsReplacements = {
             string: "str",
             object: "obj",
@@ -462,10 +463,43 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    getVarMethodIfAny(node) {
+        // should return the name of the method this node belongs to, if any
+        let current = node?.parent;
+        while (current) {
+            if (ts.isMethodDeclaration(current) || ts.isFunctionDeclaration(current)) {
+                return this.printNode(current.name, 0);
+            }
+            current = current.parent;
+        }
+        return 'outsideAnyMethod';
+    }
+
+    getVarClassIfAny(node) {
+        // should return the name of the class this node belongs to, if any
+        let current = node?.parent;
+        while (current) {
+            if (ts.isClassDeclaration(current)) {
+                return this.printNode(current.name, 0);
+            }
+            current = current.parent;
+        }
+        return '';
+    }
+
+    getVarKey(node) {
+        const varName = node.escapedText ?? node?.name.escapedText;
+        return `${this.getVarClassIfAny(node)}-${this.getVarMethodIfAny(node)}-${varName}`;
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
         const op = node.operatorToken.kind;
+
+        if (left.kind === ts.SyntaxKind.Identifier) {
+            this.ReassignedVars[this.getVarKey(left)] = true;
+        }
 
         if (left.kind === ts.SyntaxKind.TypeOfExpression) {
             const typeOfExpression = this.handleTypeOfInsideBinaryExpression(
@@ -562,8 +596,37 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    getVarListFromObjectLiteralAndUpdateInPlace(node): string[] {
+        // in java if we use an anonymous object literal put, we can't refer non final variables
+        // so here we collect them and then we add the wrapper final variables, eg: finalX = X;
+        // and we update the node in place to use finalX instead of X
+        let res = [];
+
+        node.properties.forEach( (prop) => {
+            if (prop.initializer?.kind === ts.SyntaxKind.Identifier && prop.initializer.escapedText !== 'undefined' && !prop.initializer.escapedText.startsWith('null')) {
+                if (this.ReassignedVars[prop.initializer.escapedText]) {
+                    res.push(prop.initializer.escapedText);
+                    const newNode = ts.factory.createIdentifier(`final${this.capitalize(prop.initializer.escapedText)}`);
+                    prop.initializer = newNode;
+                }
+            } else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
+                res = res.concat(innerVars);
+            }
+        });
+        return [...new Set(res)];
+    }
+
     printVariableDeclarationList(node, identation) {
         const declaration = node.declarations[0];
+
+        let finalVars = '';
+        if (declaration.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            // iterator over object and collect variables
+            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(declaration.initializer);
+            finalVars = varsList.map( v=> `final Object final${this.capitalize(v)} = ${v};`).join('\n' + this.getIden(identation));
+            // console.log('Collected vars:', varsList);
+        }
 
         if (
             this.removeVariableDeclarationForFunctionExpression &&
@@ -638,7 +701,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 parsedValue
             );
         }
+        finalVars = finalVars.length > 0 ?  this.getIden(identation) + finalVars + "\n" : finalVars;
         return (
+            finalVars +
             this.getIden(identation) +
             varToken +
             this.printNode(declaration.name) +
@@ -749,11 +814,14 @@ export class JavaTranspiler extends BaseTranspiler {
             firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
 
             if (isAsync) {
+                const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
+                const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
                 const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
                 const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
+                    insideWrappers +
                     body + "\n" +
                     this.getIden(identation + 1) + "});\n";
-                return blockOpen + asyncBody + blockClose;
+                return blockOpen + finalWrapperVars + asyncBody + blockClose;
 
             }
             return blockOpen + firstStatement + remainingString + blockClose;
@@ -827,7 +895,17 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printMethodParameters(node) {
-        const params = node.parameters.map(param => this.printParameter(param));
+        const isAsyncMethod = this.isAsyncFunction(node);
+        const params = node.parameters.map(param => {
+            const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
+            let printedParam = this.printParameter(param);
+            if (isAsyncMethod && isReassignedVar) {
+                const paramName = param.name.escapedText;
+                printedParam = printedParam.replace(paramName, `${paramName}2`);
+                // we have to rename the param, to then create the final wrapper nad finally inside method body bind the original name
+            }
+            return printedParam;
+        });
         const hasOptionalParameter = node.parameters.some(p => p.initializer !== undefined || p.questionToken !== undefined);
         if (!hasOptionalParameter) {
             return params.join(", ");
@@ -841,6 +919,61 @@ export class JavaTranspiler extends BaseTranspiler {
         // For Java: new ArrayList<>(Arrays.asList(elem1, elem2, ...))
         const elements = node.elements.map((e) => this.printNode(e)).join(", ");
         return `${this.ARRAY_OPENING_TOKEN}${elements}${this.ARRAY_CLOSING_TOKEN}`;
+    }
+
+
+    printFinalOutsideMethodVariableWrappersIfAny(node, identation) {
+        const parameters = node?.parameters;
+        const finalVarWrappers = [];
+
+        if (parameters) {
+            const isAsyncMethod = this.isAsyncFunction(node);
+            parameters.forEach(param => {
+                const isOptionalParam = param.initializer !== undefined || param.questionToken !== undefined;
+                if (!isOptionalParam) {
+                    const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
+                    if (isAsyncMethod && isReassignedVar) {
+                        const paramName = param.name.escapedText;
+                        finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${paramName}3 = ${paramName}2;`);
+                    }
+                }
+
+            });
+        }
+        return finalVarWrappers.join("\n");
+    }
+
+    printInsideMethodVariableWrappersIfAny(node, identation) {
+        const parameters = node?.parameters;
+        const finalVarWrappers = [];
+
+        if (parameters) {
+            const isAsyncMethod = this.isAsyncFunction(node);
+            parameters.forEach(param => {
+                const isOptionalParam = param.initializer !== undefined || param.questionToken !== undefined;
+                if (!isOptionalParam) {
+                    const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
+                    if (isAsyncMethod && isReassignedVar) {
+                        const paramName = param.name.escapedText;
+                        finalVarWrappers.push(this.getIden(identation + 1) + `Object ${paramName} = ${paramName}3;`);
+                    }
+                }
+
+            });
+        }
+        return finalVarWrappers.join("\n");
+    }
+
+    printMethodDeclaration(node, identation) {
+
+
+        const funcBody = this.printFunctionBody(node, identation); // print body first to get var reassignments filled
+
+        let methodDef = this.printMethodDefinition(node, identation);
+
+        methodDef += funcBody;
+
+        return methodDef;
     }
 
     printMethodDefinition(node, identation) {
@@ -1128,7 +1261,7 @@ export class JavaTranspiler extends BaseTranspiler {
                     } else {
                         return (
                             this.getIden(identation) +
-                            `throwDynamicException(${id.escapedText}, ${parsedArg});return null;`
+                            `Helpers.throwDynamicException(${id.escapedText}, ${parsedArg});return null;`
                         );
                     }
                 }
@@ -1137,7 +1270,7 @@ export class JavaTranspiler extends BaseTranspiler {
                     `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression}(${parsedArg}) ${this.LINE_TERMINATOR}`
                 );
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
-                return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
+                return this.getIden(identation) + `Helpers.throwDynamicException(${newExpression}, ${parsedArg});`;
             }
             return super.printThrowStatement(node, identation);
         }
@@ -1181,5 +1314,22 @@ export class JavaTranspiler extends BaseTranspiler {
                 this.CONDITION_CLOSE +
                 this.printBlock(node.statement, identation);
         return this.printNodeCommentsIfAny(node, identation, forStm);
+    }
+
+    printReturnStatement(node, identation) {
+        const leadingComment = this.printLeadingComments(node, identation);
+        let trailingComment = this.printTraillingComment(node, identation);
+        trailingComment = trailingComment ? " " + trailingComment : trailingComment;
+        const exp =  node.expression;
+        let finalVars = '';
+        if (exp && exp?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
+            finalVars = varsList.map( v=> `final Object final${this.capitalize(v)} = ${v};`).join('\n' + this.getIden(identation));
+        }
+        let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
+        rightPart = rightPart.trim();
+        rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+        finalVars = finalVars.length > 0 ?  this.getIden(identation) + finalVars + "\n" : finalVars;
+        return leadingComment + finalVars + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
     }
 }
