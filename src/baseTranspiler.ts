@@ -1748,6 +1748,10 @@ class BaseTranspiler {
         return undefined;
     }
 
+    printThisKeyword(node, identation) {
+        return this.THIS_TOKEN;
+    }
+
     printNode(node, identation = 0): string {
 
         try {
@@ -1800,7 +1804,7 @@ class BaseTranspiler {
             } else if ((ts as any).isBooleanLiteral(node)) {
                 return this.printBooleanLiteral(node);
             } else if (ts.SyntaxKind.ThisKeyword === node.kind) {
-                return this.THIS_TOKEN;
+                return this.printThisKeyword(node, identation);
             } else if (ts.SyntaxKind.SuperKeyword === node.kind) {
                 return this.SUPER_TOKEN;
             }else if (ts.isTryStatement(node)){

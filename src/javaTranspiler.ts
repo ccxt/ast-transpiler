@@ -2,6 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from "typescript";
 
 const parserConfig = {
+    EXTENDS_TOKEN: "extends",
     PROMISE_TYPE_KEYWORD: "java.util.concurrent.CompletableFuture",
     ARRAY_KEYWORD: "java.util.List<Object>",
     OBJECT_KEYWORD: "java.util.Map<String, Object>",
@@ -488,7 +489,11 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     getVarKey(node) {
-        const varName = node.escapedText ?? node?.name.escapedText;
+
+        const varName = node?.escapedText ?? node?.name?.escapedText;
+        if (!varName) {
+            return '';
+        }
         return `${this.getVarClassIfAny(node)}-${this.getVarMethodIfAny(node)}-${varName}`;
     }
 
@@ -604,12 +609,69 @@ export class JavaTranspiler extends BaseTranspiler {
 
         node.properties.forEach( (prop) => {
             if (prop.initializer?.kind === ts.SyntaxKind.Identifier && prop.initializer.escapedText !== 'undefined' && !prop.initializer.escapedText.startsWith('null')) {
-                if (this.ReassignedVars[prop.initializer.escapedText]) {
+                // if (this.ReassignedVars[prop.initializer.escapedText]) {
+                if (this.ReassignedVars[this.getVarKey(prop.initializer)]) {
                     res.push(prop.initializer.escapedText);
                     const newNode = ts.factory.createIdentifier(`final${this.capitalize(prop.initializer.escapedText)}`);
                     prop.initializer = newNode;
                 }
-            } else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            } else if (prop.initializer?.kind === ts.SyntaxKind.CallExpression) {
+                // check if any of the args is an identifier that was reassigned
+                const callExp = prop.initializer;
+                callExp.arguments.forEach( (arg,i) => {
+                    if (arg.kind === ts.SyntaxKind.Identifier) {
+                        // if (this.ReassignedVars[arg.escapedText]) {
+                        if (this.ReassignedVars[this.getVarKey(arg)]) {
+                            res.push(arg.escapedText);
+                            const newNode = ts.factory.createIdentifier(`final${this.capitalize(arg.escapedText)}`);
+                            arg = newNode;
+                            callExp.arguments[i] = newNode;
+                        }
+                    } else if (arg.kind === ts.SyntaxKind.CallExpression) {
+                        const innerCallExp = arg;
+                        innerCallExp.arguments.forEach( (innerArg,j) => {
+                            if (innerArg.kind === ts.SyntaxKind.Identifier) {
+                                if (this.ReassignedVars[this.getVarKey(innerArg)]) {
+                                    res.push(innerArg.escapedText);
+                                    const newNode = ts.factory.createIdentifier(`final${this.capitalize(innerArg.escapedText)}`);
+                                    innerArg = newNode;
+                                    innerCallExp.arguments[j] = newNode;
+                                }
+                            }
+                        });
+                    }
+                });
+            } else if (prop.initializer?.kind === ts.SyntaxKind.ElementAccessExpression) {
+                let left = prop.initializer.expression;
+                const right = prop.initializer.argumentExpression;
+                if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
+                    // handle x[a][b][c]... recursively
+                    // let currentLeft = left;
+                    while (left.kind === ts.SyntaxKind.ElementAccessExpression) {
+                        // const innerLeft = currentLeft.expression;
+                        left = left.expression;
+                    }
+
+                }
+                if (this.ReassignedVars[this.getVarKey(left)]) {
+                    const leftName = left.escapedText;
+                    const newLeftName = `final${this.capitalize(leftName)}`;
+                    // const newLeftNode = ts.factory.createIdentifier(newLeftName);
+                    left.escapedText = newLeftName;
+                    // finalVars = finalVars + `final Object ${newLeftName} = ${leftName};\n`;
+                    res.push(leftName);
+
+                }
+                if (right.kind === ts.SyntaxKind.Identifier) {
+                    if (this.ReassignedVars[this.getVarKey(right)]) {
+                        const rightName = right.escapedText;
+                        const newRightName = `final${this.capitalize(rightName)}`;
+                        right.escapedText = newRightName;
+                        res.push(rightName);
+                    }
+                }
+            }
+            else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
                 const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
                 res = res.concat(innerVars);
             }
@@ -712,8 +774,23 @@ export class JavaTranspiler extends BaseTranspiler {
         );
     }
 
+    printThisKeyword(node, identation) {
+
+        let current = node?.parent;
+        while (current) {
+            if (current.kind === ts.SyntaxKind.PropertyAssignment) {
+                const className = this.currentClassName;
+                return `${className}.this`;
+            }
+            current = current?.parent;
+        }
+        // if this.x() is inside a object a object literal and we need to add the class name
+        return this.THIS_TOKEN;
+    }
+
     transformPropertyAcessExpressionIfNeeded(node) {
         const expression = node.expression;
+
         const leftSide = this.printNode(expression, 0);
         const rightSide = node.name.escapedText;
 
@@ -995,31 +1072,31 @@ export class JavaTranspiler extends BaseTranspiler {
 
         let parsedArgs = undefined;
 
-        const methodOverride = (this.getMethodOverride(node) as any);
-        const isOverride = methodOverride !== undefined;
+        // const methodOverride = (this.getMethodOverride(node) as any);
+        // const isOverride = methodOverride !== undefined;
 
-        if (isOverride && (returnType === "Object" || returnType === "java.util.concurrent.CompletableFuture<Object>")) {
-            returnType = this.printFunctionType(methodOverride);
-        }
+        // if (isOverride && (returnType === "Object" || returnType === "java.util.concurrent.CompletableFuture<Object>")) {
+        //     returnType = this.printFunctionType(methodOverride);
+        // }
 
-        if (isOverride && node.parameters.length > 0) {
-            const first = node.parameters[0];
-            const firstType = this.getType(first);
+        // if (isOverride && node.parameters.length > 0) {
+        //     const first = node.parameters[0];
+        //     const firstType = this.getType(first);
 
-            if (firstType === undefined) {
-                const currentArgs = node.parameters;
-                const parentArgs = methodOverride.parameters;
-                parsedArgs = "";
-                parentArgs.forEach((param, index) => {
-                    const originalName = this.printNode(currentArgs[index].name, 0);
-                    const parsedArg = this.printParameteCustomName(param, originalName);
-                    parsedArgs += parsedArg;
-                    if (index < parentArgs.length - 1) {
-                        parsedArgs += ", ";
-                    }
-                });
-            }
-        }
+        //     if (firstType === undefined) {
+        //         const currentArgs = node.parameters;
+        //         const parentArgs = methodOverride.parameters;
+        //         parsedArgs = "";
+        //         parentArgs.forEach((param, index) => {
+        //             const originalName = this.printNode(currentArgs[index].name, 0);
+        //             const parsedArg = this.printParameteCustomName(param, originalName);
+        //             parsedArgs += parsedArg;
+        //             if (index < parentArgs.length - 1) {
+        //                 parsedArgs += ", ";
+        //             }
+        //         });
+        //     }
+        // }
 
         parsedArgs = parsedArgs ? parsedArgs : this.printMethodParameters(node);
 
@@ -1297,8 +1374,8 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printObjectLiteralBody(node, identation) {
-        const name = this.currentClassName;
-        const body =  node.properties.map((p) => this.printNode(p, identation+1)).map(l => l.replaceAll('this.', `${name}.this.`)).join("\n");
+        const body =  node.properties.map((p) => this.printNode(p, identation+1)).join("\n");
+        // body = body.replaceAll('this.', `${name}.this.`);
         return body;
     }
 
@@ -1325,6 +1402,17 @@ export class JavaTranspiler extends BaseTranspiler {
         if (exp && exp?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
             const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
             finalVars = varsList.map( v=> `final Object final${this.capitalize(v)} = ${v};`).join('\n' + this.getIden(identation));
+        } else if (exp && exp?.kind === ts.SyntaxKind.CallExpression) {
+            // const callExpr = exp;
+            const callExprArgs = exp.arguments;
+            if (callExprArgs && callExprArgs.length > 0) {
+                callExprArgs.forEach( (arg, i) => {
+                    if (arg.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                        const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(arg);
+                        finalVars = finalVars + varsList.map( v=> `final Object final${this.capitalize(v)} = ${v};`).join('\n' + this.getIden(identation));
+                    }
+                });
+            }
         }
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
