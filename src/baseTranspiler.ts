@@ -2,6 +2,7 @@ import ts from 'typescript';
 import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType } from './types.js';
 import { unCamelCase } from "./utils.js";
 import { Logger } from "./logger.js";
+import { timingSafeEqual } from 'crypto';
 class BaseTranspiler {
 
     NUM_LINES_BETWEEN_CLASS_MEMBERS = 1;
@@ -477,13 +478,19 @@ class BaseTranspiler {
                 return `${this.COMPARISON_WRAPPER_OPEN}${leftVar}, ${rightVar}${this.COMPARISON_WRAPPER_CLOSE}`;
             }
         }
-
+        let prefixes = "";
         // check if boolean operators || and && because of the falsy values
         if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
             leftVar = this.printCondition(left, 0);
             rightVar = this.printCondition(right, identation);
         }  else {
             leftVar = this.printNode(left, 0);
+
+
+            if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                prefixes = this.getBinaryExpressionPrefixes(node, identation) ?? "";
+            }
+
             rightVar = this.printNode(right, identation);
         }
 
@@ -491,7 +498,11 @@ class BaseTranspiler {
 
         operator = customOperator ? customOperator : operator;
 
-        return leftVar +" "+ operator + " " + rightVar.trim();
+        return prefixes + leftVar +" "+ operator + " " + rightVar.trim();
+    }
+
+    getBinaryExpressionPrefixes(node, identation) {
+        return undefined;
     }
 
     transformPropertyAcessExpressionIfNeeded (node) {
@@ -1417,7 +1428,6 @@ class BaseTranspiler {
     }
 
     printObjectLiteralExpression(node, identation) {
-
         const objectBody = this.printObjectLiteralBody(node, identation);
         const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(identation) : objectBody;
         return  this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
@@ -1705,14 +1715,21 @@ class BaseTranspiler {
         if (this.isCJSModuleExportsExpressionStatement(node)) {
             return ""; // remove module.exports = ...
         }
+
+        const expressionStatementPrefixes = this.getExpressionStatementPrefixesIfAny(node, identation) ?? "";
+
         const exprStm = this.printNode(node.expression, identation);
 
         // skip empty statements
         if (exprStm.length === 0) {
             return "";
         }
-        const expStatement = this.getIden(identation) + exprStm + this.LINE_TERMINATOR;
+        const expStatement = expressionStatementPrefixes + this.getIden(identation) + exprStm + this.LINE_TERMINATOR;
         return this.printNodeCommentsIfAny(node, identation, expStatement);
+    }
+
+    getExpressionStatementPrefixesIfAny(node, identation) {
+        return undefined;
     }
 
     printPropertyDeclaration(node, identation) {
