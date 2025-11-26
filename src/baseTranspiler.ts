@@ -1340,18 +1340,27 @@ class BaseTranspiler {
         return parsedMembers.join("\n");
     }
 
+    getCustomClassName(node) {
+        return node.name.escapedText;
+    }
+
+    getClassModifier(node) {
+        return "";
+    }
+
     printClassDefinition(node, identation) {
-        const className = node.name.escapedText;
+        const className = this.getCustomClassName(node);
         this.currentClassName = className;
         const heritageClauses = node.heritageClauses;
+        const classModifier = this.getClassModifier(node);
 
         let classInit = "";
         const classOpening = this.getBlockOpen(identation);
         if (heritageClauses !== undefined) {
             const classExtends = heritageClauses[0].types[0].expression.escapedText;
-            classInit = this.getIden(identation) + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
+            classInit = this.getIden(identation) + classModifier + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
         } else {
-            classInit = this.getIden(identation) + "class " + className + classOpening;
+            classInit = this.getIden(identation) + classModifier + "class " + className + classOpening;
         }
         return classInit;
     }

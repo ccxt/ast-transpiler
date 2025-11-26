@@ -220,6 +220,15 @@ export class JavaTranspiler extends BaseTranspiler {
         return "\n" + this.getIden(identation) + this.BLOCK_OPENING_TOKEN + "\n";
     }
 
+
+    getCustomClassName(node) {
+        return this.capitalize(node.name.escapedText);
+    }
+
+    getClassModifier(node) {
+        return "public ";
+    }
+
     printSuperCallInsideConstructor(_node, _identation) {
         // Java allows "super(...)" as the first line; we already inject it when needed.
         return "";
@@ -544,9 +553,10 @@ export class JavaTranspiler extends BaseTranspiler {
             left.kind === ts.SyntaxKind.ArrayLiteralExpression
         ) {
             const arrayBindingPatternElements = left.elements;
-            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) =>
-                this.printNode(e, 0)
-            );
+            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => {
+                this.ReassignedVars[this.getVarKey(e)] = true;
+                return this.printNode(e, 0);
+            });
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
             let arrayBindingStatement =
@@ -914,7 +924,7 @@ export class JavaTranspiler extends BaseTranspiler {
         while (current) {
             if (current.kind === ts.SyntaxKind.PropertyAssignment) {
                 const className = this.currentClassName;
-                return `${className}.this`;
+                return `${this.capitalize(className)}.this`;
             }
             current = current?.parent;
         }
