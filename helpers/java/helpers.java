@@ -664,6 +664,16 @@ public class Helpers {
         return s.replace(find, repl); // literal (non-regex) replacement
     }
 
+    public static String replace(Object baseString, Object search, Object replacement) {
+        if (baseString == null) {
+            return null;
+        }
+        String s     = String.valueOf(baseString);
+        String find  = (search == null) ? "" : String.valueOf(search);
+        String repl  = (replacement == null) ? "" : String.valueOf(replacement);
+        return s.replaceFirst(find, repl); // literal (non-regex) replacement
+    }
+
     public static Object getArg(Object[] v, int index, Object def) {
         if (v.length <= index) {
             return def;
@@ -704,5 +714,33 @@ public class Helpers {
 
     private static String typeName(Object o) {
         return (o == null) ? "null" : o.getClass().getName();
+    }
+
+    public static Object opNeg(Object value) {
+        if (value == null) {
+            return null;
+        }
+
+        if (value instanceof Byte) {
+            byte v = (Byte) value;
+            return (byte) -v;
+        }
+        if (value instanceof Short v) {
+            return (short) -v;
+        }
+        if (value instanceof Integer v) {
+            return -v;
+        }
+        if (value instanceof Long v) {
+            return -v;
+        }
+        if (value instanceof Float v) {
+            return -v;
+        }
+        if (value instanceof Double v) {
+            return -v;
+        }
+
+        return null;
     }
 }

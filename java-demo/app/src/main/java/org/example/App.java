@@ -3,6 +3,8 @@
  */
 package org.example;
 
+import java.util.concurrent.CompletableFuture;
+
 
 public class App {
 
@@ -35,6 +37,12 @@ public class App {
         System.out.println("test");
     }
 
+    public void retryingTask(int... retries) {
+        int n = (retries.length == 0) ? 3 : retries[0];  // default = 3
+        System.out.println("n: " + n);
+        // ...
+    }
+
     public String getGreeting() {
         var i = 1;
         i += 1;
@@ -44,9 +52,95 @@ public class App {
         return "Hello World222!" + String.valueOf(i) + a;
     }
 
+    public CompletableFuture<Object> testAsync() {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                Thread.sleep(1000); // Simulate a delay
+                throw new RuntimeException("Simulated exception");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return "Async Result";
+        });
+    }
+
+    public void teste()
+    {
+        Object aaa = (this.fWithParams(3)).join();
+        System.out.println(aaa);
+        var c = this.fWithParams(5);
+    }
+
+    public java.util.concurrent.CompletableFuture<Object> fWithParams(Object a)
+    {
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                return 42;
+        });
+
+    }
+
+    public java.util.concurrent.CompletableFuture teste(Object a)
+    {
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            System.out.println(a);
+            throw new Error("test") ;
+        });
+
+    }
+
+    public Object getVar(Object v) {
+        return v;
+    }
+
+    public void teste33(String a)
+    {
+        var x = 1;
+        x = 2;
+        Object newObj = new java.util.HashMap<String, Object>() {{
+            put( "a",  App.this.getVar(x) );
+            put( "a",  a );
+            // put( "b", this.getValue(this.getValue(this.getValue(2))) );
+        }};
+        throw new Error("test") ;
+    }
+
+    public java.util.concurrent.CompletableFuture<Object> fetchData(Object input3)
+    {
+        final Object input2 = input3;
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            Object input = input2;
+            input = 3;
+            return Helpers.add(input, 2);
+        });
+
+    }
+
+    public java.util.concurrent.CompletableFuture<Object> fetchData(Object input2, Object... optionalArgs)
+    {
+        final Object input3 = input2;
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            Object input = input3;
+            System.out.println(input);
+            return null;
+        });
+
+    }
+
     public static void main(String[] args) {
+        // this.retryingTask();
+
+        var base = 3;
         System.out.println(new App().getGreeting());
-        // var app = new App();
+        var app = new App();
+        app.teste33("example");
+        // app.retryingTask();
+        try {
+            var res = app.testAsync().join();
+            System.out.println("res: " + res);
+        } catch (Exception e) {
+            System.out.println("Error: " + e.getMessage());
+        }
+
         // System.out.println(app.getGreeting());
         // app.test();
         // app.aa();
