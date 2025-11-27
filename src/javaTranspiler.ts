@@ -742,29 +742,48 @@ export class JavaTranspiler extends BaseTranspiler {
                 // check if any of the args is an identifier that was reassigned
                 const callArgs = prop.initializer?.arguments ?? [];
                 const callExp = prop.initializer;
-                callArgs.forEach( (arg,i) => {
-                    if (arg.kind === ts.SyntaxKind.Identifier) {
-                        // if (this.ReassignedVars[arg.escapedText]) {
-                        if (this.ReassignedVars[this.getVarKey(arg)]) {
-                            res.push(arg.escapedText);
-                            const newNode = this.createNewNodeForFinalVar(arg.escapedText);
-                            arg = newNode;
-                            callExp.arguments[i] = newNode;
-                        }
-                    } else if (arg.kind === ts.SyntaxKind.CallExpression) {
-                        const innerCallExp = arg;
-                        innerCallExp.arguments.forEach( (innerArg,j) => {
-                            if (innerArg.kind === ts.SyntaxKind.Identifier) {
-                                if (this.ReassignedVars[this.getVarKey(innerArg)]) {
-                                    res.push(innerArg.escapedText);
-                                    const newNode = this.createNewNodeForFinalVar(innerArg.escapedText);
-                                    innerArg = newNode;
-                                    innerCallExp.arguments[j] = newNode;
-                                }
+                // transverseCallExpressionArguments(callExp);
+                // callArgs.forEach( (arg,i) => {
+                //     if (arg.kind === ts.SyntaxKind.Identifier) {
+                //         // if (this.ReassignedVars[arg.escapedText]) {
+                //         if (this.ReassignedVars[this.getVarKey(arg)]) {
+                //             res.push(arg.escapedText);
+                //             const newNode = this.createNewNodeForFinalVar(arg.escapedText);
+                //             arg = newNode;
+                //             callExp.arguments[i] = newNode;
+                //         }
+                //     } else if (arg.kind === ts.SyntaxKind.CallExpression) {
+                //         const innerCallExp = arg;
+                //         innerCallExp.arguments.forEach( (innerArg,j) => {
+                //             if (innerArg.kind === ts.SyntaxKind.Identifier) {
+                //                 if (this.ReassignedVars[this.getVarKey(innerArg)]) {
+                //                     res.push(innerArg.escapedText);
+                //                     const newNode = this.createNewNodeForFinalVar(innerArg.escapedText);
+                //                     innerArg = newNode;
+                //                     innerCallExp.arguments[j] = newNode;
+                //                 }
+                //             }
+                //         });
+                //     }
+                // });
+
+                const transverseCallExpressionArguments = (callExpression) => {
+                    callExpression.arguments.forEach( (arg, i) => {
+                        if (arg.kind === ts.SyntaxKind.Identifier) {
+                            if (this.ReassignedVars[this.getVarKey(arg)]) {
+                                res.push(arg.escapedText);
+                                const newNode = this.createNewNodeForFinalVar(arg.escapedText);
+                                arg = newNode;
+                                callExpression.arguments[i] = newNode;
                             }
-                        });
-                    }
-                });
+                        } else if (arg.kind === ts.SyntaxKind.CallExpression) {
+                            const innerCallExp = arg;
+                            transverseCallExpressionArguments(innerCallExp);
+                        }
+                    });
+                };
+
+                transverseCallExpressionArguments(callExp);
 
                 // handle side.toUpperCase() scenarios
                 if (callExp.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
