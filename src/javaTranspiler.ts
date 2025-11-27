@@ -1629,6 +1629,19 @@ export class JavaTranspiler extends BaseTranspiler {
                     finalVars = finalVars + varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
                 }
             }
+        } else if (exp && exp?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            const elements = exp?.elements ?? [];
+            for (const element of elements) {
+                if (element.kind === ts.SyntaxKind.CallExpression) {
+                    const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(element);
+                    for (const objLiteral of objectsFromCall) {
+                        const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
+                        if (varsList.length > 0) {
+                            finalVars = finalVars + varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
+                        }
+                    }
+                }
+            }
         }
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
