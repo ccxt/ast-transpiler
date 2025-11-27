@@ -1048,68 +1048,68 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printFunctionBody(node, identation) {
         // keep your existing default param initializer logic, but swap C# types for Java
-        const funcParams = node.parameters;
+        const funcParams = node.parameters ?? [];
         const isAsync = this.isAsyncFunction(node);
         const initParams = [];
-        if (funcParams.length > 0) {
-            const body = node.body.statements;
-            const first = body.length > 0 ? body[0] : [];
-            const remaining = body.length > 0 ? body.slice(1) : [];
-            let firstStatement = this.printNode(first, identation + 1);
+        // if (funcParams.length > 0) {
+        const body = node.body.statements;
+        const first = body.length > 0 ? body[0] : [];
+        const remaining = body.length > 0 ? body.slice(1) : [];
+        let firstStatement = this.printNode(first, identation + 1);
 
-            const remainingString = remaining
-                .map((statement) => this.printNode(statement, identation + 1))
-                .join("\n");
-            let offSetIndex = 0;
-            funcParams.forEach((param, i) => {
-                const initializer = param.initializer;
-                if (initializer) {
-                    const index = i + offSetIndex;
-                    // index = index < 0 ? 0 : i - 1;
-                    const paramName = this.printNode(param.name, 0);
-                    initParams.push(`Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)});`);
-                } else {
-                    offSetIndex--;
-                }
-            });
+        const remainingString = remaining
+            .map((statement) => this.printNode(statement, identation + 1))
+            .join("\n");
+        let offSetIndex = 0;
+        funcParams.forEach((param, i) => {
+            const initializer = param.initializer;
+            if (initializer) {
+                const index = i + offSetIndex;
+                // index = index < 0 ? 0 : i - 1;
+                const paramName = this.printNode(param.name, 0);
+                initParams.push(`Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)});`);
+            } else {
+                offSetIndex--;
+            }
+        });
 
-            if (initParams.length > 0) {
-                const defaultInitializers =
+        if (initParams.length > 0) {
+            const defaultInitializers =
                     initParams.map((l) => this.getIden(identation + 1) + l).join("\n") +
                     "\n";
-                const bodyParts = firstStatement.split("\n");
-                const commentPart = bodyParts.filter((line) => this.isComment(line));
-                const isComment = commentPart.length > 0;
-                if (isComment) {
-                    const commentPartString = commentPart
-                        .map((c) => this.getIden(identation + 1) + c.trim())
-                        .join("\n");
-                    const firstStmNoComment = bodyParts
-                        .filter((line) => !this.isComment(line))
-                        .join("\n");
-                    firstStatement =
+            const bodyParts = firstStatement.split("\n");
+            const commentPart = bodyParts.filter((line) => this.isComment(line));
+            const isComment = commentPart.length > 0;
+            if (isComment) {
+                const commentPartString = commentPart
+                    .map((c) => this.getIden(identation + 1) + c.trim())
+                    .join("\n");
+                const firstStmNoComment = bodyParts
+                    .filter((line) => !this.isComment(line))
+                    .join("\n");
+                firstStatement =
                         commentPartString + "\n" + defaultInitializers + firstStmNoComment;
-                } else {
-                    firstStatement = defaultInitializers + firstStatement;
-                }
+            } else {
+                firstStatement = defaultInitializers + firstStatement;
             }
-            const blockOpen = this.getBlockOpen(identation);
-            const blockClose = this.getBlockClose(identation);
-            firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
+        }
+        const blockOpen = this.getBlockOpen(identation);
+        const blockClose = this.getBlockClose(identation);
+        firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
 
-            if (isAsync) {
-                const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
-                const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
-                const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
-                const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
+        if (isAsync) {
+            const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
+            const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
+            const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
+            const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
                     insideWrappers +
                     body + "\n" +
                     this.getIden(identation + 1) + "});\n";
-                return blockOpen + finalWrapperVars + asyncBody + blockClose;
+            return blockOpen + finalWrapperVars + asyncBody + blockClose;
 
-            }
-            return blockOpen + firstStatement + remainingString + blockClose;
         }
+        return blockOpen + firstStatement + remainingString + blockClose;
+        // }
 
         return super.printFunctionBody(node, identation);
     }
