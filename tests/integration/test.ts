@@ -61,7 +61,8 @@ function transpileTests() {
     let csharp = 'namespace tests;\n' + result[0].content;
     csharp = csharp.replace('class Test', 'partial class Test');
 
-    const java = `package org.example;\n` + result[4].content;
+    let java = `package org.example;\n` + result[4].content;
+    java = java.replaceAll(/public class (\w+)/g, 'class $1');
 
     const goImports = [
         '\n',
