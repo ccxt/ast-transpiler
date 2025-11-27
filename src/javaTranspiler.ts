@@ -663,15 +663,23 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     getBinaryExpressionPrefixes(node, identation) {
-        if (node?.right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(node.right);
+        let right = node?.right;
+        if (right?.kind === ts.SyntaxKind.AwaitExpression) {
+            // un pack await this.x() to this.x(), we don't care about await here
+            right = right.expression;
+        }
+        if (!right) {
+            return undefined;
+        }
+        if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(right);
             if (objVariables.length > 0) {
                 return objVariables.map( (v, i) => `${this.getIden( i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n') + "\n" + this.getIden(identation);
             }
-        } else if (node?.right.kind === ts.SyntaxKind.CallExpression) {
+        } else if (right.kind === ts.SyntaxKind.CallExpression) {
             // search arguments recursively for object literals
             // eg: a[x] = this.extend(this.extend(this.extend({'a':b}, c)))
-            const objectLiterals = this.getObjectLiteralFromCallExpressionArguments(node.right);
+            const objectLiterals = this.getObjectLiteralFromCallExpressionArguments(right);
             if (objectLiterals.length > 0) {
                 let finalVars = '';
                 for (let i = 0; i < objectLiterals.length; i++) {

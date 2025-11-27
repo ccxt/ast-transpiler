@@ -487,9 +487,9 @@ class BaseTranspiler {
             leftVar = this.printNode(left, 0);
 
 
-            if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                prefixes = this.getBinaryExpressionPrefixes(node, identation) ?? "";
-            }
+            // if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            prefixes = this.getBinaryExpressionPrefixes(node, identation) ?? "";
+            // }
 
             rightVar = this.printNode(right, identation);
         }
