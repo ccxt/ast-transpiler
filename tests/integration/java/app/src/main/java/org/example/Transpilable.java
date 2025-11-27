@@ -11,6 +11,36 @@ class Second
 }
 class Test
 {
+    public void functionWithOptionals(Object a, Object... optionalArgs)
+    {
+        Object c = Helpers.getArg(optionalArgs, 0, null);
+        Object d = Helpers.getArg(optionalArgs, 1, 1);
+        System.out.println(a);
+        if (Helpers.isTrue(!Helpers.isEqual(c, null)))
+        {
+            System.out.println(c);
+        }
+        if (Helpers.isTrue(!Helpers.isEqual(d, null)))
+        {
+            System.out.println(d);
+        }
+    }
+
+    public Object getValue(Object x)
+    {
+        return x;
+    }
+
+    public void testJavaScope()
+    {
+        Object newObject = new java.util.HashMap<String, Object>() {{
+            put( "a", Test.this.getValue(5) );
+            put( "b", Test.this.getValue(Test.this.getValue(Test.this.getValue(2))) );
+        }};
+        System.out.println(Helpers.GetValue(newObject, "a")); // should print 5
+        System.out.println(Helpers.GetValue(newObject, "b")); // should print 2
+    }
+
     public void test()
     {
         Object a = 1;
@@ -73,5 +103,15 @@ class Test
         Object baseString = "aabba";
         Object replacedAllString = Helpers.replaceAll((String)baseString, (String)"a", (String)"");
         System.out.println(replacedAllString); // should print "bb"
+        this.functionWithOptionals("hello");
+        this.functionWithOptionals("hello", 5);
+        this.functionWithOptionals("hello", 5, 1);
+        Object list3 = new java.util.ArrayList<Object>(java.util.Arrays.asList("empty"));
+        Helpers.addElementToObject(list3, 0, "first");
+        System.out.println(Helpers.GetValue(list3, 0)); // should print "first"
+        Object dict3 = new java.util.HashMap<String, Object>() {{}};
+        Helpers.addElementToObject(dict3, "key", "value");
+        System.out.println(Helpers.GetValue(dict3, "key")); // should print "value"
+        this.testJavaScope();
     }
 }
