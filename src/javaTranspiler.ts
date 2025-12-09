@@ -131,6 +131,7 @@ export class JavaTranspiler extends BaseTranspiler {
             event: "eventVar",
             fixed: "fixedVar",
             final: "finalVar",
+            native: "nativeVar",
             // add Java keywords if you need to avoid collisions (e.g., enum, assert)
         };
 
@@ -434,7 +435,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 const parsedArg = this.printNode(args[0], 0);
                 switch (expressionText) {
                 case "Math.abs":
-                    return `Herlpers.mathAbs(Double.parseDouble((${parsedArg}).toString()))`;
+                    return `Helpers.mathAbs(Double.parseDouble(Helpers.toString(${parsedArg})))`;
                 }
             } else if (args.length === 2) {
                 const parsedArg1 = this.printNode(args[0], 0);
@@ -445,7 +446,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 case "Math.max":
                     return `Helpers.mathMax(${parsedArg1}, ${parsedArg2})`;
                 case "Math.pow":
-                    return `Helpers.mathPow(Double.parseDouble(${parsedArg1}.toString()), Double.parseDouble(${parsedArg2}.toString()))`;
+                    return `Helpers.mathPow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
                 }
             }
             const leftSide = node.expression?.expression;
@@ -1348,15 +1349,15 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printMathFloorCall(_node, _identation, parsedArg = undefined) {
-        return `(Math.floor(Double.parseDouble((${parsedArg}).toString())))`;
+        return `(Math.floor(Double.parseDouble(Helpers.toString(${parsedArg}))))`;
     }
 
     printMathRoundCall(_node, _identation, parsedArg = undefined) {
-        return `Math.round(Double.parseDouble(${parsedArg}.toString()))`;
+        return `Math.round(Double.parseDouble(Helpers.toString(${parsedArg})))`;
     }
 
     printMathCeilCall(_node, _identation, parsedArg = undefined) {
-        return `Math.ceil(Double.parseDouble(${parsedArg}.toString()))`;
+        return `Math.ceil(Double.parseDouble(Helpers.toString(${parsedArg})))`;
     }
 
     printNumberIsIntegerCall(_node, _identation, parsedArg = undefined) {
