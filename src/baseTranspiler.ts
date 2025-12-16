@@ -848,11 +848,13 @@ class BaseTranspiler {
         return typeText;
     }
 
+
     printFunctionDefinition(node, identation) {
         let name = node.name?.escapedText ?? "";
         name = this.transformFunctionNameIfNeeded(name);
 
-        const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
+        // const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
+        const parsedArgs = this.printMethodParameters(node);
 
         let modifiers = this.printModifiers(node);
         modifiers = modifiers ? modifiers + " " : modifiers;

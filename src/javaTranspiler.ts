@@ -238,7 +238,7 @@ export class JavaTranspiler extends BaseTranspiler {
     printNumericLiteral(node) {
         const javaMax = 2147483647;
         const nodeText = node.text;
-        if (Number(nodeText) > javaMax && Number.isInteger(Number(nodeText))) {
+        if (Number(nodeText) > javaMax && Number.isInteger(Number(nodeText)) && node.text.indexOf('e') === -1) {
             return `${nodeText}L`;
         }
         return node.text;
@@ -1434,7 +1434,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printAssertCall(_node, _identation, parsedArgs) {
-        return `assert ${parsedArgs}`;
+        return `assert(${parsedArgs})`;
     }
 
     printSliceCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
