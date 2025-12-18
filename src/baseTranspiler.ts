@@ -860,6 +860,11 @@ class BaseTranspiler {
         modifiers = modifiers ? modifiers + " " : modifiers;
 
         let returnType = this.printFunctionType(node);
+        // quick fix
+        if (returnType === 'java.util.concurrent.CompletableFuture') {
+            returnType = 'java.util.concurrent.CompletableFuture<Void>';
+        }
+
         returnType = returnType ? returnType + " " : returnType;
 
         const fnKeyword = this.FUNCTION_TOKEN ? this.FUNCTION_TOKEN + " " : "";
@@ -885,8 +890,8 @@ class BaseTranspiler {
             const body = this.printNode(node.body);
             return `(${parameters}) => ${body}`;
         }
-        let functionDef = this.printFunctionDefinition(node, identation);
         const funcBody = this.printFunctionBody(node, identation);
+        let functionDef = this.printFunctionDefinition(node, identation);
         functionDef += funcBody;
 
         return this.printNodeCommentsIfAny(node, identation, functionDef);

@@ -1267,6 +1267,11 @@ export class JavaTranspiler extends BaseTranspiler {
 
         let returnType = this.printFunctionType(node);
 
+        // quick fix
+        if (returnType === 'java.util.concurrent.CompletableFuture') {
+            returnType = 'java.util.concurrent.CompletableFuture<Void>';
+        }
+
         // let modifiers = this.printModifiers(node);
         const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " " : "";
         const modifiers = defaultAccess;
@@ -1581,6 +1586,17 @@ export class JavaTranspiler extends BaseTranspiler {
         return modifiers + " " + typeText + " ";
     }
 
+    printModifiers(node) {
+        let modifiers = node.modifiers;
+        if (modifiers === undefined) {
+            return "";
+        }
+        modifiers = modifiers.filter(mod => this.FuncModifiers[mod.kind]);
+        modifiers = modifiers.filter(mod => mod.kind !== ts.SyntaxKind.AsyncKeyword);
+        const res = modifiers.map(modifier => this.FuncModifiers[modifier.kind]).join(" ");
+
+        return res;
+    }
 
     printObjectLiteralExpression(node, identation) {
         const objectBody = this.printObjectLiteralBody(node, identation);
