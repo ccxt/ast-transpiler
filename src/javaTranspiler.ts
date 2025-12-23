@@ -1116,9 +1116,11 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printInstanceOfExpression(node, identation) {
-        const left = node.left.escapedText;
+        // const left = node.left.escapedText;
         const right = node.right.escapedText;
-        return this.getIden(identation) + `${left} instanceof ${right}`;
+        const left = this.printNode(node.left, 0);
+        // const right = this.printNode(node.right, 0);
+        return this.getIden(identation) + `Helpers.isInstance(${left}, ${right}.class)`;
     }
 
     printAwaitExpression(node, identation) {
