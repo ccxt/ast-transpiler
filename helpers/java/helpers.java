@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class Helpers {
@@ -742,5 +743,16 @@ public class Helpers {
         }
 
         return null;
+    }
+
+    public static Object split(Object str, Object splitter) {
+        if (str == null || splitter == null) {
+            return new String[0];
+        }
+
+        String s = String.valueOf(str);
+        String delim = String.valueOf(splitter);
+
+        return s.split(Pattern.quote(delim));
     }
 }

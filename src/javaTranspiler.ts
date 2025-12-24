@@ -1405,7 +1405,8 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printSplitCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)${name}).split((String)${parsedArg})))`;
+        // return `new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)${name}).split((String)${parsedArg})))`;
+        return `Helpers.split(${name}, ${parsedArg})`;
     }
 
     printConcatCall(_node, _identation, name = undefined, parsedArg = undefined) {
