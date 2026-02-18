@@ -303,6 +303,7 @@ describe('php transpiling tests', () => {
         "    public static a1: string[] = [ 'a', 'b' ];\n" +
         "    public static a2: any = whatever;\n" +
         "    public static a3: any = {};\n" +
+        "    public static a4: any = Whatever;\n" +
         "    mainFeature(message) {\n" +
         "        console.log(\"Hello! I'm inside main class:\" + message)\n" +
         "    }\n" +
@@ -312,8 +313,9 @@ describe('php transpiling tests', () => {
         "    public static $x = 10;\n" +
         "    public static $y = 'test';\n" +
         "    public static $a1 = ['a', 'b'];\n" +
-        "    public static $a2 = whatever;\n" +
+        "    public static $a2 = $whatever;\n" +
         "    public static $a3 = array();\n" +
+        "    public static $a4 = Whatever;\n" +
         "\n" +
         "    public function mainFeature($message) {\n" +
         "        var_dump('Hello! I\\'m inside main class:' . $message);\n" +
@@ -842,7 +844,7 @@ describe('php transpiling tests', () => {
         const output = transpiler.transpilePhp(ts).content;
         expect(output).toBe(php);
     });
-    test.only('transpile constants & imports', () => {
+    test('transpile constants & imports', () => {
         const ts = "import { decimalToPrecision, ROUND, TRUNCATE, DECIMAL_PLACES, } from '../../somewhere.js';\n" +
         "const exc = new xyz ();\n" +
         "assert (exc.decimalToPrecision ('12.3456000', TRUNCATE, 100, DECIMAL_PLACES) === '12.3456');";

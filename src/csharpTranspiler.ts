@@ -957,6 +957,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `((string)${name}).Replace((string)${parsedArg}, (string)${parsedArg2})`;
     }
 
+    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        return `((string)${name}).Replace((string)${parsedArg}, (string)${parsedArg2})`;
+    }
+
     printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
         return `(${name} as String).PadRight(Convert.ToInt32(${parsedArg}), Convert.ToChar(${parsedArg2}))`;
     }

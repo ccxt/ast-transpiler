@@ -1,6 +1,5 @@
-import { off } from "process";
 import { BaseTranspiler } from "./baseTranspiler.js";
-import ts, { TypeChecker } from 'typescript';
+import ts, { BinaryExpression, CallExpression, TypeChecker } from 'typescript';
 
 const SyntaxKind = ts.SyntaxKind;
 
@@ -72,6 +71,8 @@ export class GoTranspiler extends BaseTranspiler {
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
     className: string;
+    classNameMap: { [key: string]: string };
+    DEFAULT_RETURN_TYPE = 'interface{}';
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -86,8 +87,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.wrapThisCalls = false;
         this.id = "Go";
         this.className = "undefined";
-
-
+        this.classNameMap = config['classNameMap'] ?? {};
         this.initConfig();
 
         // user overrides
@@ -207,38 +207,51 @@ export class GoTranspiler extends BaseTranspiler {
     }
 
     printStruct(node, indentation) {
-        const className = node.name.escapedText;
 
         // check if we have heritage
         let heritageName = '';
         if (node?.heritageClauses?.length > 0) {
             const heritage = node.heritageClauses[0];
             const heritageType = heritage.types[0];
-            heritageName = this.getIden(indentation+1) + heritageType.expression.escapedText + '\n';
+            let heritageEscapedText = heritageType.expression.escapedText;
+            if (this.classNameMap[heritageEscapedText]) {
+                heritageEscapedText = this.classNameMap[heritageEscapedText];
+            }
+            heritageName = this.getIden(indentation+1) + heritageEscapedText + '\n';
         }
 
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
-        return `type ${className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
+        return `type ${this.className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
     }
 
     printNewStructMethod(node){
-        const className = node.name.escapedText;
         return `
-func New${this.capitalize(className)}() ${(className)} {
-   p := ${className}{}
-   setDefaults(&p)
-   return p
+func New${this.capitalize(this.className)}() *${(this.className)} {
+    p := &${this.className}{}
+    setDefaults(p)
+    return p
 }\n`;
+        // TO remove `return copies lock value: github.com/ccxt/ccxt/go/v4.bitvavoWs contains github.com/ccxt/ccxt/go/v4.bitvavo contains github.com/ccxt/ccxt/go/v4.Exchange contains sync.Mutex`
+        // change the return value to
+        //
+        //         return `
+        // func New${this.capitalize(className)}() *${(className)} {
+        //    p := ${className}{}
+        //    setDefaults(&p)
+        //    return &p
+        // }\n`;
+        //
 
     }
 
     printClass(node, identation) {
+        this.className = node.name.escapedText;
+        if (this.classNameMap[this.className]) {
+            this.className = this.classNameMap[this.className];
+        }
 
         const struct = this.printStruct(node, identation);
-
         const newMethod = this.printNewStructMethod(node);
-
-        this.className = node.name.escapedText;
 
         const methods = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
         const classMethods = methods.map(method => this.printMethodDeclaration(method, identation)).join("\n");
@@ -256,10 +269,12 @@ func New${this.capitalize(className)}() ${(className)} {
         return "";
     }
 
+    printSpreadElement(node, identation) {
+        const expression = this.printNode(node.expression, 0);
+        return this.getIden(identation) + expression + this.SPREAD_TOKEN;
+    }
+
     printMethodDeclaration(node, identation) {
-
-        const className = node.parent.name.escapedText;
-
 
         let methodDef = this.printMethodDefinition(node, identation);
 
@@ -272,8 +287,21 @@ func New${this.capitalize(className)}() ${(className)} {
         return methodDef;
     }
 
+    printFunctionDeclaration(node, identation) {
+        if (ts.isArrowFunction(node)) {
+            const parameters = node.parameters.map(param => this.printParameter(param)).join(", ");
+            const body = this.printNode(node.body);
+            return `(${parameters}) => ${body}`;
+        }
+        const isAsync = this.isAsyncFunction(node);
+        let functionDef = this.printFunctionDefinition(node, identation);
+        const funcBody = this.printFunctionBody(node, identation, isAsync);
+        functionDef += funcBody;
+
+        return this.printNodeCommentsIfAny(node, identation, functionDef);
+    }
+
     printMethodDefinition(node, identation) {
-        const className = node.parent.name.escapedText;
         let name = node.name.escapedText;
         name = this.transformMethodNameIfNeeded(name);
 
@@ -286,8 +314,27 @@ func New${this.capitalize(className)}() ${(className)} {
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
         // const methodDef = this.getIden(identation) + returnType + methodToken + name
         //     + "(" + parsedArgs + ")";
-        const structReceiver = `(${this.THIS_TOKEN} *${className})`;
+        const structReceiver = `(${this.THIS_TOKEN} *${this.className})`;
         const methodDef = this.getIden(identation) + methodToken + " " + structReceiver + " " + name + "(" + parsedArgs + ") " + returnType;
+
+        return this.printNodeCommentsIfAny(node, identation, methodDef);
+    }
+
+
+    printFunctionDefinition(node, identation) {
+        let name = node.name.escapedText;
+        name = this.transformMethodNameIfNeeded(name);
+
+        let returnType = this.printFunctionType(node);
+
+        const parsedArgs = this.printMethodParameters(node);
+
+        returnType = returnType ? returnType + " " : returnType;
+
+        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
+        // const methodDef = this.getIden(identation) + returnType + methodToken + name
+        //     + "(" + parsedArgs + ")";
+        const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ") " + returnType;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
     }
@@ -358,6 +405,12 @@ func New${this.capitalize(className)}() ${(className)} {
     printFunctionType(node){
         const typeText = this.getFunctionType(node);
         if (typeText === 'void') {
+            // // If the function is async (returns a Promise in TS) but declared void, emit a typed channel
+            // if (this.isAsyncFunction(node)) {
+            //     // Ensure element type is present; some edge cases yield '<- chan' only
+            //     const elementType = this.DEFAULT_RETURN_TYPE || 'interface{}';
+            //     return `<- chan ${elementType}`;
+            // }
             return "";
         }
         if (typeText === undefined || (typeText !== this.VOID_KEYWORD && typeText !== this.PROMISE_TYPE_KEYWORD)) {
@@ -370,6 +423,19 @@ func New${this.capitalize(className)}() ${(className)} {
             }
             this.warn(node, node.name.getText(), "Function return type not found, will default to: " + res);
             return res;
+        }
+        if (typeText === this.PROMISE_TYPE_KEYWORD) {
+            return `<- chan interface{}`;
+        }
+
+        // move any trailing array brackets "[]" to directly precede the element type
+        if (typeText && typeText.endsWith('[]')) {
+            const core = typeText.substring(0, typeText.length - 2); // drop []
+            const lastBracketPos = core.lastIndexOf(']');
+            if (lastBracketPos !== -1) {
+                // insert [] right after the last ']'
+                return core.substring(0, lastBracketPos + 1) + '[]' + core.substring(lastBracketPos + 1);
+            }
         }
         return typeText;
     }
@@ -423,7 +489,14 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             if (isNew) {
                 return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue;
             }
-            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + parsedValue;
+            const varName = this.printNode(declaration.name);
+            const stm = this.getIden(identation) + "var " + varName + " interface{} = " + parsedValue;
+            if (parsedValue.startsWith("<-this.callInternal(")) {
+                return `
+${stm}
+${this.getIden(identation)}PanicOnError(${varName})`;
+            }
+            return stm;
         }
 
         return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue.trim();
@@ -523,12 +596,24 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
 
     printElementAccessExpressionExceptionIfAny(node) {
-        // convert this[method] into this.call(method) or this.callAsync(method)
-    //    if (node?.expression?.kind === ts.SyntaxKind.ThisKeyword) {
-    //         const isAsyncDecl = node?.parent?.kind === ts.SyntaxKind.AwaitExpression;
-    //         const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
-    //         return open.replace('(', '');
-    //    }
+        // Fix malformed Split(...) element access where the index arg is mistakenly placed
+        // inside the Split call. We force the correct pattern: GetValue(Split(str, sep), idx)
+        const tsKind = ts.SyntaxKind;
+        if (node.expression.kind === tsKind.CallExpression) {
+            const callExp = node.expression;
+            const calleeText = callExp.expression.getText();
+            if (calleeText.endsWith('.split') || calleeText.toLowerCase().includes('split')) {
+                // print Split call normally (should already close with ))
+                let splitCall = this.printNode(callExp, 0).trim();
+                if (!splitCall.endsWith(')')) {
+                    splitCall += ')';
+                }
+                const idxArg = this.printNode(node.argumentExpression, 0);
+                return `GetValue(${splitCall}, ${idxArg})`;
+            }
+        }
+        // default: no exception
+        return undefined;
     }
 
     printWrappedUnknownThisProperty(node) {
@@ -574,9 +659,9 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                     let argsParsed = "";
                     if (args.length > 0) {
                         argsParsed = args.map((a) => this.printNode(a, 0)).join(", ");
-                        return `this.callInternal("${methodName}", ${argsParsed})`;
+                        return `<-this.callInternal("${methodName}", ${argsParsed})`;
                     }
-                    return `this.callInternal("${methodName}")`;
+                    return `<-this.callInternal("${methodName}")`;
                 }
             }
 
@@ -587,7 +672,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 // case "JSON.parse":
                 //     return `json_decode(${parsedArg}, $as_associative_array = true)`;
                 case "Math.abs":
-                    return `Math.Abs(Convert.ToDouble(${parsedArg}))`;
+                    return `mathAbs(${parsedArg})`;
                 }
             } else if (args.length === 2)
             {
@@ -599,7 +684,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 case "Math.max":
                     return `mathMax(${parsedArg1}, ${parsedArg2})`;
                 case "Math.pow":
-                    return `Math.Pow(Convert.ToDouble(${parsedArg1}), Convert.ToDouble(${parsedArg2}))`;
+                    return `MathPow(${parsedArg1}, ${parsedArg2})`;
                 }
             }
             const leftSide = node.expression?.expression;
@@ -662,15 +747,27 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         const op = node.operatorToken.kind;
 
-        if (left.kind === ts.SyntaxKind.TypeOfExpression) {
-            const typeOfExpression = this.handleTypeOfInsideBinaryExpression(node, identation);
-            if (typeOfExpression) {
-                return typeOfExpression;
-            }
-        }
+        // ---------------------------------------------------------------
+        // Array destructuring assignment:  [a, b] = foo()
+        // Transforms into:
+        // __tmpX := foo()
+        // a = GetValue(__tmpX, 0)
+        // b = GetValue(__tmpX, 1)
+        // ---------------------------------------------------------------
+        if (op === ts.SyntaxKind.EqualsToken &&
+            left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            // const elems = (left.elements as any[]);
+            // const returnRandName = "retRes" + this.getLineBasedSuffix(node);
+            // const rhs   = this.printNode(right, 0);
 
-        // handle: [x,d] = this.method()
-        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            // // build extraction lines
+            // const assignments = elems.map((el, idx) => {
+            //     const leftName = this.printNode(el, 0);
+            //     return `${leftName} = GetValue(${returnRandName}, ${idx})`;
+            // }).join(`\n${this.getIden(identation)}`);
+
+            // return `${returnRandName} := ${rhs}\n${this.getIden(identation)}${assignments}`;
+            //
             const arrayBindingPatternElements = left.elements;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
@@ -678,15 +775,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
-                // const type = this.getType(node);
-                // const parsedType = this.getTypeFromRawType(type);
-                const leftElement = arrayBindingPatternElements[index];
-                const leftType = global.checker.getTypeAtLocation(leftElement);
-                const parsedType = this.getTypeFromRawType(leftType);
 
-                const castExp = parsedType ? `(${parsedType})` : "";
-
-                // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
                 const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName},${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + ";\n";
@@ -697,6 +786,84 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             });
 
             return arrayBindingStatement;
+        }
+
+        // ---------------------------------------------------------------
+        // Go-style setter for element-access assignments:  a[b] = v
+        // ---------------------------------------------------------------
+        if (op === ts.SyntaxKind.EqualsToken &&
+            left.kind === ts.SyntaxKind.ElementAccessExpression) {
+            // Collect base container and all keys (inner-most key is last).
+            const keys: any[] = [];
+            let baseExpr: any = null;
+            let cur: any = left;
+            while (ts.isElementAccessExpression(cur)) {
+                keys.unshift(cur.argumentExpression);          // prepend
+                const expr = cur.expression;
+                if (!ts.isElementAccessExpression(expr)) {
+                    baseExpr = expr;
+                    break;
+                }
+                cur = expr;
+            }
+
+            const containerStr = this.printNode(baseExpr, 0);
+            const keyStrs      = keys.map(k => this.printNode(k, 0));
+
+            // Build GetValue(GetValue( ... )) chain for all but the last key.
+            let acc = containerStr;
+            for (let i = 0; i < keyStrs.length - 1; i++) {
+                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            }
+
+            const lastKey = keyStrs[keyStrs.length - 1];
+            const rhs     = this.printNode(right, 0);
+
+            return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
+        }
+
+        // ---------------------------------------------------------------
+        // Go-style setter for element-access compound assignments:  a[b] += v
+        // ---------------------------------------------------------------
+        if (op === ts.SyntaxKind.PlusEqualsToken &&
+            left.kind === ts.SyntaxKind.ElementAccessExpression) {
+            // Collect base container and all keys (inner-most key is last).
+            const keys: any[] = [];
+            let baseExpr: any = null;
+            let cur: any = left;
+            while (ts.isElementAccessExpression(cur)) {
+                keys.unshift(cur.argumentExpression);          // prepend
+                const expr = cur.expression;
+                if (!ts.isElementAccessExpression(expr)) {
+                    baseExpr = expr;
+                    break;
+                }
+                cur = expr;
+            }
+
+            const containerStr = this.printNode(baseExpr, 0);
+            const keyStrs      = keys.map(k => this.printNode(k, 0));
+
+            // Build GetValue(GetValue( ... )) chain for all but the last key.
+            let acc = containerStr;
+            for (let i = 0; i < keyStrs.length - 1; i++) {
+                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            }
+
+            const lastKey = keyStrs[keyStrs.length - 1];
+            const rhs     = this.printNode(right, 0);
+
+            // For +=, we need to get the current value, add to it, then set it back
+            const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            const result = `AddElementToObject(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
+            return result;
+        }
+
+        if (left.kind === ts.SyntaxKind.TypeOfExpression) {
+            const typeOfExpression = this.handleTypeOfInsideBinaryExpression(node, identation);
+            if (typeOfExpression) {
+                return typeOfExpression;
+            }
         }
 
         if (op === ts.SyntaxKind.InKeyword) {
@@ -872,6 +1039,11 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 shouldAddLastReturn = false;
             }
 
+            // Check if the function body ends with a conditional that has returns in all branches
+            if (node.body && this.blockEndsWithConditionalReturn(node.body.statements)) {
+                shouldAddLastReturn = false;
+            }
+
             const lastReturn = shouldAddLastReturn ? this.getIden(identation+2) + "return nil" : "";
             // const hasCatchInside = bodySplit.indexOf("recover()") > -1;
             // if ((1+1 == 2) || hasCatchInside) {
@@ -924,17 +1096,25 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
     printAwaitExpression(node, identation) {
         const expression = this.printNode(node.expression, identation);
+        if (expression.startsWith("<-")) {
+            return expression;
+        }
         return `(<-${expression})`;
     }
 
-    printInstanceOfExpression(node, identation) {
-        const left = node.left.escapedText;
-        const right = node.right.escapedText;
+    printInstanceOfExpression(node: BinaryExpression, identation: number): string {
+        const left = this.printNode (node.left);
+        const right = this.printNode (node.right);
         return this.getIden(identation) + `IsInstance(${left}, ${right})`;
     }
 
     getRandomNameSuffix() {
         return Math.floor(Math.random() * 1000000).toString();
+    }
+
+    getLineBasedSuffix(node): string {
+        const { line, character } = global.src.getLineAndCharacterOfPosition(node.getStart());
+        return `${line}${character}`;
     }
 
     printExpressionStatement(node, identation) {
@@ -948,7 +1128,9 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         const exprStm = this.printNode(node.expression, identation);
 
-        const returnRandName = "retRes" + this.getRandomNameSuffix();
+        // const { line, character } = global.src.getLineAndCharacterOfPosition(node.getStart());
+        // console.log(`line: ${line}, character: ${character}`);
+        const returnRandName = "retRes" + this.getLineBasedSuffix(node);
 
         // const expStatement =this.getIden(identation) + exprStm + this.LINE_TERMINATOR;
 
@@ -999,19 +1181,27 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         }
 
         if (node?.expression?.kind === ts.SyntaxKind.AwaitExpression) {
-            const returnRandName = "retRes" + this.getRandomNameSuffix();
+            // const returnRandName = "retRes" + this.getRandomNameSuffix();
+            const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
             rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
             // return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
             return `
     ${this.getIden(identation)}${returnRandName} := ${rightPart}
     ${this.getIden(identation)}PanicOnError(${returnRandName})
     ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
-    ${this.getIden(identation)}return ${returnRandName}`;
+    ${this.getIden(identation)}return nil`;
+            // ${this.getIden(identation)}return ${returnRandName}`;
+        }
+
+        if (rightPart.length === 0) {
+            return `\n${this.getIden(identation)}return nil`;
         }
 
         return `
 ${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
-${this.getIden(identation)}return ${rightPart}`;
+${this.getIden(identation)}return nil`;
+        // ${this.getIden(identation)}return ${rightPart}`;
+        // ${this.getIden(identation)}return ${rightPart}`;
     }
 
 
@@ -1143,8 +1333,18 @@ ${this.getIden(identation)}return ${rightPart}`;
         return `IsInt(${parsedArg})`;
     }
 
-    printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return  `AppendToArray(&${name},${parsedArg})`;
+    printArrayPushCall(node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
+        let returnValue = '';
+        let returnRandName = name;
+        if (name?.startsWith('GetValue')) {
+            returnRandName = "retRes" + this.getLineBasedSuffix(node);
+            returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
+        }
+        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
+        // works with:
+        //  func AppendToArray(slicePtr *interface{}, element interface{})
+        //  func AppendToArrayValue(slice interface{}, element interface{}) interface{}
+        //  func AppendToArraySafe(slice interface{}, element interface{}) interface{}
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -1196,7 +1396,7 @@ ${this.getIden(identation)}return ${rightPart}`;
     }
 
     printShiftCall(node, identation, name = undefined) {
-        return `Shift(${name}))`;
+        return `Shift(${name})`;
     }
 
     printReverseCall(node, identation, name = undefined) {
@@ -1221,6 +1421,10 @@ ${this.getIden(identation)}return ${rightPart}`;
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
+    }
+
+    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
         return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 
@@ -1350,11 +1554,11 @@ ${this.getIden(identation)}return ${rightPart}`;
                 return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
             }
 
-            if (right?.kind === ts.SyntaxKind.AwaitExpression) {
+            if (right?.kind === ts.SyntaxKind.AwaitExpression || rightSide.startsWith('<-this.callInternal')) {
                 const leftParsed = this.printNode(left, 0);
                 return `
-${leftParsed} = ${rightSide}
-${this.getIden(identation)}PanicOnError(${leftParsed})`;
+    ${leftParsed} = ${rightSide}
+    ${this.getIden(identation)}PanicOnError(${leftParsed})`;
             }
         }
 
@@ -1420,8 +1624,9 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
         return leftVar +" "+ operator + " " + rightVar.trim();
     }
 
-    printTryStatement(node, identation) {
+    printTryStatement(node, identation: number) {
         // const tryBody = this.printNode(node.tryBlock, 0);
+
         let tryBody = node.tryBlock.statements.map((s) => {
             return this.printNode(s, identation + 1);
         }).join("\n");
@@ -1429,40 +1634,61 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
 
         // const catchBody = this.printNode(node.catchClause.block, 0);
         const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-        const catchDeclaration = this.printNode(node.catchClause.variableDeclaration.name, 0);
 
-        const catchBodyHashReturn = catchBody.indexOf("return") > -1;
+        const catchLines = catchBody.split("\n").map(l => l.trim()).filter(Boolean);
+        const catchLastLine = catchLines.length ? catchLines[catchLines.length - 1] : "";
+        const catchBodyEndsWithReturn = catchLastLine.startsWith("return")
+            || catchLastLine.startsWith("panic")
+            || catchLastLine.startsWith("throw new")
+            || this.blockEndsWithConditionalReturn(node.catchClause.block.statements);
+
+        const tryLines = tryBody.split("\n").map(l => l.trim()).filter(Boolean);
+        const tryLastLine = tryLines.length ? tryLines[tryLines.length - 1] : "";
+        const tryBodyEndsWithReturn = tryLastLine.startsWith("return")
+            || tryLastLine.startsWith("panic")
+            || tryLastLine.startsWith("throw new")
+            || this.blockEndsWithConditionalReturn(node.tryBlock.statements);
+
         const returNil = "return nil";
-        const className = this.className;
+        const isVoid   = this.isInsideVoidFunction(node);
+
+        const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
+        const errorName = node.catchClause.variableDeclaration.name.escapedText;
+        const classPrefix = this.className !== 'undefined' ? `(this *${this.className})` : "()";
+        const thisWord = this.className !== 'undefined' ? "this" : "";
         const catchBlock =`
-{		ret__ := func(this *${className}) (ret_ any) {
-		defer func() {
-			if e := recover(); e != nil {
-                if e == "break" {
-				    return
-			    }
-				ret_ = func(this *${className}) any {
-					// catch block:
-                    ${catchBody}
-                    ${returNil}
-				}(this)
-			}
-		}()
-		// try block:
-        ${tryBody}
-		return nil
-	}(this)
-	if ret__ != nil {
-		return ret__
-	}
-}`;
+    {
+        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func${classPrefix} (ret_ interface{}) {
+		    defer func() {
+                if ${errorName} := recover(); ${errorName} != nil {
+                    if ${errorName} == "break" {
+                        return
+                    }
+                    ret_ = func${classPrefix} interface{} {
+                        // catch block:
+                        ${catchBody}
+                        ${catchBodyEndsWithReturn ? "" : returNil}
+                    }(${thisWord})
+                }
+            }()
+		    // try block:
+            ${tryBody}
+		    ${tryBodyEndsWithReturn ? "" : returNil}
+	    }(${thisWord})
+    ${nodeEndsWithReturn
+        ? `
+            if ret__ != nil {
+                return ret__
+            }
+            return nil`
+        : ''}
+        }`;
         // add identation
         const indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
         // const catchCondOpen = this.CONDITION_OPENING ? this.CONDITION_OPENING : " ";
 
         return indentedBlock;
     }
-
 
     printPrefixUnaryExpression(node, identation) {
         const {operand, operator} = node;
@@ -1483,9 +1709,123 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
             return `New${this.capitalize(expression)}()`;
         }
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
-        const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-        return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+        if (expression.endsWith('Error')) {
+            return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+        }
+        return 'New' + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }
+
+    /**
+     * Override the default element-access printer with a version that walks the
+     * entire `x[y][z]` chain and builds a properly nested sequence of helper
+     * calls.  This removes the root cause of the unbalanced-parenthesis bug
+     * without any post-processing or regex hacks.
+     */
+    printElementAccessExpression(node, identation) {
+        // Maintain original special-case handling first.
+        const special = this.printElementAccessExpressionExceptionIfAny(node);
+        if (special) {
+            return special;
+        }
+
+        // Always process element access expressions the same way
+        // The binary expression handler will override this for assignments
+
+        // For right-side access, build the full nested chain
+        const keys: any[] = [];
+        let baseExpr = null;
+        let current = node as any;
+        // Walk down while the *expression* is another ElementAccessExpression.
+        while (ts.isElementAccessExpression(current)) {
+            keys.unshift(current.argumentExpression); // prepend
+            const expr = current.expression;
+            if (!ts.isElementAccessExpression(expr)) {
+                // Reached the base container.
+                baseExpr = expr;
+                break;
+            }
+            current = expr;
+        }
+
+        const containerStr = this.printNode(baseExpr, 0);
+        const keyStrs = keys.map(k => this.printNode(k, 0));
+
+        // Now build nested helpers.
+        let acc = containerStr;
+        keyStrs.forEach(k => {
+            acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        });
+
+        return acc;
+    }
+
+    isInsideVoidFunction(node: ts.Node): boolean {
+        for (let cur = node.parent; cur; cur = cur.parent) {
+            if (ts.isFunctionLike(cur)) {
+                return cur.type === undefined || cur.type.kind === ts.SyntaxKind.VoidKeyword;
+            }
+        }
+        return true;          // default-to-void if uncertain
+    }
+
+    /**
+     * Check if a block or statement contains a return statement or throws an error
+     */
+    hasReturnInBlock(statement: ts.Statement): boolean {
+        if (ts.isBlock(statement)) {
+            // A sequence of statements returns on all control paths if the last statement returns on all control paths
+            if (statement.statements.length === 0) {
+                return false;
+            }
+            return this.hasReturnInBlock(statement.statements[statement.statements.length - 1]);
+        } else if (ts.isReturnStatement(statement)) {
+            return true;
+        } else if (ts.isThrowStatement(statement)) {
+            return true;
+        } else if (ts.isIfStatement(statement)) {
+            // An if statement returns on all control paths if both the "if" and "else" branches return on all control paths
+            const ifHasReturn = this.hasReturnInBlock(statement.thenStatement);
+            if (statement.elseStatement) {
+                const elseHasReturn = this.hasReturnInBlock(statement.elseStatement);
+                return ifHasReturn && elseHasReturn;
+            }
+            return false; // No else statement, so execution can continue
+        } else if (ts.isTryStatement(statement)) {
+            // A try statement returns on all control paths if both try and catch blocks return on all control paths
+            const tryHasReturn = this.hasReturnInBlock(statement.tryBlock);
+            const catchHasReturn = this.hasReturnInBlock(statement.catchClause.block);
+            return tryHasReturn && catchHasReturn;
+        }
+        return false;
+    }
+
+    /**
+     * Check if the last statement in a block is a conditional with returns in all branches
+     */
+    blockEndsWithConditionalReturn(statements: ts.NodeArray<ts.Statement>): boolean {
+        if (statements.length === 0) {
+            return false;
+        }
+
+        const lastStatement = statements[statements.length - 1];
+        if (ts.isIfStatement(lastStatement)) {
+            // Check if this if statement has returns in all branches (only if it has an else)
+            const ifHasReturn = this.hasReturnInBlock(lastStatement.thenStatement);
+            if (lastStatement.elseStatement) {
+                const elseHasReturn = this.hasReturnInBlock(lastStatement.elseStatement);
+                return ifHasReturn && elseHasReturn;
+            }
+        }
+        if (ts.isTryStatement(lastStatement)) {
+            // Check if this try statement has returns in both try and catch blocks
+            const tryHasReturn = this.hasReturnInBlock(lastStatement.tryBlock);
+            const catchHasReturn = this.hasReturnInBlock(lastStatement.catchClause.block);
+            return tryHasReturn && catchHasReturn;
+        }
+        return false;
+    }
+
+
 }
 
 
