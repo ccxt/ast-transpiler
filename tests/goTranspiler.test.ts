@@ -23,7 +23,7 @@ beforeAll(() => {
 describe('go transpiling tests', () => {
     test('basic variable declaration', () => {
         const ts = "const x = 1;"
-        const go = "var x interface{} = 1"
+        const go = "var x any = 1"
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
     });
@@ -35,7 +35,7 @@ describe('go transpiling tests', () => {
         "}"
         const go =
         "for true {\n" +
-        "    var x interface{} = 1\n" +
+        "    var x any = 1\n" +
         "    break\n" +
         "}";
         const output = transpiler.transpileGo(ts).content;
@@ -59,7 +59,7 @@ describe('go transpiling tests', () => {
         "   return p\n"+
         "}\n"+
         "\n"+
-        "func  (this *Test) Main() interface{}  {\n"+
+        "func  (this *Test) Main() any  {\n"+
         "    return 1\n"+
         "}";
         const output = transpiler.transpileGo(ts).content;
@@ -76,13 +76,13 @@ describe('go transpiling tests', () => {
         "    const f = 1;\n" +
         "}";
         const go =
-        "var a interface{} = \"hi\"\n" +
-        "var b interface{} = false\n" +
-        "var c interface{} = IsTrue(a) && IsTrue(b)\n" +
-        "var d interface{} = !IsTrue(a) && !IsTrue(b)\n" +
-        "var e interface{} = (IsTrue(a) || !IsTrue(b))\n" +
+        "var a any = \"hi\"\n" +
+        "var b any = false\n" +
+        "var c any = IsTrue(a) && IsTrue(b)\n" +
+        "var d any = !IsTrue(a) && !IsTrue(b)\n" +
+        "var e any = (IsTrue(a) || !IsTrue(b))\n" +
         "if IsTrue(a) {\n" +
-        "    var f interface{} = 1\n" +
+        "    var f any = 1\n" +
         "}"
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -111,15 +111,15 @@ describe('go transpiling tests', () => {
     "   return p\n"+
     "}\n"+
     "\n"+
-    "func  (this *A) Main() interface{}  {\n"+
+    "func  (this *A) Main() any  {\n"+
     "    \n"+
-    "    {		ret__ := func(this *A) (ret_ interface{}) {\n"+
+    "    {		ret__ := func(this *A) (ret_ any) {\n"+
     "    		defer func() {\n"+
-    "    			if e := recover().(interface{}); e != nil {\n"+
+    "    			if e := recover().(any); e != nil {\n"+
     "                    if e == \"break\" {\n"+
     "    				    return\n"+
     "    			    }\n"+
-    "    				ret_ = func(this *A) interface{} {\n"+
+    "    				ret_ = func(this *A) any {\n"+
     "    					// catch block:\n"+
     "                                return 2\n"+
     "    					return nil\n"+

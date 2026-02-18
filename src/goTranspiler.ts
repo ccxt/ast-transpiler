@@ -6,8 +6,8 @@ const SyntaxKind = ts.SyntaxKind;
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
-    'OBJECT_OPENING': 'map[string]interface{} {',
-    'ARRAY_OPENING_TOKEN': '[]interface{}{',
+    'OBJECT_OPENING': 'map[string]any {',
+    'ARRAY_OPENING_TOKEN': '[]any{',
     'ARRAY_CLOSING_TOKEN': '}',
     'PROPERTY_ASSIGNMENT_TOKEN': ':',
     'VAR_TOKEN': 'object', // object
@@ -52,9 +52,9 @@ const parserConfig = {
     'MOD_WRAPPER_OPEN': 'Mod(',
     'MOD_WRAPPER_CLOSE': ')',
     'FUNCTION_TOKEN': 'func',
-    'DEFAULT_RETURN_TYPE': 'interface{}',
+    'DEFAULT_RETURN_TYPE': 'any',
     'BLOCK_OPENING_TOKEN': '{',
-    'DEFAULT_PARAMETER_TYPE': 'interface{}',
+    'DEFAULT_PARAMETER_TYPE': 'any',
     'LINE_TERMINATOR': '',
     'CONDITION_OPENING':'',
     'CONDITION_CLOSE':'',
@@ -184,9 +184,9 @@ export class GoTranspiler extends BaseTranspiler {
         // let modifiers = this.printModifiers(node);
         // modifiers = modifiers ? modifiers + " " : modifiers;
         const name = this.capitalize(this.printNode(node.name, 0));
-        let type = 'interface{}';
+        let type = 'any';
         if (node.type === undefined) {
-            type = 'interface{}';
+            type = 'any';
         } else if (node.type.kind === SyntaxKind.StringKeyword) {
             type = 'string';
         } else if (node.type.kind === SyntaxKind.NumberKeyword) {
@@ -194,7 +194,7 @@ export class GoTranspiler extends BaseTranspiler {
         } else if (node.type.kind === SyntaxKind.BooleanKeyword || (ts as any).isBooleanLiteral(node)) {
             type = 'bool';
         } else if (node.type.kind === SyntaxKind.ArrayType) {
-            type = '[]interface{}';
+            type = '[]any';
         }
         if (node.initializer) {
             // we have to save the value and initialize it later
@@ -299,7 +299,7 @@ func New${this.capitalize(className)}() ${(className)} {
             return params.join(", ");
         }
         const paramsWithOptional = params.filter(param => param !== 'optional');
-        paramsWithOptional.push('optionalArgs ...interface{}');
+        paramsWithOptional.push('optionalArgs ...any');
         return paramsWithOptional.join(", ");
     }
 
@@ -331,7 +331,7 @@ func New${this.capitalize(className)}() ${(className)} {
         // // }
 
         //tmp default to interface
-        return 'interface{}';
+        return 'any';
 
         if (typeText === this.STRING_KEYWORD) {
             return 'string';
@@ -416,21 +416,21 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         const parsedValue = (declaration.initializer) ? this.printNode(declaration.initializer, identation) : this.NULL_TOKEN;
 
         if (parsedValue === this.UNDEFINED_TOKEN) {
-            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " interface{} = " + parsedValue;
+            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + parsedValue;
         }
 
         if (node?.parent?.kind === ts.SyntaxKind.FirstStatement) {
             if (isNew) {
                 return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue;
             }
-            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " interface{} = " + parsedValue;
+            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + parsedValue;
         }
 
         return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue.trim();
     }
 
     // printObjectLiteralExpression(node, identation) {
-    //     const objectCreation = 'make(map[string]interface{}) {';
+    //     const objectCreation = 'make(map[string]any) {';
     //     let formattedObjectBody = '{}';
     //     if (node.properties?.length > 0) {
     //         const objectBody = this.printObjectLiteralBody(node, identation);
@@ -877,7 +877,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             // if ((1+1 == 2) || hasCatchInside) {
             functionBody = `{
         ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-        ${this.getIden(identation + 1)}go func() interface{} {
+        ${this.getIden(identation + 1)}go func() any {
         ${this.getIden(identation + 2)}defer close(ch)
         ${this.getIden(identation + 2)}defer ReturnPanicError(ch)
         ${bodyWithIndentationExtraAndNoReturn}
@@ -888,10 +888,10 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             // } else {
             // functionBody = `{
             // ${id1}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-            // ${id1}var panicError interface{} = nil
+            // ${id1}var panicError any = nil
             // ${id1}var wg sync.WaitGroup
             // ${id1}wg.Add(1)
-            // ${id1}go func() interface{} {
+            // ${id1}go func() any {
             // ${id2}defer wg.Done()
             // ${id2}defer close(ch)
             // ${id2}defer func() {
@@ -1058,7 +1058,7 @@ ${this.getIden(identation)}return ${rightPart}`;
                 // to do check this later
                 if (type === undefined || elements.indexOf(this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN) > -1) {
                     // if (type === undefined) {
-                    arrayOpen = "[]interface{}{";
+                    arrayOpen = "[]any{";
                     // }
                     //  else {
                     //     arrayOpen = "new List<Task<object>> {";
@@ -1073,7 +1073,7 @@ ${this.getIden(identation)}return ${rightPart}`;
                     //     type = 'object';
                     // }
                     // type =
-                    arrayOpen = `[]interface{}{`;
+                    arrayOpen = `[]any{`;
                 }
             }
         }
@@ -1435,13 +1435,13 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
         const returNil = "return nil";
         const className = this.className;
         const catchBlock =`
-{		ret__ := func(this *${className}) (ret_ interface{}) {
+{		ret__ := func(this *${className}) (ret_ any) {
 		defer func() {
 			if e := recover(); e != nil {
                 if e == "break" {
 				    return
 			    }
-				ret_ = func(this *${className}) interface{} {
+				ret_ = func(this *${className}) any {
 					// catch block:
                     ${catchBody}
                     ${returNil}
