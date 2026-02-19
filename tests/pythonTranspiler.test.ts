@@ -55,7 +55,7 @@ describe('python tests', () => {
         "    return 1;\n" +
         "}"
         const python =
-        "def teste():\n" +
+        "def teste(self):\n" +
         "    return 1";
         const output = transpiler.transpilePython(ts).content;
         expect(output).toBe(python);
@@ -66,7 +66,7 @@ describe('python tests', () => {
         "    return 1;\n" +
         "}"
         const python =
-        "def teste(x='foo', y=None, params={}):\n" +
+        "def teste(self, x='foo', y=None, params={}):\n" +
         "    return 1"
         const output = transpiler.transpilePython(ts).content;
         expect(output).toBe(python);
@@ -78,7 +78,7 @@ describe('python tests', () => {
         "}\n" +
         "processNumbers(5, 10, printResult);";
         const py =
-        "def printResult(result):\n" +
+        "def printResult(self, result):\n" +
         "    return\n" +
         "processNumbers(5, 10, printResult)";
         const output = transpiler.transpilePython(ts).content;
@@ -90,7 +90,7 @@ describe('python tests', () => {
         "    return a + 1;\n" +
         "};\n";
         const python =
-        "def consumer(a):\n" +
+        "def consumer(self, a):\n" +
         "    return a + 1";
         const output = transpiler.transpilePython(ts).content;
         expect(output).toBe(python);
@@ -127,7 +127,7 @@ describe('python tests', () => {
         "    }\n" +
         "}";
         const python =
-        "def teste():\n" +
+        "def teste(self):\n" +
         "    if 1:\n" +
         "        x = 1\n" +
         "    elif 3:\n" +
@@ -209,7 +209,7 @@ describe('python tests', () => {
         "    await this.loadMarkets();\n" +
         "}"
         const python =
-        "async def camelCase():\n" +
+        "async def camelCase(self):\n" +
         "    self.myFunc()\n" +
         "    await self.loadMarkets()"
         const output = transpiler.transpilePython(ts).content;
@@ -223,7 +223,7 @@ describe('python tests', () => {
         "    await this.loadMarkets();\n" +
         "}"
         const python =
-        "def camelCase():\n" +
+        "def camelCase(self):\n" +
         "    self.myFunc()\n" +
         "    self.loadMarkets()"
         const output = transpiler.transpilePython(ts).content;
@@ -377,7 +377,7 @@ describe('python tests', () => {
         "    throw new InvalidOrder (\"error\")\n" +
         "}";
         const python =
-        "def test():\n" +
+        "def test(self):\n" +
         "    raise InvalidOrder('error')";
         const output = transpiler.transpilePython(ts).content;
         expect(output).toBe(python);
@@ -611,7 +611,7 @@ describe('python tests', () => {
         "    myFunc()\n" +
         "}";
         const python =
-        "def camel_case():\n" +
+        "def camel_case(self):\n" +
         "    self.my_func()\n" +
         "    my_func()";
         const output = transpiler.transpilePython(ts).content;
@@ -641,7 +641,7 @@ describe('python tests', () => {
         "    return 1;\n" +
         "}";
         const python =
-        "def fetchStatus(params):\n" +
+        "def fetchStatus(self, params):\n" +
         "    \"\"\"\n" +
         "    the latest known information on the availability of the exchange API\n" +
         "    :param dict params: extra parameters specific to the aax api endpoint\n" +
@@ -660,7 +660,7 @@ describe('python tests', () => {
         "    const x = 1;\n" +
         "}";
         const python =
-        "def test():\n" +
+        "def test(self):\n" +
         "    # comment 1\n" +
         "    # comment 2\n" +
         "    # comment 3\n" +
