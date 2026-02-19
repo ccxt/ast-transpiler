@@ -2,6 +2,7 @@ import ts from 'typescript';
 import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType } from './types.js';
 import { unCamelCase } from "./utils.js";
 import { Logger } from "./logger.js";
+import { timingSafeEqual } from 'crypto';
 class BaseTranspiler {
 
     NUM_LINES_BETWEEN_CLASS_MEMBERS = 1;
@@ -176,12 +177,15 @@ class BaseTranspiler {
 
     CallExpressionReplacements = {};
     ReservedKeywordsReplacements = {};
+    ReassignedVars = {};
     PropertyAccessRequiresParenthesisRemoval = [];
     VariableTypeReplacements = {};
     ArgTypeReplacements = {};
 
     FuncModifiers = {};
     defaultPropertyAccess = 'public';
+
+    currentClassName = "";
 
     uncamelcaseIdentifiers;
     asyncTranspiling;
@@ -476,13 +480,19 @@ class BaseTranspiler {
                 return `${this.COMPARISON_WRAPPER_OPEN}${leftVar}, ${rightVar}${this.COMPARISON_WRAPPER_CLOSE}`;
             }
         }
-
+        let prefixes = "";
         // check if boolean operators || and && because of the falsy values
         if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
             leftVar = this.printCondition(left, 0);
             rightVar = this.printCondition(right, identation);
         }  else {
             leftVar = this.printNode(left, 0);
+
+
+            // if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            prefixes = this.getBinaryExpressionPrefixes(node, identation) ?? "";
+            // }
+
             rightVar = this.printNode(right, identation);
         }
 
@@ -490,7 +500,11 @@ class BaseTranspiler {
 
         operator = customOperator ? customOperator : operator;
 
-        return leftVar +" "+ operator + " " + rightVar.trim();
+        return prefixes + leftVar +" "+ operator + " " + rightVar.trim();
+    }
+
+    getBinaryExpressionPrefixes(node, identation) {
+        return undefined;
     }
 
     transformPropertyAcessExpressionIfNeeded (node) {
@@ -836,16 +850,23 @@ class BaseTranspiler {
         return typeText;
     }
 
+
     printFunctionDefinition(node, identation) {
         let name = node.name?.escapedText ?? "";
         name = this.transformFunctionNameIfNeeded(name);
 
-        const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
+        // const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
+        const parsedArgs = this.printMethodParameters(node);
 
         let modifiers = this.printModifiers(node);
         modifiers = modifiers ? modifiers + " " : modifiers;
 
         let returnType = this.printFunctionType(node);
+        // quick fix
+        if (returnType === 'java.util.concurrent.CompletableFuture') {
+            returnType = 'java.util.concurrent.CompletableFuture<Void>';
+        }
+
         returnType = returnType ? returnType + " " : returnType;
 
         const fnKeyword = this.FUNCTION_TOKEN ? this.FUNCTION_TOKEN + " " : "";
@@ -871,8 +892,8 @@ class BaseTranspiler {
             const body = this.printNode(node.body);
             return `(${parameters}) => ${body}`;
         }
-        let functionDef = this.printFunctionDefinition(node, identation);
         const funcBody = this.printFunctionBody(node, identation);
+        let functionDef = this.printFunctionDefinition(node, identation);
         functionDef += funcBody;
 
         return this.printNodeCommentsIfAny(node, identation, functionDef);
@@ -1120,6 +1141,10 @@ class BaseTranspiler {
         return undefined; // stub
     }
 
+    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        return undefined; // stub
+    }
+
     printToStringCall(node, identation, name = undefined) {
         return undefined; // stub
     }
@@ -1266,6 +1291,8 @@ class BaseTranspiler {
                         return this.printSliceCall(node, identation, name, parsedArg, parsedArg2);
                     case 'replace':
                         return this.printReplaceCall(node, identation, name, parsedArg, parsedArg2);
+                    case 'replaceAll':
+                        return this.printReplaceAllCall(node, identation, name, parsedArg, parsedArg2);
                     }
                 }
             }
@@ -1322,17 +1349,27 @@ class BaseTranspiler {
         return parsedMembers.join("\n");
     }
 
+    getCustomClassName(node) {
+        return node.name.escapedText;
+    }
+
+    getClassModifier(node) {
+        return "";
+    }
+
     printClassDefinition(node, identation) {
-        const className = node.name.escapedText;
+        const className = this.getCustomClassName(node);
+        this.currentClassName = className;
         const heritageClauses = node.heritageClauses;
+        const classModifier = this.getClassModifier(node);
 
         let classInit = "";
         const classOpening = this.getBlockOpen(identation);
         if (heritageClauses !== undefined) {
             const classExtends = heritageClauses[0].types[0].expression.escapedText;
-            classInit = this.getIden(identation) + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
+            classInit = this.getIden(identation) + classModifier + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
         } else {
-            classInit = this.getIden(identation) + "class " + className + classOpening;
+            classInit = this.getIden(identation) + classModifier + "class " + className + classOpening;
         }
         return classInit;
     }
@@ -1409,7 +1446,6 @@ class BaseTranspiler {
     }
 
     printObjectLiteralExpression(node, identation) {
-
         const objectBody = this.printObjectLiteralBody(node, identation);
         const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(identation) : objectBody;
         return  this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
@@ -1497,13 +1533,20 @@ class BaseTranspiler {
                 if (this.id === "C#") {
                     const cast = ts.isStringLiteralLike(argumentExpression) ? "" : '(string)';
                     return `((IDictionary<string,object>)${expressionAsString})[${cast}${argumentAsString}]`;
+                } else if (this.id === "Java") {
+                    return `((java.util.HashMap<String, Object>)${expressionAsString}).get(${argumentAsString})`;
                 }
                 // if (this.id === "Go") {
                 //     return `AddElementToObject(${expressionAsString}, ${argumentAsString})`;
                 // }
 
             }
-            return `((${this.ARRAY_KEYWORD})${expressionAsString})[Convert.ToInt32(${argumentAsString})]`;
+            if (this.id === "C#") {
+                return `((${this.ARRAY_KEYWORD})${expressionAsString})[Convert.ToInt32(${argumentAsString})]`;
+            } else if (this.id === "Java") {
+                return `((java.util.List<Object>)${expressionAsString}).get(Helpers.toInt(${argumentAsString}))`;
+            }
+
         }
 
         return expressionAsString + "[" + argumentAsString + "]";
@@ -1573,6 +1616,10 @@ class BaseTranspiler {
         if (node.expression.kind === ts.SyntaxKind.AsExpression) {
             // transform (this as any) into this, () and as any are not necessary
             return this.getIden(identation) + this.printNode(node.expression, 0);
+        }
+        if (node.expression.kind === ts.SyntaxKind.ArrowFunction) {
+            // ignore arrowFunctions inside parenthesis
+            return "";
         }
         return this.getIden(identation) + this.LEFT_PARENTHESIS + this.printNode(node.expression, 0) + this.RIGHT_PARENTHESIS;
     }
@@ -1686,14 +1733,21 @@ class BaseTranspiler {
         if (this.isCJSModuleExportsExpressionStatement(node)) {
             return ""; // remove module.exports = ...
         }
+
+        const expressionStatementPrefixes = this.getExpressionStatementPrefixesIfAny(node, identation) ?? "";
+
         const exprStm = this.printNode(node.expression, identation);
 
         // skip empty statements
         if (exprStm.length === 0) {
             return "";
         }
-        const expStatement = this.getIden(identation) + exprStm + this.LINE_TERMINATOR;
+        const expStatement = expressionStatementPrefixes + this.getIden(identation) + exprStm + this.LINE_TERMINATOR;
         return this.printNodeCommentsIfAny(node, identation, expStatement);
+    }
+
+    getExpressionStatementPrefixesIfAny(node, identation) {
+        return undefined;
     }
 
     printPropertyDeclaration(node, identation) {
@@ -1727,6 +1781,10 @@ class BaseTranspiler {
 
     printDeleteExpression (node, identation) {
         return undefined;
+    }
+
+    printThisKeyword(node, identation) {
+        return this.THIS_TOKEN;
     }
 
     printNode(node, identation = 0): string {
@@ -1781,17 +1839,17 @@ class BaseTranspiler {
             } else if ((ts as any).isBooleanLiteral(node)) {
                 return this.printBooleanLiteral(node);
             } else if (ts.SyntaxKind.ThisKeyword === node.kind) {
-                return this.THIS_TOKEN;
+                return this.printThisKeyword(node, identation);
             } else if (ts.SyntaxKind.SuperKeyword === node.kind) {
                 return this.SUPER_TOKEN;
             }else if (ts.isTryStatement(node)){
                 return this.printTryStatement(node, identation);
             } else if (ts.isPrefixUnaryExpression(node)) {
                 return this.printPrefixUnaryExpression(node, identation);
-            } else if (ts.isNewExpression(node)) {
-                return this.printNewExpression(node, identation);
             } else if (ts.isThrowStatement(node)) {
                 return this.printThrowStatement(node, identation);
+            } else if (ts.isNewExpression(node)) {
+                return this.printNewExpression(node, identation);
             } else if (ts.isAwaitExpression(node)) {
                 return this.printAwaitExpression(node, identation);
             } else if (ts.isConditionalExpression(node)) {

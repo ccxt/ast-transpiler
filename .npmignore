@@ -5,3 +5,12 @@ node_modules/
 tests/
 manual.ts
 out/
+integration/
+*.java
+*.cs
+*.go
+*.py
+*.cpp
+*.php
+helpers/
+java-demo/
