@@ -623,6 +623,38 @@ func MathRound(v interface{}) float64 {
 	return 0
 }
 
+func MathPow(base interface{}, exp interface{}) float64 {
+	baseFloat, baseOk := base.(float64)
+	expFloat, expOk := exp.(float64)
+	if baseOk && expOk {
+		return math.Pow(baseFloat, expFloat)
+	}
+	return 0
+}
+
+func MathAbs(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return math.Abs(n)
+	case float32:
+		return math.Abs(float64(n))
+	case int:
+		return math.Abs(float64(n))
+	case int64:
+		return math.Abs(float64(n))
+	case int32:
+		return math.Abs(float64(n))
+	case int16:
+		return math.Abs(float64(n))
+	case int8:
+		return math.Abs(float64(n))
+	case uint, uint64, uint32, uint16, uint8:
+		return float64(reflect.ValueOf(n).Uint()) // no need for Abs on unsigned values
+	default:
+		return 0
+	}
+}
+
 // StartsWith checks if the string starts with the specified prefix
 func StartsWith(v interface{}, prefix interface{}) bool {
 	if str, ok := v.(string); ok {
@@ -1254,4 +1286,31 @@ func Concat(first interface{}, second interface{}) interface{} {
 
 	// Return the concatenated slice as an interface{}
 	return result.Interface()
+}
+
+func setDefaults(p interface{}) {
+	// Get the value of the pointer to struct
+	val := reflect.ValueOf(p).Elem()
+	typ := val.Type()
+
+	// Iterate over the fields of the struct using reflection
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		fieldType := typ.Field(i)
+		if value, ok := fieldType.Tag.Lookup("default"); ok {
+			switch field.Kind() {
+			case reflect.String:
+				if field.String() == "" {
+					field.SetString(value)
+				}
+			case reflect.Int:
+				if field.Int() == 0 {
+					if intValue, err := strconv.Atoi(value); err == nil {
+						field.SetInt(int64(intValue))
+					}
+				}
+				// Add other types as necessary
+			}
+		}
+	}
 }

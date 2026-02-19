@@ -1,6 +1,6 @@
 {
   "name": "ast-transpiler",
-  "version": "0.0.55",
+  "version": "0.0.78",
   "type": "module",
   "module": "./dist/transpiler.js",
   "types": "./dist/transpiler.d.ts",
@@ -16,22 +16,24 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ccxt/ast-transpiler"
+    "url": "git+https://github.com/ccxt/ast-transpiler.git"
   },
   "readme": "README.md",
   "scripts": {
-    "build": "npm run lint &&  tsup src/transpiler.ts --format cjs,esm --dts --clean --splitting --shims",
+    "build": "npm run lint &&  tsup src/transpiler.ts --format cjs,esm --dts --clean --splitting --shims --sourcemap",
     "build2": "npm run lint && tsc",
-    "start": "node --loader ts-node/esm manual.ts",
-    "start-py": "node --loader ts-node/esm src/pythonTranspiler.ts",
+    "start": "tsx manual.ts",
+    "start-py": "tsx src/pythonTranspiler.ts",
     "test-ci": "jest --ci --coverage",
     "test": "jest --verbose",
     "testv": "jest --verbose --coverage",
-    "integration": "node --loader ts-node/esm tests/integration/test.ts",
+    "integration": "tsx tests/integration/test.ts",
     "lint": "eslint src/ --ext .ts",
     "publishPackage": "sh publish.sh && git push && git push --tags && npm publish"
   },
   "devDependencies": {
+    "@types/eslint": "^8.56.12",
+    "@types/estree": "^1.0.8",
     "@types/jest": "^29.2.0",
     "@types/node": "^18.11.4",
     "@typescript-eslint/eslint-plugin": "^5.42.0",
@@ -41,7 +43,8 @@
     "test-jest": "^1.0.1",
     "ts-jest": "^29.0.3",
     "ts-node": "^10.9.1",
-    "tsup": "^6.4.0"
+    "tsup": "^6.4.0",
+    "tsx": "^4.20.6"
   },
   "dependencies": {
     "colorette": "^2.0.19",

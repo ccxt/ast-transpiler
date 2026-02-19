@@ -6,14 +6,28 @@ import (
 )
 
 type Second struct {
-
+    MyClassProperty string `default:"classProp"`
 }
+
+func NewSecond() Second {
+   p := Second{}
+   setDefaults(&p)
+   return p
+}
+
 func  (this *Second) StringifyNumber(arg interface{}) interface{}  {
     return ToString(arg)
 }
 type Test struct {
 
 }
+
+func NewTest() Test {
+   p := Test{}
+   setDefaults(&p)
+   return p
+}
+
 func  (this *Test) Test()  {
     var a interface{} = 1
     var b interface{} = 2
@@ -22,6 +36,9 @@ func  (this *Test) Test()  {
     var s1 interface{} = "a"
     var s2 interface{} = "b"
     var s3 interface{} = Add(s1, s2)
+    var stringVar interface{} = nil
+    stringVar = "hello"
+    fmt.Println(stringVar) // should print "hello"
     fmt.Println(s3) // should print "ab"
     var x interface{} = false
     if IsTrue(x) {
@@ -29,8 +46,9 @@ func  (this *Test) Test()  {
     } else {
         fmt.Println("x is false") // should print "x is false"
     }
-    instance := new(Second)
+    instance := NewSecond()
     fmt.Println(instance.StringifyNumber(4)) // should print 4
+    fmt.Println(instance.MyClassProperty) // should print "classProp"
     var arr interface{} = []interface{}{1, 2, 3, 4}
     fmt.Println(GetArrayLength(arr)) // should print 4
     var first interface{} = GetValue(arr, 0)
@@ -56,4 +74,9 @@ func  (this *Test) Test()  {
     var dictKeys interface{} = ObjectKeys(dict2)
     fmt.Println(GetArrayLength(dictKeys)) // should print 1
     fmt.Println(GetValue(dictKeys, 0)) // should print "b"
+    var firstConcat interface{} = []interface{}{"a", "b"}
+    var secondConcat interface{} = []interface{}{"c", "d"}
+    var both interface{} = Concat(firstConcat, secondConcat)
+    fmt.Println(GetArrayLength(both)) // should print 4
+    fmt.Println(GetValue(both, 2)) // should print "c"
 }

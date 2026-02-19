@@ -313,6 +313,7 @@ describe('php transpiling tests', () => {
         "    public static $x = 10;\n" +
         "    public static $y = 'test';\n" +
         "    public static $a1 = ['a', 'b'];\n" +
+
         "    public static $a2 = array();\n" +
         "    public static $a3 = $whateverCamelConstant;\n" +
         "    public static $a4 = UppercaseConstant;\n" +

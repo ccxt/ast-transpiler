@@ -220,6 +220,10 @@ export class PhpTranspiler extends BaseTranspiler {
         return `str_replace(${parsedArg}, ${parsedArg2}, ${name})`;
     }
 
+    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        return `str_replace(${parsedArg}, ${parsedArg2}, ${name})`;
+    }
+
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
         // "ol".includes("o") -> str_contains("ol", "o") or [12,3,4].includes(3) -> in_array(3, [12,3,4])
         const leftSide = node.expression?.expression;

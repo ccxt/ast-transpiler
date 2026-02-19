@@ -2,6 +2,8 @@
 #!/bin/bash
 set -e
 
+npm run build
+
 # release defaults to patch (last number in semver)
 RELEASE="patch" && [ -n "$1" ] && RELEASE=$1
 

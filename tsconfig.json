@@ -7,9 +7,13 @@
         "target": "es2021",
         "allowSyntheticDefaultImports": true,
         "esModuleInterop": true,
-        "declaration": true
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+        "rootDir": "./src",
+        "skipLibCheck": true
     },
-        "include": [
+    "include": [
         "./src/**/*"
     ]
 }

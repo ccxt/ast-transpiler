@@ -1,6 +1,8 @@
 namespace tests;
 class Second
 {
+    public string myClassProperty = "classProp";
+
     public virtual object stringifyNumber(object arg)
     {
         return ((object)arg).ToString();
@@ -31,6 +33,7 @@ partial class Test
         }
         var instance = new Second();
         Console.WriteLine(instance.stringifyNumber(4)); // should print 4
+        Console.WriteLine(instance.myClassProperty); // should print "classProp"
         object arr = new List<object>() {1, 2, 3, 4};
         Console.WriteLine(getArrayLength(arr)); // should print 4
         object first = getValue(arr, 0);
@@ -57,5 +60,10 @@ partial class Test
         object dictKeys = new List<object>(((IDictionary<string,object>)dict2).Keys);
         Console.WriteLine(getArrayLength(dictKeys)); // should print 1
         Console.WriteLine(getValue(dictKeys, 0)); // should print "b"
+        object firstConcat = new List<object>() {"a", "b"};
+        object secondConcat = new List<object>() {"c", "d"};
+        object both = concat(firstConcat, secondConcat);
+        Console.WriteLine(getArrayLength(both)); // should print 4
+        Console.WriteLine(getValue(both, 2)); // should print "c"
     }
 }

@@ -1,12 +1,38 @@
 
 class Second {
 
+    myClassProperty: string = "classProp";
+    myBoolProp: boolean = false;
     public stringifyNumber(arg: number) {
         return arg.toString();
     }
 }
 
 class Test {
+
+    public functionWithOptionals(a: string, c: number | undefined = undefined, d = 1) {
+        console.log(a);
+        if (c !== undefined) {
+            console.log(c);
+        }
+        if (d !== undefined) {
+            console.log(d);
+        }
+    }
+
+    public getValue(x) {
+        return x;
+    }
+
+    public testJavaScope() {
+        const newObject = {
+            'a': this.getValue(5),
+            'b': this.getValue(this.getValue(this.getValue(2)))
+        };
+
+        console.log(newObject['a']); // should print 5
+        console.log(newObject['b']); // should print 2
+    }
 
     public test() {
         var a = 1;
@@ -30,6 +56,12 @@ class Test {
 
         var instance = new Second();
         console.log(instance.stringifyNumber(4)); // should print 4
+
+        console.log(instance.myClassProperty); // should print "classProp"
+
+        if (instance.myBoolProp == false) {
+            console.log("myBoolProp is false"); // should print "myBoolProp is false"
+        }
 
         const arr = [1,2,3,4];
 
@@ -63,6 +95,24 @@ class Test {
         const both = firstConcat.concat(secondConcat);
         console.log(both.length); // should print 4
         console.log(both[2]); // should print "c"
+
+        const baseString = "aabba";
+        const replacedAllString = baseString.replaceAll("a", "");
+        console.log(replacedAllString); // should print "bb"
+
+        this.functionWithOptionals("hello");
+        this.functionWithOptionals("hello", 5);
+        this.functionWithOptionals("hello", 5, 1);
+
+        const list3 = ["empty"]
+        list3[0] = "first"
+        console.log(list3[0]) // should print "first"
+
+        const dict3 = {}
+        dict3["key"] = "value"
+        console.log(dict3["key"]) // should print "value"
+
+        this.testJavaScope();
     }
 }
 
