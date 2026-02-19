@@ -83,6 +83,7 @@ describe('csharp transpiling tests', () => {
         "    public z1: string[] = [ 'a', 'b' ];\n" +
         "    public z2: any = whatever;\n" +
         "    public z3: any = {};\n" +
+        "    public z4: any = Whatever;\n" +
         "    mainFeature(message): void {\n" +
         "        console.log(\"Hello! I'm inside main class:\" + message)\n" +
         "    }\n" +
@@ -95,6 +96,7 @@ describe('csharp transpiling tests', () => {
         "    public List<object> z1 = new List<object>() {\"a\", \"b\"};\n" +
         "    public Dictionary<string, object>  z2 = whatever;\n" +
         "    public Dictionary<string, object> z3 = new Dictionary<string, object>() {};\n" +
+        "    public Dictionary<string, object>  z4 = Whatever;\n" +
         "\n" +
         "    public virtual void mainFeature(object message)\n" +
         "    {\n" +
