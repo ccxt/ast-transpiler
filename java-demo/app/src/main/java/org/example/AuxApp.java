@@ -1,6 +1,6 @@
 package org.example;
 
-public class Aux {
+public class AuxApp {
 
     public static void fix() {
         System.out.println("fix");

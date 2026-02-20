@@ -23,7 +23,7 @@ public class App {
         }};
         var lista = new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 3, 4, "5"));
         Helpers.GetValue(data, "1");
-        Aux.fix();
+        AuxApp.fix();
         // System.out.println(a);
         // System.out.println(data["1"]);
         // System.out.println(lista[2]);
@@ -95,7 +95,6 @@ public class App {
     public void teste33(String a)
     {
         var x = 1;
-        x = 2;
         Object newObj = new java.util.HashMap<String, Object>() {{
             put( "a",  App.this.getVar(x) );
             put( "a",  a );
