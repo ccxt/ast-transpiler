@@ -5,11 +5,11 @@ import "fmt"
 type A struct {
 }
 
-func (this *A) main(a interface{}, b interface{}) {
-	// arr := []interface{}{}
-	// arr = appendToArray(arr, 1).([]interface{})
+func (this *A) main(a any, b any) {
+	// arr := []any{}
+	// arr = appendToArray(arr, 1).([]any)
 	// fmt.Println(arr)
-	arr := []interface{}{1}
+	arr := []any{1}
 	addElementToObject(arr, 0, 2)
 	fmt.Println(arr)
 }
