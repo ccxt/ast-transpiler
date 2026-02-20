@@ -742,10 +742,13 @@ var BaseTranspiler = class {
   printFunctionDefinition(node, identation) {
     let name = node.name?.escapedText ?? "";
     name = this.transformFunctionNameIfNeeded(name);
-    const parsedArgs = node.parameters.map((param) => this.printParameter(param)).join(", ");
+    const parsedArgs = this.printMethodParameters(node);
     let modifiers = this.printModifiers(node);
     modifiers = modifiers ? modifiers + " " : modifiers;
     let returnType = this.printFunctionType(node);
+    if (returnType === "java.util.concurrent.CompletableFuture") {
+      returnType = "java.util.concurrent.CompletableFuture<Void>";
+    }
     returnType = returnType ? returnType + " " : returnType;
     const fnKeyword = this.FUNCTION_TOKEN ? this.FUNCTION_TOKEN + " " : "";
     if (!fnKeyword && ts.isFunctionDeclaration(node)) {
@@ -767,8 +770,8 @@ var BaseTranspiler = class {
       const body = this.printNode(node.body);
       return `(${parameters}) => ${body}`;
     }
-    let functionDef = this.printFunctionDefinition(node, identation);
     const funcBody = this.printFunctionBody(node, identation);
+    let functionDef = this.printFunctionDefinition(node, identation);
     functionDef += funcBody;
     return this.printNodeCommentsIfAny(node, identation, functionDef);
   }
@@ -2148,7 +2151,7 @@ var PhpTranspiler = class extends BaseTranspiler {
     this.propRequiresScopeResolutionOperator = ["super"] + (config["ScopeResolutionProps"] ?? []);
     this.initConfig();
     this.applyUserOverrides(config);
-    this.AWAIT_WRAPPER_OPEN = config["AWAIT_WRAPPER_OPEN"] ?? "Async\\await(";
+    this.AWAIT_WRAPPER_OPEN = config["AWAIT_WRAPPER_OPEN"] ?? "\\React\\Async\\await(";
     this.AWAIT_WRAPPER_CLOSE = config["AWAIT_WRAPPER_CLOSE"] ?? ")";
   }
   printAwaitExpression(node, identation) {
@@ -2238,7 +2241,7 @@ var PhpTranspiler = class extends BaseTranspiler {
     return `${name}[] = ${parsedArg}`;
   }
   printPromiseAllCall(node, identation, parsedArg = void 0) {
-    return `Promise\\all(${parsedArg})`;
+    return `\\React\\Promise\\all(${parsedArg})`;
   }
   printMathCeilCall(node, identation, parsedArg = void 0) {
     return `((int) ceil(${parsedArg}))`;
@@ -4577,7 +4580,8 @@ var JavaTranspiler = class extends BaseTranspiler {
       internal: "intern",
       event: "eventVar",
       fixed: "fixedVar",
-      final: "finalVar"
+      final: "finalVar",
+      native: "nativeVar"
     };
     this.VariableTypeReplacements = {
       string: "String",
@@ -4673,7 +4677,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   printNumericLiteral(node) {
     const javaMax = 2147483647;
     const nodeText = node.text;
-    if (Number(nodeText) > javaMax && Number.isInteger(Number(nodeText))) {
+    if (Number(nodeText) > javaMax && Number.isInteger(Number(nodeText)) && node.text.indexOf("e") === -1) {
       return `${nodeText}L`;
     }
     return node.text;
@@ -4808,7 +4812,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         const parsedArg = this.printNode(args[0], 0);
         switch (expressionText) {
           case "Math.abs":
-            return `Herlpers.mathAbs(Double.parseDouble((${parsedArg}).toString()))`;
+            return `Helpers.mathAbs(Double.parseDouble(Helpers.toString(${parsedArg})))`;
         }
       } else if (args.length === 2) {
         const parsedArg1 = this.printNode(args[0], 0);
@@ -4819,7 +4823,7 @@ var JavaTranspiler = class extends BaseTranspiler {
           case "Math.max":
             return `Helpers.mathMax(${parsedArg1}, ${parsedArg2})`;
           case "Math.pow":
-            return `Helpers.mathPow(Double.parseDouble(${parsedArg1}.toString()), Double.parseDouble(${parsedArg2}.toString()))`;
+            return `Helpers.mathPow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
         }
       }
       const leftSide = node.expression?.expression;
@@ -5291,9 +5295,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     return super.printFunctionBody(node, identation);
   }
   printInstanceOfExpression(node, identation) {
-    const left = node.left.escapedText;
     const right = node.right.escapedText;
-    return this.getIden(identation) + `${left} instanceof ${right}`;
+    const left = this.printNode(node.left, 0);
+    return this.getIden(identation) + `Helpers.isInstance(${left}, ${right}.class)`;
   }
   printAwaitExpression(node, identation) {
     const expression = this.printNode(node.expression, identation);
@@ -5410,6 +5414,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     let name = node.name.escapedText;
     name = this.transformMethodNameIfNeeded(name);
     let returnType = this.printFunctionType(node);
+    if (returnType === "java.util.concurrent.CompletableFuture") {
+      returnType = "java.util.concurrent.CompletableFuture<Void>";
+    }
     const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " " : "";
     const modifiers = defaultAccess;
     let parsedArgs = void 0;
@@ -5438,13 +5445,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     return `Helpers.promiseAll(${parsedArg})`;
   }
   printMathFloorCall(_node, _identation, parsedArg = void 0) {
-    return `(Math.floor(Double.parseDouble((${parsedArg}).toString())))`;
+    return `(Math.floor(Double.parseDouble(Helpers.toString(${parsedArg}))))`;
   }
   printMathRoundCall(_node, _identation, parsedArg = void 0) {
-    return `Math.round(Double.parseDouble(${parsedArg}.toString()))`;
+    return `Math.round(Double.parseDouble(Helpers.toString(${parsedArg})))`;
   }
   printMathCeilCall(_node, _identation, parsedArg = void 0) {
-    return `Math.ceil(Double.parseDouble(${parsedArg}.toString()))`;
+    return `Math.ceil(Double.parseDouble(Helpers.toString(${parsedArg})))`;
   }
   printNumberIsIntegerCall(_node, _identation, parsedArg = void 0) {
     return `((${parsedArg} instanceof Integer) || (${parsedArg} instanceof Long))`;
@@ -5474,7 +5481,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     return `String.join((String)${parsedArg}, (java.util.List<String>)${name})`;
   }
   printSplitCall(_node, _identation, name = void 0, parsedArg = void 0) {
-    return `new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)${name}).split((String)${parsedArg})))`;
+    return `Helpers.split(${name}, ${parsedArg})`;
   }
   printConcatCall(_node, _identation, name = void 0, parsedArg = void 0) {
     return `Helpers.concat(${name}, ${parsedArg})`;
@@ -5501,7 +5508,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     return `((java.util.List<Object>)${name}).get(((java.util.List<Object>)${name}).size()-1)`;
   }
   printAssertCall(_node, _identation, parsedArgs) {
-    return `assert ${parsedArgs}`;
+    return `assert(${parsedArgs})`;
   }
   printSliceCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     if (parsedArg2 === void 0) {
@@ -5608,6 +5615,16 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
     }
     return modifiers + " " + typeText + " ";
+  }
+  printModifiers(node) {
+    let modifiers = node.modifiers;
+    if (modifiers === void 0) {
+      return "";
+    }
+    modifiers = modifiers.filter((mod) => this.FuncModifiers[mod.kind]);
+    modifiers = modifiers.filter((mod) => mod.kind !== ts6.SyntaxKind.AsyncKeyword);
+    const res = modifiers.map((modifier) => this.FuncModifiers[modifier.kind]).join(" ");
+    return res;
   }
   printObjectLiteralExpression(node, identation) {
     const objectBody = this.printObjectLiteralBody(node, identation);
