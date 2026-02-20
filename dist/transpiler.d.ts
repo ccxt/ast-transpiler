@@ -725,6 +725,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printThrowStatement(node: any, identation: any): string;
     csModifiers: {};
     printPropertyAccessModifiers(node: any): string;
+    printModifiers(node: any): any;
     printObjectLiteralExpression(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
