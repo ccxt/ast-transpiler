@@ -52,6 +52,7 @@ export class PhpTranspiler extends BaseTranspiler {
         super(config);
         this.id = "php";
         this.asyncTranspiling = config['async'] ?? true;
+        this.supportVariableType = config['supportVariableType'] ?? false;
         this.uncamelcaseIdentifiers = config['uncamelcaseIdentifiers'] ?? false;
         this.removeVariableDeclarationForFunctionExpression = config['removeFunctionAssignToVariable'] ?? false;
         this.includeFunctionNameInFunctionExpressionDeclaration = config['includeFunctionNameInFunctionExpressionDeclaration'] ?? false;
@@ -99,6 +100,20 @@ export class PhpTranspiler extends BaseTranspiler {
                     return `'${identifier}'`;  // Transpile function reference as string
                 }
             }
+            // add type support to variable
+            if (this.supportVariableType) {
+                const typeRaw = global.checker.getTypeAtLocation(node);
+                let type = this.getTypeFromRawType(typeRaw);
+                if (
+                    ts.isPropertyDeclaration(valueDecl) ||
+                    (ts.isParameter(valueDecl) && ts.isParameter(node.parent))
+                ) {
+                    if (type === 'object' && typeRaw?.intrinsicName === 'number') {
+                        type = 'float';
+                    }
+                    return `${type} $${identifier}`;
+                }
+            }
         }
 
         // below is commented, due to : https://github.com/ccxt/ast-transpiler/pull/15
@@ -116,6 +131,13 @@ export class PhpTranspiler extends BaseTranspiler {
         return identifier;
     }
 
+    getTypeFromRawType(type) {
+        const typeValue = super.getTypeFromRawType(type);
+        if (typeValue === undefined && type?.symbol?.escapedName) {
+            return type.symbol.escapedName;
+        }
+        return typeValue;
+    }
 
     getCustomOperatorIfAny(left, right, operator) {
         const STRING_CONCAT = '.';

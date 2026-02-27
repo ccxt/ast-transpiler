@@ -10,6 +10,10 @@ class Second {
 
 class Test {
 
+    strprop: string = "test";
+    numprop: number = 1;
+    boolprop: boolean = false;
+
     public functionWithOptionals(a: string, c: number | undefined = undefined, d = 1) {
         console.log(a);
         if (c !== undefined) {
@@ -113,6 +117,11 @@ class Test {
         console.log(dict3["key"]) // should print "value"
 
         this.testJavaScope();
+    }
+
+    someMethod(arg1: boolean, arg2: number) {
+        const res = arg1;
+        console.log(res);
     }
 }
 
