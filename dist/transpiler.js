@@ -3274,8 +3274,8 @@ import ts5 from "typescript";
 var SyntaxKind3 = ts5.SyntaxKind;
 var parserConfig4 = {
   "ELSEIF_TOKEN": "else if",
-  "OBJECT_OPENING": "map[string]interface{} {",
-  "ARRAY_OPENING_TOKEN": "[]interface{}{",
+  "OBJECT_OPENING": "map[string]any {",
+  "ARRAY_OPENING_TOKEN": "[]any{",
   "ARRAY_CLOSING_TOKEN": "}",
   "PROPERTY_ASSIGNMENT_TOKEN": ":",
   "VAR_TOKEN": "object",
@@ -3320,9 +3320,9 @@ var parserConfig4 = {
   "MOD_WRAPPER_OPEN": "Mod(",
   "MOD_WRAPPER_CLOSE": ")",
   "FUNCTION_TOKEN": "func",
-  "DEFAULT_RETURN_TYPE": "interface{}",
+  "DEFAULT_RETURN_TYPE": "any",
   "BLOCK_OPENING_TOKEN": "{",
-  "DEFAULT_PARAMETER_TYPE": "interface{}",
+  "DEFAULT_PARAMETER_TYPE": "any",
   "LINE_TERMINATOR": "",
   "CONDITION_OPENING": "",
   "CONDITION_CLOSE": "",
@@ -3338,7 +3338,7 @@ var GoTranspiler = class extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig4, config["parser"] ?? {});
     super(config);
     this.wrapCallMethods = [];
-    this.DEFAULT_RETURN_TYPE = "interface{}";
+    this.DEFAULT_RETURN_TYPE = "any";
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = false;
@@ -3412,9 +3412,9 @@ var GoTranspiler = class extends BaseTranspiler {
   }
   printPropertyDeclaration(node, identation) {
     const name = this.capitalize(this.printNode(node.name, 0));
-    let type = "interface{}";
+    let type = "any";
     if (node.type === void 0) {
-      type = "interface{}";
+      type = "any";
     } else if (node.type.kind === SyntaxKind3.StringKeyword) {
       type = "string";
     } else if (node.type.kind === SyntaxKind3.NumberKeyword) {
@@ -3422,7 +3422,7 @@ var GoTranspiler = class extends BaseTranspiler {
     } else if (node.type.kind === SyntaxKind3.BooleanKeyword || ts5.isBooleanLiteral(node)) {
       type = "bool";
     } else if (node.type.kind === SyntaxKind3.ArrayType) {
-      type = "[]interface{}";
+      type = "[]any";
     }
     if (node.initializer) {
       let initializer = this.printNode(node.initializer, 0);
@@ -3521,7 +3521,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return params.join(", ");
     }
     const paramsWithOptional = params.filter((param) => param !== "optional");
-    paramsWithOptional.push("optionalArgs ...interface{}");
+    paramsWithOptional.push("optionalArgs ...any");
     return paramsWithOptional.join(", ");
   }
   printParameter(node, defaultValue = true) {
@@ -3538,7 +3538,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   }
   printParameterType(node) {
     const typeText = this.getType(node);
-    return "interface{}";
+    return "any";
     if (typeText === this.STRING_KEYWORD) {
       return "string";
     }
@@ -3571,7 +3571,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return res;
     }
     if (typeText === this.PROMISE_TYPE_KEYWORD) {
-      return `<- chan interface{}`;
+      return `<- chan any`;
     }
     if (typeText && typeText.endsWith("[]")) {
       const core = typeText.substring(0, typeText.length - 2);
@@ -3611,14 +3611,14 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
     const isNew = declaration.initializer && declaration.initializer.kind === ts5.SyntaxKind.NewExpression;
     const parsedValue = declaration.initializer ? this.printNode(declaration.initializer, identation) : this.NULL_TOKEN;
     if (parsedValue === this.UNDEFINED_TOKEN) {
-      return this.getIden(identation) + "var " + this.printNode(declaration.name) + " interface{} = " + parsedValue;
+      return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + parsedValue;
     }
     if (node?.parent?.kind === ts5.SyntaxKind.FirstStatement) {
       if (isNew) {
         return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue;
       }
       const varName = this.printNode(declaration.name);
-      const stm = this.getIden(identation) + "var " + varName + " interface{} = " + parsedValue;
+      const stm = this.getIden(identation) + "var " + varName + " any = " + parsedValue;
       if (parsedValue.startsWith("<-this.callInternal(")) {
         return `
 ${stm}
@@ -3971,7 +3971,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const lastReturn = shouldAddLastReturn ? this.getIden(identation + 2) + "return nil" : "";
       functionBody = `{
         ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-        ${this.getIden(identation + 1)}go func() interface{} {
+        ${this.getIden(identation + 1)}go func() any {
         ${this.getIden(identation + 2)}defer close(ch)
         ${this.getIden(identation + 2)}defer ReturnPanicError(ch)
         ${bodyWithIndentationExtraAndNoReturn}
@@ -4078,9 +4078,9 @@ ${this.getIden(identation)}return nil`;
       if (first.kind === ts5.SyntaxKind.CallExpression) {
         const type = this.getFunctionType(first);
         if (type === void 0 || elements.indexOf(this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN) > -1) {
-          arrayOpen = "[]interface{}{";
+          arrayOpen = "[]any{";
         } else {
-          arrayOpen = `[]interface{}{`;
+          arrayOpen = `[]any{`;
         }
       }
     }
@@ -4342,13 +4342,13 @@ ${this.getIden(identation)}`;
     const thisWord = this.className !== "undefined" ? "this" : "";
     const catchBlock = `
     {
-        ${nodeEndsWithReturn ? "ret__ :=" : ""} func${classPrefix} (ret_ interface{}) {
+        ${nodeEndsWithReturn ? "ret__ :=" : ""} func${classPrefix} (ret_ any) {
 		    defer func() {
                 if ${errorName} := recover(); ${errorName} != nil {
                     if ${errorName} == "break" {
                         return
                     }
-                    ret_ = func${classPrefix} interface{} {
+                    ret_ = func${classPrefix} any {
                         // catch block:
                         ${catchBody}
                         ${catchBodyEndsWithReturn ? "" : returNil}
