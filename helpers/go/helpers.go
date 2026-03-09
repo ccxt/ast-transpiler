@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func Add(a interface{}, b interface{}) interface{} {
+func Add(a any, b any) any {
 	switch aType := a.(type) {
 	case int:
 		if bType, ok := b.(int); ok {
@@ -30,12 +30,12 @@ func Add(a interface{}, b interface{}) interface{} {
 	return nil
 }
 
-func IsTrue(a interface{}) bool {
+func IsTrue(a any) bool {
 	return EvalTruthy(a)
 }
 
 // EvalTruthy determines if a single interface value is truthy.
-func EvalTruthy(val interface{}) bool {
+func EvalTruthy(val any) bool {
 	if val == nil {
 		return false
 	}
@@ -63,7 +63,7 @@ func EvalTruthy(val interface{}) bool {
 	return true // Consider non-nil complex types as truthy
 }
 
-func IsInteger(value interface{}) bool {
+func IsInteger(value any) bool {
 	switch value.(type) {
 	case int, int8, int16, int32, int64:
 		return true
@@ -74,7 +74,7 @@ func IsInteger(value interface{}) bool {
 	}
 }
 
-func GetValue(collection interface{}, key interface{}) interface{} {
+func GetValue(collection any, key any) any {
 
 	if collection == nil {
 		return nil
@@ -130,7 +130,7 @@ func GetValue(collection interface{}, key interface{}) interface{} {
 	}
 }
 
-func Multiply(a, b interface{}) interface{} {
+func Multiply(a, b any) any {
 	aVal := reflect.ValueOf(a)
 	bVal := reflect.ValueOf(b)
 
@@ -155,7 +155,7 @@ func Multiply(a, b interface{}) interface{} {
 	}
 }
 
-func Divide(a, b interface{}) interface{} {
+func Divide(a, b any) any {
 	aVal := reflect.ValueOf(a)
 	bVal := reflect.ValueOf(b)
 
@@ -186,7 +186,7 @@ func Divide(a, b interface{}) interface{} {
 	}
 }
 
-func Subtract(a, b interface{}) interface{} {
+func Subtract(a, b any) any {
 	aVal := reflect.ValueOf(a)
 	bVal := reflect.ValueOf(b)
 
@@ -208,10 +208,10 @@ func Subtract(a, b interface{}) interface{} {
 	}
 }
 
-type Dict map[string]interface{}
+type Dict map[string]any
 
 // GetArrayLength returns the length of various array or slice types or string length.
-func GetArrayLength(value interface{}) int {
+func GetArrayLength(value any) int {
 	if value == nil {
 		return 0
 	}
@@ -233,7 +233,7 @@ func GetArrayLength(value interface{}) int {
 	return 0
 }
 
-func IsGreaterThan(a, b interface{}) bool {
+func IsGreaterThan(a, b any) bool {
 	if a != nil && b == nil {
 		return true
 	}
@@ -259,22 +259,22 @@ func IsGreaterThan(a, b interface{}) bool {
 }
 
 // IsLessThan checks if a is less than b
-func IsLessThan(a, b interface{}) bool {
+func IsLessThan(a, b any) bool {
 	return !IsGreaterThan(a, b) && !IsEqual(a, b)
 }
 
 // IsGreaterThanOrEqual checks if a is greater than or equal to b
-func IsGreaterThanOrEqual(a, b interface{}) bool {
+func IsGreaterThanOrEqual(a, b any) bool {
 	return IsGreaterThan(a, b) || IsEqual(a, b)
 }
 
 // IsLessThanOrEqual checks if a is less than or equal to b
-func IsLessThanOrEqual(a, b interface{}) bool {
+func IsLessThanOrEqual(a, b any) bool {
 	return IsLessThan(a, b) || IsEqual(a, b)
 }
 
 // Mod performs a modulus operation on a and b
-func Mod(a, b interface{}) interface{} {
+func Mod(a, b any) any {
 	if a == nil || b == nil {
 		return nil
 	}
@@ -288,7 +288,7 @@ func Mod(a, b interface{}) interface{} {
 }
 
 // IsEqual checks for equality of a and b with dynamic type support
-func IsEqual(a, b interface{}) bool {
+func IsEqual(a, b any) bool {
 	if a == nil && b == nil {
 		return true
 	}
@@ -322,7 +322,7 @@ func IsEqual(a, b interface{}) bool {
 }
 
 // NormalizeAndConvert normalizes and attempts to convert a and b to a common type
-func NormalizeAndConvert(a, b interface{}) (reflect.Value, reflect.Value, bool) {
+func NormalizeAndConvert(a, b any) (reflect.Value, reflect.Value, bool) {
 	aVal := reflect.ValueOf(a)
 	bVal := reflect.ValueOf(b)
 
@@ -339,7 +339,7 @@ func NormalizeAndConvert(a, b interface{}) (reflect.Value, reflect.Value, bool) 
 	return aVal, bVal, true
 }
 
-func ToFloat64(v interface{}) float64 {
+func ToFloat64(v any) float64 {
 	var result float64
 	val := reflect.ValueOf(v)
 	switch val.Kind() {
@@ -353,7 +353,7 @@ func ToFloat64(v interface{}) float64 {
 	return result
 }
 
-func Increment(a interface{}) interface{} {
+func Increment(a any) any {
 	switch v := a.(type) {
 	case int:
 		return v + 1
@@ -369,7 +369,7 @@ func Increment(a interface{}) interface{} {
 }
 
 // Decrement decreases the numeric value by 1.
-func Decrement(a interface{}) interface{} {
+func Decrement(a any) any {
 	switch v := a.(type) {
 	case int:
 		return v - 1
@@ -383,7 +383,7 @@ func Decrement(a interface{}) interface{} {
 }
 
 // Negate negates the numeric value.
-func Negate(a interface{}) interface{} {
+func Negate(a any) any {
 	switch v := a.(type) {
 	case int:
 		return -v
@@ -397,7 +397,7 @@ func Negate(a interface{}) interface{} {
 }
 
 // UnaryPlus returns the numeric value unchanged.
-func UnaryPlus(a interface{}) interface{} {
+func UnaryPlus(a any) any {
 	switch v := a.(type) {
 	case int:
 		return +v
@@ -411,7 +411,7 @@ func UnaryPlus(a interface{}) interface{} {
 }
 
 // PlusEqual adds the value of `value` to `a`, handling some basic types.
-func PlusEqual(a, value interface{}) interface{} {
+func PlusEqual(a, value any) any {
 	aVal := reflect.ValueOf(a)
 	valueVal := reflect.ValueOf(value)
 
@@ -431,12 +431,12 @@ func PlusEqual(a, value interface{}) interface{} {
 	}
 }
 
-func AppendToArray(slicePtr *interface{}, element interface{}) {
-	array := (*slicePtr).([]interface{})
+func AppendToArray(slicePtr *any, element any) {
+	array := (*slicePtr).([]any)
 	*slicePtr = append(array, element)
 }
 
-func AddElementToObject(arrayOrDict interface{}, stringOrInt interface{}, value interface{}) {
+func AddElementToObject(arrayOrDict any, stringOrInt any, value any) {
 	val := reflect.ValueOf(arrayOrDict)
 	key := reflect.ValueOf(stringOrInt)
 	valueVal := reflect.ValueOf(value)
@@ -465,7 +465,7 @@ func AddElementToObject(arrayOrDict interface{}, stringOrInt interface{}, value 
 	// return nil
 }
 
-func InOp(dict interface{}, key interface{}) bool {
+func InOp(dict any, key any) bool {
 
 	if dict == nil {
 		return false
@@ -489,7 +489,7 @@ func InOp(dict interface{}, key interface{}) bool {
 	return false
 }
 
-func GetIndexOf(str interface{}, target interface{}) int {
+func GetIndexOf(str any, target any) int {
 	switch v := str.(type) {
 	case []string:
 		t, ok := target.(string)
@@ -523,34 +523,34 @@ func GetIndexOf(str interface{}, target interface{}) int {
 }
 
 // IsBool checks if the input is a boolean
-func IsBool(v interface{}) bool {
+func IsBool(v any) bool {
 	_, ok := v.(bool)
 	return ok
 }
 
 // IsDictionary checks if the input is a map (dictionary in Python)
-func IsDictionary(v interface{}) bool {
+func IsDictionary(v any) bool {
 	return reflect.TypeOf(v).Kind() == reflect.Map
 }
 
 // IsString checks if the input is a string
-func IsString(v interface{}) bool {
+func IsString(v any) bool {
 	_, ok := v.(string)
 	return ok
 }
 
 // IsInt checks if the input is an integer
-func IsInt(v interface{}) bool {
+func IsInt(v any) bool {
 	_, ok := v.(int)
 	return ok
 }
 
 // IsFunction checks if the input is a function
-func IsFunction(v interface{}) bool {
+func IsFunction(v any) bool {
 	return reflect.TypeOf(v).Kind() == reflect.Func
 }
 
-func IsNumber(v interface{}) bool {
+func IsNumber(v any) bool {
 	switch v.(type) {
 	case int, int8, int16, int32, int64:
 		return true
@@ -563,7 +563,7 @@ func IsNumber(v interface{}) bool {
 	}
 }
 
-func IsObject(v interface{}) bool {
+func IsObject(v any) bool {
 	kind := reflect.TypeOf(v).Kind()
 	switch kind {
 	case reflect.Array, reflect.Chan, reflect.Func, reflect.Interface,
@@ -574,7 +574,7 @@ func IsObject(v interface{}) bool {
 	}
 }
 
-func ToLower(v interface{}) string {
+func ToLower(v any) string {
 	if str, ok := v.(string); ok {
 		return strings.ToLower(str)
 	}
@@ -582,7 +582,7 @@ func ToLower(v interface{}) string {
 }
 
 // ToUpper converts a string to uppercase
-func ToUpper(v interface{}) string {
+func ToUpper(v any) string {
 	if str, ok := v.(string); ok {
 		return strings.ToUpper(str)
 	}
@@ -590,7 +590,7 @@ func ToUpper(v interface{}) string {
 }
 
 // IsInt checks if the input is an integer
-// func IsInt(v interface{}) bool {
+// func IsInt(v any) bool {
 // 	switch v.(type) {
 // 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 // 		return true
@@ -600,7 +600,7 @@ func ToUpper(v interface{}) string {
 // }
 
 // MathFloor returns the largest integer less than or equal to the given number
-func MathFloor(v interface{}) float64 {
+func MathFloor(v any) float64 {
 	if num, ok := v.(float64); ok {
 		return math.Floor(num)
 	}
@@ -608,7 +608,7 @@ func MathFloor(v interface{}) float64 {
 }
 
 // MathCeil returns the smallest integer greater than or equal to the given number
-func MathCeil(v interface{}) float64 {
+func MathCeil(v any) float64 {
 	if num, ok := v.(float64); ok {
 		return math.Ceil(num)
 	}
@@ -616,7 +616,7 @@ func MathCeil(v interface{}) float64 {
 }
 
 // MathRound returns the nearest integer, rounding half away from zero
-func MathRound(v interface{}) float64 {
+func MathRound(v any) float64 {
 	if num, ok := v.(float64); ok {
 		return math.Round(num)
 	}
@@ -656,7 +656,7 @@ func MathAbs(v interface{}) float64 {
 }
 
 // StartsWith checks if the string starts with the specified prefix
-func StartsWith(v interface{}, prefix interface{}) bool {
+func StartsWith(v any, prefix any) bool {
 	if str, ok := v.(string); ok {
 		prefixStr := ToString(prefix)
 		return strings.HasPrefix(str, prefixStr)
@@ -665,7 +665,7 @@ func StartsWith(v interface{}, prefix interface{}) bool {
 }
 
 // EndsWith checks if the string ends with the specified suffix
-func EndsWith(v interface{}, suffix interface{}) bool {
+func EndsWith(v any, suffix any) bool {
 	if str, ok := v.(string); ok {
 		suffixStr := ToString(suffix)
 		return strings.HasSuffix(str, suffixStr)
@@ -674,7 +674,7 @@ func EndsWith(v interface{}, suffix interface{}) bool {
 }
 
 // IndexOf returns the index of the first occurrence of a substring
-func IndexOf(v interface{}, substr interface{}) int {
+func IndexOf(v any, substr any) int {
 	if str, ok := v.(string); ok {
 		substrStr := ToString(substr)
 		return strings.Index(str, substrStr)
@@ -683,7 +683,7 @@ func IndexOf(v interface{}, substr interface{}) int {
 }
 
 // Trim removes leading and trailing whitespace from a string
-func Trim(v interface{}) string {
+func Trim(v any) string {
 	if str, ok := v.(string); ok {
 		return strings.TrimSpace(str)
 	}
@@ -691,7 +691,7 @@ func Trim(v interface{}) string {
 }
 
 // Contains checks if the string contains the specified substring
-func Contains(v interface{}, substr interface{}) bool {
+func Contains(v any, substr any) bool {
 	if str, ok := v.(string); ok {
 		substrStr := ToString(substr)
 		return strings.Contains(str, substrStr)
@@ -699,7 +699,7 @@ func Contains(v interface{}, substr interface{}) bool {
 	return false
 }
 
-func ToString(v interface{}) string {
+func ToString(v any) string {
 	switch v := v.(type) {
 	case string:
 		return v
@@ -716,14 +716,14 @@ func ToString(v interface{}) string {
 	}
 }
 
-func Join(slice interface{}, sep interface{}) string {
+func Join(slice any, sep any) string {
 	sepStr := ToString(sep)
 	var strSlice []string
 
 	switch v := slice.(type) {
 	case []string:
 		strSlice = v
-	case []interface{}:
+	case []any:
 		for _, elem := range v {
 			strSlice = append(strSlice, ToString(elem))
 		}
@@ -735,7 +735,7 @@ func Join(slice interface{}, sep interface{}) string {
 }
 
 // Split splits a string into a slice of substrings separated by a separator
-func Split(str interface{}, sep interface{}) []string {
+func Split(str any, sep any) []string {
 	strVal, ok := str.(string)
 	if !ok {
 		return nil
@@ -746,7 +746,7 @@ func Split(str interface{}, sep interface{}) []string {
 }
 
 // ObjectKeys returns the keys of a map as a slice of strings
-func ObjectKeys(v interface{}) []string {
+func ObjectKeys(v any) []string {
 	val := reflect.ValueOf(v)
 	if val.Kind() != reflect.Map {
 		return nil
@@ -760,24 +760,24 @@ func ObjectKeys(v interface{}) []string {
 	return strKeys
 }
 
-// ObjectValues returns the values of a map as a slice of interface{}
-func ObjectValues(v interface{}) []interface{} {
+// ObjectValues returns the values of a map as a slice of any
+func ObjectValues(v any) []any {
 	val := reflect.ValueOf(v)
 	if val.Kind() != reflect.Map {
 		return nil
 	}
 
 	keys := val.MapKeys()
-	values := make([]interface{}, len(keys))
+	values := make([]any, len(keys))
 	for i, key := range keys {
 		values[i] = val.MapIndex(key).Interface()
 	}
 	return values
 }
 
-func JsonParse(jsonStr2 interface{}) interface{} {
+func JsonParse(jsonStr2 any) any {
 	jsonStr := jsonStr2.(string)
-	var result interface{}
+	var result any
 	err := json.Unmarshal([]byte(jsonStr), &result)
 	if err != nil {
 		return nil
@@ -785,7 +785,7 @@ func JsonParse(jsonStr2 interface{}) interface{} {
 	return result
 }
 
-func IsArray(v interface{}) bool {
+func IsArray(v any) bool {
 	if v == nil {
 		return false
 	}
@@ -793,7 +793,7 @@ func IsArray(v interface{}) bool {
 	return kind == reflect.Slice || kind == reflect.Array
 }
 
-func Shift(slice interface{}) (interface{}, interface{}) {
+func Shift(slice any) (any, any) {
 	sliceVal, ok := castToSlice(slice)
 	if !ok || len(sliceVal) == 0 {
 		return slice, nil
@@ -801,7 +801,7 @@ func Shift(slice interface{}) (interface{}, interface{}) {
 	return sliceVal[1:], sliceVal[0]
 }
 
-func Reverse(slice interface{}) {
+func Reverse(slice any) {
 	sliceVal, ok := castToSlice(slice)
 	if !ok {
 		panic("provided value is not a slice")
@@ -821,7 +821,7 @@ func Reverse(slice interface{}) {
 }
 
 // Pop removes the last element from a slice and returns the new slice and the removed element
-func Pop(slice interface{}) (interface{}, interface{}) {
+func Pop(slice any) (any, any) {
 	sliceVal, ok := castToSlice(slice)
 	if !ok || len(sliceVal) == 0 {
 		return slice, nil
@@ -829,21 +829,21 @@ func Pop(slice interface{}) (interface{}, interface{}) {
 	return sliceVal[:len(sliceVal)-1], sliceVal[len(sliceVal)-1]
 }
 
-// Helper function to cast interface{} to []interface{}
-func castToSlice(slice interface{}) ([]interface{}, bool) {
+// Helper function to cast any to []any
+func castToSlice(slice any) ([]any, bool) {
 	val := reflect.ValueOf(slice)
 	if val.Kind() != reflect.Slice {
 		return nil, false
 	}
 
-	sliceVal := make([]interface{}, val.Len())
+	sliceVal := make([]any, val.Len())
 	for i := 0; i < val.Len(); i++ {
 		sliceVal[i] = val.Index(i).Interface()
 	}
 	return sliceVal, true
 }
 
-func Replace(input interface{}, old interface{}, new interface{}) string {
+func Replace(input any, old any, new any) string {
 	str := ToString(input)
 	oldStr := ToString(old)
 	newStr := ToString(new)
@@ -851,7 +851,7 @@ func Replace(input interface{}, old interface{}, new interface{}) string {
 }
 
 // PadEnd pads the input string on the right with padStr until it reaches the specified length
-func PadEnd(input interface{}, length int, padStr interface{}) string {
+func PadEnd(input any, length int, padStr any) string {
 	str := ToString(input)
 	pad := ToString(padStr)
 	for len(str) < length {
@@ -861,7 +861,7 @@ func PadEnd(input interface{}, length int, padStr interface{}) string {
 }
 
 // PadStart pads the input string on the left with padStr until it reaches the specified length
-func PadStart(input interface{}, length int, padStr interface{}) string {
+func PadStart(input any, length int, padStr any) string {
 	str := ToString(input)
 	pad := ToString(padStr)
 	for len(str) < length {
@@ -875,7 +875,7 @@ func DateNow() string {
 	return time.Now().Format(time.RFC3339)
 }
 
-func GetLength(v interface{}) int {
+func GetLength(v any) int {
 	val := reflect.ValueOf(v)
 	switch val.Kind() {
 	case reflect.String:
@@ -887,21 +887,21 @@ func GetLength(v interface{}) int {
 	}
 }
 
-func GetArg(v []interface{}, index int, def interface{}) interface{} {
+func GetArg(v []any, index int, def any) any {
 	if len(v) <= index {
 		return def
 	}
 	return v[index]
 }
 
-func Ternary(cond bool, whenTrue interface{}, whenFalse interface{}) interface{} {
+func Ternary(cond bool, whenTrue any, whenFalse any) any {
 	if cond {
 		return whenTrue
 	}
 	return whenFalse
 }
 
-func IsInstance(value interface{}, typ interface{}) bool {
+func IsInstance(value any, typ any) bool {
 	// Get the reflect.Type of the value and the type
 	valueType := reflect.TypeOf(value)
 	typeType := reflect.TypeOf(typ)
@@ -910,7 +910,7 @@ func IsInstance(value interface{}, typ interface{}) bool {
 	return valueType == typeType
 }
 
-func Slice(str2 interface{}, idx1 interface{}, idx2 interface{}) string {
+func Slice(str2 any, idx1 any, idx2 any) string {
 	if str2 == nil {
 		return ""
 	}
@@ -943,31 +943,31 @@ func Slice(str2 interface{}, idx1 interface{}, idx2 interface{}) string {
 	}
 }
 
-type Task func() interface{}
+type Task func() any
 
-func promiseAll(tasksInterface interface{}) <-chan []interface{} {
-	ch := make(chan []interface{})
+func promiseAll(tasksInterface any) <-chan []any {
+	ch := make(chan []any)
 
 	go func() {
 		defer close(ch)
 
-		// Ensure tasksInterface is a slice of channels (<-chan interface{})
-		tasks, ok := tasksInterface.([]interface{})
+		// Ensure tasksInterface is a slice of channels (<-chan any)
+		tasks, ok := tasksInterface.([]any)
 		if !ok {
 			ch <- nil // Return nil if the input is not a slice of interfaces
 			return
 		}
 
-		results := make([]interface{}, len(tasks))
+		results := make([]any, len(tasks))
 		var wg sync.WaitGroup
 		wg.Add(len(tasks))
 
 		for i, task := range tasks {
-			go func(i int, task interface{}) {
+			go func(i int, task any) {
 				defer wg.Done()
 
 				// Assert the task is a channel
-				if chanTask, ok := task.(<-chan interface{}); ok {
+				if chanTask, ok := task.(<-chan any); ok {
 					// Receive the result from the channel
 					results[i] = <-chanTask
 				} else {
@@ -986,7 +986,7 @@ func promiseAll(tasksInterface interface{}) <-chan []interface{} {
 
 	return ch
 }
-func ParseInt(number interface{}) int64 {
+func ParseInt(number any) int64 {
 	switch v := number.(type) {
 	case int:
 		return int64(v)
@@ -1022,7 +1022,7 @@ func ParseInt(number interface{}) int64 {
 	return 0 // Default value if conversion is not possible
 }
 
-func mathMin(a, b interface{}) interface{} {
+func mathMin(a, b any) any {
 	switch a := a.(type) {
 	case int:
 		b := b.(int)
@@ -1049,7 +1049,7 @@ func mathMin(a, b interface{}) interface{} {
 
 // mathMax returns the maximum of two values of the same type.
 // It supports int, float64, and string types.
-func mathMax(a, b interface{}) interface{} {
+func mathMax(a, b any) any {
 	switch a := a.(type) {
 	case int:
 		b := b.(int)
@@ -1075,7 +1075,7 @@ func mathMax(a, b interface{}) interface{} {
 }
 
 // parseInt tries to convert various types of input to an int
-// func parseInt(input interface{}) interface{} {
+// func parseInt(input any) any {
 // 	switch v := input.(type) {
 // 	case int:
 // 		return v
@@ -1112,7 +1112,7 @@ func mathMax(a, b interface{}) interface{} {
 // }
 
 // parseFloat tries to convert various types of input to a float64
-func ParseFloat(input interface{}) interface{} {
+func ParseFloat(input any) any {
 	switch v := input.(type) {
 	case float32:
 		return float64(v)
@@ -1148,12 +1148,12 @@ func ParseFloat(input interface{}) interface{} {
 	}
 }
 
-func ParseJSON(input interface{}) interface{} {
+func ParseJSON(input any) any {
 	jsonString := fmt.Sprintf("%v", input)
-	// var result interface{}
+	// var result any
 
 	if jsonString[0] == '[' {
-		var arrayResult []map[string]interface{}
+		var arrayResult []map[string]any
 		err := json.Unmarshal([]byte(jsonString), &arrayResult)
 		if err != nil {
 			return nil
@@ -1161,7 +1161,7 @@ func ParseJSON(input interface{}) interface{} {
 		return arrayResult
 	}
 
-	var mapResult map[string]interface{}
+	var mapResult map[string]any
 	err := json.Unmarshal([]byte(jsonString), &mapResult)
 	if err != nil {
 		return nil
@@ -1169,7 +1169,7 @@ func ParseJSON(input interface{}) interface{} {
 	return mapResult
 }
 
-func throwDynamicException(exceptionType interface{}, message interface{}) {
+func throwDynamicException(exceptionType any, message any) {
 	// to do implement
 	// // exceptionTypeStr, ok := exceptionType.(string)
 	// if !ok {
@@ -1189,7 +1189,7 @@ func throwDynamicException(exceptionType interface{}, message interface{}) {
 	// // panic(err)
 }
 
-func OpNeg(value interface{}) interface{} {
+func OpNeg(value any) any {
 	val := reflect.ValueOf(value)
 
 	switch val.Kind() {
@@ -1206,7 +1206,7 @@ func OpNeg(value interface{}) interface{} {
 	}
 }
 
-func JsonStringify(obj interface{}) string {
+func JsonStringify(obj any) string {
 	if obj == nil {
 		return ""
 	}
@@ -1229,7 +1229,7 @@ func JsonStringify(obj interface{}) string {
 	return string(jsonData)
 }
 
-func toFixed(number interface{}, decimals interface{}) float64 {
+func toFixed(number any, decimals any) float64 {
 	// Assert that the number is a float64 or convert it
 	num := ToFloat64(number)
 
@@ -1240,12 +1240,12 @@ func toFixed(number interface{}, decimals interface{}) float64 {
 	return math.Round(num*multiplier) / multiplier
 }
 
-func Remove(dict interface{}, key interface{}) {
-	// Attempt to cast the dict to map[string]interface{}
-	castedDict, ok := dict.(map[string]interface{})
+func Remove(dict any, key any) {
+	// Attempt to cast the dict to map[string]any
+	castedDict, ok := dict.(map[string]any)
 	if !ok {
 		// Panic if the cast fails
-		panic("provided value is not a map[string]interface{}")
+		panic("provided value is not a map[string]any")
 	}
 
 	// Attempt to cast the key to string
@@ -1264,7 +1264,7 @@ func Remove(dict interface{}, key interface{}) {
 	delete(castedDict, keyStr)
 }
 
-func Concat(first interface{}, second interface{}) interface{} {
+func Concat(first any, second any) any {
 	// Ensure both arguments are slices
 	firstValue := reflect.ValueOf(first)
 	secondValue := reflect.ValueOf(second)
@@ -1284,11 +1284,11 @@ func Concat(first interface{}, second interface{}) interface{} {
 	// Concatenate the two slices using reflect.AppendSlice
 	result := reflect.AppendSlice(firstValue, secondValue)
 
-	// Return the concatenated slice as an interface{}
+	// Return the concatenated slice as an any
 	return result.Interface()
 }
 
-func setDefaults(p interface{}) {
+func setDefaults(p any) {
 	// Get the value of the pointer to struct
 	val := reflect.ValueOf(p).Elem()
 	typ := val.Type()
