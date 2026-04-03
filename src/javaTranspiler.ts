@@ -1102,9 +1102,14 @@ export class JavaTranspiler extends BaseTranspiler {
             const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
             const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
+            // Check if last statement is a return — if not, add return null for supplyAsync lambda
+            const lastStatement = remaining.length > 0 ? remaining[remaining.length - 1] : (node.body.statements.length > 0 ? node.body.statements[0] : undefined);
+            const lastStmtIsReturn = lastStatement && ts.isReturnStatement(lastStatement);
+            const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
             const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
                     insideWrappers +
                     body + "\n" +
+                    returnNull +
                     this.getIden(identation + 1) + "});\n";
             return blockOpen + finalWrapperVars + asyncBody + blockClose;
 
@@ -1271,7 +1276,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
         // quick fix
         if (returnType === 'java.util.concurrent.CompletableFuture') {
-            returnType = 'java.util.concurrent.CompletableFuture<Void>';
+            returnType = 'java.util.concurrent.CompletableFuture<Object>';
         }
 
         // let modifiers = this.printModifiers(node);
@@ -1673,6 +1678,19 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
+        if (!rightPart) {
+            // bare return; — check if inside async method (supplyAsync lambda needs return null)
+            let parent = node.parent;
+            while (parent) {
+                if (ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent) || ts.isFunctionExpression(parent) || ts.isArrowFunction(parent)) {
+                    if (this.isAsyncFunction(parent)) {
+                        rightPart = ' null';
+                    }
+                    break;
+                }
+                parent = parent.parent;
+            }
+        }
         rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
         finalVars = finalVars.length > 0 ?  this.getIden(identation) + finalVars + "\n" : finalVars;
         return leadingComment + finalVars + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
