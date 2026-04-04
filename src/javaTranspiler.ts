@@ -1103,7 +1103,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
             // Check if last statement is a return — if not, add return null for supplyAsync lambda
-            const lastStatement = remaining.length > 0 ? remaining[remaining.length - 1] : (node.body.statements.length > 0 ? node.body.statements[0] : undefined);
+            const lastStatement = remaining.length > 0 ? remaining[remaining.length - 1] : (node.body.statements.length > 0 ? node.body.statements[node.body.statements.length - 1] : undefined);
             const lastStmtIsReturn = lastStatement && ts.isReturnStatement(lastStatement);
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
             const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
@@ -1684,7 +1684,7 @@ export class JavaTranspiler extends BaseTranspiler {
             while (parent) {
                 if (ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent) || ts.isFunctionExpression(parent) || ts.isArrowFunction(parent)) {
                     if (this.isAsyncFunction(parent)) {
-                        rightPart = ' null';
+                        rightPart = 'null';
                     }
                     break;
                 }

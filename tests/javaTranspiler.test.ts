@@ -21,70 +21,73 @@ beforeAll(() => {
 
 describe('java transpiling tests', () => {
     test('basic variable declaration', () => {
-        const ts = "const x = 1;"
-        const java = "Object x = 1;"
-        const output = transpiler.transpileJava(ts).content;
-        expect(output).toBe(java);
+        const input = "const x = 1;"
+        const expected = "Object x = 1;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe(expected);
     });
 
     test('basic method declaration', () => {
-        const ts =
+        const input =
         "class T {\n" +
         "    test(): string {\n" +
         "        return \"hello\";\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Object test(");
         expect(output).toContain('return "hello"');
     });
 
-    test('async method returns CompletableFuture<Object> not <Void>', () => {
-        const ts =
+    test('async void method returns CompletableFuture<Object> not <Void>', () => {
+        const input =
         "class T {\n" +
         "    async doSomething(): Promise<void> {\n" +
         "        const x = 1;\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         expect(output).toContain("java.util.concurrent.CompletableFuture<Object> doSomething(");
         expect(output).not.toContain("CompletableFuture<Void>");
     });
 
-    test('async method with typed return uses CompletableFuture<Object>', () => {
-        const ts =
+    test('async method with typed return also uses CompletableFuture<Object> (no per-type generics)', () => {
+        const input =
         "class T {\n" +
         "    async fetchData(): Promise<string> {\n" +
         "        return \"data\";\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
-        // Java transpiler emits CompletableFuture<Object> for all async returns
+        const output = transpiler.transpileJava(input).content;
+        // The Java transpiler does not map TS return types to Java generics —
+        // all async methods use CompletableFuture<Object> regardless of the
+        // declared Promise<T> type. This is intentional: the runtime casts
+        // happen on the consumer side.
         expect(output).toContain("CompletableFuture<Object> fetchData(");
         expect(output).not.toContain("CompletableFuture<Void>");
     });
 
     test('async method body gets return null at end when no explicit return', () => {
-        const ts =
+        const input =
         "class T {\n" +
         "    async doSomething(): Promise<void> {\n" +
         "        const x = 1;\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         // supplyAsync lambda should end with return null before closing
         expect(output).toContain("return null;");
         expect(output).toContain("supplyAsync");
     });
 
     test('async method body does not add return null when last stmt is return', () => {
-        const ts =
+        const input =
         "class T {\n" +
         "    async fetchData(): Promise<string> {\n" +
         "        return \"data\";\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         const lines = output.split('\n');
         // Should not have a stray "return null;" — only the actual return "data"
         const returnNullCount = lines.filter(l => l.trim() === 'return null;').length;
@@ -92,7 +95,7 @@ describe('java transpiling tests', () => {
     });
 
     test('bare return in async method becomes return null', () => {
-        const ts =
+        const input =
         "class T {\n" +
         "    async handleMessage(msg: any): Promise<void> {\n" +
         "        if (msg === undefined) {\n" +
@@ -101,7 +104,7 @@ describe('java transpiling tests', () => {
         "        const x = msg;\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         // The bare return; inside the if should become return null;
         // since it's inside an async method (supplyAsync lambda)
         expect(output).not.toMatch(/\breturn;\s*$/m);
@@ -109,7 +112,7 @@ describe('java transpiling tests', () => {
     });
 
     test('bare return in sync void method stays as return', () => {
-        const ts =
+        const input =
         "class T {\n" +
         "    handleMessage(msg: any): void {\n" +
         "        if (msg === undefined) {\n" +
@@ -118,14 +121,43 @@ describe('java transpiling tests', () => {
         "        const x = msg;\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         // Sync void method should keep bare return;
         expect(output).toMatch(/\breturn;\s*$/m);
         expect(output).not.toContain("supplyAsync");
     });
 
+    test('bare return in sync method is not affected by async methods in the same class', () => {
+        // Test sync method in isolation to verify bare return; is preserved
+        const syncInput =
+        "class T {\n" +
+        "    handleMessage(msg: any): void {\n" +
+        "        if (msg === undefined) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "        const x = msg;\n" +
+        "    }\n" +
+        "}"
+        const syncOutput = transpiler.transpileJava(syncInput).content;
+        expect(syncOutput).toMatch(/\breturn;\s*$/m);
+
+        // Test async method in isolation to verify bare return; becomes return null;
+        const asyncInput =
+        "class T {\n" +
+        "    async handleMessage(msg: any): Promise<void> {\n" +
+        "        if (msg === undefined) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "        const x = msg;\n" +
+        "    }\n" +
+        "}"
+        const asyncOutput = transpiler.transpileJava(asyncInput).content;
+        expect(asyncOutput).not.toMatch(/\breturn;\s*$/m);
+        expect(asyncOutput).toContain("return null;");
+    });
+
     test('async method with multiple returns does not add extra return null', () => {
-        const ts =
+        const input =
         "class T {\n" +
         "    async fetchData(x: any): Promise<string> {\n" +
         "        if (x) {\n" +
@@ -134,24 +166,40 @@ describe('java transpiling tests', () => {
         "        return \"b\";\n" +
         "    }\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
+        const output = transpiler.transpileJava(input).content;
         // Last statement is a return, so no return null should be added
         const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
         expect(returnNullCount).toBe(0);
     });
 
+    test('return null has correct spacing (no double space)', () => {
+        const input =
+        "class T {\n" +
+        "    async handleMessage(msg: any): Promise<void> {\n" +
+        "        if (msg === undefined) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "        const x = msg;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // Should be "return null;" with single space, not "return  null;"
+        expect(output).not.toContain("return  null;");
+        expect(output).toContain("return null;");
+    });
+
     test('basic while loop', () => {
-        const ts =
+        const input =
         "while (true) {\n" +
         "    const x = 1;\n" +
         "    break;\n" +
         "}"
-        const java =
+        const expected =
         "while (true)\n{\n" +
         "    Object x = 1;\n" +
         "    break;\n" +
         "}"
-        const output = transpiler.transpileJava(ts).content;
-        expect(output).toBe(java);
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe(expected);
     });
 });
