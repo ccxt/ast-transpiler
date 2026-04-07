@@ -395,6 +395,7 @@ declare class PythonTranspiler extends BaseTranspiler {
     transformTrailingComment(comment: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printClassDefinition(node: any, identation: any): string;
+    isFunctionOutSideClass(node: any): boolean;
     printMethodParameters(node: any): any;
     printInstanceOfExpression(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
