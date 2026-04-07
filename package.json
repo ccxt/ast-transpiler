@@ -1,6 +1,6 @@
 {
   "name": "ast-transpiler",
-  "version": "0.0.79",
+  "version": "0.0.80",
   "type": "module",
   "module": "./dist/transpiler.js",
   "types": "./dist/transpiler.d.ts",
@@ -29,7 +29,7 @@
     "testv": "jest --verbose --coverage",
     "integration": "tsx tests/integration/test.ts",
     "lint": "eslint src/ --ext .ts",
-    "publishPackage": "sh publish.sh && git push && git push --tags && npm publish"
+    "publishPackage": "npm run build && sh publish.sh && git push && git push --tags && npm publish"
   },
   "devDependencies": {
     "@types/eslint": "^8.56.12",
