@@ -2009,9 +2009,13 @@ var PythonTranspiler = class extends BaseTranspiler {
     }
     return classInit;
   }
+  isFunctionOutSideClass(node) {
+    return !(node.parent && node.parent.kind === SyntaxKind.ClassDeclaration);
+  }
   printMethodParameters(node) {
     let parsedArgs = super.printMethodParameters(node);
-    parsedArgs = parsedArgs ? "self, " + parsedArgs : "self";
+    const shouldAddSelf = !this.isFunctionOutSideClass(node);
+    parsedArgs = shouldAddSelf ? parsedArgs ? "self, " + parsedArgs : "self" : parsedArgs;
     return parsedArgs;
   }
   printInstanceOfExpression(node, identation) {
