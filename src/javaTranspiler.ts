@@ -1705,8 +1705,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return stmts.length > 0 && this.allBranchesTerminate(stmts[stmts.length - 1]);
         }
         if (ts.isIfStatement(node)) {
-            if (!node.elseStatement || ts.isIfStatement(node.elseStatement)) {
-                return false; // no else or else-if: not all paths covered
+            if (!node.elseStatement) {
+                return false; // no else: not all paths covered
             }
             return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
         }

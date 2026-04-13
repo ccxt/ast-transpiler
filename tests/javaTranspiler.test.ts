@@ -220,6 +220,62 @@ describe('java transpiling tests', () => {
         expect(output).toContain("return null;");
     });
 
+    test('async method with if/else-if/else all returning does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchOHLCV(uta: boolean, market: any): Promise<any> {\n" +
+        "        if (uta) {\n" +
+        "            return await this.fetchUTAOHLCV();\n" +
+        "        } else if (market['contract']) {\n" +
+        "            return await this.fetchContractOHLCV();\n" +
+        "        } else {\n" +
+        "            return await this.fetchSpotOHLCV();\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method with deeply nested if/else-if/else-if/else all returning does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetch(x: number): Promise<string> {\n" +
+        "        if (x === 1) {\n" +
+        "            return \"a\";\n" +
+        "        } else if (x === 2) {\n" +
+        "            return \"b\";\n" +
+        "        } else if (x === 3) {\n" +
+        "            return \"c\";\n" +
+        "        } else {\n" +
+        "            return \"d\";\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method with if/else-if/else where middle branch missing return still works', () => {
+        const input =
+        "class T {\n" +
+        "    async fetch(x: number): Promise<any> {\n" +
+        "        if (x === 1) {\n" +
+        "            return \"a\";\n" +
+        "        } else if (x === 2) {\n" +
+        "            const y = x;\n" +
+        "        } else {\n" +
+        "            return \"c\";\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // middle branch doesn't return, so return null is needed
+        expect(output).toContain("return null;");
+    });
+
     test('async method with if/else where both throw does not add return null', () => {
         const input =
         "class T {\n" +
