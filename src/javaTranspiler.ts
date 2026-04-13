@@ -1104,7 +1104,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
             // Check if last statement is a return — if not, add return null for supplyAsync lambda
             const lastStatement = remaining.length > 0 ? remaining[remaining.length - 1] : (node.body.statements.length > 0 ? node.body.statements[node.body.statements.length - 1] : undefined);
-            const lastStmtIsReturn = lastStatement && ts.isReturnStatement(lastStatement);
+            const lastStmtIsReturn = lastStatement && (ts.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
             const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
                     insideWrappers +
@@ -1694,5 +1694,22 @@ export class JavaTranspiler extends BaseTranspiler {
         rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
         finalVars = finalVars.length > 0 ?  this.getIden(identation) + finalVars + "\n" : finalVars;
         return leadingComment + finalVars + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+    }
+
+    private allBranchesTerminate(node: ts.Node): boolean {
+        if (ts.isReturnStatement(node) || ts.isThrowStatement(node)) {
+            return true;
+        }
+        if (ts.isBlock(node)) {
+            const stmts = node.statements;
+            return stmts.length > 0 && this.allBranchesTerminate(stmts[stmts.length - 1]);
+        }
+        if (ts.isIfStatement(node)) {
+            if (!node.elseStatement) {
+                return false; // no else: not all paths covered
+            }
+            return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
+        }
+        return false;
     }
 }

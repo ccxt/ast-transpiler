@@ -188,6 +188,179 @@ describe('java transpiling tests', () => {
         expect(output).toContain("return null;");
     });
 
+    test('async method with if/else both returning does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(condition: boolean): Promise<string> {\n" +
+        "        if (condition) {\n" +
+        "            return await this.methodA();\n" +
+        "        } else {\n" +
+        "            return await this.methodB();\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method with if/else-if (no final else) still adds return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(x: number): Promise<string> {\n" +
+        "        if (x === 1) {\n" +
+        "            return \"a\";\n" +
+        "        } else if (x === 2) {\n" +
+        "            return \"b\";\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // else-if without final else: fallthrough possible, return null needed
+        expect(output).toContain("return null;");
+    });
+
+    test('async method with if/else-if/else all returning does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchOHLCV(uta: boolean, market: any): Promise<any> {\n" +
+        "        if (uta) {\n" +
+        "            return await this.fetchUTAOHLCV();\n" +
+        "        } else if (market['contract']) {\n" +
+        "            return await this.fetchContractOHLCV();\n" +
+        "        } else {\n" +
+        "            return await this.fetchSpotOHLCV();\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method with deeply nested if/else-if/else-if/else all returning does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetch(x: number): Promise<string> {\n" +
+        "        if (x === 1) {\n" +
+        "            return \"a\";\n" +
+        "        } else if (x === 2) {\n" +
+        "            return \"b\";\n" +
+        "        } else if (x === 3) {\n" +
+        "            return \"c\";\n" +
+        "        } else {\n" +
+        "            return \"d\";\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method with if/else-if/else where middle branch missing return still works', () => {
+        const input =
+        "class T {\n" +
+        "    async fetch(x: number): Promise<any> {\n" +
+        "        if (x === 1) {\n" +
+        "            return \"a\";\n" +
+        "        } else if (x === 2) {\n" +
+        "            const y = x;\n" +
+        "        } else {\n" +
+        "            return \"c\";\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // middle branch doesn't return, so return null is needed
+        expect(output).toContain("return null;");
+    });
+
+    test('async method with if/else where both throw does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(condition: boolean): Promise<string> {\n" +
+        "        if (condition) {\n" +
+        "            throw new Error(\"a\");\n" +
+        "        } else {\n" +
+        "            throw new Error(\"b\");\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method with if (no else) still adds return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(condition: boolean): Promise<string> {\n" +
+        "        if (condition) {\n" +
+        "            return \"a\";\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return null;");
+    });
+
+    test('async method with multi-statement if/else both ending in return does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(condition: boolean): Promise<any> {\n" +
+        "        if (condition) {\n" +
+        "            const response = await this.publicGetFoo();\n" +
+        "            const data = this.safeDict(response, 'data', {});\n" +
+        "            return this.parseTicker(data);\n" +
+        "        } else {\n" +
+        "            const response = await this.publicGetBar();\n" +
+        "            const data = this.safeDict(response, 'data', {});\n" +
+        "            return this.parseSpotTicker(data);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
+    test('async method ending with assignment still adds return null', () => {
+        const input =
+        "class T {\n" +
+        "    async process(x: any): Promise<void> {\n" +
+        "        const result = await this.fetch(x);\n" +
+        "        this.data = result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return null;");
+    });
+
+    test('async method ending with function call still adds return null', () => {
+        const input =
+        "class T {\n" +
+        "    async process(x: any): Promise<void> {\n" +
+        "        await this.doSomething(x);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return null;");
+    });
+
+    test('async method ending with for loop still adds return null', () => {
+        const input =
+        "class T {\n" +
+        "    async process(items: any[]): Promise<void> {\n" +
+        "        for (let i = 0; i < items.length; i++) {\n" +
+        "            await this.handle(items[i]);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return null;");
+    });
+
     test('basic while loop', () => {
         const input =
         "while (true) {\n" +
