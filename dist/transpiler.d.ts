@@ -731,6 +731,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printObjectLiteralBody(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
+    private allBranchesTerminate;
 }
 
 declare class Transpiler {

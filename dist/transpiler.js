@@ -5293,7 +5293,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
       const body2 = (firstStatement + remainingString).split("\n").map((line) => this.getIden(identation) + line).join("\n");
       const lastStatement = remaining.length > 0 ? remaining[remaining.length - 1] : node.body.statements.length > 0 ? node.body.statements[node.body.statements.length - 1] : void 0;
-      const lastStmtIsReturn = lastStatement && ts6.isReturnStatement(lastStatement);
+      const lastStmtIsReturn = lastStatement && (ts6.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
       const returnNull = lastStmtIsReturn ? "" : this.getIden(identation + 2) + "return null;\n";
       const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" + insideWrappers + body2 + "\n" + returnNull + this.getIden(identation + 1) + "});\n";
       return blockOpen + finalWrapperVars + asyncBody + blockClose;
@@ -5700,6 +5700,22 @@ var JavaTranspiler = class extends BaseTranspiler {
     rightPart = rightPart ? " " + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
     finalVars = finalVars.length > 0 ? this.getIden(identation) + finalVars + "\n" : finalVars;
     return leadingComment + finalVars + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+  }
+  allBranchesTerminate(node) {
+    if (ts6.isReturnStatement(node) || ts6.isThrowStatement(node)) {
+      return true;
+    }
+    if (ts6.isBlock(node)) {
+      const stmts = node.statements;
+      return stmts.length > 0 && this.allBranchesTerminate(stmts[stmts.length - 1]);
+    }
+    if (ts6.isIfStatement(node)) {
+      if (!node.elseStatement) {
+        return false;
+      }
+      return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
+    }
+    return false;
   }
 };
 
