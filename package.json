@@ -1,6 +1,6 @@
 {
   "name": "ast-transpiler",
-  "version": "0.0.81",
+  "version": "0.0.82",
   "type": "module",
   "module": "./dist/transpiler.js",
   "types": "./dist/transpiler.d.ts",
