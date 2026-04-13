@@ -249,6 +249,26 @@ describe('java transpiling tests', () => {
         expect(output).toContain("return null;");
     });
 
+    test('async method with multi-statement if/else both ending in return does not add return null', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(condition: boolean): Promise<any> {\n" +
+        "        if (condition) {\n" +
+        "            const response = await this.publicGetFoo();\n" +
+        "            const data = this.safeDict(response, 'data', {});\n" +
+        "            return this.parseTicker(data);\n" +
+        "        } else {\n" +
+        "            const response = await this.publicGetBar();\n" +
+        "            const data = this.safeDict(response, 'data', {});\n" +
+        "            return this.parseSpotTicker(data);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const returnNullCount = output.split('\n').filter(l => l.trim() === 'return null;').length;
+        expect(returnNullCount).toBe(0);
+    });
+
     test('async method ending with assignment still adds return null', () => {
         const input =
         "class T {\n" +
