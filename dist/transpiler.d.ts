@@ -643,6 +643,12 @@ declare class GoTranspiler extends BaseTranspiler {
 declare class JavaTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
+    emittedFinalVars: Set<string>;
+    pendingFinalVars: Array<{
+        orig: string;
+        final: string;
+    }>;
+    methodBodyVarNames: Set<string>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -666,6 +672,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     getBinaryExpressionPrefixes(node: any, identation: any): string;
     getFinalVarName(varName: string): string;
     getOriginalVarName(name: string): string;
+    buildFinalVarDeclarations(varNames: string[], identation: number): string;
     getObjectLiteralId(node: any): string;
     createNewNodeForFinalVar(originalName: string): ts.Identifier;
     getVarListFromObjectLiteralAndUpdateInPlace(node: any): string[];
