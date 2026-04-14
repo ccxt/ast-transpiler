@@ -932,4 +932,43 @@ describe('java transpiling tests', () => {
         const iDecls = output.match(/final Object finalI\s*=\s*i;/g) || [];
         expect(iDecls.length).toBe(2);
     });
+
+    test('three for-loops in async method with optional params — each gets its own finalI', () => {
+        const input =
+        "class TestExchange {\n" +
+        "    async cancelOrders(ids, symbol = undefined, params = {}) {\n" +
+        "        const market = { 'id': 'BTCUSDT' };\n" +
+        "        const algoIds = ['algo1'];\n" +
+        "        const request = [];\n" +
+        "        if (algoIds !== undefined) {\n" +
+        "            for (let i = 0; i < algoIds.length; i++) {\n" +
+        "                request.push({\n" +
+        "                    'algoId': algoIds[i],\n" +
+        "                    'instId': market['id'],\n" +
+        "                });\n" +
+        "            }\n" +
+        "        }\n" +
+        "        for (let i = 0; i < ids.length; i++) {\n" +
+        "            request.push({\n" +
+        "                'ordId': ids[i],\n" +
+        "                'instId': market['id'],\n" +
+        "            });\n" +
+        "        }\n" +
+        "        for (let i = 0; i < ids.length; i++) {\n" +
+        "            request.push({\n" +
+        "                'clOrdId': ids[i],\n" +
+        "                'instId': market['id'],\n" +
+        "            });\n" +
+        "        }\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // Each of the 3 loops needs its own finalI declaration
+        const finalIDecls = output.match(/final Object finalI\s*=\s*i;/g) || [];
+        expect(finalIDecls.length).toBe(3);
+        // Each loop's GetValue should use finalI
+        const getValueCalls = output.match(/Helpers\.GetValue\(\w+, finalI\)/g) || [];
+        expect(getValueCalls.length).toBe(3);
+    });
 });
