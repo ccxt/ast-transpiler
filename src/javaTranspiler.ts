@@ -728,16 +728,17 @@ export class JavaTranspiler extends BaseTranspiler {
         const inlineVars = [];
         for (const v of varNames) {
             const finalName = this.getFinalVarName(v);
-            if (!this.emittedFinalVars.has(finalName)) {
-                this.emittedFinalVars.add(finalName);
-                const origName = this.getOriginalVarName(v);
-                if (this.methodBodyVarNames.has(origName)) {
-                    // Variable is declared at method body level — hoist
+            const origName = this.getOriginalVarName(v);
+            if (this.methodBodyVarNames.has(origName)) {
+                // Variable is declared at method body level — hoist (deduplicate across method)
+                if (!this.emittedFinalVars.has(finalName)) {
+                    this.emittedFinalVars.add(finalName);
                     this.pendingFinalVars.push({ orig: origName, final: finalName });
-                } else {
-                    // Variable is local to a nested block (loop/if) — emit inline
-                    inlineVars.push(v);
                 }
+            } else {
+                // Variable is local to a nested block (loop/if) — emit inline
+                // No dedup: each block scope (e.g., separate for-loops) needs its own declaration
+                inlineVars.push(v);
             }
         }
         if (inlineVars.length === 0) {

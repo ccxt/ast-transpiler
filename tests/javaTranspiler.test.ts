@@ -886,4 +886,50 @@ describe('java transpiling tests', () => {
         const afterFor = output.substring(forPos);
         expect(afterFor).toMatch(/final Object finalI\b/);
     });
+
+    test('two for-loops with same variable name each get their own finalI declaration', () => {
+        const input =
+        "class T {\n" +
+        "    cancelOrders(algoIds, ids) {\n" +
+        "        const request = [];\n" +
+        "        for (let i = 0; i < algoIds.length; i++) {\n" +
+        "            request.push({ 'algoId': algoIds[i] });\n" +
+        "        }\n" +
+        "        for (let i = 0; i < ids.length; i++) {\n" +
+        "            request.push({ 'ordId': ids[i] });\n" +
+        "        }\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // Each loop needs its own final Object finalI = i; declaration
+        const declMatches = output.match(/final Object finalI\s*=\s*i;/g) || [];
+        expect(declMatches.length).toBe(2);
+    });
+
+    test('two for-loops with different loop-local vars each get their own final declarations', () => {
+        const input =
+        "class T {\n" +
+        "    parse(fees, trades) {\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < fees.length; i++) {\n" +
+        "            let code = this.safeString(fees[i], 'currency');\n" +
+        "            code = this.normalize(code);\n" +
+        "            result.push({ 'code': code, 'id': fees[i] });\n" +
+        "        }\n" +
+        "        for (let i = 0; i < trades.length; i++) {\n" +
+        "            let code = this.safeString(trades[i], 'currency');\n" +
+        "            code = this.normalize(code);\n" +
+        "            result.push({ 'code': code, 'id': trades[i] });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // Each loop has its own code and i — both need per-loop declarations
+        const codeDecls = output.match(/final Object finalCode\s*=\s*code;/g) || [];
+        expect(codeDecls.length).toBe(2);
+        const iDecls = output.match(/final Object finalI\s*=\s*i;/g) || [];
+        expect(iDecls.length).toBe(2);
+    });
 });
