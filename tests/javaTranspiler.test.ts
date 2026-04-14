@@ -528,4 +528,74 @@ describe('java transpiling tests', () => {
         expect(output).toMatch(/put\(\s*"x",\s*finalA\s*\)/);
         expect(output).toMatch(/put\(\s*"y",\s*finalB\s*\)/);
     });
+
+    // --- Regression: sequential transpileJava calls must not leak state ---
+
+    test('sequential transpileJava calls do not leak final var state between files', () => {
+        // First call — populates ReassignedVars and varListFromObjectLiterals caches
+        const input1 =
+        "class E1 {\n" +
+        "    fetch() {\n" +
+        "        let m = 'a';\n" +
+        "        m = 'b';\n" +
+        "        const r = { 'k': m };\n" +
+        "    }\n" +
+        "}"
+        const out1 = transpiler.transpileJava(input1).content;
+        expect(out1).toContain('final Object finalM = m;');
+        expect(out1).toMatch(/put\(\s*"k",\s*finalM\s*\)/);
+
+        // Second call — same structure, different class. Must still work.
+        const input2 =
+        "class E2 {\n" +
+        "    fetch() {\n" +
+        "        let m = 'a';\n" +
+        "        m = 'b';\n" +
+        "        const r = { 'k': m };\n" +
+        "    }\n" +
+        "}"
+        const out2 = transpiler.transpileJava(input2).content;
+        expect(out2).toContain('final Object finalM = m;');
+        expect(out2).toMatch(/put\(\s*"k",\s*finalM\s*\)/);
+    });
+
+    test('duplicate final var across methods in same class — each method gets its own declaration', () => {
+        const input =
+        "class Exchange {\n" +
+        "    method1() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        return { 'key': x };\n" +
+        "    }\n" +
+        "    method2() {\n" +
+        "        let x = 'c';\n" +
+        "        x = 'd';\n" +
+        "        return { 'key': x };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // Each method should have its own final declaration
+        const declCount = (output.match(/final Object finalX = x;/g) || []).length;
+        expect(declCount).toBe(2);
+    });
+
+    test('reassigned var in element-access with duplicate calls emits declaration once and both puts use finalXxx', () => {
+        const input =
+        "class Exchange {\n" +
+        "    fetchBalance() {\n" +
+        "        let code = 'BTC';\n" +
+        "        code = this.safeCurrencyCode('BTC');\n" +
+        "        let result = {};\n" +
+        "        result['BTC'] = this.safeBalance({ 'currency': code });\n" +
+        "        result['ETH'] = this.safeBalance({ 'currency': code });\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
+        expect(declCount).toBe(1);
+        const putMatches = output.match(/put\(\s*"currency",\s*(\w+)\s*\)/g) || [];
+        expect(putMatches.length).toBe(2);
+        putMatches.forEach(m => expect(m).toContain('finalCode'));
+    });
 });
