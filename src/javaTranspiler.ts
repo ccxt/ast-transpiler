@@ -72,6 +72,7 @@ export class JavaTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
 
     varListFromObjectLiterals = {};
+    emittedFinalVars: Set<string> = new Set();
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -382,8 +383,10 @@ export class JavaTranspiler extends BaseTranspiler {
             }
 
             if (finalVars.length > 0) {
-                return finalVars.map( (v, i) => `${this.getIden( i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n') + "\n" + this.getIden(identation);
-
+                const decls = this.buildFinalVarDeclarations(finalVars, identation);
+                if (decls) {
+                    return decls + "\n" + this.getIden(identation);
+                }
             }
         }
 
@@ -675,22 +678,28 @@ export class JavaTranspiler extends BaseTranspiler {
         if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
             const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(right);
             if (objVariables.length > 0) {
-                return objVariables.map( (v, i) => `${this.getIden( i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n') + "\n" + this.getIden(identation);
+                const decls = this.buildFinalVarDeclarations(objVariables, identation);
+                if (decls) {
+                    return decls + "\n" + this.getIden(identation);
+                }
             }
         } else if (right.kind === ts.SyntaxKind.CallExpression) {
             // search arguments recursively for object literals
             // eg: a[x] = this.extend(this.extend(this.extend({'a':b}, c)))
             const objectLiterals = this.getObjectLiteralFromCallExpressionArguments(right);
             if (objectLiterals.length > 0) {
-                let finalVars = '';
+                const allVars = [];
                 for (let i = 0; i < objectLiterals.length; i++) {
                     const objLiteral = objectLiterals[i];
                     const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                    if (objVariables.length > 0) {
-                        finalVars += objVariables.map( (v, j) => `${this.getIden( j > 0 || i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n');
+                    allVars.push(...objVariables);
+                }
+                if (allVars.length > 0) {
+                    const decls = this.buildFinalVarDeclarations(allVars, identation);
+                    if (decls) {
+                        return decls + "\n" + this.getIden(identation);
                     }
                 }
-                return finalVars + "\n" + this.getIden(identation);
             }
         }
         return undefined;
@@ -711,6 +720,23 @@ export class JavaTranspiler extends BaseTranspiler {
             name = this.ReservedKeywordsReplacements[name];
         }
         return name;
+    }
+
+    buildFinalVarDeclarations(varNames: string[], identation: number): string {
+        const newVars = varNames.filter(v => {
+            const finalName = this.getFinalVarName(v);
+            if (this.emittedFinalVars.has(finalName)) {
+                return false;
+            }
+            this.emittedFinalVars.add(finalName);
+            return true;
+        });
+        if (newVars.length === 0) {
+            return '';
+        }
+        return newVars.map((v, i) =>
+            `${this.getIden(i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`
+        ).join('\n');
     }
 
     getObjectLiteralId(node): string {
@@ -745,7 +771,6 @@ export class JavaTranspiler extends BaseTranspiler {
                     const finalName = this.getFinalVarName(prop.initializer.escapedText);
                     const newNode = ts.factory.createIdentifier(finalName);
                     prop.initializer = newNode;
-                    // prop.initializer.escapedText = finalName;
                 }
             } else if (prop.initializer?.kind === ts.SyntaxKind.CallExpression) {
                 // check if any of the args is an identifier that was reassigned
@@ -881,8 +906,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (declaration.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
             // iterator over object and collect variables
             const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(declaration.initializer);
-            finalVars = varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
-            // console.log('Collected vars:', varsList);
+            finalVars = this.buildFinalVarDeclarations(varsList, identation);
         } else if (declaration.initializer?.kind === ts.SyntaxKind.CallExpression) {
             const callExp = declaration.initializer;
             const args = callExp.arguments ?? [];
@@ -894,7 +918,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 }
             });
             if (varObj.length > 0) {
-                finalVars = varObj.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
+                finalVars = this.buildFinalVarDeclarations(varObj, identation);
             }
         }
 
@@ -1048,6 +1072,8 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printFunctionBody(node, identation) {
+        this.emittedFinalVars = new Set();
+        this.varListFromObjectLiterals = {};
         // keep your existing default param initializer logic, but swap C# types for Java
         const funcParams = node.parameters ?? [];
         const isAsync = this.isAsyncFunction(node);
@@ -1640,27 +1666,15 @@ export class JavaTranspiler extends BaseTranspiler {
         if (exp && exp.kind === ts.SyntaxKind.AsExpression && (exp.expression.kind === ts.SyntaxKind.ObjectLiteralExpression || ts.SyntaxKind.CallExpression)) {
             exp = exp.expression; // go over something like return {} as SomeType
         }
-        let finalVars = '';
+        const allVarNames = [];
         if (exp && exp?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
             const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
-            finalVars = varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
+            allVarNames.push(...varsList);
         } else if (exp && exp?.kind === ts.SyntaxKind.CallExpression) {
-            // const callExpr = exp;
-            // const callExprArgs = exp.arguments;
-            // if (callExprArgs && callExprArgs.length > 0) {
-            //     callExprArgs.forEach( (arg, i) => {
-            //         if (arg.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            //             const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(arg);
-            //             finalVars = finalVars + varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
-            //         }
-            //     });
-            // }
             const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(exp);
             for (const objLiteral of objectsFromCall) {
                 const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                if (varsList.length > 0) {
-                    finalVars = finalVars + varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
-                }
+                allVarNames.push(...varsList);
             }
         } else if (exp && exp?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
             const elements = exp?.elements ?? [];
@@ -1669,13 +1683,12 @@ export class JavaTranspiler extends BaseTranspiler {
                     const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(element);
                     for (const objLiteral of objectsFromCall) {
                         const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                        if (varsList.length > 0) {
-                            finalVars = finalVars + varsList.map( v=> `final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`).join('\n' + this.getIden(identation));
-                        }
+                        allVarNames.push(...varsList);
                     }
                 }
             }
         }
+        let finalVars = allVarNames.length > 0 ? this.buildFinalVarDeclarations(allVarNames, identation) : '';
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
         if (!rightPart) {

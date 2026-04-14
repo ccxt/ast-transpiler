@@ -375,4 +375,157 @@ describe('java transpiling tests', () => {
         const output = transpiler.transpileJava(input).content;
         expect(output).toBe(expected);
     });
+
+    // --- Bug 2: duplicate final variable declarations ---
+
+    test('same reassigned variable in two variable-declaration object literals does not produce duplicate final', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        const obj1 = { 'key': x };\n" +
+        "        const obj2 = { 'key': x };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // final Object finalX = x; should appear exactly once
+        const finalCount = (output.match(/final Object finalX = x;/g) || []).length;
+        expect(finalCount).toBe(1);
+        // both put() calls should use finalX
+        const putMatches = output.match(/put\(\s*"key",\s*(\w+)\s*\)/g) || [];
+        expect(putMatches.length).toBe(2);
+        putMatches.forEach(m => expect(m).toContain('finalX'));
+    });
+
+    test('same reassigned variable in two expression-statement object literals does not produce duplicate final', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        this.method1({ 'key': x });\n" +
+        "        this.method2({ 'key': x });\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const finalCount = (output.match(/final Object finalX = x;/g) || []).length;
+        expect(finalCount).toBe(1);
+        // both put() calls should use finalX, not bare x
+        const putMatches = output.match(/put\(\s*"key",\s*(\w+)\s*\)/g) || [];
+        expect(putMatches.length).toBe(2);
+        putMatches.forEach(m => expect(m).toContain('finalX'));
+    });
+
+    test('same reassigned variable in two element-access assignments does not produce duplicate final', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        let result = {};\n" +
+        "        result['a'] = this.method({ 'key': x });\n" +
+        "        result['b'] = this.method({ 'key': x });\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const finalCount = (output.match(/final Object finalX = x;/g) || []).length;
+        expect(finalCount).toBe(1);
+    });
+
+    test('same reassigned variable in variable-decl then return does not produce duplicate final', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        const obj1 = { 'key': x };\n" +
+        "        return this.method({ 'key': x });\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const finalCount = (output.match(/final Object finalX = x;/g) || []).length;
+        expect(finalCount).toBe(1);
+    });
+
+    // --- Bug 1: final var detection in nested call arguments ---
+
+    test('reassigned variable in object literal inside method call gets final wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        this.method({ 'key': x });\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toContain('finalX');
+        // the put() inside HashMap should use finalX, not x
+        expect(output).toMatch(/put\(\s*"key",\s*finalX\s*\)/);
+    });
+
+    test('reassigned variable used as value in object literal inside nested call args', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        this.method1(this.method2({ 'key': x }));\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"key",\s*finalX\s*\)/);
+    });
+
+    test('reassigned variable in object literal in element access assignment with nested call', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let code = 'a';\n" +
+        "        code = this.getCode();\n" +
+        "        let isUSDC = false;\n" +
+        "        isUSDC = true;\n" +
+        "        let result = {};\n" +
+        "        result[code] = this.safeCurrencyStructure({ 'deposit': isUSDC });\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalIsUSDC = isUSDC;');
+        expect(output).toMatch(/put\(\s*"deposit",\s*finalIsUSDC\s*\)/);
+    });
+
+    test('reassigned variable in return with call expression wrapping object literal', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        return this.method({ 'key': x });\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"key",\s*finalX\s*\)/);
+    });
+
+    test('multiple different reassigned variables in same object literal all get final wrappers', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let a = 1;\n" +
+        "        a = 2;\n" +
+        "        let b = 3;\n" +
+        "        b = 4;\n" +
+        "        const obj = { 'x': a, 'y': b };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalA = a;');
+        expect(output).toContain('final Object finalB = b;');
+        expect(output).toMatch(/put\(\s*"x",\s*finalA\s*\)/);
+        expect(output).toMatch(/put\(\s*"y",\s*finalB\s*\)/);
+    });
 });
