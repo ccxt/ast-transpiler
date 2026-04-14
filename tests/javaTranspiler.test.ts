@@ -838,4 +838,52 @@ describe('java transpiling tests', () => {
         // the loop so it captures the current iteration value, not the initial value
         expect(finalIPos).toBeGreaterThan(forPos);
     });
+
+    test('for-let loop counter with same-name method-level var (shadowing) — finalI stays inside loop', () => {
+        // If method body has `let i = 0;` AND a for-loop has `for (let i = 0; ...)`,
+        // the loop's i shadows the method's i. The final copy must be inside the loop.
+        const input =
+        "class T {\n" +
+        "    test(data) {\n" +
+        "        let i = 0;\n" +
+        "        i = 5;\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < data.length; i++) {\n" +
+        "            result.push({ 'index': i });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const forPos = output.indexOf('for (');
+        // Use word boundary to avoid matching finalIds when looking for finalI
+        const finalIMatch = output.match(/final Object finalI\b/);
+        expect(finalIMatch).not.toBeNull();
+        const finalIPos = output.indexOf(finalIMatch[0]);
+        expect(finalIPos).toBeGreaterThan(forPos);
+    });
+
+    test('for-let loop counter used in element access ids[i] — finalI inside loop', () => {
+        const input =
+        "class T {\n" +
+        "    fetchMarkets(ids) {\n" +
+        "        ids = this.filterIds(ids);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < ids.length; i++) {\n" +
+        "            result.push({ 'id': ids[i], 'index': i });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const forPos = output.indexOf('for (');
+        // finalIds should be hoisted (method param, reassigned before loop)
+        const finalIdsPos = output.indexOf('final Object finalIds');
+        expect(finalIdsPos).toBeGreaterThan(-1);
+        expect(finalIdsPos).toBeLessThan(forPos);
+        // finalI must be inside the loop (loop counter)
+        // Use regex to match finalI but not finalIds
+        const afterFor = output.substring(forPos);
+        expect(afterFor).toMatch(/final Object finalI\b/);
+    });
 });

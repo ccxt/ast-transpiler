@@ -1111,8 +1111,17 @@ export class JavaTranspiler extends BaseTranspiler {
         };
         for (const stmt of bodyStatements) {
             if (ts.isForStatement(stmt)) {
-                if (stmt.initializer && !ts.isVariableDeclarationList(stmt.initializer)) {
-                    collectLoopVars(stmt.initializer);
+                if (stmt.initializer) {
+                    if (ts.isVariableDeclarationList(stmt.initializer)) {
+                        // for (let i = 0; ...) — extract declared names
+                        for (const decl of stmt.initializer.declarations) {
+                            const name = decl.name?.['escapedText'];
+                            if (name) this.methodBodyVarNames.delete(name as string);
+                        }
+                    } else {
+                        // for (i = 0; ...) — collect identifiers from assignment
+                        collectLoopVars(stmt.initializer);
+                    }
                 }
                 if (stmt.incrementor) {
                     collectLoopVars(stmt.incrementor);
