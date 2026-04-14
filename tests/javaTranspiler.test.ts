@@ -598,4 +598,78 @@ describe('java transpiling tests', () => {
         expect(putMatches.length).toBe(2);
         putMatches.forEach(m => expect(m).toContain('finalCode'));
     });
+
+    // --- Bug: finalXxx declared inside if-block but referenced outside it ---
+
+    test('finalXxx declaration is hoisted to method level when used in multiple scopes', () => {
+        const input =
+        "class T {\n" +
+        "    safeMarket(marketId) {\n" +
+        "        marketId = this.normalize(marketId);\n" +
+        "        const market = this.findMarket(marketId);\n" +
+        "        if (market !== undefined) {\n" +
+        "            const result = {\n" +
+        "                'symbol': marketId,\n" +
+        "            };\n" +
+        "            return result;\n" +
+        "        }\n" +
+        "        return {\n" +
+        "            'symbol': marketId,\n" +
+        "        };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // final declaration must appear exactly once
+        const declCount = (output.match(/final Object finalMarketId = marketId;/g) || []).length;
+        expect(declCount).toBe(1);
+        // all put() calls should use finalMarketId
+        const putMatches = output.match(/put\(\s*"symbol",\s*(\w+)\s*\)/g) || [];
+        expect(putMatches.length).toBe(2);
+        putMatches.forEach(m => expect(m).toContain('finalMarketId'));
+        // the declaration must be BEFORE the if block (at method level), not inside it
+        const declPos = output.indexOf('final Object finalMarketId = marketId;');
+        const ifPos = output.indexOf('if (');
+        expect(declPos).toBeLessThan(ifPos);
+    });
+
+    test('finalXxx in if/else branches — declaration at method level', () => {
+        const input =
+        "class T {\n" +
+        "    fetch(code) {\n" +
+        "        code = this.normalize(code);\n" +
+        "        if (code === 'BTC') {\n" +
+        "            return { 'currency': code };\n" +
+        "        } else {\n" +
+        "            return { 'currency': code };\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
+        expect(declCount).toBe(1);
+        // declaration must be before the if
+        const declPos = output.indexOf('final Object finalCode = code;');
+        const ifPos = output.indexOf('if (');
+        expect(declPos).toBeLessThan(ifPos);
+    });
+
+    test('finalXxx in for-loop body then after loop — declaration at method level', () => {
+        const input =
+        "class T {\n" +
+        "    process(data) {\n" +
+        "        let code = 'BTC';\n" +
+        "        code = this.normalize(code);\n" +
+        "        for (let i = 0; i < data.length; i++) {\n" +
+        "            const entry = { 'currency': code };\n" +
+        "        }\n" +
+        "        return { 'currency': code };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
+        expect(declCount).toBe(1);
+        const declPos = output.indexOf('final Object finalCode = code;');
+        const forPos = output.indexOf('for (');
+        expect(declPos).toBeLessThan(forPos);
+    });
 });

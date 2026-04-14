@@ -73,6 +73,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
     varListFromObjectLiterals = {};
     emittedFinalVars: Set<string> = new Set();
+    pendingFinalVars: Array<{orig: string, final: string}> = [];
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -723,20 +724,14 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     buildFinalVarDeclarations(varNames: string[], identation: number): string {
-        const newVars = varNames.filter(v => {
+        for (const v of varNames) {
             const finalName = this.getFinalVarName(v);
-            if (this.emittedFinalVars.has(finalName)) {
-                return false;
+            if (!this.emittedFinalVars.has(finalName)) {
+                this.emittedFinalVars.add(finalName);
+                this.pendingFinalVars.push({ orig: this.getOriginalVarName(v), final: finalName });
             }
-            this.emittedFinalVars.add(finalName);
-            return true;
-        });
-        if (newVars.length === 0) {
-            return '';
         }
-        return newVars.map((v, i) =>
-            `${this.getIden(i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`
-        ).join('\n');
+        return '';
     }
 
     getObjectLiteralId(node): string {
@@ -1074,19 +1069,29 @@ export class JavaTranspiler extends BaseTranspiler {
     printFunctionBody(node, identation) {
         this.emittedFinalVars = new Set();
         this.varListFromObjectLiterals = {};
+        this.pendingFinalVars = [];
         // keep your existing default param initializer logic, but swap C# types for Java
         const funcParams = node.parameters ?? [];
         const isAsync = this.isAsyncFunction(node);
         const initParams = [];
-        // if (funcParams.length > 0) {
-        const body = node.body.statements;
-        const first = body.length > 0 ? body[0] : [];
-        const remaining = body.length > 0 ? body.slice(1) : [];
-        let firstStatement = this.printNode(first, identation + 1);
-
-        const remainingString = remaining
-            .map((statement) => this.printNode(statement, identation + 1))
-            .join("\n");
+        // Process each statement and hoist final var declarations to method body level
+        const bodyStatements = node.body.statements;
+        const processedParts = [];
+        for (let i = 0; i < bodyStatements.length; i++) {
+            const pendingBefore = this.pendingFinalVars.length;
+            const printed = this.printNode(bodyStatements[i], identation + 1);
+            if (this.pendingFinalVars.length > pendingBefore) {
+                const newVars = this.pendingFinalVars.slice(pendingBefore);
+                const decls = newVars.map(v =>
+                    this.getIden(identation + 1) + `final Object ${v.final} = ${v.orig};`
+                ).join('\n');
+                processedParts.push(decls + '\n' + printed);
+            } else {
+                processedParts.push(printed);
+            }
+        }
+        let firstStatement = processedParts[0] || '';
+        const remainingString = processedParts.slice(1).join("\n");
         let offSetIndex = 0;
         funcParams.forEach((param, i) => {
             const initializer = param.initializer;
@@ -1129,7 +1134,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
             // Check if last statement is a return — if not, add return null for supplyAsync lambda
-            const lastStatement = remaining.length > 0 ? remaining[remaining.length - 1] : (node.body.statements.length > 0 ? node.body.statements[node.body.statements.length - 1] : undefined);
+            const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : (bodyStatements.length > 0 ? bodyStatements[0] : undefined);
             const lastStmtIsReturn = lastStatement && (ts.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
             const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
