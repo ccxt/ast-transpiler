@@ -971,4 +971,33 @@ describe('java transpiling tests', () => {
         const getValueCalls = output.match(/Helpers\.GetValue\(\w+, finalI\)/g) || [];
         expect(getValueCalls.length).toBe(3);
     });
+
+    // --- Bug: ternary/ConditionalExpression not handled for final var replacement ---
+
+    test('reassigned variable inside ternary expression in object literal gets finalXxx', () => {
+        const input =
+        "class T {\n" +
+        "    test(data) {\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < data.length; i++) {\n" +
+        "            let type = this.safeString(data[i], 'type');\n" +
+        "            type = this.normalize(type);\n" +
+        "            result.push({\n" +
+        "                'type': type,\n" +
+        "                'spot': type === 'spot',\n" +
+        "                'linear': (type === 'swap') ? true : undefined,\n" +
+        "                'inverse': (type === 'swap') ? false : undefined,\n" +
+        "            });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // All values referencing type must use finalType (check each put's value part)
+        expect(output).toContain('put( "type", finalType )');
+        expect(output).toContain('Helpers.isEqual(finalType, "spot")');
+        // finalType must appear in ternary expressions too (not raw 'type')
+        expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? true/);
+        expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? false/);
+    });
 });

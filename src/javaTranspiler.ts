@@ -900,6 +900,41 @@ export class JavaTranspiler extends BaseTranspiler {
                     }
                 }
             }
+            else if (prop.initializer?.kind === ts.SyntaxKind.ConditionalExpression) {
+                // handle ternary: (type === 'swap') ? true : undefined
+                // Traverse the condition/whenTrue/whenFalse and replace identifiers in place
+                const traverseAndReplace = (node) => {
+                    if (!node) return;
+                    if (node.kind === ts.SyntaxKind.Identifier && node.escapedText !== 'undefined' && !node.escapedText?.startsWith('null')) {
+                        if (this.ReassignedVars[this.getVarKey(node)]) {
+                            res.push(node.escapedText);
+                            node.escapedText = this.getFinalVarName(node.escapedText);
+                        }
+                        return;
+                    }
+                    if (node.kind === ts.SyntaxKind.BinaryExpression) {
+                        traverseAndReplace(node.left);
+                        traverseAndReplace(node.right);
+                    } else if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+                        traverseAndReplace(node.expression);
+                    } else if (node.kind === ts.SyntaxKind.ConditionalExpression) {
+                        traverseAndReplace(node.condition);
+                        traverseAndReplace(node.whenTrue);
+                        traverseAndReplace(node.whenFalse);
+                    } else if (node.kind === ts.SyntaxKind.CallExpression) {
+                        node.arguments?.forEach(arg => traverseAndReplace(arg));
+                        if (node.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
+                            traverseAndReplace(node.expression.expression);
+                        }
+                    } else if (node.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+                        traverseAndReplace(node.operand);
+                    }
+                };
+                const cond = prop.initializer;
+                traverseAndReplace(cond.condition);
+                traverseAndReplace(cond.whenTrue);
+                traverseAndReplace(cond.whenFalse);
+            }
             else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
                 const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
                 res = res.concat(innerVars);
