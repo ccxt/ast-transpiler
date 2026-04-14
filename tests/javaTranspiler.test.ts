@@ -672,4 +672,73 @@ describe('java transpiling tests', () => {
         const forPos = output.indexOf('for (');
         expect(declPos).toBeLessThan(forPos);
     });
+
+    // --- Bug: over-aggressive hoisting of loop-local variables ---
+
+    test('loop-local variable final declaration stays inside the loop, not hoisted to method body', () => {
+        const input =
+        "class T {\n" +
+        "    parseFees(fees) {\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < fees.length; i++) {\n" +
+        "            let code = this.safeString(fees[i], 'currency');\n" +
+        "            code = this.safeCurrencyCode(code);\n" +
+        "            result.push({ 'code': code });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // finalCode declaration must exist
+        expect(output).toContain('final Object finalCode = code;');
+        // finalCode must be AFTER the for loop starts (inside the loop body)
+        const declPos = output.indexOf('final Object finalCode = code;');
+        const forPos = output.indexOf('for (');
+        expect(declPos).toBeGreaterThan(forPos);
+    });
+
+    test('method-param variable IS hoisted but loop-local variable is NOT in same method', () => {
+        const input =
+        "class T {\n" +
+        "    process(marketId, fees) {\n" +
+        "        marketId = this.normalize(marketId);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < fees.length; i++) {\n" +
+        "            let code = this.safeString(fees[i], 'currency');\n" +
+        "            code = this.safeCurrencyCode(code);\n" +
+        "            result.push({ 'market': marketId, 'code': code });\n" +
+        "        }\n" +
+        "        return { 'market': marketId };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // marketId is a method param reassigned at method body level → hoisted
+        const marketDeclPos = output.indexOf('final Object finalMarketId = marketId;');
+        const forPos = output.indexOf('for (');
+        expect(marketDeclPos).toBeGreaterThan(-1);
+        expect(marketDeclPos).toBeLessThan(forPos);
+        // code is loop-local → NOT hoisted, stays inside loop
+        const codeDeclPos = output.indexOf('final Object finalCode = code;');
+        expect(codeDeclPos).toBeGreaterThan(-1);
+        expect(codeDeclPos).toBeGreaterThan(forPos);
+    });
+
+    test('variable declared inside if-block final decl stays inside if-block', () => {
+        const input =
+        "class T {\n" +
+        "    fetch(condition) {\n" +
+        "        if (condition) {\n" +
+        "            let code = 'BTC';\n" +
+        "            code = this.normalize(code);\n" +
+        "            return { 'currency': code };\n" +
+        "        }\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // finalCode must be inside the if block
+        const declPos = output.indexOf('final Object finalCode = code;');
+        const ifPos = output.indexOf('if (');
+        expect(declPos).toBeGreaterThan(ifPos);
+    });
 });

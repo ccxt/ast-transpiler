@@ -74,6 +74,7 @@ export class JavaTranspiler extends BaseTranspiler {
     varListFromObjectLiterals = {};
     emittedFinalVars: Set<string> = new Set();
     pendingFinalVars: Array<{orig: string, final: string}> = [];
+    methodBodyVarNames: Set<string> = new Set();
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -724,14 +725,27 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     buildFinalVarDeclarations(varNames: string[], identation: number): string {
+        const inlineVars = [];
         for (const v of varNames) {
             const finalName = this.getFinalVarName(v);
             if (!this.emittedFinalVars.has(finalName)) {
                 this.emittedFinalVars.add(finalName);
-                this.pendingFinalVars.push({ orig: this.getOriginalVarName(v), final: finalName });
+                const origName = this.getOriginalVarName(v);
+                if (this.methodBodyVarNames.has(origName)) {
+                    // Variable is declared at method body level — hoist
+                    this.pendingFinalVars.push({ orig: origName, final: finalName });
+                } else {
+                    // Variable is local to a nested block (loop/if) — emit inline
+                    inlineVars.push(v);
+                }
             }
         }
-        return '';
+        if (inlineVars.length === 0) {
+            return '';
+        }
+        return inlineVars.map((v, i) =>
+            `${this.getIden(i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`
+        ).join('\n');
     }
 
     getObjectLiteralId(node): string {
@@ -1070,12 +1084,27 @@ export class JavaTranspiler extends BaseTranspiler {
         this.emittedFinalVars = new Set();
         this.varListFromObjectLiterals = {};
         this.pendingFinalVars = [];
-        // keep your existing default param initializer logic, but swap C# types for Java
+        // Collect method-body-level variable names (parameters + top-level declarations)
+        // so buildFinalVarDeclarations can decide whether to hoist or emit inline.
+        this.methodBodyVarNames = new Set();
         const funcParams = node.parameters ?? [];
+        funcParams.forEach(p => {
+            const name = p.name?.escapedText;
+            if (name) this.methodBodyVarNames.add(name);
+        });
+        const bodyStatements = node.body.statements;
+        for (const stmt of bodyStatements) {
+            if (ts.isVariableStatement(stmt)) {
+                for (const decl of stmt.declarationList.declarations) {
+                    const name = decl.name?.['escapedText'];
+                    if (name) this.methodBodyVarNames.add(name);
+                }
+            }
+        }
         const isAsync = this.isAsyncFunction(node);
         const initParams = [];
         // Process each statement and hoist final var declarations to method body level
-        const bodyStatements = node.body.statements;
+        // when the source variable is at method-body scope. Loop/block-local vars stay inline.
         const processedParts = [];
         for (let i = 0; i < bodyStatements.length; i++) {
             const pendingBefore = this.pendingFinalVars.length;
