@@ -741,4 +741,101 @@ describe('java transpiling tests', () => {
         const ifPos = output.indexOf('if (');
         expect(declPos).toBeGreaterThan(ifPos);
     });
+
+    // --- Loop variable final declarations must stay inside the loop ---
+
+    test('for-loop counter i gets finalI inside loop body, not at method level', () => {
+        const input =
+        "class T {\n" +
+        "    test(arr) {\n" +
+        "        for (let i = 0; i < arr.length; i++) {\n" +
+        "            const obj = { 'index': i };\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('finalI');
+        const declPos = output.indexOf('final Object finalI');
+        const forPos = output.indexOf('for (');
+        // finalI must be inside the loop body, not before the loop
+        expect(declPos).toBeGreaterThan(forPos);
+    });
+
+    test('loop-local reassigned var and loop counter both stay inside loop', () => {
+        const input =
+        "class T {\n" +
+        "    parseOrders(orders) {\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < orders.length; i++) {\n" +
+        "            let deposit = this.safeValue(orders[i], 'deposit');\n" +
+        "            deposit = this.parseDeposit(deposit);\n" +
+        "            result.push({\n" +
+        "                'index': i,\n" +
+        "                'deposit': deposit,\n" +
+        "            });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const forPos = output.indexOf('for (');
+        // Both finalI and finalDeposit must be inside the loop
+        const finalIPos = output.indexOf('final Object finalI');
+        const finalDepositPos = output.indexOf('final Object finalDeposit');
+        expect(finalIPos).toBeGreaterThan(forPos);
+        expect(finalDepositPos).toBeGreaterThan(forPos);
+    });
+
+    test('method param hoisted, loop counter and loop-local stay inside loop', () => {
+        const input =
+        "class T {\n" +
+        "    parseOrders(orders, marketId) {\n" +
+        "        marketId = this.normalize(marketId);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < orders.length; i++) {\n" +
+        "            let deposit = this.safeValue(orders[i], 'deposit');\n" +
+        "            deposit = this.parseDeposit(deposit);\n" +
+        "            result.push({\n" +
+        "                'index': i,\n" +
+        "                'deposit': deposit,\n" +
+        "                'market': marketId,\n" +
+        "            });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const forPos = output.indexOf('for (');
+        // marketId is method param → hoisted before loop
+        const finalMarketPos = output.indexOf('final Object finalMarketId');
+        expect(finalMarketPos).toBeGreaterThan(-1);
+        expect(finalMarketPos).toBeLessThan(forPos);
+        // i and deposit are loop-scoped → inside loop
+        const finalIPos = output.indexOf('final Object finalI');
+        const finalDepositPos = output.indexOf('final Object finalDeposit');
+        expect(finalIPos).toBeGreaterThan(forPos);
+        expect(finalDepositPos).toBeGreaterThan(forPos);
+    });
+
+    test('method-level var reused as loop counter — finalXxx stays inside loop (per-iteration capture)', () => {
+        // When `let i` is declared at method level but reassigned in a for loop,
+        // the final copy must be inside the loop to capture the per-iteration value
+        const input =
+        "class T {\n" +
+        "    test(data) {\n" +
+        "        let i = 0;\n" +
+        "        const result = [];\n" +
+        "        for (i = 0; i < data.length; i++) {\n" +
+        "            result.push({ 'index': i });\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const forPos = output.indexOf('for (');
+        const finalIPos = output.indexOf('final Object finalI');
+        // Even though i is declared at method level, its final copy must be inside
+        // the loop so it captures the current iteration value, not the initial value
+        expect(finalIPos).toBeGreaterThan(forPos);
+    });
 });

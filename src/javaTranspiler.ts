@@ -1101,6 +1101,24 @@ export class JavaTranspiler extends BaseTranspiler {
                 }
             }
         }
+        // Remove variables that are reassigned per-iteration in for-loops
+        // (loop counters must NOT be hoisted — their final copy must be per-iteration)
+        const collectLoopVars = (n: ts.Node) => {
+            if (ts.isIdentifier(n)) {
+                this.methodBodyVarNames.delete(n.escapedText as string);
+            }
+            ts.forEachChild(n, collectLoopVars);
+        };
+        for (const stmt of bodyStatements) {
+            if (ts.isForStatement(stmt)) {
+                if (stmt.initializer && !ts.isVariableDeclarationList(stmt.initializer)) {
+                    collectLoopVars(stmt.initializer);
+                }
+                if (stmt.incrementor) {
+                    collectLoopVars(stmt.incrementor);
+                }
+            }
+        }
         const isAsync = this.isAsyncFunction(node);
         const initParams = [];
         // Process each statement and hoist final var declarations to method body level
