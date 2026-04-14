@@ -1000,4 +1000,61 @@ describe('java transpiling tests', () => {
         expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? true/);
         expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? false/);
     });
+
+    test('nested ternary with reassigned variable', () => {
+        const input =
+        "class T {\n" +
+        "    test() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        const obj = { 'v': x ? (x === 'a' ? 1 : 2) : 0 };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        // no raw x should appear inside the HashMap put values
+        expect(output).not.toMatch(/put\(\s*"v",.*\bx\b/);
+    });
+
+    // --- Integration: realistic exchange pattern combining all features ---
+
+    test('async method with hoisted param, loop-local vars, ternaries, and two loops', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchData(marketId, params = {}) {\n" +
+        "        marketId = this.normalize(marketId);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < 10; i++) {\n" +
+        "            let code = this.safeString(params, 'code');\n" +
+        "            code = this.safeCurrencyCode(code);\n" +
+        "            let type = this.safeString(params, 'type');\n" +
+        "            type = this.normalize(type);\n" +
+        "            result.push({\n" +
+        "                'market': marketId,\n" +
+        "                'index': i,\n" +
+        "                'code': code,\n" +
+        "                'isSpot': type === 'spot',\n" +
+        "                'linear': (type === 'swap') ? true : undefined,\n" +
+        "            });\n" +
+        "        }\n" +
+        "        for (let i = 0; i < 5; i++) {\n" +
+        "            let code = this.safeString(params, 'alt');\n" +
+        "            code = this.normalize(code);\n" +
+        "            result.push({ 'market': marketId, 'altCode': code, 'idx': i });\n" +
+        "        }\n" +
+        "        return { 'market': marketId, 'results': result };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // every finalXxx reference must have a matching declaration
+        const allRefs = [...output.matchAll(/\\b(final[A-Z]\\w+)\\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\\w+)\\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+        // marketId hoisted (1 decl), code per-loop (2), i per-loop (2), type in first loop (1)
+        expect((output.match(/final Object finalMarketId/g) || []).length).toBe(1);
+        expect((output.match(/final Object finalCode/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalI\b/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalType/g) || []).length).toBe(1);
+    });
 });
