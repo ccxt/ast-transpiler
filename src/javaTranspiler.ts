@@ -773,6 +773,36 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.varListFromObjectLiterals[nodeId];
         }
 
+        // shared helper: walks an expression and replaces identifiers of
+        // reassigned variables with their finalXxx counterparts in place.
+        const traverseAndReplace = (n) => {
+            if (!n) return;
+            if (n.kind === ts.SyntaxKind.Identifier && n.escapedText !== 'undefined' && !n.escapedText?.startsWith('null')) {
+                if (this.ReassignedVars[this.getVarKey(n)]) {
+                    res.push(n.escapedText);
+                    n.escapedText = this.getFinalVarName(n.escapedText);
+                }
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.BinaryExpression) {
+                traverseAndReplace(n.left);
+                traverseAndReplace(n.right);
+            } else if (n.kind === ts.SyntaxKind.ParenthesizedExpression) {
+                traverseAndReplace(n.expression);
+            } else if (n.kind === ts.SyntaxKind.ConditionalExpression) {
+                traverseAndReplace(n.condition);
+                traverseAndReplace(n.whenTrue);
+                traverseAndReplace(n.whenFalse);
+            } else if (n.kind === ts.SyntaxKind.CallExpression) {
+                n.arguments?.forEach(arg => traverseAndReplace(arg));
+                if (n.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
+                    traverseAndReplace(n.expression.expression);
+                }
+            } else if (n.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+                traverseAndReplace(n.operand);
+            }
+        };
+
         node.properties.forEach( (prop) => {
             if (prop.initializer?.kind === ts.SyntaxKind.Identifier && prop.initializer.escapedText !== 'undefined' && !prop.initializer.escapedText.startsWith('null')) {
                 // if (this.ReassignedVars[prop.initializer.escapedText]) {
@@ -902,38 +932,14 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             else if (prop.initializer?.kind === ts.SyntaxKind.ConditionalExpression) {
                 // handle ternary: (type === 'swap') ? true : undefined
-                // Traverse the condition/whenTrue/whenFalse and replace identifiers in place
-                const traverseAndReplace = (node) => {
-                    if (!node) return;
-                    if (node.kind === ts.SyntaxKind.Identifier && node.escapedText !== 'undefined' && !node.escapedText?.startsWith('null')) {
-                        if (this.ReassignedVars[this.getVarKey(node)]) {
-                            res.push(node.escapedText);
-                            node.escapedText = this.getFinalVarName(node.escapedText);
-                        }
-                        return;
-                    }
-                    if (node.kind === ts.SyntaxKind.BinaryExpression) {
-                        traverseAndReplace(node.left);
-                        traverseAndReplace(node.right);
-                    } else if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
-                        traverseAndReplace(node.expression);
-                    } else if (node.kind === ts.SyntaxKind.ConditionalExpression) {
-                        traverseAndReplace(node.condition);
-                        traverseAndReplace(node.whenTrue);
-                        traverseAndReplace(node.whenFalse);
-                    } else if (node.kind === ts.SyntaxKind.CallExpression) {
-                        node.arguments?.forEach(arg => traverseAndReplace(arg));
-                        if (node.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
-                            traverseAndReplace(node.expression.expression);
-                        }
-                    } else if (node.kind === ts.SyntaxKind.PrefixUnaryExpression) {
-                        traverseAndReplace(node.operand);
-                    }
-                };
                 const cond = prop.initializer;
                 traverseAndReplace(cond.condition);
                 traverseAndReplace(cond.whenTrue);
                 traverseAndReplace(cond.whenFalse);
+            }
+            else if (prop.initializer?.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+                // handle prefix unary: !isSpot, -count, !(a && b), !foo.bar()
+                traverseAndReplace(prop.initializer.operand);
             }
             else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
                 const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
