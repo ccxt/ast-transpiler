@@ -1001,6 +1001,33 @@ describe('java transpiling tests', () => {
         expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? false/);
     });
 
+    // --- Bug: PrefixUnaryExpression not handled for final var replacement ---
+
+    test('reassigned variable inside prefix unary expression in object literal gets finalXxx', () => {
+        const input =
+        "class T {\n" +
+        "    demo(x) {\n" +
+        "        let isSpot = true;\n" +
+        "        if (x !== undefined) {\n" +
+        "            isSpot = false;\n" +
+        "        }\n" +
+        "        return {\n" +
+        "            'spot': isSpot,\n" +
+        "            'type': isSpot ? 'spot' : 'swap',\n" +
+        "            'swap': !isSpot,\n" +
+        "            'contract': !isSpot,\n" +
+        "        };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalIsSpot = isSpot;');
+        // The !isSpot values must reference finalIsSpot, not raw isSpot
+        expect(output).toMatch(/put\(\s*"swap",\s*!Helpers\.isTrue\(finalIsSpot\)\s*\)/);
+        expect(output).toMatch(/put\(\s*"contract",\s*!Helpers\.isTrue\(finalIsSpot\)\s*\)/);
+        // No put value should reference raw isSpot
+        expect(output).not.toMatch(/put\(\s*"[^"]+",[^)]*\bisSpot\b/);
+    });
+
     test('nested ternary with reassigned variable', () => {
         const input =
         "class T {\n" +
