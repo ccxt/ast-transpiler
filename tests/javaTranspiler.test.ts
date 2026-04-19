@@ -1194,6 +1194,66 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/put\(\s*"p",\s*x\.a\s*\)/);
     });
 
+    // Bug shape A (developer report): variable declared inside a nested block
+    // and conditionally reassigned must still get a final snapshot before its
+    // capture inside an object literal. Earlier versions only hoisted vars
+    // declared at the top of the function body.
+    test('object literal: var declared in nested block and reassigned conditionally gets final snapshot', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async handleAccountIndex(params: any, methodName1: string): Promise<any> {\n" +
+        "        let accountIndex = undefined;\n" +
+        "        if (accountIndex === undefined) {\n" +
+        "            let walletAddress = this.walletAddress;\n" +
+        "            if (this.privateKey !== undefined) {\n" +
+        "                walletAddress = this.deriveAddress(this.privateKey);\n" +
+        "            }\n" +
+        "            const res = this.getByAddress({ 'l1_address': walletAddress });\n" +
+        "            return res;\n" +
+        "        }\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    walletAddress: any; privateKey: any;\n" +
+        "    deriveAddress(k: any) { return k; }\n" +
+        "    getByAddress(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalWalletAddress = walletAddress;');
+        expect(output).toMatch(/put\(\s*"l1_address",\s*finalWalletAddress\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"l1_address",\s*walletAddress\s*\)/);
+    });
+
+    // Bug shape B (developer report): identifiers inside sub-expressions
+    // (BinaryExpression, ParenthesizedExpression, etc.) used as property values
+    // must also be remapped to the finalXxx name. Earlier versions only
+    // remapped top-level Identifier property values, leaving the binary
+    // expression's left side referencing the raw (non-final) name.
+    test('object literal: identifier nested in BinaryExpression property value is remapped to finalXxx', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async parsePosition(marginModeId: number): Promise<any> {\n" +
+        "        let marginMode = undefined;\n" +
+        "        if (marginModeId !== undefined) {\n" +
+        "            marginMode = (marginModeId === 0) ? 'cross' : 'isolated';\n" +
+        "        }\n" +
+        "        return this.safePosition({\n" +
+        "            'isolated': (marginMode === 'isolated'),\n" +
+        "            'marginMode': marginMode,\n" +
+        "        });\n" +
+        "    }\n" +
+        "    safePosition(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalMarginMode = marginMode;');
+        // Plain-identifier property value: remapped.
+        expect(output).toMatch(/put\(\s*"marginMode",\s*finalMarginMode\s*\)/);
+        // Identifier nested inside a BinaryExpression must also be remapped.
+        expect(output).toMatch(/put\(\s*"isolated",[^)]*\bfinalMarginMode\b[^)]*\)/);
+        expect(output).not.toMatch(/Helpers\.isEqual\(\s*marginMode\b/);
+    });
+
     // --- Async method param wrapper: keyword-remapped names must round-trip ---
     // The async-method wrapper hoists each reassigned param into a final snapshot
     // outside the supplyAsync lambda and re-binds the original name inside it.
