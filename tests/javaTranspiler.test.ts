@@ -1198,7 +1198,10 @@ describe('java transpiling tests', () => {
     // and conditionally reassigned must still get a final snapshot before its
     // capture inside an object literal. Earlier versions only hoisted vars
     // declared at the top of the function body.
-    test('object literal: var declared in nested block and reassigned conditionally gets final snapshot', () => {
+    test('object literal: var declared in nested block and reassigned conditionally gets final snapshot (await-wrapped call initializer)', () => {
+        // The reported shape uses `const res = await this.x({...})` — the
+        // initializer's top kind is AwaitExpression, not CallExpression, so
+        // the old narrow branches in printVariableDeclarationList missed it.
         const fresh = new Transpiler();
         const input =
         "class T {\n" +
@@ -1209,19 +1212,73 @@ describe('java transpiling tests', () => {
         "            if (this.privateKey !== undefined) {\n" +
         "                walletAddress = this.deriveAddress(this.privateKey);\n" +
         "            }\n" +
-        "            const res = this.getByAddress({ 'l1_address': walletAddress });\n" +
+        "            const res = await this.getByAddress({ 'l1_address': walletAddress });\n" +
         "            return res;\n" +
         "        }\n" +
         "        return undefined;\n" +
         "    }\n" +
         "    walletAddress: any; privateKey: any;\n" +
         "    deriveAddress(k: any) { return k; }\n" +
-        "    getByAddress(p: any) { return p; }\n" +
+        "    async getByAddress(p: any) { return p; }\n" +
         "}";
         const output = fresh.transpileJava(input).content;
         expect(output).toContain('final Object finalWalletAddress = walletAddress;');
         expect(output).toMatch(/put\(\s*"l1_address",\s*finalWalletAddress\s*\)/);
         expect(output).not.toMatch(/put\(\s*"l1_address",\s*walletAddress\s*\)/);
+    });
+
+    // Extra initializer wrapping shapes where an ObjectLiteralExpression that
+    // captures a reassigned var is nested under a non-CallExpression wrapper.
+    // All of these previously skipped the hoist because the old branches only
+    // matched ObjectLiteralExpression or CallExpression directly.
+    test('object literal: initializer wrapped in ParenthesizedExpression still hoists final', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let x: any = 1;\n" +
+        "        x = 2;\n" +
+        "        const res = (this.f({ 'k': x }));\n" +
+        "        return res;\n" +
+        "    }\n" +
+        "    f(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"k",\s*finalX\s*\)/);
+    });
+
+    test('object literal: initializer wrapped in AwaitExpression+ObjectLiteral hoists final', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async demo() {\n" +
+        "        let x: any = 1;\n" +
+        "        x = 2;\n" +
+        "        const res = await this.f({ 'k': x });\n" +
+        "        return res;\n" +
+        "    }\n" +
+        "    async f(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"k",\s*finalX\s*\)/);
+    });
+
+    test('object literal: initializer is ternary containing an ObjectLiteral branch', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let x: any = 1;\n" +
+        "        x = 2;\n" +
+        "        const res = (x > 0) ? { 'k': x } : undefined;\n" +
+        "        return res;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"k",\s*finalX\s*\)/);
     });
 
     // Bug shape B (developer report): identifiers inside sub-expressions

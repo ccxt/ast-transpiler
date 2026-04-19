@@ -672,6 +672,37 @@ export class JavaTranspiler extends BaseTranspiler {
         return res;
     }
 
+    // Finds every ObjectLiteralExpression nested anywhere inside an RHS/initializer
+    // expression that would produce an anonymous-inner-class capture in Java
+    // (HashMap double-brace init). Stops descending at each ObjectLiteralExpression
+    // because nested literals are walked recursively inside
+    // getVarListFromObjectLiteralAndUpdateInPlace. Skips function/arrow bodies so
+    // we don't capture literals that evaluate in a different scope.
+    //
+    // Unifies the previously-narrow matching in printVariableDeclarationList and
+    // getBinaryExpressionPrefixes which only handled ObjectLiteralExpression or
+    // CallExpression directly — missing wrappers like AwaitExpression,
+    // ParenthesizedExpression, NewExpression, and ConditionalExpression.
+    collectCapturingObjectLiterals(node): any[] {
+        const found = [];
+        const walk = (n) => {
+            if (!n) return;
+            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                found.push(n);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.FunctionExpression ||
+                n.kind === ts.SyntaxKind.ArrowFunction ||
+                n.kind === ts.SyntaxKind.MethodDeclaration ||
+                n.kind === ts.SyntaxKind.FunctionDeclaration) {
+                return;
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(node);
+        return found;
+    }
+
     getBinaryExpressionPrefixes(node, identation) {
         let right = node?.right;
         if (right?.kind === ts.SyntaxKind.AwaitExpression) {
@@ -1070,20 +1101,16 @@ export class JavaTranspiler extends BaseTranspiler {
         const declaration = node.declarations[0];
 
         let finalVars = '';
-        if (declaration.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            // iterator over object and collect variables
-            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(declaration.initializer);
-            finalVars = this.buildFinalVarDeclarations(varsList, identation);
-        } else if (declaration.initializer?.kind === ts.SyntaxKind.CallExpression) {
-            const callExp = declaration.initializer;
-            const args = callExp.arguments ?? [];
+        if (declaration.initializer) {
+            // Walk the whole initializer tree — handles AwaitExpression,
+            // ParenthesizedExpression, NewExpression, ConditionalExpression,
+            // nested CallExpressions, etc. uniformly.
+            const objLiterals = this.collectCapturingObjectLiterals(declaration.initializer);
             let varObj = [];
-            args.forEach( (arg) => {
-                if (arg.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                    const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(arg);
-                    varObj = varObj.concat(objVariables);
-                }
-            });
+            for (const lit of objLiterals) {
+                const vars = this.getVarListFromObjectLiteralAndUpdateInPlace(lit);
+                varObj = varObj.concat(vars);
+            }
             if (varObj.length > 0) {
                 finalVars = this.buildFinalVarDeclarations(varObj, identation);
             }
