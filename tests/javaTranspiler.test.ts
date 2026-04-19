@@ -1119,6 +1119,81 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/final Object finalParameters\s*=\s*params\s*;/);
     });
 
+    // --- Object-literal substitution coverage gaps ---
+    // The anonymous inner-class HashMap requires every captured variable to be
+    // effectively final. Each of these expression shapes used to leave the
+    // reassigned identifier raw inside the inner class, producing invalid Java.
+
+    test('object literal: postfix unary on reassigned counter gets finalized', () => {
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let i = 0;\n" +
+        "        i = 1;\n" +
+        "        const a = { 'q': i++ };\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        // The inner-class put must reference finalI, not raw i++ (which mutates a captured var).
+        expect(output).toContain('final Object finalI = i;');
+        // The inner class must not reference bare i in any capacity (would fail effectively-final).
+        expect(output).not.toMatch(/put\(\s*"q",\s*i\+\+\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"q",[^)]*\bi\b(?!nal)/);
+    });
+
+    test('object literal: ElementAccessExpression inside a call argument substitutes the index', () => {
+        const input =
+        "class T {\n" +
+        "    demo(arr: any[]) {\n" +
+        "        let i = 0;\n" +
+        "        i = 1;\n" +
+        "        const a = { 'p': this.unwrap(arr[i]) };\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "    unwrap(x: any) { return x; }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalI = i;');
+        // The index inside the inner-class put must read finalI, not raw i.
+        expect(output).toMatch(/put\(\s*"p",[^)]*\bfinalI\b/);
+        expect(output).not.toMatch(/put\(\s*"p",[^)]*GetValue\(\s*arr,\s*i\s*\)/);
+    });
+
+    test('object literal: nested object literal inside a ternary branch substitutes inner identifiers', () => {
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let a = 1;\n" +
+        "        a = 2;\n" +
+        "        const o = { 'p': (a > 0) ? { 'q': a } : undefined };\n" +
+        "        return o;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalA = a;');
+        // The inner literal's `q` value must use finalA, not raw a.
+        expect(output).toMatch(/put\(\s*"q",\s*finalA\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"q",\s*a\s*\)/);
+    });
+
+    test('object literal: PropertyAccessExpression on reassigned receiver substitutes the receiver', () => {
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let x: any = {};\n" +
+        "        x = { a: 1 };\n" +
+        "        const o = { 'p': x.a };\n" +
+        "        return o;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        // The .a access inside the inner-class put must read finalX, not raw x.
+        expect(output).toMatch(/put\(\s*"p",[^)]*\bfinalX\b/);
+        expect(output).not.toMatch(/put\(\s*"p",\s*x\.a\s*\)/);
+    });
+
     // --- Async method param wrapper: keyword-remapped names must round-trip ---
     // The async-method wrapper hoists each reassigned param into a final snapshot
     // outside the supplyAsync lambda and re-binds the original name inside it.

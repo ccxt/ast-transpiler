@@ -1016,151 +1016,41 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.usageToFinalName.get(n) ?? this.getFinalVarName(origName);
         };
 
+        // Walks any expression, rewriting reassigned-var Identifiers to their
+        // finalXxx names in place. We rely on ts.forEachChild for traversal so
+        // every node kind (PrefixUnary, PostfixUnary, ElementAccess,
+        // PropertyAccess, BinaryExpression, ConditionalExpression, CallExpression,
+        // ParenthesizedExpression, etc.) is covered uniformly. ObjectLiteral is
+        // delegated back to the parent function so per-objectLiteral nodeId
+        // dedup applies to nested literals too.
         const traverseAndReplace = (n) => {
             if (!n) return;
-            if (n.kind === ts.SyntaxKind.Identifier && n.escapedText !== 'undefined' && !n.escapedText?.startsWith('null')) {
-                if (this.ReassignedVars[this.getVarKey(n)]) {
-                    const orig = n.escapedText as string;
-                    const finalName = finalNameFor(n, orig);
-                    res.push({ orig, final: finalName });
-                    n.escapedText = finalName;
+            if (n.kind === ts.SyntaxKind.Identifier) {
+                const name = n.escapedText as string | undefined;
+                if (name && name !== 'undefined' && !name.startsWith('null')) {
+                    if (this.ReassignedVars[this.getVarKey(n)]) {
+                        const finalName = finalNameFor(n, name);
+                        res.push({ orig: name, final: finalName });
+                        n.escapedText = finalName;
+                        // Some downstream print paths read from getFullText (which
+                        // reflects the source text, not escapedText) — shim it so
+                        // they see the rewritten name.
+                        (n as any).getFullText = () => finalName;
+                    }
                 }
                 return;
             }
-            if (n.kind === ts.SyntaxKind.BinaryExpression) {
-                traverseAndReplace(n.left);
-                traverseAndReplace(n.right);
-            } else if (n.kind === ts.SyntaxKind.ParenthesizedExpression) {
-                traverseAndReplace(n.expression);
-            } else if (n.kind === ts.SyntaxKind.ConditionalExpression) {
-                traverseAndReplace(n.condition);
-                traverseAndReplace(n.whenTrue);
-                traverseAndReplace(n.whenFalse);
-            } else if (n.kind === ts.SyntaxKind.CallExpression) {
-                n.arguments?.forEach(arg => traverseAndReplace(arg));
-                if (n.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
-                    traverseAndReplace(n.expression.expression);
-                }
-            } else if (n.kind === ts.SyntaxKind.PrefixUnaryExpression) {
-                traverseAndReplace(n.operand);
+            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(n);
+                res = res.concat(innerVars);
+                return;
             }
+            ts.forEachChild(n, traverseAndReplace);
         };
 
         node.properties.forEach( (prop) => {
-            if (prop.initializer?.kind === ts.SyntaxKind.Identifier && prop.initializer.escapedText !== 'undefined' && !prop.initializer.escapedText.startsWith('null')) {
-                if (this.ReassignedVars[this.getVarKey(prop.initializer)]) {
-                    const orig = prop.initializer.escapedText as string;
-                    const finalName = finalNameFor(prop.initializer, orig);
-                    res.push({ orig, final: finalName });
-                    const newNode = ts.factory.createIdentifier(finalName);
-                    prop.initializer = newNode;
-                }
-            } else if (prop.initializer?.kind === ts.SyntaxKind.CallExpression) {
-                const callExp = prop.initializer;
-                const transverseCallExpressionArguments = (callExpression) => {
-                    callExpression.arguments.forEach( (arg, i) => {
-                        if (arg.kind === ts.SyntaxKind.Identifier) {
-                            if (this.ReassignedVars[this.getVarKey(arg)]) {
-                                const orig = arg.escapedText as string;
-                                const finalName = finalNameFor(arg, orig);
-                                res.push({ orig, final: finalName });
-                                const newNode = ts.factory.createIdentifier(finalName);
-                                (newNode as any).getFullText = () => finalName;
-                                callExpression.arguments[i] = newNode;
-                            }
-                        } else if (arg.kind === ts.SyntaxKind.CallExpression) {
-                            transverseCallExpressionArguments(arg);
-                        }
-                    });
-                };
-
-                transverseCallExpressionArguments(callExp);
-
-                // handle side.toUpperCase() scenarios
-                if (callExp.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
-                    const propAccess = callExp.expression;
-                    const leftSide = propAccess.expression;
-                    if (leftSide.kind === ts.SyntaxKind.Identifier) {
-                        if (this.ReassignedVars[this.getVarKey(leftSide)]) {
-                            const orig = leftSide.escapedText as string;
-                            const finalName = finalNameFor(leftSide, orig);
-                            res.push({ orig, final: finalName });
-                            const newNode = ts.factory.createIdentifier(finalName);
-                            (newNode as any).getFullText = () => finalName;
-                            leftSide.escapedText = newNode.escapedText;
-                            propAccess.expression = newNode;
-                        }
-                    }
-                }
-            } else if (prop.initializer?.kind === ts.SyntaxKind.BinaryExpression) {
-                // handle scenarios like : 'a': b + b +x
-                const binExp = prop.initializer;
-                const checkNode = (n) => {
-                    if (!n) {
-                        return n;
-                    }
-                    if (n.kind === ts.SyntaxKind.Identifier) {
-                        if (this.ReassignedVars[this.getVarKey(n)]) {
-                            const orig = n.escapedText as string;
-                            const finalName = finalNameFor(n, orig);
-                            res.push({ orig, final: finalName });
-                            const newNode = ts.factory.createIdentifier(finalName);
-                            (newNode as any).getFullText = () => finalName;
-                            return newNode;
-                        }
-                    }
-                    return n;
-                };
-                const traverseBinaryExpression = (be) => {
-                    be.left = checkNode(be.left);
-                    be.right = checkNode(be.right);
-                    if (be?.left?.kind === ts.SyntaxKind.BinaryExpression) {
-                        traverseBinaryExpression(be.left);
-                    }
-                    if (be?.right?.kind === ts.SyntaxKind.BinaryExpression) {
-                        traverseBinaryExpression(be.right);
-                    }
-                };
-                traverseBinaryExpression(binExp);
-
-            } else if (prop.initializer?.kind === ts.SyntaxKind.ElementAccessExpression) {
-                let left = prop.initializer.expression;
-                const right = prop.initializer.argumentExpression;
-                if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                    while (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                        left = left.expression;
-                    }
-                }
-                if (this.ReassignedVars[this.getVarKey(left)]) {
-                    const orig = left.escapedText as string;
-                    const finalName = finalNameFor(left, orig);
-                    left.escapedText = finalName;
-                    res.push({ orig, final: finalName });
-                }
-                if (right.kind === ts.SyntaxKind.Identifier) {
-                    if (this.ReassignedVars[this.getVarKey(right)]) {
-                        const orig = right.escapedText as string;
-                        const finalName = finalNameFor(right, orig);
-                        right.escapedText = finalName;
-                        res.push({ orig, final: finalName });
-                    }
-                }
-            }
-            else if (prop.initializer?.kind === ts.SyntaxKind.ConditionalExpression) {
-                // handle ternary: (type === 'swap') ? true : undefined
-                const cond = prop.initializer;
-                traverseAndReplace(cond.condition);
-                traverseAndReplace(cond.whenTrue);
-                traverseAndReplace(cond.whenFalse);
-            }
-            else if (prop.initializer?.kind === ts.SyntaxKind.PrefixUnaryExpression) {
-                // handle prefix unary: !isSpot, -count, !(a && b), !foo.bar()
-                traverseAndReplace(prop.initializer.operand);
-            }
-            else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
-                res = res.concat(innerVars);
-            }
+            if (!prop.initializer) return;
+            traverseAndReplace(prop.initializer);
         });
 
         // dedup on (orig|final) pair
@@ -1417,9 +1307,6 @@ export class JavaTranspiler extends BaseTranspiler {
 
         }
         return blockOpen + firstStatement + remainingString + blockClose;
-        // }
-
-        return super.printFunctionBody(node, identation);
     }
 
     printBlock(node, identation, chainBlock = false) {
