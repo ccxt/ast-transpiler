@@ -601,7 +601,10 @@ describe('java transpiling tests', () => {
 
     // --- Bug: finalXxx declared inside if-block but referenced outside it ---
 
-    test('finalXxx declaration is hoisted to method level when used in multiple scopes', () => {
+    test('finalXxx anchored at each usage site when used in multiple scopes', () => {
+        // Each usage gets its own anchored declaration. Declarations live in the
+        // narrowest scope that contains the usage so that nested-block
+        // reassignments cannot be hoisted past (correctness over minimization).
         const input =
         "class T {\n" +
         "    safeMarket(marketId) {\n" +
@@ -619,20 +622,16 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // final declaration must appear exactly once
+        // Two usage sites in distinct scopes → two anchored declarations
         const declCount = (output.match(/final Object finalMarketId = marketId;/g) || []).length;
-        expect(declCount).toBe(1);
+        expect(declCount).toBe(2);
         // all put() calls should use finalMarketId
         const putMatches = output.match(/put\(\s*"symbol",\s*(\w+)\s*\)/g) || [];
         expect(putMatches.length).toBe(2);
         putMatches.forEach(m => expect(m).toContain('finalMarketId'));
-        // the declaration must be BEFORE the if block (at method level), not inside it
-        const declPos = output.indexOf('final Object finalMarketId = marketId;');
-        const ifPos = output.indexOf('if (');
-        expect(declPos).toBeLessThan(ifPos);
     });
 
-    test('finalXxx in if/else branches — declaration at method level', () => {
+    test('finalXxx in if/else branches — each branch gets its own anchored declaration', () => {
         const input =
         "class T {\n" +
         "    fetch(code) {\n" +
@@ -645,15 +644,12 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
+        // Each branch is a sibling scope → independent declarations
         const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
-        expect(declCount).toBe(1);
-        // declaration must be before the if
-        const declPos = output.indexOf('final Object finalCode = code;');
-        const ifPos = output.indexOf('if (');
-        expect(declPos).toBeLessThan(ifPos);
+        expect(declCount).toBe(2);
     });
 
-    test('finalXxx in for-loop body then after loop — declaration at method level', () => {
+    test('finalXxx in for-loop body and after loop — anchored at each usage', () => {
         const input =
         "class T {\n" +
         "    process(data) {\n" +
@@ -666,11 +662,16 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
+        // One declaration inside the loop body, one before the return statement
         const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
-        expect(declCount).toBe(1);
-        const declPos = output.indexOf('final Object finalCode = code;');
+        expect(declCount).toBe(2);
+        const decls = [...output.matchAll(/final Object finalCode = code;/g)].map(m => m.index!);
         const forPos = output.indexOf('for (');
-        expect(declPos).toBeLessThan(forPos);
+        const returnPos = output.lastIndexOf('return');
+        // first decl inside the loop, second before the return
+        expect(decls[0]).toBeGreaterThan(forPos);
+        expect(decls[1]).toBeLessThan(returnPos);
+        expect(decls[1]).toBeGreaterThan(forPos);
     });
 
     // --- Bug: over-aggressive hoisting of loop-local variables ---
@@ -697,7 +698,7 @@ describe('java transpiling tests', () => {
         expect(declPos).toBeGreaterThan(forPos);
     });
 
-    test('method-param variable IS hoisted but loop-local variable is NOT in same method', () => {
+    test('method-param variable gets an anchored declaration at each usage site', () => {
         const input =
         "class T {\n" +
         "    process(marketId, fees) {\n" +
@@ -712,14 +713,12 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // marketId is a method param reassigned at method body level → hoisted
-        const marketDeclPos = output.indexOf('final Object finalMarketId = marketId;');
         const forPos = output.indexOf('for (');
-        expect(marketDeclPos).toBeGreaterThan(-1);
-        expect(marketDeclPos).toBeLessThan(forPos);
-        // code is loop-local → NOT hoisted, stays inside loop
+        // marketId used inside the loop and before the return — both anchored
+        const marketDecls = (output.match(/final Object finalMarketId = marketId;/g) || []).length;
+        expect(marketDecls).toBe(2);
+        // code is loop-local → stays inside loop
         const codeDeclPos = output.indexOf('final Object finalCode = code;');
-        expect(codeDeclPos).toBeGreaterThan(-1);
         expect(codeDeclPos).toBeGreaterThan(forPos);
     });
 
@@ -786,7 +785,7 @@ describe('java transpiling tests', () => {
         expect(finalDepositPos).toBeGreaterThan(forPos);
     });
 
-    test('method param hoisted, loop counter and loop-local stay inside loop', () => {
+    test('method-param, loop counter and loop-local all anchor at their own usage site', () => {
         const input =
         "class T {\n" +
         "    parseOrders(orders, marketId) {\n" +
@@ -806,10 +805,9 @@ describe('java transpiling tests', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         const forPos = output.indexOf('for (');
-        // marketId is method param → hoisted before loop
+        // marketId is only used inside the loop → one decl, inside the loop
         const finalMarketPos = output.indexOf('final Object finalMarketId');
-        expect(finalMarketPos).toBeGreaterThan(-1);
-        expect(finalMarketPos).toBeLessThan(forPos);
+        expect(finalMarketPos).toBeGreaterThan(forPos);
         // i and deposit are loop-scoped → inside loop
         const finalIPos = output.indexOf('final Object finalI');
         const finalDepositPos = output.indexOf('final Object finalDeposit');
@@ -863,7 +861,7 @@ describe('java transpiling tests', () => {
         expect(finalIPos).toBeGreaterThan(forPos);
     });
 
-    test('for-let loop counter used in element access ids[i] — finalI inside loop', () => {
+    test('for-let loop counter used in element access ids[i] — finalIds and finalI both inside loop', () => {
         const input =
         "class T {\n" +
         "    fetchMarkets(ids) {\n" +
@@ -877,12 +875,9 @@ describe('java transpiling tests', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         const forPos = output.indexOf('for (');
-        // finalIds should be hoisted (method param, reassigned before loop)
+        // Both ids and i are only used inside the loop → both anchored inside
         const finalIdsPos = output.indexOf('final Object finalIds');
-        expect(finalIdsPos).toBeGreaterThan(-1);
-        expect(finalIdsPos).toBeLessThan(forPos);
-        // finalI must be inside the loop (loop counter)
-        // Use regex to match finalI but not finalIds
+        expect(finalIdsPos).toBeGreaterThan(forPos);
         const afterFor = output.substring(forPos);
         expect(afterFor).toMatch(/final Object finalI\b/);
     });
@@ -1001,6 +996,33 @@ describe('java transpiling tests', () => {
         expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? false/);
     });
 
+    // --- Bug: PrefixUnaryExpression not handled for final var replacement ---
+
+    test('reassigned variable inside prefix unary expression in object literal gets finalXxx', () => {
+        const input =
+        "class T {\n" +
+        "    demo(x) {\n" +
+        "        let isSpot = true;\n" +
+        "        if (x !== undefined) {\n" +
+        "            isSpot = false;\n" +
+        "        }\n" +
+        "        return {\n" +
+        "            'spot': isSpot,\n" +
+        "            'type': isSpot ? 'spot' : 'swap',\n" +
+        "            'swap': !isSpot,\n" +
+        "            'contract': !isSpot,\n" +
+        "        };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalIsSpot = isSpot;');
+        // The !isSpot values must reference finalIsSpot, not raw isSpot
+        expect(output).toMatch(/put\(\s*"swap",\s*!Helpers\.isTrue\(finalIsSpot\)\s*\)/);
+        expect(output).toMatch(/put\(\s*"contract",\s*!Helpers\.isTrue\(finalIsSpot\)\s*\)/);
+        // No put value should reference raw isSpot
+        expect(output).not.toMatch(/put\(\s*"[^"]+",[^)]*\bisSpot\b/);
+    });
+
     test('nested ternary with reassigned variable', () => {
         const input =
         "class T {\n" +
@@ -1014,6 +1036,365 @@ describe('java transpiling tests', () => {
         expect(output).toContain('final Object finalX = x;');
         // no raw x should appear inside the HashMap put values
         expect(output).not.toMatch(/put\(\s*"v",.*\bx\b/);
+    });
+
+    // --- Bug: hoisted final var captured pre-reassignment value (bybit.setMarginMode) ---
+
+    test('final var declaration lands AFTER nested-block reassignment, not before it', () => {
+        const input =
+        "class T {\n" +
+        "    fn(marginMode) {\n" +
+        "        const isUnifiedAccount = true;\n" +
+        "        if (isUnifiedAccount) {\n" +
+        "            if (marginMode === 'isolated') {\n" +
+        "                marginMode = 'ISOLATED_MARGIN';\n" +
+        "            } else if (marginMode === 'cross') {\n" +
+        "                marginMode = 'REGULAR_MARGIN';\n" +
+        "            }\n" +
+        "            const request = { 'setMarginMode': marginMode };\n" +
+        "            return request;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        const finalDeclIdx = output.indexOf('final Object finalMarginMode = marginMode;');
+        const firstReassignIdx = output.indexOf('marginMode = "ISOLATED_MARGIN"');
+        const secondReassignIdx = output.indexOf('marginMode = "REGULAR_MARGIN"');
+        expect(finalDeclIdx).toBeGreaterThan(-1);
+        expect(firstReassignIdx).toBeGreaterThan(-1);
+        expect(secondReassignIdx).toBeGreaterThan(-1);
+        expect(finalDeclIdx).toBeGreaterThan(firstReassignIdx);
+        expect(finalDeclIdx).toBeGreaterThan(secondReassignIdx);
+        expect(output).toMatch(/put\(\s*"setMarginMode",\s*finalMarginMode\s*\)/);
+    });
+
+    test('pathological: reassignment between two usages in same block uses distinct finals', () => {
+        const input =
+        "class T {\n" +
+        "    fn() {\n" +
+        "        let x = 'a';\n" +
+        "        x = 'b';\n" +
+        "        const a = { 'v': x };\n" +
+        "        x = 'c';\n" +
+        "        const b = { 'v': x };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // Two distinct final snapshots (different suffixes) — one per version
+        const finalDecls = output.match(/final Object final\w+ = x;/g) || [];
+        expect(finalDecls.length).toBe(2);
+        const uniqueNames = new Set(finalDecls);
+        expect(uniqueNames.size).toBe(2);
+        // Each put must reference a final name, not raw x
+        const putMatches = output.match(/put\(\s*"v",\s*(\w+)\s*\)/g) || [];
+        expect(putMatches.length).toBe(2);
+        putMatches.forEach(m => expect(m).not.toMatch(/\bx\s*\)/));
+        // First decl must be between first reassignment and first usage; second decl between second reassignment and second usage
+        const firstReassignIdx = output.indexOf('x = "b"');
+        const secondReassignIdx = output.indexOf('x = "c"');
+        const firstPutIdx = output.indexOf('put( "v",');
+        const secondPutIdx = output.indexOf('put( "v",', firstPutIdx + 1);
+        const firstDeclIdx = output.indexOf('final Object final');
+        const secondDeclIdx = output.indexOf('final Object final', firstDeclIdx + 1);
+        expect(firstDeclIdx).toBeGreaterThan(firstReassignIdx);
+        expect(firstDeclIdx).toBeLessThan(firstPutIdx);
+        expect(secondDeclIdx).toBeGreaterThan(secondReassignIdx);
+        expect(secondDeclIdx).toBeLessThan(secondPutIdx);
+    });
+
+    test('reserved-keyword name (params/internal) — RHS uses the remapped Java identifier', () => {
+        // `params` is a reserved keyword in Java and is remapped to `parameters`.
+        // The final-var RHS must reference the remapped name, not the raw TS name.
+        const input =
+        "class T {\n" +
+        "    fetch(params) {\n" +
+        "        params = this.normalize(params);\n" +
+        "        return { 'p': params };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // LHS is finalParameters, RHS must be parameters (not raw `params`)
+        expect(output).toContain('final Object finalParameters = parameters;');
+        // must NOT emit the raw TS name on the RHS
+        expect(output).not.toMatch(/final Object finalParameters\s*=\s*params\s*;/);
+    });
+
+    // --- Object-literal substitution coverage gaps ---
+    // The anonymous inner-class HashMap requires every captured variable to be
+    // effectively final. Each of these expression shapes used to leave the
+    // reassigned identifier raw inside the inner class, producing invalid Java.
+
+    test('object literal: postfix unary on reassigned counter gets finalized', () => {
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let i = 0;\n" +
+        "        i = 1;\n" +
+        "        const a = { 'q': i++ };\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        // The inner-class put must reference finalI, not raw i++ (which mutates a captured var).
+        expect(output).toContain('final Object finalI = i;');
+        // The inner class must not reference bare i in any capacity (would fail effectively-final).
+        expect(output).not.toMatch(/put\(\s*"q",\s*i\+\+\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"q",[^)]*\bi\b(?!nal)/);
+    });
+
+    test('object literal: ElementAccessExpression inside a call argument substitutes the index', () => {
+        const input =
+        "class T {\n" +
+        "    demo(arr: any[]) {\n" +
+        "        let i = 0;\n" +
+        "        i = 1;\n" +
+        "        const a = { 'p': this.unwrap(arr[i]) };\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "    unwrap(x: any) { return x; }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalI = i;');
+        // The index inside the inner-class put must read finalI, not raw i.
+        expect(output).toMatch(/put\(\s*"p",[^)]*\bfinalI\b/);
+        expect(output).not.toMatch(/put\(\s*"p",[^)]*GetValue\(\s*arr,\s*i\s*\)/);
+    });
+
+    test('object literal: nested object literal inside a ternary branch substitutes inner identifiers', () => {
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let a = 1;\n" +
+        "        a = 2;\n" +
+        "        const o = { 'p': (a > 0) ? { 'q': a } : undefined };\n" +
+        "        return o;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalA = a;');
+        // The inner literal's `q` value must use finalA, not raw a.
+        expect(output).toMatch(/put\(\s*"q",\s*finalA\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"q",\s*a\s*\)/);
+    });
+
+    test('object literal: PropertyAccessExpression on reassigned receiver substitutes the receiver', () => {
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let x: any = {};\n" +
+        "        x = { a: 1 };\n" +
+        "        const o = { 'p': x.a };\n" +
+        "        return o;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        // The .a access inside the inner-class put must read finalX, not raw x.
+        expect(output).toMatch(/put\(\s*"p",[^)]*\bfinalX\b/);
+        expect(output).not.toMatch(/put\(\s*"p",\s*x\.a\s*\)/);
+    });
+
+    // Bug shape A (developer report): variable declared inside a nested block
+    // and conditionally reassigned must still get a final snapshot before its
+    // capture inside an object literal. Earlier versions only hoisted vars
+    // declared at the top of the function body.
+    test('object literal: var declared in nested block and reassigned conditionally gets final snapshot (await-wrapped call initializer)', () => {
+        // The reported shape uses `const res = await this.x({...})` — the
+        // initializer's top kind is AwaitExpression, not CallExpression, so
+        // the old narrow branches in printVariableDeclarationList missed it.
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async handleAccountIndex(params: any, methodName1: string): Promise<any> {\n" +
+        "        let accountIndex = undefined;\n" +
+        "        if (accountIndex === undefined) {\n" +
+        "            let walletAddress = this.walletAddress;\n" +
+        "            if (this.privateKey !== undefined) {\n" +
+        "                walletAddress = this.deriveAddress(this.privateKey);\n" +
+        "            }\n" +
+        "            const res = await this.getByAddress({ 'l1_address': walletAddress });\n" +
+        "            return res;\n" +
+        "        }\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    walletAddress: any; privateKey: any;\n" +
+        "    deriveAddress(k: any) { return k; }\n" +
+        "    async getByAddress(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalWalletAddress = walletAddress;');
+        expect(output).toMatch(/put\(\s*"l1_address",\s*finalWalletAddress\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"l1_address",\s*walletAddress\s*\)/);
+    });
+
+    // Extra initializer wrapping shapes where an ObjectLiteralExpression that
+    // captures a reassigned var is nested under a non-CallExpression wrapper.
+    // All of these previously skipped the hoist because the old branches only
+    // matched ObjectLiteralExpression or CallExpression directly.
+    test('object literal: initializer wrapped in ParenthesizedExpression still hoists final', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let x: any = 1;\n" +
+        "        x = 2;\n" +
+        "        const res = (this.f({ 'k': x }));\n" +
+        "        return res;\n" +
+        "    }\n" +
+        "    f(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"k",\s*finalX\s*\)/);
+    });
+
+    test('object literal: initializer wrapped in AwaitExpression+ObjectLiteral hoists final', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async demo() {\n" +
+        "        let x: any = 1;\n" +
+        "        x = 2;\n" +
+        "        const res = await this.f({ 'k': x });\n" +
+        "        return res;\n" +
+        "    }\n" +
+        "    async f(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"k",\s*finalX\s*\)/);
+    });
+
+    test('object literal: initializer is ternary containing an ObjectLiteral branch', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let x: any = 1;\n" +
+        "        x = 2;\n" +
+        "        const res = (x > 0) ? { 'k': x } : undefined;\n" +
+        "        return res;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalX = x;');
+        expect(output).toMatch(/put\(\s*"k",\s*finalX\s*\)/);
+    });
+
+    // Bug shape B (developer report): identifiers inside sub-expressions
+    // (BinaryExpression, ParenthesizedExpression, etc.) used as property values
+    // must also be remapped to the finalXxx name. Earlier versions only
+    // remapped top-level Identifier property values, leaving the binary
+    // expression's left side referencing the raw (non-final) name.
+    test('object literal: identifier nested in BinaryExpression property value is remapped to finalXxx', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async parsePosition(marginModeId: number): Promise<any> {\n" +
+        "        let marginMode = undefined;\n" +
+        "        if (marginModeId !== undefined) {\n" +
+        "            marginMode = (marginModeId === 0) ? 'cross' : 'isolated';\n" +
+        "        }\n" +
+        "        return this.safePosition({\n" +
+        "            'isolated': (marginMode === 'isolated'),\n" +
+        "            'marginMode': marginMode,\n" +
+        "        });\n" +
+        "    }\n" +
+        "    safePosition(p: any) { return p; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalMarginMode = marginMode;');
+        // Plain-identifier property value: remapped.
+        expect(output).toMatch(/put\(\s*"marginMode",\s*finalMarginMode\s*\)/);
+        // Identifier nested inside a BinaryExpression must also be remapped.
+        expect(output).toMatch(/put\(\s*"isolated",[^)]*\bfinalMarginMode\b[^)]*\)/);
+        expect(output).not.toMatch(/Helpers\.isEqual\(\s*marginMode\b/);
+    });
+
+    // --- Async method param wrapper: keyword-remapped names must round-trip ---
+    // The async-method wrapper hoists each reassigned param into a final snapshot
+    // outside the supplyAsync lambda and re-binds the original name inside it.
+    // For keyword-remapped params (e.g. `params` -> `parameters`) the wrapper
+    // names must be derived from the remapped Java identifier; otherwise the
+    // outside snapshot RHS references an undeclared variable.
+
+    test('async-wrapper: reassigned keyword-remapped param (params) — sig/snap/local round-trip on `parameters`', () => {
+        // Use a fresh transpiler to avoid cross-call ReassignedVars leakage
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "  async handleAccountIndex(params: object, methodName1: string): Promise<any> {\n" +
+        "    let accountIndex = undefined;\n" +
+        "    [accountIndex, params] = this.handleOptionAndParams2(params, methodName1);\n" +
+        "    return accountIndex;\n" +
+        "  }\n" +
+        "  handleOptionAndParams2(p: object, m: string) { return [1, p]; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Signature: param is remapped + suffixed (Object parameters2)
+        expect(output).toMatch(/handleAccountIndex\s*\(\s*Object parameters2\b/);
+        // Outside snapshot: RHS = sig name (parameters2), LHS = parameters3
+        expect(output).toContain('final Object parameters3 = parameters2;');
+        // Inside lambda: local rebinds the post-keyword-remap name
+        expect(output).toContain('Object parameters = parameters3;');
+        // Must NOT emit the broken pre-fix output (`params2`/`params3` referenced anywhere)
+        expect(output).not.toMatch(/\bparams2\b/);
+        expect(output).not.toMatch(/\bparams3\b/);
+    });
+
+    test('async-wrapper: reassigned non-remapped param (body) — preserves existing body2/body3 shape', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "  async f(body: string): Promise<any> {\n" +
+        "    body = 'x';\n" +
+        "    return body;\n" +
+        "  }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/f\s*\(\s*Object body2\b/);
+        expect(output).toContain('final Object body3 = body2;');
+        expect(output).toContain('Object body = body3;');
+    });
+
+    test('async-wrapper: other keyword-remapped params (internal, event) get correct wrappers', () => {
+        const fresh = new Transpiler();
+        // `internal` -> `intern`, `event` -> `eventVar`
+        const input =
+        "class T {\n" +
+        "  async f(internal: string, event: string): Promise<any> {\n" +
+        "    internal = 'x';\n" +
+        "    event = 'y';\n" +
+        "    return internal;\n" +
+        "  }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/f\s*\(\s*Object intern2,\s*Object eventVar2\b/);
+        expect(output).toContain('final Object intern3 = intern2;');
+        expect(output).toContain('final Object eventVar3 = eventVar2;');
+        expect(output).toContain('Object intern = intern3;');
+        expect(output).toContain('Object eventVar = eventVar3;');
+        // Pre-fix bug would emit `internal2`/`event2` on RHS — must not appear.
+        expect(output).not.toMatch(/\binternal2\b/);
+        expect(output).not.toMatch(/\bevent2\b/);
+    });
+
+    test('async-wrapper: mixed remapped + non-remapped reassigned params coexist', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "  async f(params: object, body: string): Promise<any> {\n" +
+        "    params = {};\n" +
+        "    body = 'x';\n" +
+        "    return body;\n" +
+        "  }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/f\s*\(\s*Object parameters2,\s*Object body2\b/);
+        expect(output).toContain('final Object parameters3 = parameters2;');
+        expect(output).toContain('final Object body3 = body2;');
+        expect(output).toContain('Object parameters = parameters3;');
+        expect(output).toContain('Object body = body3;');
     });
 
     // --- Integration: realistic exchange pattern combining all features ---
@@ -1047,12 +1428,13 @@ describe('java transpiling tests', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         // every finalXxx reference must have a matching declaration
-        const allRefs = [...output.matchAll(/\\b(final[A-Z]\\w+)\\b/g)].map(m => m[1]);
-        const allDecls = new Set([...output.matchAll(/final Object (final\\w+)\\s*=/g)].map(m => m[1]));
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
         const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
         expect(undeclared).toEqual([]);
-        // marketId hoisted (1 decl), code per-loop (2), i per-loop (2), type in first loop (1)
-        expect((output.match(/final Object finalMarketId/g) || []).length).toBe(1);
+        // marketId anchored at each usage (inside loop1, inside loop2, and before return) → 3
+        // code per-loop (2), i per-loop (2), type in first loop (1)
+        expect((output.match(/final Object finalMarketId/g) || []).length).toBe(3);
         expect((output.match(/final Object finalCode/g) || []).length).toBe(2);
         expect((output.match(/final Object finalI\b/g) || []).length).toBe(2);
         expect((output.match(/final Object finalType/g) || []).length).toBe(1);

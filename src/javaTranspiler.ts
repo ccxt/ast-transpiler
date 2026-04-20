@@ -72,9 +72,13 @@ export class JavaTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
 
     varListFromObjectLiterals = {};
-    emittedFinalVars: Set<string> = new Set();
-    pendingFinalVars: Array<{orig: string, final: string}> = [];
-    methodBodyVarNames: Set<string> = new Set();
+    // Per-function analysis results. Populated by analyzeFinalVars at the start of
+    // printFunctionBody and consumed during printing of the same function body.
+    usageToFinalName: WeakMap<ts.Node, string> = new WeakMap();
+    // Stack of emitted-finalName sets, one entry per enclosing block. Pushed on block
+    // entry, popped on exit. Used by buildFinalVarDeclarations to dedup: skip if the
+    // finalName is already in scope via any ancestor.
+    finalVarScopeStack: Array<Set<string>> = [];
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -668,6 +672,37 @@ export class JavaTranspiler extends BaseTranspiler {
         return res;
     }
 
+    // Finds every ObjectLiteralExpression nested anywhere inside an RHS/initializer
+    // expression that would produce an anonymous-inner-class capture in Java
+    // (HashMap double-brace init). Stops descending at each ObjectLiteralExpression
+    // because nested literals are walked recursively inside
+    // getVarListFromObjectLiteralAndUpdateInPlace. Skips function/arrow bodies so
+    // we don't capture literals that evaluate in a different scope.
+    //
+    // Unifies the previously-narrow matching in printVariableDeclarationList and
+    // getBinaryExpressionPrefixes which only handled ObjectLiteralExpression or
+    // CallExpression directly — missing wrappers like AwaitExpression,
+    // ParenthesizedExpression, NewExpression, and ConditionalExpression.
+    collectCapturingObjectLiterals(node): any[] {
+        const found = [];
+        const walk = (n) => {
+            if (!n) return;
+            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                found.push(n);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.FunctionExpression ||
+                n.kind === ts.SyntaxKind.ArrowFunction ||
+                n.kind === ts.SyntaxKind.MethodDeclaration ||
+                n.kind === ts.SyntaxKind.FunctionDeclaration) {
+                return;
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(node);
+        return found;
+    }
+
     getBinaryExpressionPrefixes(node, identation) {
         let right = node?.right;
         if (right?.kind === ts.SyntaxKind.AwaitExpression) {
@@ -724,29 +759,262 @@ export class JavaTranspiler extends BaseTranspiler {
         return name;
     }
 
-    buildFinalVarDeclarations(varNames: string[], identation: number): string {
-        const inlineVars = [];
-        for (const v of varNames) {
-            const finalName = this.getFinalVarName(v);
-            const origName = this.getOriginalVarName(v);
-            if (this.methodBodyVarNames.has(origName)) {
-                // Variable is declared at method body level — hoist (deduplicate across method)
-                if (!this.emittedFinalVars.has(finalName)) {
-                    this.emittedFinalVars.add(finalName);
-                    this.pendingFinalVars.push({ orig: origName, final: finalName });
+    // Resolves the trio of names used to wrap a reassigned async-method param
+    // so the lambda body sees an effectively-final local. We base every name on
+    // the keyword-remapped Java identifier — using the raw TS name when remapped
+    // (e.g. params -> parameters) makes the wrapper text and the body diverge,
+    // because identifier emission already routes through ReservedKeywordsReplacements.
+    private getAsyncParamWrapperNames(paramName: string): { sigName: string; snapName: string; localName: string } {
+        const javaName = this.getOriginalVarName(paramName);
+        return {
+            sigName: `${javaName}2`,
+            snapName: `${javaName}3`,
+            localName: javaName,
+        };
+    }
+
+    private isAssignmentOperator(op: ts.SyntaxKind): boolean {
+        return op === ts.SyntaxKind.EqualsToken ||
+            op === ts.SyntaxKind.PlusEqualsToken ||
+            op === ts.SyntaxKind.MinusEqualsToken ||
+            op === ts.SyntaxKind.AsteriskEqualsToken ||
+            op === ts.SyntaxKind.AsteriskAsteriskEqualsToken ||
+            op === ts.SyntaxKind.SlashEqualsToken ||
+            op === ts.SyntaxKind.PercentEqualsToken ||
+            op === ts.SyntaxKind.LessThanLessThanEqualsToken ||
+            op === ts.SyntaxKind.GreaterThanGreaterThanEqualsToken ||
+            op === ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken ||
+            op === ts.SyntaxKind.AmpersandEqualsToken ||
+            op === ts.SyntaxKind.BarEqualsToken ||
+            op === ts.SyntaxKind.CaretEqualsToken ||
+            op === ts.SyntaxKind.BarBarEqualsToken ||
+            op === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+            op === ts.SyntaxKind.QuestionQuestionEqualsToken;
+    }
+
+    private isIncDecOperator(op: ts.SyntaxKind): boolean {
+        return op === ts.SyntaxKind.PlusPlusToken || op === ts.SyntaxKind.MinusMinusToken;
+    }
+
+    // Walk the function body in source order and assign a version-aware finalName to
+    // every identifier that appears inside an object literal property and refers to a
+    // variable that's reassigned anywhere in this function. Each reassignment bumps the
+    // per-variable version counter; usages of the same (var, version) share one finalName.
+    //
+    // Naming:
+    //   - If only one version of a var is ever used in object literals, use `final<Var>`
+    //     (matches prior behavior).
+    //   - If multiple versions are used, name them `final<Var>`, `final<Var>_2`,
+    //     `final<Var>_3` in source-order of the version they correspond to.
+    analyzeFinalVars(fnBody: ts.Node): void {
+        this.usageToFinalName = new WeakMap();
+        if (!fnBody) return;
+
+        // Symbol identity: two identifiers are the same lexical variable iff they
+        // resolve to the same declaration. This differentiates e.g. `i` in two
+        // sibling for-loops (separate `let i` declarations = separate symbols).
+        const symbolIdOf = (n: any): string => {
+            try {
+                const checker = (global as any).checker;
+                const sym = checker?.getSymbolAtLocation?.(n);
+                const decl = sym?.declarations?.[0] ?? sym?.valueDeclaration;
+                if (decl) return `s:${decl.pos}:${decl.end}`;
+            } catch {
+                // checker may be unavailable in some contexts — fall through to name-based id
+            }
+            return `n:${n.escapedText}`;
+        };
+
+        // Pass 1 — discover which symbols are reassigned anywhere in this function body.
+        const reassignedSyms = new Set<string>();
+        const discoverWalk = (node: any) => {
+            if (!node) return;
+            if (node.kind === ts.SyntaxKind.BinaryExpression &&
+                this.isAssignmentOperator(node.operatorToken.kind) &&
+                node.left?.kind === ts.SyntaxKind.Identifier) {
+                reassignedSyms.add(symbolIdOf(node.left));
+            }
+            if ((node.kind === ts.SyntaxKind.PrefixUnaryExpression ||
+                 node.kind === ts.SyntaxKind.PostfixUnaryExpression) &&
+                this.isIncDecOperator(node.operator) &&
+                node.operand?.kind === ts.SyntaxKind.Identifier) {
+                reassignedSyms.add(symbolIdOf(node.operand));
+            }
+            ts.forEachChild(node, discoverWalk);
+        };
+        discoverWalk(fnBody);
+
+        if (reassignedSyms.size === 0) return;
+
+        // Pass 2 — walk in source order, producing a stream of reassignment and usage
+        // events keyed by symbol. Usages are identifiers that (a) sit inside an
+        // object literal property initializer expression, (b) refer to a reassigned symbol.
+        type Event =
+            | { kind: 'reassign'; sym: string }
+            | { kind: 'use'; sym: string; name: string; node: ts.Node };
+        const events: Event[] = [];
+
+        const visitExprInObjLit = (n: any) => {
+            if (!n) return;
+            if (n.kind === ts.SyntaxKind.Identifier) {
+                const name = n.escapedText as string;
+                if (name && name !== 'undefined' && !name.startsWith?.('null')) {
+                    const sym = symbolIdOf(n);
+                    if (reassignedSyms.has(sym)) {
+                        events.push({ kind: 'use', sym, name, node: n });
+                    }
                 }
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.BinaryExpression) {
+                visitExprInObjLit(n.left);
+                visitExprInObjLit(n.right);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.ParenthesizedExpression) {
+                visitExprInObjLit(n.expression);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.ConditionalExpression) {
+                visitExprInObjLit(n.condition);
+                visitExprInObjLit(n.whenTrue);
+                visitExprInObjLit(n.whenFalse);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.CallExpression) {
+                n.arguments?.forEach(visitExprInObjLit);
+                if (n.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
+                    visitExprInObjLit(n.expression.expression);
+                }
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+                visitExprInObjLit(n.operand);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.ElementAccessExpression) {
+                let left = n.expression;
+                while (left?.kind === ts.SyntaxKind.ElementAccessExpression) {
+                    left = left.expression;
+                }
+                visitExprInObjLit(left);
+                visitExprInObjLit(n.argumentExpression);
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                n.properties?.forEach((p: any) => {
+                    if (p.initializer) visitExprInObjLit(p.initializer);
+                });
+                return;
+            }
+            // Other shapes (property access, literals, etc.) — ignore.
+        };
+
+        const walk = (node: any) => {
+            if (!node) return;
+
+            if (node.kind === ts.SyntaxKind.BinaryExpression &&
+                this.isAssignmentOperator(node.operatorToken.kind)) {
+                walk(node.right);
+                if (node.left?.kind === ts.SyntaxKind.Identifier) {
+                    const sym = symbolIdOf(node.left);
+                    if (reassignedSyms.has(sym)) {
+                        events.push({ kind: 'reassign', sym });
+                    }
+                } else {
+                    walk(node.left);
+                }
+                return;
+            }
+
+            if ((node.kind === ts.SyntaxKind.PrefixUnaryExpression ||
+                 node.kind === ts.SyntaxKind.PostfixUnaryExpression) &&
+                this.isIncDecOperator(node.operator) &&
+                node.operand?.kind === ts.SyntaxKind.Identifier) {
+                const sym = symbolIdOf(node.operand);
+                if (reassignedSyms.has(sym)) {
+                    events.push({ kind: 'reassign', sym });
+                }
+                return;
+            }
+
+            if (node.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                node.properties?.forEach((prop: any) => {
+                    if (prop.initializer) {
+                        visitExprInObjLit(prop.initializer);
+                        walk(prop.initializer);
+                    }
+                });
+                return;
+            }
+
+            ts.forEachChild(node, walk);
+        };
+
+        walk(fnBody);
+
+        // Post-process: compute per-symbol versions and assign final names. The
+        // final name is derived from the identifier's text, not the symbol — so
+        // two distinct symbols named `i` both get `finalI` (each lives in its own
+        // lexical scope, so scope-stack dedup allows both to be emitted).
+        const counters = new Map<string, number>();
+        const perSym = new Map<string, { name: string; byVer: Map<number, ts.Node[]> }>();
+        for (const e of events) {
+            if (e.kind === 'reassign') {
+                counters.set(e.sym, (counters.get(e.sym) ?? 0) + 1);
             } else {
-                // Variable is local to a nested block (loop/if) — emit inline
-                // No dedup: each block scope (e.g., separate for-loops) needs its own declaration
-                inlineVars.push(v);
+                const v = counters.get(e.sym) ?? 0;
+                if (!perSym.has(e.sym)) perSym.set(e.sym, { name: e.name, byVer: new Map() });
+                const entry = perSym.get(e.sym)!;
+                if (!entry.byVer.has(v)) entry.byVer.set(v, []);
+                entry.byVer.get(v)!.push(e.node);
             }
         }
-        if (inlineVars.length === 0) {
-            return '';
+
+        for (const { name, byVer } of perSym.values()) {
+            const versions = [...byVer.keys()].sort((a, b) => a - b);
+            const baseName = this.getFinalVarName(name);
+            if (versions.length === 1) {
+                for (const n of byVer.get(versions[0])!) {
+                    this.usageToFinalName.set(n, baseName);
+                }
+            } else {
+                versions.forEach((v, idx) => {
+                    const finalName = idx === 0 ? baseName : `${baseName}_${idx + 1}`;
+                    for (const n of byVer.get(v)!) {
+                        this.usageToFinalName.set(n, finalName);
+                    }
+                });
+            }
         }
-        return inlineVars.map((v, i) =>
-            `${this.getIden(i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`
-        ).join('\n');
+    }
+
+    private finalNameInAncestorScope(finalName: string): boolean {
+        for (const scope of this.finalVarScopeStack) {
+            if (scope.has(finalName)) return true;
+        }
+        return false;
+    }
+
+    buildFinalVarDeclarations(pairs: Array<{ orig: string; final: string }>, identation: number): string {
+        if (pairs.length === 0) return '';
+        const current = this.finalVarScopeStack.length > 0
+            ? this.finalVarScopeStack[this.finalVarScopeStack.length - 1]
+            : null;
+        const lines: string[] = [];
+        const seenHere = new Set<string>();
+        for (const p of pairs) {
+            if (seenHere.has(p.final)) continue;
+            if (this.finalNameInAncestorScope(p.final)) continue;
+            seenHere.add(p.final);
+            if (current) current.add(p.final);
+            const indent = lines.length === 0 ? 0 : identation;
+            // The RHS must use the remapped Java name (e.g. `params` → `parameters`,
+            // `internal` → `intern`) since the original TS identifier doesn't exist
+            // in the generated Java code.
+            lines.push(`${this.getIden(indent)}final Object ${p.final} = ${this.getOriginalVarName(p.orig)};`);
+        }
+        return lines.join('\n');
     }
 
     getObjectLiteralId(node): string {
@@ -761,11 +1029,13 @@ export class JavaTranspiler extends BaseTranspiler {
         return newNode;
     }
 
-    getVarListFromObjectLiteralAndUpdateInPlace(node): string[] {
+    getVarListFromObjectLiteralAndUpdateInPlace(node): Array<{ orig: string; final: string }> {
         // in java if we use an anonymous object literal put, we can't refer non final variables
         // so here we collect them and then we add the wrapper final variables, eg: finalX = X;
-        // and we update the node in place to use finalX instead of X
-        let res = [];
+        // and we update the node in place to use finalX instead of X.
+        // The final name comes from analyzeFinalVars (pre-walk), which assigns
+        // version-aware names so reassignment-between-usages produces distinct finals.
+        let res: Array<{ orig: string; final: string }> = [];
 
         const nodeId = this.getObjectLiteralId(node);
 
@@ -773,195 +1043,74 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.varListFromObjectLiterals[nodeId];
         }
 
-        node.properties.forEach( (prop) => {
-            if (prop.initializer?.kind === ts.SyntaxKind.Identifier && prop.initializer.escapedText !== 'undefined' && !prop.initializer.escapedText.startsWith('null')) {
-                // if (this.ReassignedVars[prop.initializer.escapedText]) {
-                if (this.ReassignedVars[this.getVarKey(prop.initializer)]) {
-                    res.push(prop.initializer.escapedText);
-                    const finalName = this.getFinalVarName(prop.initializer.escapedText);
-                    const newNode = ts.factory.createIdentifier(finalName);
-                    prop.initializer = newNode;
-                }
-            } else if (prop.initializer?.kind === ts.SyntaxKind.CallExpression) {
-                // check if any of the args is an identifier that was reassigned
-                const callArgs = prop.initializer?.arguments ?? [];
-                const callExp = prop.initializer;
-                // transverseCallExpressionArguments(callExp);
-                // callArgs.forEach( (arg,i) => {
-                //     if (arg.kind === ts.SyntaxKind.Identifier) {
-                //         // if (this.ReassignedVars[arg.escapedText]) {
-                //         if (this.ReassignedVars[this.getVarKey(arg)]) {
-                //             res.push(arg.escapedText);
-                //             const newNode = this.createNewNodeForFinalVar(arg.escapedText);
-                //             arg = newNode;
-                //             callExp.arguments[i] = newNode;
-                //         }
-                //     } else if (arg.kind === ts.SyntaxKind.CallExpression) {
-                //         const innerCallExp = arg;
-                //         innerCallExp.arguments.forEach( (innerArg,j) => {
-                //             if (innerArg.kind === ts.SyntaxKind.Identifier) {
-                //                 if (this.ReassignedVars[this.getVarKey(innerArg)]) {
-                //                     res.push(innerArg.escapedText);
-                //                     const newNode = this.createNewNodeForFinalVar(innerArg.escapedText);
-                //                     innerArg = newNode;
-                //                     innerCallExp.arguments[j] = newNode;
-                //                 }
-                //             }
-                //         });
-                //     }
-                // });
+        const finalNameFor = (n: any, origName: string): string => {
+            return this.usageToFinalName.get(n) ?? this.getFinalVarName(origName);
+        };
 
-                const transverseCallExpressionArguments = (callExpression) => {
-                    callExpression.arguments.forEach( (arg, i) => {
-                        if (arg.kind === ts.SyntaxKind.Identifier) {
-                            if (this.ReassignedVars[this.getVarKey(arg)]) {
-                                res.push(arg.escapedText);
-                                const newNode = this.createNewNodeForFinalVar(arg.escapedText);
-                                arg = newNode;
-                                callExpression.arguments[i] = newNode;
-                            }
-                        } else if (arg.kind === ts.SyntaxKind.CallExpression) {
-                            const innerCallExp = arg;
-                            transverseCallExpressionArguments(innerCallExp);
-                        }
-                    });
-                };
-
-                transverseCallExpressionArguments(callExp);
-
-                // handle side.toUpperCase() scenarios
-                if (callExp.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
-                    const propAccess = callExp.expression;
-                    const leftSide = propAccess.expression;
-                    if (leftSide.kind === ts.SyntaxKind.Identifier) {
-                        if (this.ReassignedVars[this.getVarKey(leftSide)]) {
-                            res.push(leftSide.escapedText);
-                            const newNode = this.createNewNodeForFinalVar(leftSide.escapedText);
-                            leftSide.escapedText = newNode.escapedText;
-                            propAccess.expression = newNode;
-                        }
+        // Walks any expression, rewriting reassigned-var Identifiers to their
+        // finalXxx names in place. We rely on ts.forEachChild for traversal so
+        // every node kind (PrefixUnary, PostfixUnary, ElementAccess,
+        // PropertyAccess, BinaryExpression, ConditionalExpression, CallExpression,
+        // ParenthesizedExpression, etc.) is covered uniformly. ObjectLiteral is
+        // delegated back to the parent function so per-objectLiteral nodeId
+        // dedup applies to nested literals too.
+        const traverseAndReplace = (n) => {
+            if (!n) return;
+            if (n.kind === ts.SyntaxKind.Identifier) {
+                const name = n.escapedText as string | undefined;
+                if (name && name !== 'undefined' && !name.startsWith('null')) {
+                    if (this.ReassignedVars[this.getVarKey(n)]) {
+                        const finalName = finalNameFor(n, name);
+                        res.push({ orig: name, final: finalName });
+                        n.escapedText = finalName;
+                        // Some downstream print paths read from getFullText (which
+                        // reflects the source text, not escapedText) — shim it so
+                        // they see the rewritten name.
+                        (n as any).getFullText = () => finalName;
                     }
                 }
-            } else if (prop.initializer?.kind === ts.SyntaxKind.BinaryExpression) {
-                // handle scenarios like : 'a': b + b +x
-                const binExp = prop.initializer;
-                const checkNode = (n) => {
-                    if (!n) {
-                        return n;
-                    }
-                    if (n.kind === ts.SyntaxKind.Identifier) {
-                        if (this.ReassignedVars[this.getVarKey(n)]) {
-                            res.push(n.escapedText);
-                            const newNode = this.createNewNodeForFinalVar(n.escapedText);
-                            return newNode;
-                        }
-                    }
-                    return n;
-                };
-                const traverseBinaryExpression = (be) => {
-                    be.left = checkNode(be.left);
-                    be.right = checkNode(be.right);
-                    if (be?.left?.kind === ts.SyntaxKind.BinaryExpression) {
-                        traverseBinaryExpression(be.left);
-                    }
-                    if (be?.right?.kind === ts.SyntaxKind.BinaryExpression) {
-                        traverseBinaryExpression(be.right);
-                    }
-                };
-                traverseBinaryExpression(binExp);
-
-            } else if (prop.initializer?.kind === ts.SyntaxKind.ElementAccessExpression) {
-                let left = prop.initializer.expression;
-                const right = prop.initializer.argumentExpression;
-                if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                    // handle x[a][b][c]... recursively
-                    // let currentLeft = left;
-                    while (left.kind === ts.SyntaxKind.ElementAccessExpression) {
-                        // const innerLeft = currentLeft.expression;
-                        left = left.expression;
-                    }
-
-                }
-                if (this.ReassignedVars[this.getVarKey(left)]) {
-                    const leftName = left.escapedText;
-                    const newLeftName = this.getFinalVarName(leftName);
-                    // const newLeftNode = ts.factory.createIdentifier(newLeftName);
-                    left.escapedText = newLeftName;
-                    // finalVars = finalVars + `final Object ${newLeftName} = ${leftName};\n`;
-                    res.push(leftName);
-
-                }
-                if (right.kind === ts.SyntaxKind.Identifier) {
-                    if (this.ReassignedVars[this.getVarKey(right)]) {
-                        const rightName = right.escapedText;
-                        const newRightName = this.getFinalVarName(rightName);
-                        right.escapedText = newRightName;
-                        res.push(rightName);
-                    }
-                }
+                return;
             }
-            else if (prop.initializer?.kind === ts.SyntaxKind.ConditionalExpression) {
-                // handle ternary: (type === 'swap') ? true : undefined
-                // Traverse the condition/whenTrue/whenFalse and replace identifiers in place
-                const traverseAndReplace = (node) => {
-                    if (!node) return;
-                    if (node.kind === ts.SyntaxKind.Identifier && node.escapedText !== 'undefined' && !node.escapedText?.startsWith('null')) {
-                        if (this.ReassignedVars[this.getVarKey(node)]) {
-                            res.push(node.escapedText);
-                            node.escapedText = this.getFinalVarName(node.escapedText);
-                        }
-                        return;
-                    }
-                    if (node.kind === ts.SyntaxKind.BinaryExpression) {
-                        traverseAndReplace(node.left);
-                        traverseAndReplace(node.right);
-                    } else if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
-                        traverseAndReplace(node.expression);
-                    } else if (node.kind === ts.SyntaxKind.ConditionalExpression) {
-                        traverseAndReplace(node.condition);
-                        traverseAndReplace(node.whenTrue);
-                        traverseAndReplace(node.whenFalse);
-                    } else if (node.kind === ts.SyntaxKind.CallExpression) {
-                        node.arguments?.forEach(arg => traverseAndReplace(arg));
-                        if (node.expression?.kind === ts.SyntaxKind.PropertyAccessExpression) {
-                            traverseAndReplace(node.expression.expression);
-                        }
-                    } else if (node.kind === ts.SyntaxKind.PrefixUnaryExpression) {
-                        traverseAndReplace(node.operand);
-                    }
-                };
-                const cond = prop.initializer;
-                traverseAndReplace(cond.condition);
-                traverseAndReplace(cond.whenTrue);
-                traverseAndReplace(cond.whenFalse);
-            }
-            else if (prop.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
+            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+                const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(n);
                 res = res.concat(innerVars);
+                return;
             }
+            ts.forEachChild(n, traverseAndReplace);
+        };
+
+        node.properties.forEach( (prop) => {
+            if (!prop.initializer) return;
+            traverseAndReplace(prop.initializer);
         });
-        this.varListFromObjectLiterals[nodeId] =  [...new Set(res)];
-        return [...new Set(res)];
+
+        // dedup on (orig|final) pair
+        const seen = new Set<string>();
+        const dedup: Array<{ orig: string; final: string }> = [];
+        for (const p of res) {
+            const key = `${p.orig}|${p.final}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            dedup.push(p);
+        }
+        this.varListFromObjectLiterals[nodeId] = dedup;
+        return dedup;
     }
 
     printVariableDeclarationList(node, identation) {
         const declaration = node.declarations[0];
 
         let finalVars = '';
-        if (declaration.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            // iterator over object and collect variables
-            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(declaration.initializer);
-            finalVars = this.buildFinalVarDeclarations(varsList, identation);
-        } else if (declaration.initializer?.kind === ts.SyntaxKind.CallExpression) {
-            const callExp = declaration.initializer;
-            const args = callExp.arguments ?? [];
+        if (declaration.initializer) {
+            // Walk the whole initializer tree — handles AwaitExpression,
+            // ParenthesizedExpression, NewExpression, ConditionalExpression,
+            // nested CallExpressions, etc. uniformly.
+            const objLiterals = this.collectCapturingObjectLiterals(declaration.initializer);
             let varObj = [];
-            args.forEach( (arg) => {
-                if (arg.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                    const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(arg);
-                    varObj = varObj.concat(objVariables);
-                }
-            });
+            for (const lit of objLiterals) {
+                const vars = this.getVarListFromObjectLiteralAndUpdateInPlace(lit);
+                varObj = varObj.concat(vars);
+            }
             if (varObj.length > 0) {
                 finalVars = this.buildFinalVarDeclarations(varObj, identation);
             }
@@ -1117,71 +1266,18 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printFunctionBody(node, identation) {
-        this.emittedFinalVars = new Set();
         this.varListFromObjectLiterals = {};
-        this.pendingFinalVars = [];
-        // Collect method-body-level variable names (parameters + top-level declarations)
-        // so buildFinalVarDeclarations can decide whether to hoist or emit inline.
-        this.methodBodyVarNames = new Set();
+        this.analyzeFinalVars(node.body);
+        this.finalVarScopeStack = [new Set<string>()];
         const funcParams = node.parameters ?? [];
-        funcParams.forEach(p => {
-            const name = p.name?.escapedText;
-            if (name) this.methodBodyVarNames.add(name);
-        });
         const bodyStatements = node.body.statements;
-        for (const stmt of bodyStatements) {
-            if (ts.isVariableStatement(stmt)) {
-                for (const decl of stmt.declarationList.declarations) {
-                    const name = decl.name?.['escapedText'];
-                    if (name) this.methodBodyVarNames.add(name);
-                }
-            }
-        }
-        // Remove variables that are reassigned per-iteration in for-loops
-        // (loop counters must NOT be hoisted — their final copy must be per-iteration)
-        const collectLoopVars = (n: ts.Node) => {
-            if (ts.isIdentifier(n)) {
-                this.methodBodyVarNames.delete(n.escapedText as string);
-            }
-            ts.forEachChild(n, collectLoopVars);
-        };
-        for (const stmt of bodyStatements) {
-            if (ts.isForStatement(stmt)) {
-                if (stmt.initializer) {
-                    if (ts.isVariableDeclarationList(stmt.initializer)) {
-                        // for (let i = 0; ...) — extract declared names
-                        for (const decl of stmt.initializer.declarations) {
-                            const name = decl.name?.['escapedText'];
-                            if (name) this.methodBodyVarNames.delete(name as string);
-                        }
-                    } else {
-                        // for (i = 0; ...) — collect identifiers from assignment
-                        collectLoopVars(stmt.initializer);
-                    }
-                }
-                if (stmt.incrementor) {
-                    collectLoopVars(stmt.incrementor);
-                }
-            }
-        }
         const isAsync = this.isAsyncFunction(node);
         const initParams = [];
-        // Process each statement and hoist final var declarations to method body level
-        // when the source variable is at method-body scope. Loop/block-local vars stay inline.
         const processedParts = [];
         for (let i = 0; i < bodyStatements.length; i++) {
-            const pendingBefore = this.pendingFinalVars.length;
-            const printed = this.printNode(bodyStatements[i], identation + 1);
-            if (this.pendingFinalVars.length > pendingBefore) {
-                const newVars = this.pendingFinalVars.slice(pendingBefore);
-                const decls = newVars.map(v =>
-                    this.getIden(identation + 1) + `final Object ${v.final} = ${v.orig};`
-                ).join('\n');
-                processedParts.push(decls + '\n' + printed);
-            } else {
-                processedParts.push(printed);
-            }
+            processedParts.push(this.printNode(bodyStatements[i], identation + 1));
         }
+        this.finalVarScopeStack = [];
         let firstStatement = processedParts[0] || '';
         const remainingString = processedParts.slice(1).join("\n");
         let offSetIndex = 0;
@@ -1238,9 +1334,19 @@ export class JavaTranspiler extends BaseTranspiler {
 
         }
         return blockOpen + firstStatement + remainingString + blockClose;
-        // }
+    }
 
-        return super.printFunctionBody(node, identation);
+    printBlock(node, identation, chainBlock = false) {
+        // Track per-block scope for final var dedup: same final name must not be
+        // declared twice in a single block (Java would error), but may shadow
+        // across nested blocks. We push an empty scope on entry and pop on exit.
+        const managed = this.finalVarScopeStack.length > 0;
+        if (managed) this.finalVarScopeStack.push(new Set<string>());
+        try {
+            return super.printBlock(node, identation, chainBlock);
+        } finally {
+            if (managed) this.finalVarScopeStack.pop();
+        }
     }
 
     printInstanceOfExpression(node, identation) {
@@ -1316,8 +1422,10 @@ export class JavaTranspiler extends BaseTranspiler {
             let printedParam = this.printParameter(param);
             if (isAsyncMethod && isReassignedVar) {
                 const paramName = param.name.escapedText;
-                printedParam = printedParam.replace(paramName, `${paramName}2`);
-                // we have to rename the param, to then create the final wrapper nad finally inside method body bind the original name
+                const { localName, sigName } = this.getAsyncParamWrapperNames(paramName);
+                // Replace the printed Java name (post keyword-remap) with sigName so
+                // the original name is freed for the lambda body to bind.
+                printedParam = printedParam.replace(localName, sigName);
             }
             return printedParam;
         });
@@ -1349,7 +1457,8 @@ export class JavaTranspiler extends BaseTranspiler {
                     const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
                     if (isAsyncMethod && isReassignedVar) {
                         const paramName = param.name.escapedText;
-                        finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${paramName}3 = ${paramName}2;`);
+                        const { sigName, snapName } = this.getAsyncParamWrapperNames(paramName);
+                        finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${snapName} = ${sigName};`);
                     }
                 }
 
@@ -1370,7 +1479,8 @@ export class JavaTranspiler extends BaseTranspiler {
                     const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
                     if (isAsyncMethod && isReassignedVar) {
                         const paramName = param.name.escapedText;
-                        finalVarWrappers.push(this.getIden(identation + 1) + `Object ${paramName} = ${paramName}3;`);
+                        const { localName, snapName } = this.getAsyncParamWrapperNames(paramName);
+                        finalVarWrappers.push(this.getIden(identation + 1) + `Object ${localName} = ${snapName};`);
                     }
                 }
 
