@@ -4537,9 +4537,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig5, _nullishCoalesce(config["parser"], () => ( {})));
     super(config);
     this.varListFromObjectLiterals = {};
-    this.emittedFinalVars = /* @__PURE__ */ new Set();
-    this.pendingFinalVars = [];
-    this.methodBodyVarNames = /* @__PURE__ */ new Set();
+    this.usageToFinalName = /* @__PURE__ */ new WeakMap();
+    this.finalVarScopeStack = [];
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -4988,6 +4987,23 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return res;
   }
+  collectCapturingObjectLiterals(node) {
+    const found = [];
+    const walk = (n) => {
+      if (!n)
+        return;
+      if (n.kind === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
+        found.push(n);
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.FunctionExpression || n.kind === _typescript2.default.SyntaxKind.ArrowFunction || n.kind === _typescript2.default.SyntaxKind.MethodDeclaration || n.kind === _typescript2.default.SyntaxKind.FunctionDeclaration) {
+        return;
+      }
+      _typescript2.default.forEachChild(n, walk);
+    };
+    walk(node);
+    return found;
+  }
   getBinaryExpressionPrefixes(node, identation) {
     let right = _optionalChain([node, 'optionalAccess', _206 => _206.right]);
     if (_optionalChain([right, 'optionalAccess', _207 => _207.kind]) === _typescript2.default.SyntaxKind.AwaitExpression) {
@@ -5038,26 +5054,198 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return name;
   }
-  buildFinalVarDeclarations(varNames, identation) {
-    const inlineVars = [];
-    for (const v of varNames) {
-      const finalName = this.getFinalVarName(v);
-      const origName = this.getOriginalVarName(v);
-      if (this.methodBodyVarNames.has(origName)) {
-        if (!this.emittedFinalVars.has(finalName)) {
-          this.emittedFinalVars.add(finalName);
-          this.pendingFinalVars.push({ orig: origName, final: finalName });
+  getAsyncParamWrapperNames(paramName) {
+    const javaName = this.getOriginalVarName(paramName);
+    return {
+      sigName: `${javaName}2`,
+      snapName: `${javaName}3`,
+      localName: javaName
+    };
+  }
+  isAssignmentOperator(op) {
+    return op === _typescript2.default.SyntaxKind.EqualsToken || op === _typescript2.default.SyntaxKind.PlusEqualsToken || op === _typescript2.default.SyntaxKind.MinusEqualsToken || op === _typescript2.default.SyntaxKind.AsteriskEqualsToken || op === _typescript2.default.SyntaxKind.AsteriskAsteriskEqualsToken || op === _typescript2.default.SyntaxKind.SlashEqualsToken || op === _typescript2.default.SyntaxKind.PercentEqualsToken || op === _typescript2.default.SyntaxKind.LessThanLessThanEqualsToken || op === _typescript2.default.SyntaxKind.GreaterThanGreaterThanEqualsToken || op === _typescript2.default.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken || op === _typescript2.default.SyntaxKind.AmpersandEqualsToken || op === _typescript2.default.SyntaxKind.BarEqualsToken || op === _typescript2.default.SyntaxKind.CaretEqualsToken || op === _typescript2.default.SyntaxKind.BarBarEqualsToken || op === _typescript2.default.SyntaxKind.AmpersandAmpersandEqualsToken || op === _typescript2.default.SyntaxKind.QuestionQuestionEqualsToken;
+  }
+  isIncDecOperator(op) {
+    return op === _typescript2.default.SyntaxKind.PlusPlusToken || op === _typescript2.default.SyntaxKind.MinusMinusToken;
+  }
+  analyzeFinalVars(fnBody) {
+    this.usageToFinalName = /* @__PURE__ */ new WeakMap();
+    if (!fnBody)
+      return;
+    const symbolIdOf = (n) => {
+      try {
+        const checker = global.checker;
+        const sym = _optionalChain([checker, 'optionalAccess', _208 => _208.getSymbolAtLocation, 'optionalCall', _209 => _209(n)]);
+        const decl = _nullishCoalesce(_optionalChain([sym, 'optionalAccess', _210 => _210.declarations, 'optionalAccess', _211 => _211[0]]), () => ( _optionalChain([sym, 'optionalAccess', _212 => _212.valueDeclaration])));
+        if (decl)
+          return `s:${decl.pos}:${decl.end}`;
+      } catch (e2) {
+      }
+      return `n:${n.escapedText}`;
+    };
+    const reassignedSyms = /* @__PURE__ */ new Set();
+    const discoverWalk = (node) => {
+      if (!node)
+        return;
+      if (node.kind === _typescript2.default.SyntaxKind.BinaryExpression && this.isAssignmentOperator(node.operatorToken.kind) && _optionalChain([node, 'access', _213 => _213.left, 'optionalAccess', _214 => _214.kind]) === _typescript2.default.SyntaxKind.Identifier) {
+        reassignedSyms.add(symbolIdOf(node.left));
+      }
+      if ((node.kind === _typescript2.default.SyntaxKind.PrefixUnaryExpression || node.kind === _typescript2.default.SyntaxKind.PostfixUnaryExpression) && this.isIncDecOperator(node.operator) && _optionalChain([node, 'access', _215 => _215.operand, 'optionalAccess', _216 => _216.kind]) === _typescript2.default.SyntaxKind.Identifier) {
+        reassignedSyms.add(symbolIdOf(node.operand));
+      }
+      _typescript2.default.forEachChild(node, discoverWalk);
+    };
+    discoverWalk(fnBody);
+    if (reassignedSyms.size === 0)
+      return;
+    const events = [];
+    const visitExprInObjLit = (n) => {
+      if (!n)
+        return;
+      if (n.kind === _typescript2.default.SyntaxKind.Identifier) {
+        const name = n.escapedText;
+        if (name && name !== "undefined" && !_optionalChain([name, 'access', _217 => _217.startsWith, 'optionalCall', _218 => _218("null")])) {
+          const sym = symbolIdOf(n);
+          if (reassignedSyms.has(sym)) {
+            events.push({ kind: "use", sym, name, node: n });
+          }
         }
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.BinaryExpression) {
+        visitExprInObjLit(n.left);
+        visitExprInObjLit(n.right);
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+        visitExprInObjLit(n.expression);
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.ConditionalExpression) {
+        visitExprInObjLit(n.condition);
+        visitExprInObjLit(n.whenTrue);
+        visitExprInObjLit(n.whenFalse);
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.CallExpression) {
+        _optionalChain([n, 'access', _219 => _219.arguments, 'optionalAccess', _220 => _220.forEach, 'call', _221 => _221(visitExprInObjLit)]);
+        if (_optionalChain([n, 'access', _222 => _222.expression, 'optionalAccess', _223 => _223.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression) {
+          visitExprInObjLit(n.expression.expression);
+        }
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.PrefixUnaryExpression) {
+        visitExprInObjLit(n.operand);
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.ElementAccessExpression) {
+        let left = n.expression;
+        while (_optionalChain([left, 'optionalAccess', _224 => _224.kind]) === _typescript2.default.SyntaxKind.ElementAccessExpression) {
+          left = left.expression;
+        }
+        visitExprInObjLit(left);
+        visitExprInObjLit(n.argumentExpression);
+        return;
+      }
+      if (n.kind === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
+        _optionalChain([n, 'access', _225 => _225.properties, 'optionalAccess', _226 => _226.forEach, 'call', _227 => _227((p) => {
+          if (p.initializer)
+            visitExprInObjLit(p.initializer);
+        })]);
+        return;
+      }
+    };
+    const walk = (node) => {
+      if (!node)
+        return;
+      if (node.kind === _typescript2.default.SyntaxKind.BinaryExpression && this.isAssignmentOperator(node.operatorToken.kind)) {
+        walk(node.right);
+        if (_optionalChain([node, 'access', _228 => _228.left, 'optionalAccess', _229 => _229.kind]) === _typescript2.default.SyntaxKind.Identifier) {
+          const sym = symbolIdOf(node.left);
+          if (reassignedSyms.has(sym)) {
+            events.push({ kind: "reassign", sym });
+          }
+        } else {
+          walk(node.left);
+        }
+        return;
+      }
+      if ((node.kind === _typescript2.default.SyntaxKind.PrefixUnaryExpression || node.kind === _typescript2.default.SyntaxKind.PostfixUnaryExpression) && this.isIncDecOperator(node.operator) && _optionalChain([node, 'access', _230 => _230.operand, 'optionalAccess', _231 => _231.kind]) === _typescript2.default.SyntaxKind.Identifier) {
+        const sym = symbolIdOf(node.operand);
+        if (reassignedSyms.has(sym)) {
+          events.push({ kind: "reassign", sym });
+        }
+        return;
+      }
+      if (node.kind === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
+        _optionalChain([node, 'access', _232 => _232.properties, 'optionalAccess', _233 => _233.forEach, 'call', _234 => _234((prop) => {
+          if (prop.initializer) {
+            visitExprInObjLit(prop.initializer);
+            walk(prop.initializer);
+          }
+        })]);
+        return;
+      }
+      _typescript2.default.forEachChild(node, walk);
+    };
+    walk(fnBody);
+    const counters = /* @__PURE__ */ new Map();
+    const perSym = /* @__PURE__ */ new Map();
+    for (const e of events) {
+      if (e.kind === "reassign") {
+        counters.set(e.sym, (_nullishCoalesce(counters.get(e.sym), () => ( 0))) + 1);
       } else {
-        inlineVars.push(v);
+        const v = _nullishCoalesce(counters.get(e.sym), () => ( 0));
+        if (!perSym.has(e.sym))
+          perSym.set(e.sym, { name: e.name, byVer: /* @__PURE__ */ new Map() });
+        const entry = perSym.get(e.sym);
+        if (!entry.byVer.has(v))
+          entry.byVer.set(v, []);
+        entry.byVer.get(v).push(e.node);
       }
     }
-    if (inlineVars.length === 0) {
-      return "";
+    for (const { name, byVer } of perSym.values()) {
+      const versions = [...byVer.keys()].sort((a, b) => a - b);
+      const baseName = this.getFinalVarName(name);
+      if (versions.length === 1) {
+        for (const n of byVer.get(versions[0])) {
+          this.usageToFinalName.set(n, baseName);
+        }
+      } else {
+        versions.forEach((v, idx) => {
+          const finalName = idx === 0 ? baseName : `${baseName}_${idx + 1}`;
+          for (const n of byVer.get(v)) {
+            this.usageToFinalName.set(n, finalName);
+          }
+        });
+      }
     }
-    return inlineVars.map(
-      (v, i) => `${this.getIden(i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`
-    ).join("\n");
+  }
+  finalNameInAncestorScope(finalName) {
+    for (const scope of this.finalVarScopeStack) {
+      if (scope.has(finalName))
+        return true;
+    }
+    return false;
+  }
+  buildFinalVarDeclarations(pairs, identation) {
+    if (pairs.length === 0)
+      return "";
+    const current = this.finalVarScopeStack.length > 0 ? this.finalVarScopeStack[this.finalVarScopeStack.length - 1] : null;
+    const lines = [];
+    const seenHere = /* @__PURE__ */ new Set();
+    for (const p of pairs) {
+      if (seenHere.has(p.final))
+        continue;
+      if (this.finalNameInAncestorScope(p.final))
+        continue;
+      seenHere.add(p.final);
+      if (current)
+        current.add(p.final);
+      const indent = lines.length === 0 ? 0 : identation;
+      lines.push(`${this.getIden(indent)}final Object ${p.final} = ${this.getOriginalVarName(p.orig)};`);
+    }
+    return lines.join("\n");
   }
   getObjectLiteralId(node) {
     const start = node.getStart();
@@ -5075,158 +5263,66 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (nodeId in this.varListFromObjectLiterals) {
       return this.varListFromObjectLiterals[nodeId];
     }
-    node.properties.forEach((prop) => {
-      if (_optionalChain([prop, 'access', _208 => _208.initializer, 'optionalAccess', _209 => _209.kind]) === _typescript2.default.SyntaxKind.Identifier && prop.initializer.escapedText !== "undefined" && !prop.initializer.escapedText.startsWith("null")) {
-        if (this.ReassignedVars[this.getVarKey(prop.initializer)]) {
-          res.push(prop.initializer.escapedText);
-          const finalName = this.getFinalVarName(prop.initializer.escapedText);
-          const newNode = _typescript2.default.factory.createIdentifier(finalName);
-          prop.initializer = newNode;
-        }
-      } else if (_optionalChain([prop, 'access', _210 => _210.initializer, 'optionalAccess', _211 => _211.kind]) === _typescript2.default.SyntaxKind.CallExpression) {
-        const callArgs = _nullishCoalesce(_optionalChain([prop, 'access', _212 => _212.initializer, 'optionalAccess', _213 => _213.arguments]), () => ( []));
-        const callExp = prop.initializer;
-        const transverseCallExpressionArguments = (callExpression) => {
-          callExpression.arguments.forEach((arg, i) => {
-            if (arg.kind === _typescript2.default.SyntaxKind.Identifier) {
-              if (this.ReassignedVars[this.getVarKey(arg)]) {
-                res.push(arg.escapedText);
-                const newNode = this.createNewNodeForFinalVar(arg.escapedText);
-                arg = newNode;
-                callExpression.arguments[i] = newNode;
-              }
-            } else if (arg.kind === _typescript2.default.SyntaxKind.CallExpression) {
-              const innerCallExp = arg;
-              transverseCallExpressionArguments(innerCallExp);
-            }
-          });
-        };
-        transverseCallExpressionArguments(callExp);
-        if (_optionalChain([callExp, 'access', _214 => _214.expression, 'optionalAccess', _215 => _215.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression) {
-          const propAccess = callExp.expression;
-          const leftSide = propAccess.expression;
-          if (leftSide.kind === _typescript2.default.SyntaxKind.Identifier) {
-            if (this.ReassignedVars[this.getVarKey(leftSide)]) {
-              res.push(leftSide.escapedText);
-              const newNode = this.createNewNodeForFinalVar(leftSide.escapedText);
-              leftSide.escapedText = newNode.escapedText;
-              propAccess.expression = newNode;
-            }
+    const finalNameFor = (n, origName) => {
+      return _nullishCoalesce(this.usageToFinalName.get(n), () => ( this.getFinalVarName(origName)));
+    };
+    const traverseAndReplace = (n) => {
+      if (!n)
+        return;
+      if (n.kind === _typescript2.default.SyntaxKind.Identifier) {
+        const name = n.escapedText;
+        if (name && name !== "undefined" && !name.startsWith("null")) {
+          if (this.ReassignedVars[this.getVarKey(n)]) {
+            const finalName = finalNameFor(n, name);
+            res.push({ orig: name, final: finalName });
+            n.escapedText = finalName;
+            n.getFullText = () => finalName;
           }
         }
-      } else if (_optionalChain([prop, 'access', _216 => _216.initializer, 'optionalAccess', _217 => _217.kind]) === _typescript2.default.SyntaxKind.BinaryExpression) {
-        const binExp = prop.initializer;
-        const checkNode = (n) => {
-          if (!n) {
-            return n;
-          }
-          if (n.kind === _typescript2.default.SyntaxKind.Identifier) {
-            if (this.ReassignedVars[this.getVarKey(n)]) {
-              res.push(n.escapedText);
-              const newNode = this.createNewNodeForFinalVar(n.escapedText);
-              return newNode;
-            }
-          }
-          return n;
-        };
-        const traverseBinaryExpression = (be) => {
-          be.left = checkNode(be.left);
-          be.right = checkNode(be.right);
-          if (_optionalChain([be, 'optionalAccess', _218 => _218.left, 'optionalAccess', _219 => _219.kind]) === _typescript2.default.SyntaxKind.BinaryExpression) {
-            traverseBinaryExpression(be.left);
-          }
-          if (_optionalChain([be, 'optionalAccess', _220 => _220.right, 'optionalAccess', _221 => _221.kind]) === _typescript2.default.SyntaxKind.BinaryExpression) {
-            traverseBinaryExpression(be.right);
-          }
-        };
-        traverseBinaryExpression(binExp);
-      } else if (_optionalChain([prop, 'access', _222 => _222.initializer, 'optionalAccess', _223 => _223.kind]) === _typescript2.default.SyntaxKind.ElementAccessExpression) {
-        let left = prop.initializer.expression;
-        const right = prop.initializer.argumentExpression;
-        if (left.kind === _typescript2.default.SyntaxKind.ElementAccessExpression) {
-          while (left.kind === _typescript2.default.SyntaxKind.ElementAccessExpression) {
-            left = left.expression;
-          }
-        }
-        if (this.ReassignedVars[this.getVarKey(left)]) {
-          const leftName = left.escapedText;
-          const newLeftName = this.getFinalVarName(leftName);
-          left.escapedText = newLeftName;
-          res.push(leftName);
-        }
-        if (right.kind === _typescript2.default.SyntaxKind.Identifier) {
-          if (this.ReassignedVars[this.getVarKey(right)]) {
-            const rightName = right.escapedText;
-            const newRightName = this.getFinalVarName(rightName);
-            right.escapedText = newRightName;
-            res.push(rightName);
-          }
-        }
-      } else if (_optionalChain([prop, 'access', _224 => _224.initializer, 'optionalAccess', _225 => _225.kind]) === _typescript2.default.SyntaxKind.ConditionalExpression) {
-        const traverseAndReplace = (node2) => {
-          if (!node2)
-            return;
-          if (node2.kind === _typescript2.default.SyntaxKind.Identifier && node2.escapedText !== "undefined" && !_optionalChain([node2, 'access', _226 => _226.escapedText, 'optionalAccess', _227 => _227.startsWith, 'call', _228 => _228("null")])) {
-            if (this.ReassignedVars[this.getVarKey(node2)]) {
-              res.push(node2.escapedText);
-              node2.escapedText = this.getFinalVarName(node2.escapedText);
-            }
-            return;
-          }
-          if (node2.kind === _typescript2.default.SyntaxKind.BinaryExpression) {
-            traverseAndReplace(node2.left);
-            traverseAndReplace(node2.right);
-          } else if (node2.kind === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
-            traverseAndReplace(node2.expression);
-          } else if (node2.kind === _typescript2.default.SyntaxKind.ConditionalExpression) {
-            traverseAndReplace(node2.condition);
-            traverseAndReplace(node2.whenTrue);
-            traverseAndReplace(node2.whenFalse);
-          } else if (node2.kind === _typescript2.default.SyntaxKind.CallExpression) {
-            _optionalChain([node2, 'access', _229 => _229.arguments, 'optionalAccess', _230 => _230.forEach, 'call', _231 => _231((arg) => traverseAndReplace(arg))]);
-            if (_optionalChain([node2, 'access', _232 => _232.expression, 'optionalAccess', _233 => _233.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression) {
-              traverseAndReplace(node2.expression.expression);
-            }
-          } else if (node2.kind === _typescript2.default.SyntaxKind.PrefixUnaryExpression) {
-            traverseAndReplace(node2.operand);
-          }
-        };
-        const cond = prop.initializer;
-        traverseAndReplace(cond.condition);
-        traverseAndReplace(cond.whenTrue);
-        traverseAndReplace(cond.whenFalse);
-      } else if (_optionalChain([prop, 'access', _234 => _234.initializer, 'optionalAccess', _235 => _235.kind]) === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
-        const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
-        res = res.concat(innerVars);
+        return;
       }
+      if (n.kind === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
+        const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(n);
+        res = res.concat(innerVars);
+        return;
+      }
+      _typescript2.default.forEachChild(n, traverseAndReplace);
+    };
+    node.properties.forEach((prop) => {
+      if (!prop.initializer)
+        return;
+      traverseAndReplace(prop.initializer);
     });
-    this.varListFromObjectLiterals[nodeId] = [...new Set(res)];
-    return [...new Set(res)];
+    const seen = /* @__PURE__ */ new Set();
+    const dedup = [];
+    for (const p of res) {
+      const key = `${p.orig}|${p.final}`;
+      if (seen.has(key))
+        continue;
+      seen.add(key);
+      dedup.push(p);
+    }
+    this.varListFromObjectLiterals[nodeId] = dedup;
+    return dedup;
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
     let finalVars = "";
-    if (_optionalChain([declaration, 'access', _236 => _236.initializer, 'optionalAccess', _237 => _237.kind]) === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
-      const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(declaration.initializer);
-      finalVars = this.buildFinalVarDeclarations(varsList, identation);
-    } else if (_optionalChain([declaration, 'access', _238 => _238.initializer, 'optionalAccess', _239 => _239.kind]) === _typescript2.default.SyntaxKind.CallExpression) {
-      const callExp = declaration.initializer;
-      const args = _nullishCoalesce(callExp.arguments, () => ( []));
+    if (declaration.initializer) {
+      const objLiterals = this.collectCapturingObjectLiterals(declaration.initializer);
       let varObj = [];
-      args.forEach((arg) => {
-        if (arg.kind === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
-          const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(arg);
-          varObj = varObj.concat(objVariables);
-        }
-      });
+      for (const lit of objLiterals) {
+        const vars = this.getVarListFromObjectLiteralAndUpdateInPlace(lit);
+        varObj = varObj.concat(vars);
+      }
       if (varObj.length > 0) {
         finalVars = this.buildFinalVarDeclarations(varObj, identation);
       }
     }
-    if (this.removeVariableDeclarationForFunctionExpression && _optionalChain([declaration, 'optionalAccess', _240 => _240.initializer]) && _typescript2.default.isFunctionExpression(declaration.initializer)) {
+    if (this.removeVariableDeclarationForFunctionExpression && _optionalChain([declaration, 'optionalAccess', _235 => _235.initializer]) && _typescript2.default.isFunctionExpression(declaration.initializer)) {
       return this.printNode(declaration.initializer, identation).trimEnd();
     }
-    if (_optionalChain([declaration, 'optionalAccess', _241 => _241.name, 'access', _242 => _242.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _236 => _236.name, 'access', _237 => _237.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map(
@@ -5248,7 +5344,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       });
       return arrayBindingStatement;
     }
-    const isNew = _optionalChain([declaration, 'optionalAccess', _243 => _243.initializer]) && declaration.initializer.kind === _typescript2.default.SyntaxKind.NewExpression;
+    const isNew = _optionalChain([declaration, 'optionalAccess', _238 => _238.initializer]) && declaration.initializer.kind === _typescript2.default.SyntaxKind.NewExpression;
     const varToken = isNew ? "var " : this.VAR_TOKEN + " ";
     if (!declaration.initializer) {
       return this.getIden(identation) + "Object " + this.printNode(declaration.name) + " = " + this.UNDEFINED_TOKEN;
@@ -5270,13 +5366,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     return finalVars + this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
   }
   printThisKeyword(node, identation) {
-    let current = _optionalChain([node, 'optionalAccess', _244 => _244.parent]);
+    let current = _optionalChain([node, 'optionalAccess', _239 => _239.parent]);
     while (current) {
       if (current.kind === _typescript2.default.SyntaxKind.PropertyAssignment) {
         const className = this.currentClassName;
         return `${this.capitalize(className)}.this`;
       }
-      current = _optionalChain([current, 'optionalAccess', _245 => _245.parent]);
+      current = _optionalChain([current, 'optionalAccess', _240 => _240.parent]);
     }
     return this.THIS_TOKEN;
   }
@@ -5307,72 +5403,24 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (_typescript2.default.isNumericLiteral(node)) {
       return this.UNDEFINED_TOKEN;
     }
-    if (_optionalChain([node, 'optionalAccess', _246 => _246.escapedText]) === "undefined" && _optionalChain([global, 'access', _247 => _247.checker, 'access', _248 => _248.getTypeAtLocation, 'call', _249 => _249(_optionalChain([node, 'optionalAccess', _250 => _250.parent])), 'optionalAccess', _251 => _251.flags]) === _typescript2.default.TypeFlags.Number) {
+    if (_optionalChain([node, 'optionalAccess', _241 => _241.escapedText]) === "undefined" && _optionalChain([global, 'access', _242 => _242.checker, 'access', _243 => _243.getTypeAtLocation, 'call', _244 => _244(_optionalChain([node, 'optionalAccess', _245 => _245.parent])), 'optionalAccess', _246 => _246.flags]) === _typescript2.default.TypeFlags.Number) {
       return this.UNDEFINED_TOKEN;
     }
     return void 0;
   }
   printFunctionBody(node, identation) {
-    this.emittedFinalVars = /* @__PURE__ */ new Set();
     this.varListFromObjectLiterals = {};
-    this.pendingFinalVars = [];
-    this.methodBodyVarNames = /* @__PURE__ */ new Set();
+    this.analyzeFinalVars(node.body);
+    this.finalVarScopeStack = [/* @__PURE__ */ new Set()];
     const funcParams = _nullishCoalesce(node.parameters, () => ( []));
-    funcParams.forEach((p) => {
-      const name = _optionalChain([p, 'access', _252 => _252.name, 'optionalAccess', _253 => _253.escapedText]);
-      if (name)
-        this.methodBodyVarNames.add(name);
-    });
     const bodyStatements = node.body.statements;
-    for (const stmt of bodyStatements) {
-      if (_typescript2.default.isVariableStatement(stmt)) {
-        for (const decl of stmt.declarationList.declarations) {
-          const name = _optionalChain([decl, 'access', _254 => _254.name, 'optionalAccess', _255 => _255["escapedText"]]);
-          if (name)
-            this.methodBodyVarNames.add(name);
-        }
-      }
-    }
-    const collectLoopVars = (n) => {
-      if (_typescript2.default.isIdentifier(n)) {
-        this.methodBodyVarNames.delete(n.escapedText);
-      }
-      _typescript2.default.forEachChild(n, collectLoopVars);
-    };
-    for (const stmt of bodyStatements) {
-      if (_typescript2.default.isForStatement(stmt)) {
-        if (stmt.initializer) {
-          if (_typescript2.default.isVariableDeclarationList(stmt.initializer)) {
-            for (const decl of stmt.initializer.declarations) {
-              const name = _optionalChain([decl, 'access', _256 => _256.name, 'optionalAccess', _257 => _257["escapedText"]]);
-              if (name)
-                this.methodBodyVarNames.delete(name);
-            }
-          } else {
-            collectLoopVars(stmt.initializer);
-          }
-        }
-        if (stmt.incrementor) {
-          collectLoopVars(stmt.incrementor);
-        }
-      }
-    }
     const isAsync = this.isAsyncFunction(node);
     const initParams = [];
     const processedParts = [];
     for (let i = 0; i < bodyStatements.length; i++) {
-      const pendingBefore = this.pendingFinalVars.length;
-      const printed = this.printNode(bodyStatements[i], identation + 1);
-      if (this.pendingFinalVars.length > pendingBefore) {
-        const newVars = this.pendingFinalVars.slice(pendingBefore);
-        const decls = newVars.map(
-          (v) => this.getIden(identation + 1) + `final Object ${v.final} = ${v.orig};`
-        ).join("\n");
-        processedParts.push(decls + "\n" + printed);
-      } else {
-        processedParts.push(printed);
-      }
+      processedParts.push(this.printNode(bodyStatements[i], identation + 1));
     }
+    this.finalVarScopeStack = [];
     let firstStatement = processedParts[0] || "";
     const remainingString = processedParts.slice(1).join("\n");
     let offSetIndex = 0;
@@ -5413,7 +5461,17 @@ var JavaTranspiler = class extends BaseTranspiler {
       return blockOpen + finalWrapperVars + asyncBody + blockClose;
     }
     return blockOpen + firstStatement + remainingString + blockClose;
-    return super.printFunctionBody(node, identation);
+  }
+  printBlock(node, identation, chainBlock = false) {
+    const managed = this.finalVarScopeStack.length > 0;
+    if (managed)
+      this.finalVarScopeStack.push(/* @__PURE__ */ new Set());
+    try {
+      return super.printBlock(node, identation, chainBlock);
+    } finally {
+      if (managed)
+        this.finalVarScopeStack.pop();
+    }
   }
   printInstanceOfExpression(node, identation) {
     const right = node.right.escapedText;
@@ -5473,7 +5531,8 @@ var JavaTranspiler = class extends BaseTranspiler {
       let printedParam = this.printParameter(param);
       if (isAsyncMethod && isReassignedVar) {
         const paramName = param.name.escapedText;
-        printedParam = printedParam.replace(paramName, `${paramName}2`);
+        const { localName, sigName } = this.getAsyncParamWrapperNames(paramName);
+        printedParam = printedParam.replace(localName, sigName);
       }
       return printedParam;
     });
@@ -5490,7 +5549,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     return `${this.ARRAY_OPENING_TOKEN}${elements}${this.ARRAY_CLOSING_TOKEN}`;
   }
   printFinalOutsideMethodVariableWrappersIfAny(node, identation) {
-    const parameters = _optionalChain([node, 'optionalAccess', _258 => _258.parameters]);
+    const parameters = _optionalChain([node, 'optionalAccess', _247 => _247.parameters]);
     const finalVarWrappers = [];
     if (parameters) {
       const isAsyncMethod = this.isAsyncFunction(node);
@@ -5500,7 +5559,8 @@ var JavaTranspiler = class extends BaseTranspiler {
           const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
-            finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${paramName}3 = ${paramName}2;`);
+            const { sigName, snapName } = this.getAsyncParamWrapperNames(paramName);
+            finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${snapName} = ${sigName};`);
           }
         }
       });
@@ -5508,7 +5568,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     return finalVarWrappers.join("\n");
   }
   printInsideMethodVariableWrappersIfAny(node, identation) {
-    const parameters = _optionalChain([node, 'optionalAccess', _259 => _259.parameters]);
+    const parameters = _optionalChain([node, 'optionalAccess', _248 => _248.parameters]);
     const finalVarWrappers = [];
     if (parameters) {
       const isAsyncMethod = this.isAsyncFunction(node);
@@ -5518,7 +5578,8 @@ var JavaTranspiler = class extends BaseTranspiler {
           const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
-            finalVarWrappers.push(this.getIden(identation + 1) + `Object ${paramName} = ${paramName}3;`);
+            const { localName, snapName } = this.getAsyncParamWrapperNames(paramName);
+            finalVarWrappers.push(this.getIden(identation + 1) + `Object ${localName} = ${snapName};`);
           }
         }
       });
@@ -5697,14 +5758,14 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _260 => _260.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _249 => _249.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(","), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = global.checker.getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([global, 'access', _261 => _261.checker, 'access', _262 => _262.getDeclaredTypeOfSymbol, 'call', _263 => _263(symbol), 'access', _264 => _264.symbol, 'optionalAccess', _265 => _265.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([global, 'access', _250 => _250.checker, 'access', _251 => _251.getDeclaredTypeOfSymbol, 'call', _252 => _252(symbol), 'access', _253 => _253.symbol, 'optionalAccess', _254 => _254.declarations]), () => ( []));
           const isClassDeclaration = declarations.find(
             (l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration
           );
@@ -5772,17 +5833,17 @@ var JavaTranspiler = class extends BaseTranspiler {
       exp = exp.expression;
     }
     const allVarNames = [];
-    if (exp && _optionalChain([exp, 'optionalAccess', _266 => _266.kind]) === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
+    if (exp && _optionalChain([exp, 'optionalAccess', _255 => _255.kind]) === _typescript2.default.SyntaxKind.ObjectLiteralExpression) {
       const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
       allVarNames.push(...varsList);
-    } else if (exp && _optionalChain([exp, 'optionalAccess', _267 => _267.kind]) === _typescript2.default.SyntaxKind.CallExpression) {
+    } else if (exp && _optionalChain([exp, 'optionalAccess', _256 => _256.kind]) === _typescript2.default.SyntaxKind.CallExpression) {
       const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(exp);
       for (const objLiteral of objectsFromCall) {
         const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
         allVarNames.push(...varsList);
       }
-    } else if (exp && _optionalChain([exp, 'optionalAccess', _268 => _268.kind]) === _typescript2.default.SyntaxKind.ArrayLiteralExpression) {
-      const elements = _nullishCoalesce(_optionalChain([exp, 'optionalAccess', _269 => _269.elements]), () => ( []));
+    } else if (exp && _optionalChain([exp, 'optionalAccess', _257 => _257.kind]) === _typescript2.default.SyntaxKind.ArrayLiteralExpression) {
+      const elements = _nullishCoalesce(_optionalChain([exp, 'optionalAccess', _258 => _258.elements]), () => ( []));
       for (const element of elements) {
         if (element.kind === _typescript2.default.SyntaxKind.CallExpression) {
           const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(element);

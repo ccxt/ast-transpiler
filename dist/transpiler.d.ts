@@ -643,12 +643,8 @@ declare class GoTranspiler extends BaseTranspiler {
 declare class JavaTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
-    emittedFinalVars: Set<string>;
-    pendingFinalVars: Array<{
-        orig: string;
-        final: string;
-    }>;
-    methodBodyVarNames: Set<string>;
+    usageToFinalName: WeakMap<ts.Node, string>;
+    finalVarScopeStack: Array<Set<string>>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -669,18 +665,31 @@ declare class JavaTranspiler extends BaseTranspiler {
     getVarKey(node: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
+    collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;
     getFinalVarName(varName: string): string;
     getOriginalVarName(name: string): string;
-    buildFinalVarDeclarations(varNames: string[], identation: number): string;
+    private getAsyncParamWrapperNames;
+    private isAssignmentOperator;
+    private isIncDecOperator;
+    analyzeFinalVars(fnBody: ts.Node): void;
+    private finalNameInAncestorScope;
+    buildFinalVarDeclarations(pairs: Array<{
+        orig: string;
+        final: string;
+    }>, identation: number): string;
     getObjectLiteralId(node: any): string;
     createNewNodeForFinalVar(originalName: string): ts.Identifier;
-    getVarListFromObjectLiteralAndUpdateInPlace(node: any): string[];
+    getVarListFromObjectLiteralAndUpdateInPlace(node: any): Array<{
+        orig: string;
+        final: string;
+    }>;
     printVariableDeclarationList(node: any, identation: any): string;
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
     printFunctionBody(node: any, identation: any): string;
+    printBlock(node: any, identation: any, chainBlock?: boolean): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printAwaitExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;

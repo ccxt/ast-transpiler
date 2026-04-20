@@ -4543,9 +4543,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
     super(config);
     this.varListFromObjectLiterals = {};
-    this.emittedFinalVars = /* @__PURE__ */ new Set();
-    this.pendingFinalVars = [];
-    this.methodBodyVarNames = /* @__PURE__ */ new Set();
+    this.usageToFinalName = /* @__PURE__ */ new WeakMap();
+    this.finalVarScopeStack = [];
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -4994,6 +4993,23 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return res;
   }
+  collectCapturingObjectLiterals(node) {
+    const found = [];
+    const walk = (n) => {
+      if (!n)
+        return;
+      if (n.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
+        found.push(n);
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.FunctionExpression || n.kind === ts6.SyntaxKind.ArrowFunction || n.kind === ts6.SyntaxKind.MethodDeclaration || n.kind === ts6.SyntaxKind.FunctionDeclaration) {
+        return;
+      }
+      ts6.forEachChild(n, walk);
+    };
+    walk(node);
+    return found;
+  }
   getBinaryExpressionPrefixes(node, identation) {
     let right = node?.right;
     if (right?.kind === ts6.SyntaxKind.AwaitExpression) {
@@ -5044,26 +5060,198 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return name;
   }
-  buildFinalVarDeclarations(varNames, identation) {
-    const inlineVars = [];
-    for (const v of varNames) {
-      const finalName = this.getFinalVarName(v);
-      const origName = this.getOriginalVarName(v);
-      if (this.methodBodyVarNames.has(origName)) {
-        if (!this.emittedFinalVars.has(finalName)) {
-          this.emittedFinalVars.add(finalName);
-          this.pendingFinalVars.push({ orig: origName, final: finalName });
+  getAsyncParamWrapperNames(paramName) {
+    const javaName = this.getOriginalVarName(paramName);
+    return {
+      sigName: `${javaName}2`,
+      snapName: `${javaName}3`,
+      localName: javaName
+    };
+  }
+  isAssignmentOperator(op) {
+    return op === ts6.SyntaxKind.EqualsToken || op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken || op === ts6.SyntaxKind.AsteriskEqualsToken || op === ts6.SyntaxKind.AsteriskAsteriskEqualsToken || op === ts6.SyntaxKind.SlashEqualsToken || op === ts6.SyntaxKind.PercentEqualsToken || op === ts6.SyntaxKind.LessThanLessThanEqualsToken || op === ts6.SyntaxKind.GreaterThanGreaterThanEqualsToken || op === ts6.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken || op === ts6.SyntaxKind.AmpersandEqualsToken || op === ts6.SyntaxKind.BarEqualsToken || op === ts6.SyntaxKind.CaretEqualsToken || op === ts6.SyntaxKind.BarBarEqualsToken || op === ts6.SyntaxKind.AmpersandAmpersandEqualsToken || op === ts6.SyntaxKind.QuestionQuestionEqualsToken;
+  }
+  isIncDecOperator(op) {
+    return op === ts6.SyntaxKind.PlusPlusToken || op === ts6.SyntaxKind.MinusMinusToken;
+  }
+  analyzeFinalVars(fnBody) {
+    this.usageToFinalName = /* @__PURE__ */ new WeakMap();
+    if (!fnBody)
+      return;
+    const symbolIdOf = (n) => {
+      try {
+        const checker = global.checker;
+        const sym = checker?.getSymbolAtLocation?.(n);
+        const decl = sym?.declarations?.[0] ?? sym?.valueDeclaration;
+        if (decl)
+          return `s:${decl.pos}:${decl.end}`;
+      } catch {
+      }
+      return `n:${n.escapedText}`;
+    };
+    const reassignedSyms = /* @__PURE__ */ new Set();
+    const discoverWalk = (node) => {
+      if (!node)
+        return;
+      if (node.kind === ts6.SyntaxKind.BinaryExpression && this.isAssignmentOperator(node.operatorToken.kind) && node.left?.kind === ts6.SyntaxKind.Identifier) {
+        reassignedSyms.add(symbolIdOf(node.left));
+      }
+      if ((node.kind === ts6.SyntaxKind.PrefixUnaryExpression || node.kind === ts6.SyntaxKind.PostfixUnaryExpression) && this.isIncDecOperator(node.operator) && node.operand?.kind === ts6.SyntaxKind.Identifier) {
+        reassignedSyms.add(symbolIdOf(node.operand));
+      }
+      ts6.forEachChild(node, discoverWalk);
+    };
+    discoverWalk(fnBody);
+    if (reassignedSyms.size === 0)
+      return;
+    const events = [];
+    const visitExprInObjLit = (n) => {
+      if (!n)
+        return;
+      if (n.kind === ts6.SyntaxKind.Identifier) {
+        const name = n.escapedText;
+        if (name && name !== "undefined" && !name.startsWith?.("null")) {
+          const sym = symbolIdOf(n);
+          if (reassignedSyms.has(sym)) {
+            events.push({ kind: "use", sym, name, node: n });
+          }
         }
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.BinaryExpression) {
+        visitExprInObjLit(n.left);
+        visitExprInObjLit(n.right);
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+        visitExprInObjLit(n.expression);
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.ConditionalExpression) {
+        visitExprInObjLit(n.condition);
+        visitExprInObjLit(n.whenTrue);
+        visitExprInObjLit(n.whenFalse);
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.CallExpression) {
+        n.arguments?.forEach(visitExprInObjLit);
+        if (n.expression?.kind === ts6.SyntaxKind.PropertyAccessExpression) {
+          visitExprInObjLit(n.expression.expression);
+        }
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.PrefixUnaryExpression) {
+        visitExprInObjLit(n.operand);
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.ElementAccessExpression) {
+        let left = n.expression;
+        while (left?.kind === ts6.SyntaxKind.ElementAccessExpression) {
+          left = left.expression;
+        }
+        visitExprInObjLit(left);
+        visitExprInObjLit(n.argumentExpression);
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
+        n.properties?.forEach((p) => {
+          if (p.initializer)
+            visitExprInObjLit(p.initializer);
+        });
+        return;
+      }
+    };
+    const walk = (node) => {
+      if (!node)
+        return;
+      if (node.kind === ts6.SyntaxKind.BinaryExpression && this.isAssignmentOperator(node.operatorToken.kind)) {
+        walk(node.right);
+        if (node.left?.kind === ts6.SyntaxKind.Identifier) {
+          const sym = symbolIdOf(node.left);
+          if (reassignedSyms.has(sym)) {
+            events.push({ kind: "reassign", sym });
+          }
+        } else {
+          walk(node.left);
+        }
+        return;
+      }
+      if ((node.kind === ts6.SyntaxKind.PrefixUnaryExpression || node.kind === ts6.SyntaxKind.PostfixUnaryExpression) && this.isIncDecOperator(node.operator) && node.operand?.kind === ts6.SyntaxKind.Identifier) {
+        const sym = symbolIdOf(node.operand);
+        if (reassignedSyms.has(sym)) {
+          events.push({ kind: "reassign", sym });
+        }
+        return;
+      }
+      if (node.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
+        node.properties?.forEach((prop) => {
+          if (prop.initializer) {
+            visitExprInObjLit(prop.initializer);
+            walk(prop.initializer);
+          }
+        });
+        return;
+      }
+      ts6.forEachChild(node, walk);
+    };
+    walk(fnBody);
+    const counters = /* @__PURE__ */ new Map();
+    const perSym = /* @__PURE__ */ new Map();
+    for (const e of events) {
+      if (e.kind === "reassign") {
+        counters.set(e.sym, (counters.get(e.sym) ?? 0) + 1);
       } else {
-        inlineVars.push(v);
+        const v = counters.get(e.sym) ?? 0;
+        if (!perSym.has(e.sym))
+          perSym.set(e.sym, { name: e.name, byVer: /* @__PURE__ */ new Map() });
+        const entry = perSym.get(e.sym);
+        if (!entry.byVer.has(v))
+          entry.byVer.set(v, []);
+        entry.byVer.get(v).push(e.node);
       }
     }
-    if (inlineVars.length === 0) {
-      return "";
+    for (const { name, byVer } of perSym.values()) {
+      const versions = [...byVer.keys()].sort((a, b) => a - b);
+      const baseName = this.getFinalVarName(name);
+      if (versions.length === 1) {
+        for (const n of byVer.get(versions[0])) {
+          this.usageToFinalName.set(n, baseName);
+        }
+      } else {
+        versions.forEach((v, idx) => {
+          const finalName = idx === 0 ? baseName : `${baseName}_${idx + 1}`;
+          for (const n of byVer.get(v)) {
+            this.usageToFinalName.set(n, finalName);
+          }
+        });
+      }
     }
-    return inlineVars.map(
-      (v, i) => `${this.getIden(i > 0 ? identation : 0)}final Object ${this.getFinalVarName(v)} = ${this.getOriginalVarName(v)};`
-    ).join("\n");
+  }
+  finalNameInAncestorScope(finalName) {
+    for (const scope of this.finalVarScopeStack) {
+      if (scope.has(finalName))
+        return true;
+    }
+    return false;
+  }
+  buildFinalVarDeclarations(pairs, identation) {
+    if (pairs.length === 0)
+      return "";
+    const current = this.finalVarScopeStack.length > 0 ? this.finalVarScopeStack[this.finalVarScopeStack.length - 1] : null;
+    const lines = [];
+    const seenHere = /* @__PURE__ */ new Set();
+    for (const p of pairs) {
+      if (seenHere.has(p.final))
+        continue;
+      if (this.finalNameInAncestorScope(p.final))
+        continue;
+      seenHere.add(p.final);
+      if (current)
+        current.add(p.final);
+      const indent = lines.length === 0 ? 0 : identation;
+      lines.push(`${this.getIden(indent)}final Object ${p.final} = ${this.getOriginalVarName(p.orig)};`);
+    }
+    return lines.join("\n");
   }
   getObjectLiteralId(node) {
     const start = node.getStart();
@@ -5081,150 +5269,58 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (nodeId in this.varListFromObjectLiterals) {
       return this.varListFromObjectLiterals[nodeId];
     }
-    node.properties.forEach((prop) => {
-      if (prop.initializer?.kind === ts6.SyntaxKind.Identifier && prop.initializer.escapedText !== "undefined" && !prop.initializer.escapedText.startsWith("null")) {
-        if (this.ReassignedVars[this.getVarKey(prop.initializer)]) {
-          res.push(prop.initializer.escapedText);
-          const finalName = this.getFinalVarName(prop.initializer.escapedText);
-          const newNode = ts6.factory.createIdentifier(finalName);
-          prop.initializer = newNode;
-        }
-      } else if (prop.initializer?.kind === ts6.SyntaxKind.CallExpression) {
-        const callArgs = prop.initializer?.arguments ?? [];
-        const callExp = prop.initializer;
-        const transverseCallExpressionArguments = (callExpression) => {
-          callExpression.arguments.forEach((arg, i) => {
-            if (arg.kind === ts6.SyntaxKind.Identifier) {
-              if (this.ReassignedVars[this.getVarKey(arg)]) {
-                res.push(arg.escapedText);
-                const newNode = this.createNewNodeForFinalVar(arg.escapedText);
-                arg = newNode;
-                callExpression.arguments[i] = newNode;
-              }
-            } else if (arg.kind === ts6.SyntaxKind.CallExpression) {
-              const innerCallExp = arg;
-              transverseCallExpressionArguments(innerCallExp);
-            }
-          });
-        };
-        transverseCallExpressionArguments(callExp);
-        if (callExp.expression?.kind === ts6.SyntaxKind.PropertyAccessExpression) {
-          const propAccess = callExp.expression;
-          const leftSide = propAccess.expression;
-          if (leftSide.kind === ts6.SyntaxKind.Identifier) {
-            if (this.ReassignedVars[this.getVarKey(leftSide)]) {
-              res.push(leftSide.escapedText);
-              const newNode = this.createNewNodeForFinalVar(leftSide.escapedText);
-              leftSide.escapedText = newNode.escapedText;
-              propAccess.expression = newNode;
-            }
+    const finalNameFor = (n, origName) => {
+      return this.usageToFinalName.get(n) ?? this.getFinalVarName(origName);
+    };
+    const traverseAndReplace = (n) => {
+      if (!n)
+        return;
+      if (n.kind === ts6.SyntaxKind.Identifier) {
+        const name = n.escapedText;
+        if (name && name !== "undefined" && !name.startsWith("null")) {
+          if (this.ReassignedVars[this.getVarKey(n)]) {
+            const finalName = finalNameFor(n, name);
+            res.push({ orig: name, final: finalName });
+            n.escapedText = finalName;
+            n.getFullText = () => finalName;
           }
         }
-      } else if (prop.initializer?.kind === ts6.SyntaxKind.BinaryExpression) {
-        const binExp = prop.initializer;
-        const checkNode = (n) => {
-          if (!n) {
-            return n;
-          }
-          if (n.kind === ts6.SyntaxKind.Identifier) {
-            if (this.ReassignedVars[this.getVarKey(n)]) {
-              res.push(n.escapedText);
-              const newNode = this.createNewNodeForFinalVar(n.escapedText);
-              return newNode;
-            }
-          }
-          return n;
-        };
-        const traverseBinaryExpression = (be) => {
-          be.left = checkNode(be.left);
-          be.right = checkNode(be.right);
-          if (be?.left?.kind === ts6.SyntaxKind.BinaryExpression) {
-            traverseBinaryExpression(be.left);
-          }
-          if (be?.right?.kind === ts6.SyntaxKind.BinaryExpression) {
-            traverseBinaryExpression(be.right);
-          }
-        };
-        traverseBinaryExpression(binExp);
-      } else if (prop.initializer?.kind === ts6.SyntaxKind.ElementAccessExpression) {
-        let left = prop.initializer.expression;
-        const right = prop.initializer.argumentExpression;
-        if (left.kind === ts6.SyntaxKind.ElementAccessExpression) {
-          while (left.kind === ts6.SyntaxKind.ElementAccessExpression) {
-            left = left.expression;
-          }
-        }
-        if (this.ReassignedVars[this.getVarKey(left)]) {
-          const leftName = left.escapedText;
-          const newLeftName = this.getFinalVarName(leftName);
-          left.escapedText = newLeftName;
-          res.push(leftName);
-        }
-        if (right.kind === ts6.SyntaxKind.Identifier) {
-          if (this.ReassignedVars[this.getVarKey(right)]) {
-            const rightName = right.escapedText;
-            const newRightName = this.getFinalVarName(rightName);
-            right.escapedText = newRightName;
-            res.push(rightName);
-          }
-        }
-      } else if (prop.initializer?.kind === ts6.SyntaxKind.ConditionalExpression) {
-        const traverseAndReplace = (node2) => {
-          if (!node2)
-            return;
-          if (node2.kind === ts6.SyntaxKind.Identifier && node2.escapedText !== "undefined" && !node2.escapedText?.startsWith("null")) {
-            if (this.ReassignedVars[this.getVarKey(node2)]) {
-              res.push(node2.escapedText);
-              node2.escapedText = this.getFinalVarName(node2.escapedText);
-            }
-            return;
-          }
-          if (node2.kind === ts6.SyntaxKind.BinaryExpression) {
-            traverseAndReplace(node2.left);
-            traverseAndReplace(node2.right);
-          } else if (node2.kind === ts6.SyntaxKind.ParenthesizedExpression) {
-            traverseAndReplace(node2.expression);
-          } else if (node2.kind === ts6.SyntaxKind.ConditionalExpression) {
-            traverseAndReplace(node2.condition);
-            traverseAndReplace(node2.whenTrue);
-            traverseAndReplace(node2.whenFalse);
-          } else if (node2.kind === ts6.SyntaxKind.CallExpression) {
-            node2.arguments?.forEach((arg) => traverseAndReplace(arg));
-            if (node2.expression?.kind === ts6.SyntaxKind.PropertyAccessExpression) {
-              traverseAndReplace(node2.expression.expression);
-            }
-          } else if (node2.kind === ts6.SyntaxKind.PrefixUnaryExpression) {
-            traverseAndReplace(node2.operand);
-          }
-        };
-        const cond = prop.initializer;
-        traverseAndReplace(cond.condition);
-        traverseAndReplace(cond.whenTrue);
-        traverseAndReplace(cond.whenFalse);
-      } else if (prop.initializer?.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-        const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(prop.initializer);
-        res = res.concat(innerVars);
+        return;
       }
+      if (n.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
+        const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(n);
+        res = res.concat(innerVars);
+        return;
+      }
+      ts6.forEachChild(n, traverseAndReplace);
+    };
+    node.properties.forEach((prop) => {
+      if (!prop.initializer)
+        return;
+      traverseAndReplace(prop.initializer);
     });
-    this.varListFromObjectLiterals[nodeId] = [...new Set(res)];
-    return [...new Set(res)];
+    const seen = /* @__PURE__ */ new Set();
+    const dedup = [];
+    for (const p of res) {
+      const key = `${p.orig}|${p.final}`;
+      if (seen.has(key))
+        continue;
+      seen.add(key);
+      dedup.push(p);
+    }
+    this.varListFromObjectLiterals[nodeId] = dedup;
+    return dedup;
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
     let finalVars = "";
-    if (declaration.initializer?.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-      const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(declaration.initializer);
-      finalVars = this.buildFinalVarDeclarations(varsList, identation);
-    } else if (declaration.initializer?.kind === ts6.SyntaxKind.CallExpression) {
-      const callExp = declaration.initializer;
-      const args = callExp.arguments ?? [];
+    if (declaration.initializer) {
+      const objLiterals = this.collectCapturingObjectLiterals(declaration.initializer);
       let varObj = [];
-      args.forEach((arg) => {
-        if (arg.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-          const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(arg);
-          varObj = varObj.concat(objVariables);
-        }
-      });
+      for (const lit of objLiterals) {
+        const vars = this.getVarListFromObjectLiteralAndUpdateInPlace(lit);
+        varObj = varObj.concat(vars);
+      }
       if (varObj.length > 0) {
         finalVars = this.buildFinalVarDeclarations(varObj, identation);
       }
@@ -5319,66 +5415,18 @@ var JavaTranspiler = class extends BaseTranspiler {
     return void 0;
   }
   printFunctionBody(node, identation) {
-    this.emittedFinalVars = /* @__PURE__ */ new Set();
     this.varListFromObjectLiterals = {};
-    this.pendingFinalVars = [];
-    this.methodBodyVarNames = /* @__PURE__ */ new Set();
+    this.analyzeFinalVars(node.body);
+    this.finalVarScopeStack = [/* @__PURE__ */ new Set()];
     const funcParams = node.parameters ?? [];
-    funcParams.forEach((p) => {
-      const name = p.name?.escapedText;
-      if (name)
-        this.methodBodyVarNames.add(name);
-    });
     const bodyStatements = node.body.statements;
-    for (const stmt of bodyStatements) {
-      if (ts6.isVariableStatement(stmt)) {
-        for (const decl of stmt.declarationList.declarations) {
-          const name = decl.name?.["escapedText"];
-          if (name)
-            this.methodBodyVarNames.add(name);
-        }
-      }
-    }
-    const collectLoopVars = (n) => {
-      if (ts6.isIdentifier(n)) {
-        this.methodBodyVarNames.delete(n.escapedText);
-      }
-      ts6.forEachChild(n, collectLoopVars);
-    };
-    for (const stmt of bodyStatements) {
-      if (ts6.isForStatement(stmt)) {
-        if (stmt.initializer) {
-          if (ts6.isVariableDeclarationList(stmt.initializer)) {
-            for (const decl of stmt.initializer.declarations) {
-              const name = decl.name?.["escapedText"];
-              if (name)
-                this.methodBodyVarNames.delete(name);
-            }
-          } else {
-            collectLoopVars(stmt.initializer);
-          }
-        }
-        if (stmt.incrementor) {
-          collectLoopVars(stmt.incrementor);
-        }
-      }
-    }
     const isAsync = this.isAsyncFunction(node);
     const initParams = [];
     const processedParts = [];
     for (let i = 0; i < bodyStatements.length; i++) {
-      const pendingBefore = this.pendingFinalVars.length;
-      const printed = this.printNode(bodyStatements[i], identation + 1);
-      if (this.pendingFinalVars.length > pendingBefore) {
-        const newVars = this.pendingFinalVars.slice(pendingBefore);
-        const decls = newVars.map(
-          (v) => this.getIden(identation + 1) + `final Object ${v.final} = ${v.orig};`
-        ).join("\n");
-        processedParts.push(decls + "\n" + printed);
-      } else {
-        processedParts.push(printed);
-      }
+      processedParts.push(this.printNode(bodyStatements[i], identation + 1));
     }
+    this.finalVarScopeStack = [];
     let firstStatement = processedParts[0] || "";
     const remainingString = processedParts.slice(1).join("\n");
     let offSetIndex = 0;
@@ -5419,7 +5467,17 @@ var JavaTranspiler = class extends BaseTranspiler {
       return blockOpen + finalWrapperVars + asyncBody + blockClose;
     }
     return blockOpen + firstStatement + remainingString + blockClose;
-    return super.printFunctionBody(node, identation);
+  }
+  printBlock(node, identation, chainBlock = false) {
+    const managed = this.finalVarScopeStack.length > 0;
+    if (managed)
+      this.finalVarScopeStack.push(/* @__PURE__ */ new Set());
+    try {
+      return super.printBlock(node, identation, chainBlock);
+    } finally {
+      if (managed)
+        this.finalVarScopeStack.pop();
+    }
   }
   printInstanceOfExpression(node, identation) {
     const right = node.right.escapedText;
@@ -5479,7 +5537,8 @@ var JavaTranspiler = class extends BaseTranspiler {
       let printedParam = this.printParameter(param);
       if (isAsyncMethod && isReassignedVar) {
         const paramName = param.name.escapedText;
-        printedParam = printedParam.replace(paramName, `${paramName}2`);
+        const { localName, sigName } = this.getAsyncParamWrapperNames(paramName);
+        printedParam = printedParam.replace(localName, sigName);
       }
       return printedParam;
     });
@@ -5506,7 +5565,8 @@ var JavaTranspiler = class extends BaseTranspiler {
           const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
-            finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${paramName}3 = ${paramName}2;`);
+            const { sigName, snapName } = this.getAsyncParamWrapperNames(paramName);
+            finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${snapName} = ${sigName};`);
           }
         }
       });
@@ -5524,7 +5584,8 @@ var JavaTranspiler = class extends BaseTranspiler {
           const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
-            finalVarWrappers.push(this.getIden(identation + 1) + `Object ${paramName} = ${paramName}3;`);
+            const { localName, snapName } = this.getAsyncParamWrapperNames(paramName);
+            finalVarWrappers.push(this.getIden(identation + 1) + `Object ${localName} = ${snapName};`);
           }
         }
       });
