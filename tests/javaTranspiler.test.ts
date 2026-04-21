@@ -1119,6 +1119,65 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/final Object finalParameters\s*=\s*params\s*;/);
     });
 
+    // Bug shape: forward-reference reassignment. The object literal uses a
+    // parameter/variable BEFORE it is reassigned later in the same function
+    // body. analyzeFinalVars pre-walks and correctly flags the var, but
+    // getVarListFromObjectLiteralAndUpdateInPlace used to consult only
+    // ReassignedVars (which is populated as BinaryExpressions are printed),
+    // so at print time the flag was still false → finalXxx shadow skipped
+    // → Java compile failed: "local variables referenced from an inner
+    // class must be final or effectively final".
+    //
+    // Mirrors the ccxt blofin createTpslOrderRequest regression: a request
+    // object literal captures `params`, then several lines later the
+    // function does `params = this.omit(params, [...])`.
+    test('object literal: identifier is reassigned AFTER the literal (forward reference) — still emits final shadow', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    createTpslOrderRequest(params: any) {\n" +
+        "        const request = {\n" +
+        "            'reduceOnly': this.safeBool(params, 'reduceOnly', true),\n" +
+        "        };\n" +
+        "        params = this.omit(params, ['stopLossPrice']);\n" +
+        "        return this.extend(request, params);\n" +
+        "    }\n" +
+        "    safeBool(p: any, k: string, d: boolean) { return d; }\n" +
+        "    omit(p: any, k: any) { return p; }\n" +
+        "    extend(a: any, b: any) { return a; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The final shadow must be emitted for the forward-referenced parameter.
+        // `params` is a Java reserved keyword → remapped to `parameters`.
+        expect(output).toContain('final Object finalParameters = parameters;');
+        // The inner-class put() must reference finalParameters, not raw parameters.
+        expect(output).toMatch(/put\(\s*"reduceOnly",[^)]*\bfinalParameters\b/);
+        // And must NOT reference raw `parameters` inside the inner-class put()
+        // (which would fail effectively-final since parameters is reassigned later).
+        expect(output).not.toMatch(/put\(\s*"reduceOnly",[^)]*safeBool\(\s*parameters\b/);
+    });
+
+    test('object literal: non-reserved identifier reassigned AFTER the literal still emits final shadow', () => {
+        // Same bug shape but with a plain identifier (no reserved-keyword remap)
+        // so the assertion is unambiguous about which name is finalised.
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo(config: any) {\n" +
+        "        const request = { 'cfg': this.wrap(config) };\n" +
+        "        config = this.normalize(config);\n" +
+        "        return this.extend(request, config);\n" +
+        "    }\n" +
+        "    wrap(p: any) { return p; }\n" +
+        "    normalize(p: any) { return p; }\n" +
+        "    extend(a: any, b: any) { return a; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalConfig = config;');
+        expect(output).toMatch(/put\(\s*"cfg",[^)]*\bfinalConfig\b/);
+        expect(output).not.toMatch(/put\(\s*"cfg",[^)]*wrap\(\s*config\s*\)/);
+    });
+
     // --- Object-literal substitution coverage gaps ---
     // The anonymous inner-class HashMap requires every captured variable to be
     // effectively final. Each of these expression shapes used to leave the
