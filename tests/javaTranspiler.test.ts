@@ -1119,6 +1119,132 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/final Object finalParameters\s*=\s*params\s*;/);
     });
 
+    // Bug shape: forward-reference reassignment. The object literal uses a
+    // parameter/variable BEFORE it is reassigned later in the same function
+    // body. analyzeFinalVars pre-walks and correctly flags the var, but
+    // getVarListFromObjectLiteralAndUpdateInPlace used to consult only
+    // ReassignedVars (which is populated as BinaryExpressions are printed),
+    // so at print time the flag was still false → finalXxx shadow skipped
+    // → Java compile failed: "local variables referenced from an inner
+    // class must be final or effectively final".
+    //
+    // Mirrors the ccxt blofin createTpslOrderRequest regression: a request
+    // object literal captures `params`, then several lines later the
+    // function does `params = this.omit(params, [...])`.
+    test('object literal: identifier is reassigned AFTER the literal (forward reference) — still emits final shadow', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    createTpslOrderRequest(params: any) {\n" +
+        "        const request = {\n" +
+        "            'reduceOnly': this.safeBool(params, 'reduceOnly', true),\n" +
+        "        };\n" +
+        "        params = this.omit(params, ['stopLossPrice']);\n" +
+        "        return this.extend(request, params);\n" +
+        "    }\n" +
+        "    safeBool(p: any, k: string, d: boolean) { return d; }\n" +
+        "    omit(p: any, k: any) { return p; }\n" +
+        "    extend(a: any, b: any) { return a; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The final shadow must be emitted for the forward-referenced parameter.
+        // `params` is a Java reserved keyword → remapped to `parameters`.
+        expect(output).toContain('final Object finalParameters = parameters;');
+        // The inner-class put() must reference finalParameters, not raw parameters.
+        expect(output).toMatch(/put\(\s*"reduceOnly",[^)]*\bfinalParameters\b/);
+        // And must NOT reference raw `parameters` inside the inner-class put()
+        // (which would fail effectively-final since parameters is reassigned later).
+        expect(output).not.toMatch(/put\(\s*"reduceOnly",[^)]*safeBool\(\s*parameters\b/);
+    });
+
+    test('object literal: non-reserved identifier reassigned AFTER the literal still emits final shadow', () => {
+        // Same bug shape but with a plain identifier (no reserved-keyword remap)
+        // so the assertion is unambiguous about which name is finalised.
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo(config: any) {\n" +
+        "        const request = { 'cfg': this.wrap(config) };\n" +
+        "        config = this.normalize(config);\n" +
+        "        return this.extend(request, config);\n" +
+        "    }\n" +
+        "    wrap(p: any) { return p; }\n" +
+        "    normalize(p: any) { return p; }\n" +
+        "    extend(a: any, b: any) { return a; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalConfig = config;');
+        expect(output).toMatch(/put\(\s*"cfg",[^)]*\bfinalConfig\b/);
+        expect(output).not.toMatch(/put\(\s*"cfg",[^)]*wrap\(\s*config\s*\)/);
+    });
+
+    // Ordering and scope of the rewrite for the forward-reference case.
+    // The final snapshot must sit BEFORE the object literal (so the literal
+    // can close over it as an effectively-final variable), and uses outside
+    // the literal — both the later reassignment LHS and the post-literal
+    // return — must still reference the raw (mutable) name.
+    test('object literal: forward-reference final-snapshot precedes the literal; uses outside the literal stay raw', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    createTpslOrderRequest(params: any) {\n" +
+        "        const request = {\n" +
+        "            'reduceOnly': this.safeBool(params, 'reduceOnly', true),\n" +
+        "        };\n" +
+        "        params = this.omit(params, ['stopLossPrice']);\n" +
+        "        return this.extend(request, params);\n" +
+        "    }\n" +
+        "    safeBool(p: any, k: string, d: boolean) { return d; }\n" +
+        "    omit(p: any, k: any) { return p; }\n" +
+        "    extend(a: any, b: any) { return a; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+
+        const declIdx = output.indexOf('final Object finalParameters = parameters;');
+        const literalIdx = output.indexOf('new java.util.HashMap');
+        const reassignIdx = output.indexOf('parameters = this.omit(');
+        const returnIdx = output.indexOf('return this.extend(');
+
+        expect(declIdx).toBeGreaterThanOrEqual(0);
+        expect(literalIdx).toBeGreaterThanOrEqual(0);
+        expect(reassignIdx).toBeGreaterThanOrEqual(0);
+        expect(returnIdx).toBeGreaterThanOrEqual(0);
+
+        // Snapshot comes BEFORE the literal so the inner class can capture it.
+        expect(declIdx).toBeLessThan(literalIdx);
+        // And BEFORE the reassignment so the snapshot captures the pre-reassign value.
+        expect(declIdx).toBeLessThan(reassignIdx);
+        // Literal appears before the later reassignment (this is the forward-ref shape).
+        expect(literalIdx).toBeLessThan(reassignIdx);
+
+        // Statements OUTSIDE the literal must keep the raw name, not finalParameters.
+        expect(output).toMatch(/parameters\s*=\s*this\.omit\(\s*parameters\s*,/);
+        expect(output).not.toMatch(/finalParameters\s*=\s*this\.omit/);
+        expect(output).toMatch(/return this\.extend\(\s*request\s*,\s*parameters\s*\)/);
+        expect(output).not.toMatch(/return this\.extend\(\s*request\s*,\s*finalParameters\s*\)/);
+    });
+
+    // Symmetric counterpart to the existing "postfix unary on reassigned
+    // counter" test (which reassigns BEFORE the literal via `i = 1`). Here
+    // the inc happens AFTER the literal — exercises the forward-reference
+    // path for PostfixUnaryExpression specifically.
+    test('object literal: postfix increment AFTER the literal (forward reference) gets finalized', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    demo() {\n" +
+        "        let i = 0;\n" +
+        "        const a = { 'q': i };\n" +
+        "        i++;\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toContain('final Object finalI = i;');
+        expect(output).toMatch(/put\(\s*"q",\s*finalI\s*\)/);
+        expect(output).not.toMatch(/put\(\s*"q",\s*i\s*\)/);
+    });
+
     // --- Object-literal substitution coverage gaps ---
     // The anonymous inner-class HashMap requires every captured variable to be
     // effectively final. Each of these expression shapes used to leave the
