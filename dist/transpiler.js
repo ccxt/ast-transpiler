@@ -5278,7 +5278,8 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (n.kind === ts6.SyntaxKind.Identifier) {
         const name = n.escapedText;
         if (name && name !== "undefined" && !name.startsWith("null")) {
-          if (this.ReassignedVars[this.getVarKey(n)]) {
+          const isReassignedAhead = this.usageToFinalName.has(n);
+          if (isReassignedAhead || this.ReassignedVars[this.getVarKey(n)]) {
             const finalName = finalNameFor(n, name);
             res.push({ orig: name, final: finalName });
             n.escapedText = finalName;
