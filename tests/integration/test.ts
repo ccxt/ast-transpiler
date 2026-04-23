@@ -9,6 +9,8 @@ const PY_TRANSPILABLE_FILE = "./tests/integration/py/transpilable.py";
 const PHP_TRANSPILABLE_FILE = "./tests/integration/php/transpilable.php";
 const CS_TRANSPILABLE_FILE = "./tests/integration/cs/transpilable.cs";
 const GO_TRANSPILABLE_FILE = "./tests/integration/go/transpilable.go";
+
+const PHP_TRANSPILABLE_FILE_WITH_TYPES = "./tests/integration/php/transpilable_with_types.php";
 const JAVA_TRANSPILABLE_FILE = "./tests/integration/java/app/src/main/java/org/example/Transpilable.java";
 
 
@@ -38,6 +40,13 @@ const langConfig = [
         async: true
     },
     {
+        language: "php",
+        async: true,
+        parser: {
+            supportVariableType: true
+        }
+    },
+    {
         language: "java",
     },
 ]
@@ -55,8 +64,12 @@ function transpileTests() {
     const transpiler = new Transpiler(parseConfig);
     const result = transpiler.transpileDifferentLanguagesByPath(langConfig as any, TS_TRANSPILABLE_FILE);
 
-    let phpRes = `<?php\nfunction custom_echo($x){ echo (string)$x . "\n";}\n${result[2].content}\n?>` as string;
-    phpRes = (phpRes as any).replaceAll('var_dump', 'custom_echo');
+    let phpResWrapper = (content) => {
+        const res = `<?php\nfunction custom_echo($x){ echo (string)$x . "\n";}\n${content}\n?>` as string;
+        return (res as any).replaceAll('var_dump', 'custom_echo');
+    };
+    const phpRes = phpResWrapper(result[2].content);
+    const phpResWithTypes = phpResWrapper(result[4].content);
     const pythonAsync = result[1].content;
     let csharp = 'namespace tests;\n' + result[0].content;
     csharp = csharp.replace('class Test', 'partial class Test');
@@ -74,6 +87,7 @@ function transpileTests() {
     const go = 'package main\n' + goImports + result[3].content;
 
     writeFileSync(PHP_TRANSPILABLE_FILE, phpRes.toString());
+    writeFileSync(PHP_TRANSPILABLE_FILE_WITH_TYPES, phpResWithTypes.toString());
     writeFileSync(PY_TRANSPILABLE_FILE, pythonAsync);
     writeFileSync(CS_TRANSPILABLE_FILE, csharp);
     writeFileSync(GO_TRANSPILABLE_FILE, go);
@@ -85,6 +99,8 @@ function runCommand(command) {
         exec(command, (error, stdout, stderr) => {
             if (stderr !== undefined || stderr !== null) {
                 stderr = stderr.replace('Debugger attached.\nWaiting for the debugger to disconnect...\n', '');
+                // fix for windows
+                stderr = stderr.replace('Debugger attached.\r','').replace('\nWaiting for the debugger to disconnect...\r\n', '');
             }
             if (stderr.startsWith("Debugger listening") && stderr.includes("For help, see: https://nodejs.org/en/docs/inspector")) {
                 stderr = undefined;

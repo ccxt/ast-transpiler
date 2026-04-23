@@ -190,6 +190,7 @@ class BaseTranspiler {
     uncamelcaseIdentifiers;
     asyncTranspiling;
     requiresReturnType;
+    supportVariableType;
     requiresParameterType;
     supportsFalsyOrTruthyValues;
     requiresCallExpressionCast;
@@ -202,6 +203,7 @@ class BaseTranspiler {
         this.id = "base";
         this.uncamelcaseIdentifiers = false;
         this.requiresReturnType = false;
+        this.supportVariableType = false;
         this.requiresParameterType = false;
         this.supportsFalsyOrTruthyValues = true;
         this.requiresCallExpressionCast = false;

@@ -7,6 +7,8 @@ jest.mock('module',()=>({
   }));
 
 let transpiler: Transpiler;
+let transpilerWithType: Transpiler;
+
 
 beforeAll(() => {
     const config = {
@@ -18,6 +20,14 @@ beforeAll(() => {
         }
     }
     transpiler = new Transpiler(config);
+
+        
+    const config2 ={
+        'php': {
+            'supportVariableType': true
+        }
+    }
+    transpilerWithType = new Transpiler(config2);
 })
 
 describe('php transpiling tests', () => {
@@ -895,5 +905,41 @@ describe('php transpiling tests', () => {
         const result = "gettype($x) === 'array' && array_is_list($x);";
         const output = transpiler.transpilePhp(ts).content;
         expect(output).toBe(result);
+    });
+    test('should support types', () => {
+        const nl = '\n';
+        const ts =
+        'class RefClass {}' + nl +
+        'class BasicClass {' + nl +
+        '    public stringProp: string;' + nl +
+        '    public numProp: number;' + nl +
+        '    public boolProp: boolean;' + nl +
+        '    public refProp: RefClass;' + nl +
+        '    public constructor(arg1: string, arg2: number, arg3: boolean, arg4: RefClass) {' + nl +
+        '        this.stringProp = arg1;' + nl +
+        '        this.numProp = arg2;' + nl +
+        '        this.boolProp = arg3;' + nl +
+        '        this.refProp = arg4;' + nl +
+        '    }' + nl +
+        '}';
+        const php =
+        'class RefClass {'  + nl +
+        '' + nl +
+        '}' + nl +
+        'class BasicClass {' + nl +
+        '    public string $stringProp;' + nl +
+        '    public object $numProp;' + nl +
+        '    public bool $boolProp;' + nl +
+        '    public RefClass $refProp;' + nl +
+        '' + nl +
+        '    function __construct(string $arg1, object $arg2, bool $arg3, RefClass $arg4) {' + nl +
+        '        $this->stringProp = $arg1;' + nl +
+        '        $this->numProp = $arg2;' + nl +
+        '        $this->boolProp = $arg3;' + nl +
+        '        $this->refProp = $arg4;' + nl +
+        '    }' + nl +
+        '}' + nl;
+        const output = transpilerWithType.transpilePhp(ts).content;
+        expect(output).toBe(php);
     });
   });
