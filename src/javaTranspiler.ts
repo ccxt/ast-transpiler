@@ -1880,26 +1880,20 @@ export class JavaTranspiler extends BaseTranspiler {
         if (exp && exp.kind === ts.SyntaxKind.AsExpression && (exp.expression.kind === ts.SyntaxKind.ObjectLiteralExpression || ts.SyntaxKind.CallExpression)) {
             exp = exp.expression; // go over something like return {} as SomeType
         }
+        // Use collectCapturingObjectLiterals to walk through every wrapper
+        // (AwaitExpression, ParenthesizedExpression, CallExpression args, ArrayLiteral
+        // elements, ConditionalExpression branches, NewExpression args, etc.) and
+        // pick up every HashMap literal whose anonymous-inner-class body would
+        // need effectively-final captures. The previous narrow switch missed
+        // `return await this.watch(..., { literal capturing reassigned var }, ...)`
+        // entirely — the literal ended up referencing the raw (reassigned)
+        // identifier with no snapshot, which javac rejects.
         const allVarNames = [];
-        if (exp && exp?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
-            allVarNames.push(...varsList);
-        } else if (exp && exp?.kind === ts.SyntaxKind.CallExpression) {
-            const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(exp);
-            for (const objLiteral of objectsFromCall) {
+        if (exp) {
+            const objLiterals = this.collectCapturingObjectLiterals(exp);
+            for (const objLiteral of objLiterals) {
                 const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
                 allVarNames.push(...varsList);
-            }
-        } else if (exp && exp?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
-            const elements = exp?.elements ?? [];
-            for (const element of elements) {
-                if (element.kind === ts.SyntaxKind.CallExpression) {
-                    const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(element);
-                    for (const objLiteral of objectsFromCall) {
-                        const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                        allVarNames.push(...varsList);
-                    }
-                }
             }
         }
         let finalVars = allVarNames.length > 0 ? this.buildFinalVarDeclarations(allVarNames, identation) : '';

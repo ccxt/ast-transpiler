@@ -1525,6 +1525,93 @@ describe('java transpiling tests', () => {
 
     // --- Integration: realistic exchange pattern combining all features ---
 
+    // Regression: CCXT-style WS subscribe — `return await this.watch(..., { ...rawHash... }, rawHash)`.
+    // The HashMap argument capture needs an effectively-final snapshot of `rawHash`,
+    // even though the return expression is wrapped in `AwaitExpression`. Pre-fix,
+    // printReturnStatement only matched ObjectLiteralExpression/CallExpression/
+    // ArrayLiteralExpression at the top level, so AwaitExpression-wrapped returns
+    // produced raw `rawHash` inside the anon-inner-class — javac rejected it.
+    test('return await call(...{literal-capturing-reassigned}, ...): per-branch final snapshot is emitted', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async subscribe(symbol: string, type: string): Promise<any> {\n" +
+        "        let rawHash = undefined;\n" +
+        "        const messageHash = 'ticker:' + symbol;\n" +
+        "        if (type === 'spot') {\n" +
+        "            rawHash = 'spot/ticker:' + symbol;\n" +
+        "            return await this.watch('url', messageHash, { 'op': 'subscribe', 'args': [ rawHash ] }, rawHash);\n" +
+        "        } else {\n" +
+        "            rawHash = 'futures/ticker:' + symbol;\n" +
+        "            return await this.watch('url', messageHash, { 'op': 'subscribe', 'args': [ rawHash ] }, rawHash);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    async watch(url: string, hash: string, request: any, sub: string): Promise<any> { return [url, hash, request, sub]; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The HashMap argument must read finalRawHash, not raw rawHash.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\s*\)/);
+        expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
+        // Each branch declares its own snapshot, after the reassignment.
+        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
+        // Snapshot must be in the same branch as the reassignment.
+        const branchPattern =
+            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash = rawHash;\s*return\b/g;
+        expect((output.match(branchPattern) || []).length).toBe(2);
+        // No method-scope snapshot before the if/else (which would capture null).
+        expect(output).not.toMatch(/final Object finalRawHash = rawHash;\s*if\s*\(/);
+        // every finalXxx reference must have a matching declaration
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression: bitmart-style subscribe helper. `rawHash` is declared with
+    // `undefined`, then reassigned inside each if/else branch and immediately
+    // used inside a HashMap literal in that same branch. The final-var snapshot
+    // must be placed *inside* each branch, *after* the reassignment — never at
+    // method scope before the if/else (which would capture null).
+    test('object literal: per-branch reassignment captures branch-local snapshot, not method-scope null', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async subscribe(symbol: string, op: string, kind: string): Promise<any> {\n" +
+        "        let rawHash = undefined;\n" +
+        "        let request = {};\n" +
+        "        if (kind === 'spot') {\n" +
+        "            rawHash = 'spot/ticker:' + symbol;\n" +
+        "            request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "        } else {\n" +
+        "            rawHash = 'futures/ticker:' + symbol;\n" +
+        "            request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "        }\n" +
+        "        return JSON.stringify(request);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The literal must read from finalRawHash, not raw rawHash.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\s*\)/);
+        expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
+        // The snapshot must be inside each branch (after the reassignment),
+        // not at method scope before the if. There are two branches → two snapshots.
+        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
+        // The snapshot must come AFTER the corresponding reassignment in each branch.
+        // We assert structurally: each snapshot is preceded by a `rawHash = Helpers.add(...)`
+        // line, with no intervening `if (` on the same path.
+        const branchPattern =
+            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash = rawHash;\s*request = new java\.util\.HashMap/g;
+        expect((output.match(branchPattern) || []).length).toBe(2);
+        // Must NOT emit a method-scope snapshot before the if/else
+        // (which the pre-fix output did, capturing the null seed value).
+        expect(output).not.toMatch(/final Object finalRawHash = rawHash;\s*if\s*\(/);
+        // every finalXxx reference must have a matching declaration
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
     test('async method with hoisted param, loop-local vars, ternaries, and two loops', () => {
         const input =
         "class Exchange {\n" +
