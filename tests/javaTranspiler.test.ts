@@ -1567,6 +1567,64 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // Regression (user-reported reproducer): free-function shape with default-value
+    // param `op = 'subscribe'`. Asserts both branches emit `final Object finalRawHash`
+    // — the user's report claimed the else branch was missing its snapshot.
+    test('object literal: free-function default-param subscribe shape — both branches declare', () => {
+        const fresh = new Transpiler();
+        const input =
+        "async function subscribe (type, channel, symbol, op = 'subscribe') {\n" +
+        "    let request = {};\n" +
+        "    let rawHash = undefined;\n" +
+        "    if (type === 'spot') {\n" +
+        "        rawHash = 'spot/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    } else {\n" +
+        "        rawHash = 'futures/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    }\n" +
+        "    return request;\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both branches declare a per-branch snapshot.
+        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
+        // Both branches read finalRawHash inside the HashMap; no raw rawHash leaks into the literal.
+        expect((output.match(/Arrays\.asList\(\s*finalRawHash\s*\)/g) || []).length).toBe(2);
+        expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
+        // No `cannot find symbol`: every finalXxx reference has a declaration.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression: same shape as above but with `op` actually reassigned inside the
+    // function — so `op` itself enters ReassignedVars and needs a per-branch snapshot too.
+    test('object literal: free-function with op reassigned + rawHash in if/else — both branches declare both', () => {
+        const fresh = new Transpiler();
+        const input =
+        "async function subscribe (type, channel, symbol, op = 'subscribe') {\n" +
+        "    op = op.toLowerCase();\n" +
+        "    let request = {};\n" +
+        "    let rawHash = undefined;\n" +
+        "    if (type === 'spot') {\n" +
+        "        rawHash = 'spot/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    } else {\n" +
+        "        rawHash = 'futures/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    }\n" +
+        "    return request;\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalOp = op;/g) || []).length).toBe(2);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
     // Regression: bitmart-style subscribe helper. `rawHash` is declared with
     // `undefined`, then reassigned inside each if/else branch and immediately
     // used inside a HashMap literal in that same branch. The final-var snapshot
