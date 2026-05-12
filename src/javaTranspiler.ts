@@ -825,13 +825,33 @@ export class JavaTranspiler extends BaseTranspiler {
             return `n:${n.escapedText}`;
         };
 
-        // Pass 1 — discover which symbols are reassigned anywhere in this function body.
+        // Pass 1 — discover which symbols the printer will treat as reassigned.
+        //
+        // The printer's `printCustomBinaryExpressionIfAny` sets
+        // `ReassignedVars[varKey] = true` for the LEFT identifier of *every*
+        // BinaryExpression — not just assignment operators. So `timestamp + '#'`
+        // or `x === 5` will both flag `timestamp`/`x` later during emit, even
+        // though they're plain reads syntactically. The printer's substitution
+        // path then uses ReassignedVars as a fallback trigger for the finalXxx
+        // rewrite, so a literal capturing such an identifier ends up referring
+        // to `finalTimestamp` even when the analyzer thinks the symbol isn't
+        // reassigned.
+        //
+        // If the analyzer disagrees with the printer here, the printer's
+        // fallback substitution uses the un-suffixed base name for *every* use
+        // (including in sibling if/else branches), and any environment with
+        // ancestor-scope dedup leak will suppress one of the two declarations.
+        //
+        // Mirror the printer's over-broad heuristic in the analyzer so the
+        // version-bump machinery (a5c2036 / ac618b0 / 48a1786) can assign
+        // distinct names to sibling and post-block uses.
         const reassignedSyms = new Set<string>();
         const discoverWalk = (node: any) => {
             if (!node) return;
             if (node.kind === ts.SyntaxKind.BinaryExpression &&
-                this.isAssignmentOperator(node.operatorToken.kind) &&
                 node.left?.kind === ts.SyntaxKind.Identifier) {
+                // Mirror printCustomBinaryExpressionIfAny: any BinaryExpression
+                // with an Identifier left flags it, regardless of operator.
                 reassignedSyms.add(symbolIdOf(node.left));
             }
             if ((node.kind === ts.SyntaxKind.PrefixUnaryExpression ||

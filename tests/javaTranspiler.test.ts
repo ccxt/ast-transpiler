@@ -1584,6 +1584,51 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // Regression (real CCXT bitmart authenticate shape): the var `timestamp` is
+    // declared `const` (never reassigned in source) but later used as the left
+    // side of a BinaryExpression (`timestamp + '#' + memo`). The printer flags
+    // this in ReassignedVars mid-print, then substitutes `timestamp` → `finalTimestamp`
+    // in every literal that captures it. Without analyzer awareness, both if/else
+    // branches share the same `finalTimestamp` name and the consumer's scope
+    // tracking can suppress the else-branch declaration.
+    //
+    // Pass 1 of the analyzer now mirrors the printer's heuristic: any
+    // BinaryExpression with an Identifier left flags the symbol, so the version
+    // bump fires for these too.
+    test('object literal: var read in BinaryExpression then captured in if/else literals — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async authenticate(type) {\n" +
+        "        const authenticated = this.safeValue(this.client.subscriptions, 'authenticated');\n" +
+        "        if (authenticated === undefined) {\n" +
+        "            const timestamp = '123';\n" +
+        "            const auth = timestamp + '#' + 'memo';\n" +
+        "            let request = undefined;\n" +
+        "            if (type === 'spot') {\n" +
+        "                request = { 'args': [ this.apiKey, timestamp, auth ] };\n" +
+        "            } else {\n" +
+        "                request = { 'args': [ this.apiKey, timestamp, auth, 'web' ] };\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "    apiKey = 'k';\n" +
+        "    client = { subscriptions: {} };\n" +
+        "    safeValue(o, k) { return undefined; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/final Object finalTimestamp = timestamp;/);
+        expect(output).toMatch(/final Object finalTimestamp_2 = timestamp;/);
+        // Each branch references its own snapshot, no cross-scope leaks.
+        expect(output).toMatch(/Arrays\.asList\([^)]*finalTimestamp,[^)]*\)/);
+        expect(output).toMatch(/Arrays\.asList\([^)]*finalTimestamp_2,[^)]*\)/);
+        // No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
     // Regression (real CCXT bitmart/bingx authenticate shape with state leak):
     // a var is marked in ReassignedVars from a prior transpile (cross-call leak)
     // but is `const` in the current function body. Without analyzer awareness of
