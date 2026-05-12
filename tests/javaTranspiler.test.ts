@@ -1622,6 +1622,66 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // Coverage gap: deeply nested if/else where the inner branches and the
+    // outer post-if all capture the same reassigned symbol. The version bump
+    // must propagate up through nested IfStatement walks so each region gets
+    // a distinct snapshot name.
+    test('object literal: deeply nested if/else — each region gets a distinct snapshot', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f(type, sub) {\n" +
+        "        let x = 'init';\n" +
+        "        x = x + '!';\n" +
+        "        if (type === 'a') {\n" +
+        "            if (sub === 'x') {\n" +
+        "                return { 'v': x };\n" +
+        "            } else {\n" +
+        "                return { 'v': x };\n" +
+        "            }\n" +
+        "        }\n" +
+        "        return { 'v': x };\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Three distinct regions → three distinct snapshot names.
+        const decls = [...output.matchAll(/final Object (finalX\w*) = x;/g)].map(m => m[1]);
+        const unique = new Set(decls);
+        expect(unique.size).toBe(3);
+        expect(decls.length).toBe(3);
+        // Every finalXxx reference must resolve to a declaration.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Negative regression: a var that is truly never reassigned and only read
+    // outside any BinaryExpression context must NOT get a snapshot in the
+    // captured literal. Catches accidental over-eager versioning from the
+    // pass-1 broadening (mirror of printCustomBinaryExpressionIfAny).
+    test('object literal: truly read-only var captured in if/else — NO snapshot emitted', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f(type) {\n" +
+        "        const x = 'const';\n" +
+        "        let r = undefined;\n" +
+        "        if (type === 'a') {\n" +
+        "            r = { 'v': x };\n" +
+        "        } else {\n" +
+        "            r = { 'v': x };\n" +
+        "        }\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // x appears only as a read inside literals; never on the left of any
+        // BinaryExpression and never reassigned. No finalX snapshot expected.
+        expect(output).not.toMatch(/final Object finalX\b/);
+        expect(output).toMatch(/put\(\s*"v",\s*x\s*\)/);
+    });
+
     // Regression (real CCXT bitmart authenticate shape): the var `timestamp` is
     // declared `const` (never reassigned in source) but later used as the left
     // side of a BinaryExpression (`timestamp + '#' + memo`). The printer flags

@@ -846,7 +846,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // version-bump machinery (a5c2036 / ac618b0 / 48a1786) can assign
         // distinct names to sibling and post-block uses.
         const reassignedSyms = new Set<string>();
-        const discoverWalk = (node: any) => {
+        const discoverPotentialReassignments = (node: any) => {
             if (!node) return;
             if (node.kind === ts.SyntaxKind.BinaryExpression) {
                 if (node.left?.kind === ts.SyntaxKind.Identifier) {
@@ -874,23 +874,13 @@ export class JavaTranspiler extends BaseTranspiler {
                 node.operand?.kind === ts.SyntaxKind.Identifier) {
                 reassignedSyms.add(symbolIdOf(node.operand));
             }
-            ts.forEachChild(node, discoverWalk);
-        };
-        discoverWalk(fnBody);
-
-        // Also include symbols whose <class>-<method>-<varName> key is already
-        // marked in ReassignedVars. That table accumulates across transpile
-        // calls and across earlier-printed methods in the same call, so a var
-        // declared as `const` in this function body may still be flagged from
-        // a prior context (cross-call state leak, or an alias seen earlier).
-        // The printer's traverseAndReplace already consults ReassignedVars as
-        // a fallback for substitution; if the analyzer doesn't know, it can't
-        // assign a version, the printer falls back to the un-suffixed base name
-        // for *all* uses, and sibling if/else branches share the same finalName
-        // — which is exactly the shape that breaks when the consumer's scope
-        // tracking suppresses the second declaration.
-        const includeFromReassignedVars = (node: any) => {
-            if (!node) return;
+            // Cross-call / cross-method state leak: ReassignedVars accumulates
+            // across transpile calls and earlier-printed methods in the same
+            // class+method context, so a var declared `const` in this function
+            // body may still be flagged from a prior context. The printer's
+            // substitution path consults ReassignedVars as a fallback; if the
+            // analyzer disagrees, version-bump can't apply and sibling if/else
+            // branches end up with the same base name.
             if (node.kind === ts.SyntaxKind.Identifier) {
                 const name = node.escapedText as string | undefined;
                 if (name && name !== 'undefined' && !name.startsWith?.('null')) {
@@ -900,9 +890,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 }
                 return;
             }
-            ts.forEachChild(node, includeFromReassignedVars);
+            ts.forEachChild(node, discoverPotentialReassignments);
         };
-        includeFromReassignedVars(fnBody);
+        discoverPotentialReassignments(fnBody);
 
         if (reassignedSyms.size === 0) return;
 
@@ -1015,60 +1005,39 @@ export class JavaTranspiler extends BaseTranspiler {
                 return;
             }
 
-            // An if-block introduces a sibling scope for declarations inside it.
-            // Without intervention, the analyzer assigns the same per-symbol
-            // version to uses inside the then-block and uses after the if (or
-            // inside the else-block) — same name, same emit target. Java permits
-            // sibling-scope reuse of a name when the inner block has popped,
-            // but ancestor-scope dedup in buildFinalVarDeclarations + any scope
-            // tracking leak in the consumer environment can suppress the outer
-            // declaration, leaving an undeclared reference.
+            // If/else branches introduce sibling scopes for declarations inside
+            // them. Without intervention, the analyzer assigns the same per-symbol
+            // version to uses across siblings and to uses after the branch.
+            // Java permits sibling-scope name reuse when the inner block has
+            // popped, but ancestor-scope dedup in buildFinalVarDeclarations +
+            // any scope tracking leak in the consumer environment can suppress
+            // the outer declaration, leaving an undeclared reference.
             //
-            // Insert phantom reassign events at block boundaries so:
-            //   - then-block uses get version N
-            //   - else-block uses (if present) get version N+1
-            //   - post-if uses get the next version after both branches
-            // Names are distinct per region; ancestor-scope dedup becomes a no-op.
-            if (node.kind === ts.SyntaxKind.IfStatement) {
-                walk(node.expression);
-                const eventsBeforeThen = events.length;
-                walk(node.thenStatement);
-                const usedInThen = new Set<string>();
-                for (let i = eventsBeforeThen; i < events.length; i++) {
+            // The helper below records 'use' events inside a sub-block and emits
+            // a phantom reassign on exit for every symbol used inside, so each
+            // region gets a distinct per-symbol version → distinct finalXxx name.
+            const walkBlockAndBump = (subNode: ts.Node | undefined): Set<string> => {
+                const usedInBlock = new Set<string>();
+                if (!subNode) return usedInBlock;
+                const eventsBefore = events.length;
+                walk(subNode);
+                for (let i = eventsBefore; i < events.length; i++) {
                     const e = events[i];
-                    if (e.kind === 'use') usedInThen.add(e.sym);
+                    if (e.kind === 'use') usedInBlock.add(e.sym);
                 }
-                // Bump version for every symbol used inside then — separates
-                // then-block name from any subsequent (else-block or post-if) use.
-                for (const sym of usedInThen) {
+                for (const sym of usedInBlock) {
                     events.push({ kind: 'reassign', sym });
                 }
-                const usedInThenOrElse = new Set<string>(usedInThen);
-                if (node.elseStatement) {
-                    const eventsBeforeElse = events.length;
-                    walk(node.elseStatement);
-                    for (let i = eventsBeforeElse; i < events.length; i++) {
-                        const e = events[i];
-                        if (e.kind === 'use') usedInThenOrElse.add(e.sym);
-                    }
-                    // Bump again so any post-if use gets a distinct version
-                    // from BOTH branches.
-                    for (const sym of usedInThenOrElse) {
-                        if (!usedInThen.has(sym)) {
-                            // Already bumped once for then-only symbols; bump
-                            // the remaining (else-only) ones here.
-                            events.push({ kind: 'reassign', sym });
-                        }
-                    }
-                    // For symbols used in BOTH branches, we already bumped once
-                    // between then and else; do an additional bump here so post-if
-                    // gets a unique version beyond the else-branch version.
-                    for (const sym of usedInThen) {
-                        if (usedInThenOrElse.has(sym)) {
-                            events.push({ kind: 'reassign', sym });
-                        }
-                    }
-                }
+                return usedInBlock;
+            };
+
+            if (node.kind === ts.SyntaxKind.IfStatement) {
+                walk(node.expression);
+                walkBlockAndBump(node.thenStatement);
+                walkBlockAndBump(node.elseStatement);
+                // After walking either branch we've already bumped for every
+                // symbol used inside it, so post-if uses naturally land on a
+                // version higher than either branch's uses.
                 return;
             }
 
