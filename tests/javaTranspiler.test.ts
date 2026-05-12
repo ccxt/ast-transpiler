@@ -644,9 +644,16 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // Each branch is a sibling scope → independent declarations
-        const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
-        expect(declCount).toBe(2);
+        // Each sibling branch declares its own snapshot with a distinct version-suffixed
+        // name (finalCode in then, finalCode_2 in else). This avoids any conflict with
+        // ancestor-scope dedup if scope tracking ever leaks. Each literal references its
+        // branch's own snapshot.
+        expect(output).toMatch(/final Object finalCode = code;/);
+        expect(output).toMatch(/final Object finalCode_2 = code;/);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
     });
 
     test('finalXxx in for-loop body and after loop — anchored at each usage', () => {
@@ -1549,22 +1556,95 @@ describe('java transpiling tests', () => {
         "    async watch(url: string, hash: string, request: any, sub: string): Promise<any> { return [url, hash, request, sub]; }\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        // The HashMap argument must read finalRawHash, not raw rawHash.
-        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\s*\)/);
+        // The HashMap argument must read a finalRawHash variant (per-branch unique name),
+        // never raw rawHash.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash(_\d+)?\s*\)/);
         expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
-        // Each branch declares its own snapshot, after the reassignment.
-        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
+        // Each branch declares its own snapshot, after the reassignment. The
+        // analyzer assigns per-branch version names (finalRawHash + finalRawHash_2)
+        // so sibling branches can't suppress each other via ancestor-scope dedup.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
         // Snapshot must be in the same branch as the reassignment.
         const branchPattern =
-            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash = rawHash;\s*return\b/g;
+            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*return\b/g;
         expect((output.match(branchPattern) || []).length).toBe(2);
         // No method-scope snapshot before the if/else (which would capture null).
-        expect(output).not.toMatch(/final Object finalRawHash = rawHash;\s*if\s*\(/);
+        expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
         // every finalXxx reference must have a matching declaration
         const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
         const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
         const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
         expect(undeclared).toEqual([]);
+    });
+
+    // Regression (real CCXT bitmart subscribe shape): the else-branch has
+    // intervening statements (const speed = ..., a nested `if (speed !== undefined)`,
+    // and a different prop key 'action' vs the if-branch's 'op') between the
+    // reassignment and the literal. The if-branch's literal captures requestOp
+    // and rawHash; the else-branch captures them again. Pre-fix output (in some
+    // environments) had the else-branch reference `finalRequestOp`/`finalRawHash`
+    // without declaring them, producing `cannot find symbol`. The analyzer's
+    // per-branch version bump fixes this by giving sibling branches distinct
+    // snapshot names.
+    test('object literal: real-bitmart-shape if/else with intervening nested if — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async subscribe(unifiedName, channel, symbol, type, params = {}) {\n" +
+        "        const market = this.market(symbol);\n" +
+        "        let request = {};\n" +
+        "        let messageHash = undefined;\n" +
+        "        let rawHash = undefined;\n" +
+        "        const unsubscribe = this.safeBool(params, 'unsubscribe', false);\n" +
+        "        let prefix = '';\n" +
+        "        let requestOp = 'subscribe';\n" +
+        "        if (unsubscribe) {\n" +
+        "            params = this.omit(params, 'unsubscribe');\n" +
+        "            prefix = 'unsubscribe::';\n" +
+        "            requestOp = 'unsubscribe';\n" +
+        "        }\n" +
+        "        messageHash = unifiedName + '::' + symbol;\n" +
+        "        if (type === 'spot') {\n" +
+        "            rawHash = 'spot/' + channel + ':' + market['id'];\n" +
+        "            request = { 'op': requestOp, 'args': [ rawHash ] };\n" +
+        "        } else {\n" +
+        "            rawHash = 'futures/' + channel + ':' + market['id'];\n" +
+        "            const speed = this.safeString(params, 'speed');\n" +
+        "            if (speed !== undefined) {\n" +
+        "                params = this.omit(params, 'speed');\n" +
+        "                messageHash += ':' + speed;\n" +
+        "            }\n" +
+        "            request = { 'action': requestOp, 'args': [ rawHash ] };\n" +
+        "        }\n" +
+        "        messageHash = prefix + messageHash;\n" +
+        "        return await this.watch('url', messageHash, request, messageHash);\n" +
+        "    }\n" +
+        "    market(s) { return { 'id': s }; }\n" +
+        "    safeBool(p, k, d) { return d; }\n" +
+        "    safeString(p, k) { return undefined; }\n" +
+        "    omit(p, k) { return p; }\n" +
+        "    async watch(url, hash, req, sub) { return [url, hash, req, sub]; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Each branch declares its own snapshot for both rawHash and requestOp.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalRequestOp\w* = requestOp;/g) || []).length).toBe(2);
+        // If-branch and else-branch use DIFFERENT snapshot names — both halves of
+        // the version-suffix pair must be present.
+        expect(output).toMatch(/final Object finalRawHash = rawHash;/);
+        expect(output).toMatch(/final Object finalRawHash_2 = rawHash;/);
+        expect(output).toMatch(/final Object finalRequestOp = requestOp;/);
+        expect(output).toMatch(/final Object finalRequestOp_2 = requestOp;/);
+        // The else-branch literal references the _2 names (the if-branch's names
+        // are scoped to its block). No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+        // Each finalRawHash variant declaration must be paired with a usage
+        // inside an Arrays.asList (the anonymous-inner-class HashMap capture).
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\s*\)/);
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash_2\s*\)/);
     });
 
     // Regression (user-reported reproducer): free-function shape with default-value
@@ -1586,10 +1666,13 @@ describe('java transpiling tests', () => {
         "    return request;\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        // Both branches declare a per-branch snapshot.
-        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
-        // Both branches read finalRawHash inside the HashMap; no raw rawHash leaks into the literal.
-        expect((output.match(/Arrays\.asList\(\s*finalRawHash\s*\)/g) || []).length).toBe(2);
+        // Each branch declares its own per-branch snapshot. With the analyzer's
+        // sibling-branch version bump, the if-branch gets `finalRawHash` and the
+        // else-branch gets `finalRawHash_2` (or similar) — distinct names per
+        // branch so neither suppresses the other.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        // Both branches reference a finalRawHash variant; no raw rawHash leaks.
+        expect((output.match(/Arrays\.asList\(\s*finalRawHash\w*\s*\)/g) || []).length).toBe(2);
         expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
         // No `cannot find symbol`: every finalXxx reference has a declaration.
         const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
@@ -1617,8 +1700,10 @@ describe('java transpiling tests', () => {
         "    return request;\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
-        expect((output.match(/final Object finalOp = op;/g) || []).length).toBe(2);
+        // Both branches declare their own snapshots for both vars (with distinct
+        // version-suffixed names for the sibling branch).
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalOp\w* = op;/g) || []).length).toBe(2);
         const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
         const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
         const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
@@ -1648,21 +1733,20 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        // The literal must read from finalRawHash, not raw rawHash.
-        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\s*\)/);
+        // The literal must read from a finalRawHash variant, not raw rawHash.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\w*\s*\)/);
         expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
-        // The snapshot must be inside each branch (after the reassignment),
-        // not at method scope before the if. There are two branches → two snapshots.
-        expect((output.match(/final Object finalRawHash = rawHash;/g) || []).length).toBe(2);
+        // Each branch declares its own snapshot, after the reassignment, not at
+        // method scope before the if. Names are per-branch unique
+        // (finalRawHash + finalRawHash_2) so ancestor-scope dedup can't suppress.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
         // The snapshot must come AFTER the corresponding reassignment in each branch.
-        // We assert structurally: each snapshot is preceded by a `rawHash = Helpers.add(...)`
-        // line, with no intervening `if (` on the same path.
         const branchPattern =
-            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash = rawHash;\s*request = new java\.util\.HashMap/g;
+            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*request = new java\.util\.HashMap/g;
         expect((output.match(branchPattern) || []).length).toBe(2);
         // Must NOT emit a method-scope snapshot before the if/else
         // (which the pre-fix output did, capturing the null seed value).
-        expect(output).not.toMatch(/final Object finalRawHash = rawHash;\s*if\s*\(/);
+        expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
         // every finalXxx reference must have a matching declaration
         const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
         const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));

@@ -907,7 +907,14 @@ export class JavaTranspiler extends BaseTranspiler {
                 });
                 return;
             }
-            // Other shapes (property access, literals, etc.) — ignore.
+            // Fallback for any other expression kind (ArrayLiteralExpression,
+            // SpreadElement, TemplateExpression, AsExpression, NonNullExpression,
+            // PropertyAccessExpression, TypeAssertion, etc.) — descend uniformly
+            // so identifiers nested inside `[rawHash]`, `{...x}`, `` `${x}` ``, and
+            // so on are still tagged. ObjectLiteralExpression is handled above so
+            // it doesn't fall through to the generic descent (which would re-walk
+            // the same prop initializers and double-count).
+            ts.forEachChild(n, visitExprInObjLit);
         };
 
         const walk = (node: any) => {
@@ -945,6 +952,35 @@ export class JavaTranspiler extends BaseTranspiler {
                         walk(prop.initializer);
                     }
                 });
+                return;
+            }
+
+            // If/else branches are mutually exclusive, but the analyzer walks
+            // them sequentially — so without intervention, a symbol with the
+            // same reassign-counter in both branches gets the same version name
+            // (e.g. `finalRequestOp`). When both branches emit a HashMap literal
+            // capturing that symbol, they'd share the snapshot name; if scope
+            // tracking ever loses track of the if-branch's pop, the else branch's
+            // declaration gets suppressed by the ancestor-scope check.
+            //
+            // Insert a phantom reassign event at the boundary between then and
+            // else for every symbol used inside the then-block. This bumps the
+            // counter so else-block uses get a distinct version (`finalRequestOp_2`),
+            // making the snapshots unique per-branch even if the analyzer's
+            // expression-kind coverage misses some shape inside the literal.
+            if (node.kind === ts.SyntaxKind.IfStatement && node.elseStatement) {
+                walk(node.expression);
+                const eventsBeforeThen = events.length;
+                walk(node.thenStatement);
+                const usedInThen = new Set<string>();
+                for (let i = eventsBeforeThen; i < events.length; i++) {
+                    const e = events[i];
+                    if (e.kind === 'use') usedInThen.add(e.sym);
+                }
+                for (const sym of usedInThen) {
+                    events.push({ kind: 'reassign', sym });
+                }
+                walk(node.elseStatement);
                 return;
             }
 
