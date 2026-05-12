@@ -848,11 +848,25 @@ export class JavaTranspiler extends BaseTranspiler {
         const reassignedSyms = new Set<string>();
         const discoverWalk = (node: any) => {
             if (!node) return;
-            if (node.kind === ts.SyntaxKind.BinaryExpression &&
-                node.left?.kind === ts.SyntaxKind.Identifier) {
-                // Mirror printCustomBinaryExpressionIfAny: any BinaryExpression
-                // with an Identifier left flags it, regardless of operator.
-                reassignedSyms.add(symbolIdOf(node.left));
+            if (node.kind === ts.SyntaxKind.BinaryExpression) {
+                if (node.left?.kind === ts.SyntaxKind.Identifier) {
+                    // Mirror printCustomBinaryExpressionIfAny: any BinaryExpression
+                    // with an Identifier left flags it, regardless of operator.
+                    reassignedSyms.add(symbolIdOf(node.left));
+                } else if (
+                    node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+                    node.left?.kind === ts.SyntaxKind.ArrayLiteralExpression
+                ) {
+                    // Tuple destructuring assignment: `[a, b] = expr`. The printer's
+                    // ArrayLiteralExpression branch in printCustomBinaryExpressionIfAny
+                    // flags each Identifier element in ReassignedVars, so mirror it
+                    // here for version-bump coverage.
+                    for (const elem of node.left.elements ?? []) {
+                        if (elem?.kind === ts.SyntaxKind.Identifier) {
+                            reassignedSyms.add(symbolIdOf(elem));
+                        }
+                    }
+                }
             }
             if ((node.kind === ts.SyntaxKind.PrefixUnaryExpression ||
                  node.kind === ts.SyntaxKind.PostfixUnaryExpression) &&

@@ -1584,6 +1584,44 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // Regression (real CCXT bingx watchOrderBook shape): `params` is reassigned
+    // via tuple-destructure (`[marketType, params] = this.handle(...)`). The
+    // printer's ArrayLiteralExpression branch in printCustomBinaryExpressionIfAny
+    // flags each element in ReassignedVars at emit time. Pass 1 needs to mirror
+    // this so the version-bump fires; otherwise sibling if/else captures share
+    // `finalParameters` and the else-branch declaration can be suppressed.
+    test('object literal: tuple-destructure target captured in if/else literals — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async watchOrderBook(symbol, limit = undefined, params = {}) {\n" +
+        "        let marketType = undefined;\n" +
+        "        [ marketType, params ] = this.handleMarketTypeAndParams('watchOrderBook', undefined, params);\n" +
+        "        let subscriptionArgs = {};\n" +
+        "        if (this.someFlag(symbol)) {\n" +
+        "            subscriptionArgs = { 'params': params };\n" +
+        "        } else {\n" +
+        "            subscriptionArgs = { 'params': params };\n" +
+        "        }\n" +
+        "        return subscriptionArgs;\n" +
+        "    }\n" +
+        "    handleMarketTypeAndParams(method, market, params) { return [undefined, params]; }\n" +
+        "    someFlag(s) { return true; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both branches declare their own snapshot with distinct names.
+        expect(output).toMatch(/final Object finalParameters = parameters;/);
+        expect(output).toMatch(/final Object finalParameters_2 = parameters;/);
+        // Each literal references its branch's own snapshot.
+        expect(output).toMatch(/put\(\s*"params",\s*finalParameters\s*\)/);
+        expect(output).toMatch(/put\(\s*"params",\s*finalParameters_2\s*\)/);
+        // No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
     // Regression (real CCXT bitmart authenticate shape): the var `timestamp` is
     // declared `const` (never reassigned in source) but later used as the left
     // side of a BinaryExpression (`timestamp + '#' + memo`). The printer flags
