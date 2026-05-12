@@ -955,20 +955,21 @@ export class JavaTranspiler extends BaseTranspiler {
                 return;
             }
 
-            // If/else branches are mutually exclusive, but the analyzer walks
-            // them sequentially — so without intervention, a symbol with the
-            // same reassign-counter in both branches gets the same version name
-            // (e.g. `finalRequestOp`). When both branches emit a HashMap literal
-            // capturing that symbol, they'd share the snapshot name; if scope
-            // tracking ever loses track of the if-branch's pop, the else branch's
-            // declaration gets suppressed by the ancestor-scope check.
+            // An if-block introduces a sibling scope for declarations inside it.
+            // Without intervention, the analyzer assigns the same per-symbol
+            // version to uses inside the then-block and uses after the if (or
+            // inside the else-block) — same name, same emit target. Java permits
+            // sibling-scope reuse of a name when the inner block has popped,
+            // but ancestor-scope dedup in buildFinalVarDeclarations + any scope
+            // tracking leak in the consumer environment can suppress the outer
+            // declaration, leaving an undeclared reference.
             //
-            // Insert a phantom reassign event at the boundary between then and
-            // else for every symbol used inside the then-block. This bumps the
-            // counter so else-block uses get a distinct version (`finalRequestOp_2`),
-            // making the snapshots unique per-branch even if the analyzer's
-            // expression-kind coverage misses some shape inside the literal.
-            if (node.kind === ts.SyntaxKind.IfStatement && node.elseStatement) {
+            // Insert phantom reassign events at block boundaries so:
+            //   - then-block uses get version N
+            //   - else-block uses (if present) get version N+1
+            //   - post-if uses get the next version after both branches
+            // Names are distinct per region; ancestor-scope dedup becomes a no-op.
+            if (node.kind === ts.SyntaxKind.IfStatement) {
                 walk(node.expression);
                 const eventsBeforeThen = events.length;
                 walk(node.thenStatement);
@@ -977,10 +978,37 @@ export class JavaTranspiler extends BaseTranspiler {
                     const e = events[i];
                     if (e.kind === 'use') usedInThen.add(e.sym);
                 }
+                // Bump version for every symbol used inside then — separates
+                // then-block name from any subsequent (else-block or post-if) use.
                 for (const sym of usedInThen) {
                     events.push({ kind: 'reassign', sym });
                 }
-                walk(node.elseStatement);
+                const usedInThenOrElse = new Set<string>(usedInThen);
+                if (node.elseStatement) {
+                    const eventsBeforeElse = events.length;
+                    walk(node.elseStatement);
+                    for (let i = eventsBeforeElse; i < events.length; i++) {
+                        const e = events[i];
+                        if (e.kind === 'use') usedInThenOrElse.add(e.sym);
+                    }
+                    // Bump again so any post-if use gets a distinct version
+                    // from BOTH branches.
+                    for (const sym of usedInThenOrElse) {
+                        if (!usedInThen.has(sym)) {
+                            // Already bumped once for then-only symbols; bump
+                            // the remaining (else-only) ones here.
+                            events.push({ kind: 'reassign', sym });
+                        }
+                    }
+                    // For symbols used in BOTH branches, we already bumped once
+                    // between then and else; do an additional bump here so post-if
+                    // gets a unique version beyond the else-branch version.
+                    for (const sym of usedInThen) {
+                        if (usedInThenOrElse.has(sym)) {
+                            events.push({ kind: 'reassign', sym });
+                        }
+                    }
+                }
                 return;
             }
 

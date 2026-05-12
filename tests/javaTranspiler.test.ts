@@ -622,13 +622,20 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // Two usage sites in distinct scopes → two anchored declarations
-        const declCount = (output.match(/final Object finalMarketId = marketId;/g) || []).length;
-        expect(declCount).toBe(2);
-        // all put() calls should use finalMarketId
+        // Two usage sites in distinct scopes → two anchored declarations. The
+        // analyzer's per-block version bump gives each region a distinct name
+        // (finalMarketId inside the if, finalMarketId_2 after the if) so the
+        // ancestor-scope dedup can never suppress the outer declaration.
+        expect((output.match(/final Object finalMarketId\w* = marketId;/g) || []).length).toBe(2);
+        // each put() must reference a declared finalMarketId variant
         const putMatches = output.match(/put\(\s*"symbol",\s*(\w+)\s*\)/g) || [];
         expect(putMatches.length).toBe(2);
-        putMatches.forEach(m => expect(m).toContain('finalMarketId'));
+        putMatches.forEach(m => expect(m).toMatch(/finalMarketId\w*/));
+        // every finalXxx reference has a matching declaration (no cannot-find-symbol)
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
     });
 
     test('finalXxx in if/else branches — each branch gets its own anchored declaration', () => {
@@ -1571,6 +1578,44 @@ describe('java transpiling tests', () => {
         // No method-scope snapshot before the if/else (which would capture null).
         expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
         // every finalXxx reference must have a matching declaration
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression (real CCXT parseWsTrade shape): a single if-without-else block
+    // contains a HashMap literal capturing `market`; a later return-statement
+    // literal also captures `market`. Pre-fix, both got the same `finalMarket`
+    // name and the second emission was suppressed by ancestor-scope dedup in
+    // some environments — leaving the return literal with an undeclared reference.
+    // The analyzer's per-block version bump gives each region a distinct name
+    // (finalMarket inside the if, finalMarket_2 after the if).
+    test('object literal: if-without-else inner capture + post-if outer capture — distinct snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    parseWsTrade(trade, market = undefined) {\n" +
+        "        market = this.safeMarket(this.safeString(trade, 'code'), market);\n" +
+        "        let fee = null;\n" +
+        "        const feeCost = this.safeString(trade, 'paid_fee');\n" +
+        "        if (feeCost !== undefined) {\n" +
+        "            fee = { 'currency': market['quote'], 'cost': feeCost };\n" +
+        "        }\n" +
+        "        return this.safeTrade({ 'symbol': market['symbol'], 'fee': fee });\n" +
+        "    }\n" +
+        "    safeMarket(a, b) { return b; }\n" +
+        "    safeString(o, k) { return undefined; }\n" +
+        "    safeTrade(t) { return t; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both regions declare their own snapshot with distinct names.
+        expect(output).toMatch(/final Object finalMarket = market;/);
+        expect(output).toMatch(/final Object finalMarket_2 = market;/);
+        // The if-block literal references finalMarket; the return literal references finalMarket_2.
+        expect(output).toMatch(/put\(\s*"currency",\s*Helpers\.GetValue\(finalMarket,/);
+        expect(output).toMatch(/put\(\s*"symbol",\s*Helpers\.GetValue\(finalMarket_2,/);
+        // No undeclared finalXxx references.
         const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
         const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
         const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
