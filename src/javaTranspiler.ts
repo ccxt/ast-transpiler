@@ -1041,6 +1041,16 @@ export class JavaTranspiler extends BaseTranspiler {
                 return;
             }
 
+            // try / catch / finally: catch is a sibling scope to try; finally
+            // executes after both. Treat each block the same way as if/else
+            // branches so captures across them get distinct snapshot names.
+            if (node.kind === ts.SyntaxKind.TryStatement) {
+                walkBlockAndBump(node.tryBlock);
+                walkBlockAndBump(node.catchClause?.block);
+                walkBlockAndBump(node.finallyBlock);
+                return;
+            }
+
             ts.forEachChild(node, walk);
         };
 

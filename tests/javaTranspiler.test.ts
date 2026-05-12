@@ -1656,6 +1656,59 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // Coverage gap: try/catch are sibling scopes like if/else. A captured
+    // reassigned symbol in both blocks gets the same un-suffixed name without
+    // intervention, leaving the catch block vulnerable to ancestor-scope dedup
+    // leak in the same way as the if/else case.
+    test('object literal: try/catch sibling blocks — distinct per-block snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f() {\n" +
+        "        let x = '';\n" +
+        "        x = x + '!';\n" +
+        "        let r = undefined;\n" +
+        "        try {\n" +
+        "            r = { 'v': x };\n" +
+        "        } catch (e) {\n" +
+        "            r = { 'v': x };\n" +
+        "        }\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/final Object finalX = x;/);
+        expect(output).toMatch(/final Object finalX_2 = x;/);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Ternary captures: both branches of a ConditionalExpression evaluate in
+    // the parent scope, so a single snapshot at parent scope serves both. No
+    // sibling-scope hazard here — just locks in the expected single-decl shape.
+    test('object literal: ternary branches share parent-scope snapshot — single declaration', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f(type) {\n" +
+        "        let x = '';\n" +
+        "        x = x + '!';\n" +
+        "        const r = (type === 'a') ? { 'v': x } : { 'v': x };\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both ternary branches share one snapshot at the enclosing scope.
+        expect((output.match(/final Object finalX = x;/g) || []).length).toBe(1);
+        expect((output.match(/put\(\s*"v",\s*finalX\s*\)/g) || []).length).toBe(2);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
     // Negative regression: a var that is truly never reassigned and only read
     // outside any BinaryExpression context must NOT get a snapshot in the
     // captured literal. Catches accidental over-eager versioning from the
