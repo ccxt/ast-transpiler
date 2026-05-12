@@ -1584,6 +1584,57 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // Regression (real CCXT bitmart/bingx authenticate shape with state leak):
+    // a var is marked in ReassignedVars from a prior transpile (cross-call leak)
+    // but is `const` in the current function body. Without analyzer awareness of
+    // the leak, sibling if/else branches share the same `finalTimestamp` name,
+    // and the consumer's scope-tracking suppresses the else-branch declaration.
+    //
+    // The analyzer now consults ReassignedVars during pass 1, so leaked-in symbols
+    // also get per-branch version bumps. We simulate the leak by transpiling a
+    // priming class first.
+    test('object literal: nested if/else with ReassignedVars state leak — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        // Prime ReassignedVars: T-authenticate-timestamp will get set.
+        const priming =
+        "class T {\n" +
+        "    async authenticate(type, params = {}) {\n" +
+        "        let timestamp = '0';\n" +
+        "        timestamp = timestamp + '!';\n" +
+        "        return timestamp;\n" +
+        "    }\n" +
+        "}";
+        fresh.transpileJava(priming);
+        // Target: same class+method shape but timestamp is now `const`.
+        const target =
+        "class T {\n" +
+        "    async authenticate(type, params = {}) {\n" +
+        "        if (true) {\n" +
+        "            const timestamp = '123';\n" +
+        "            const signature = 'sig';\n" +
+        "            let request = null;\n" +
+        "            if (type === 'spot') {\n" +
+        "                request = { 'args': [ timestamp, signature ] };\n" +
+        "            } else {\n" +
+        "                request = { 'args': [ timestamp, signature, 'web' ] };\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(target).content;
+        // Each sibling branch declares its own snapshot with a distinct name.
+        expect(output).toMatch(/final Object finalTimestamp = timestamp;/);
+        expect(output).toMatch(/final Object finalTimestamp_2 = timestamp;/);
+        // Each literal references its branch's own snapshot — no out-of-scope refs.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalTimestamp,/);
+        expect(output).toMatch(/Arrays\.asList\(\s*finalTimestamp_2,/);
+        // No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
     // Regression (real CCXT parseWsTrade shape): a single if-without-else block
     // contains a HashMap literal capturing `market`; a later return-statement
     // literal also captures `market`. Pre-fix, both got the same `finalMarket`

@@ -844,6 +844,32 @@ export class JavaTranspiler extends BaseTranspiler {
         };
         discoverWalk(fnBody);
 
+        // Also include symbols whose <class>-<method>-<varName> key is already
+        // marked in ReassignedVars. That table accumulates across transpile
+        // calls and across earlier-printed methods in the same call, so a var
+        // declared as `const` in this function body may still be flagged from
+        // a prior context (cross-call state leak, or an alias seen earlier).
+        // The printer's traverseAndReplace already consults ReassignedVars as
+        // a fallback for substitution; if the analyzer doesn't know, it can't
+        // assign a version, the printer falls back to the un-suffixed base name
+        // for *all* uses, and sibling if/else branches share the same finalName
+        // — which is exactly the shape that breaks when the consumer's scope
+        // tracking suppresses the second declaration.
+        const includeFromReassignedVars = (node: any) => {
+            if (!node) return;
+            if (node.kind === ts.SyntaxKind.Identifier) {
+                const name = node.escapedText as string | undefined;
+                if (name && name !== 'undefined' && !name.startsWith?.('null')) {
+                    if (this.ReassignedVars[this.getVarKey(node)]) {
+                        reassignedSyms.add(symbolIdOf(node));
+                    }
+                }
+                return;
+            }
+            ts.forEachChild(node, includeFromReassignedVars);
+        };
+        includeFromReassignedVars(fnBody);
+
         if (reassignedSyms.size === 0) return;
 
         // Pass 2 — walk in source order, producing a stream of reassignment and usage
