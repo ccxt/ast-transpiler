@@ -5090,18 +5090,35 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `n:${n.escapedText}`;
     };
     const reassignedSyms = /* @__PURE__ */ new Set();
-    const discoverWalk = (node) => {
+    const discoverPotentialReassignments = (node) => {
       if (!node)
         return;
-      if (node.kind === ts6.SyntaxKind.BinaryExpression && this.isAssignmentOperator(node.operatorToken.kind) && node.left?.kind === ts6.SyntaxKind.Identifier) {
-        reassignedSyms.add(symbolIdOf(node.left));
+      if (node.kind === ts6.SyntaxKind.BinaryExpression) {
+        if (node.left?.kind === ts6.SyntaxKind.Identifier) {
+          reassignedSyms.add(symbolIdOf(node.left));
+        } else if (node.operatorToken.kind === ts6.SyntaxKind.EqualsToken && node.left?.kind === ts6.SyntaxKind.ArrayLiteralExpression) {
+          for (const elem of node.left.elements ?? []) {
+            if (elem?.kind === ts6.SyntaxKind.Identifier) {
+              reassignedSyms.add(symbolIdOf(elem));
+            }
+          }
+        }
       }
       if ((node.kind === ts6.SyntaxKind.PrefixUnaryExpression || node.kind === ts6.SyntaxKind.PostfixUnaryExpression) && this.isIncDecOperator(node.operator) && node.operand?.kind === ts6.SyntaxKind.Identifier) {
         reassignedSyms.add(symbolIdOf(node.operand));
       }
-      ts6.forEachChild(node, discoverWalk);
+      if (node.kind === ts6.SyntaxKind.Identifier) {
+        const name = node.escapedText;
+        if (name && name !== "undefined" && !name.startsWith?.("null")) {
+          if (this.ReassignedVars[this.getVarKey(node)]) {
+            reassignedSyms.add(symbolIdOf(node));
+          }
+        }
+        return;
+      }
+      ts6.forEachChild(node, discoverPotentialReassignments);
     };
-    discoverWalk(fnBody);
+    discoverPotentialReassignments(fnBody);
     if (reassignedSyms.size === 0)
       return;
     const events = [];
@@ -5160,6 +5177,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         });
         return;
       }
+      ts6.forEachChild(n, visitExprInObjLit);
     };
     const walk = (node) => {
       if (!node)
@@ -5190,6 +5208,34 @@ var JavaTranspiler = class extends BaseTranspiler {
             walk(prop.initializer);
           }
         });
+        return;
+      }
+      const walkBlockAndBump = (subNode) => {
+        const usedInBlock = /* @__PURE__ */ new Set();
+        if (!subNode)
+          return usedInBlock;
+        const eventsBefore = events.length;
+        walk(subNode);
+        for (let i = eventsBefore; i < events.length; i++) {
+          const e = events[i];
+          if (e.kind === "use")
+            usedInBlock.add(e.sym);
+        }
+        for (const sym of usedInBlock) {
+          events.push({ kind: "reassign", sym });
+        }
+        return usedInBlock;
+      };
+      if (node.kind === ts6.SyntaxKind.IfStatement) {
+        walk(node.expression);
+        walkBlockAndBump(node.thenStatement);
+        walkBlockAndBump(node.elseStatement);
+        return;
+      }
+      if (node.kind === ts6.SyntaxKind.TryStatement) {
+        walkBlockAndBump(node.tryBlock);
+        walkBlockAndBump(node.catchClause?.block);
+        walkBlockAndBump(node.finallyBlock);
         return;
       }
       ts6.forEachChild(node, walk);
@@ -5616,13 +5662,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     return this.printNodeCommentsIfAny(node, identation, signature);
   }
   printArrayIsArrayCall(_node, _identation, parsedArg = void 0) {
-    return `((${parsedArg} instanceof java.util.List) || (${parsedArg}.getClass().isArray()))`;
+    return `Helpers.isArray(${parsedArg})`;
   }
   printObjectKeysCall(_node, _identation, parsedArg = void 0) {
-    return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${parsedArg}).keySet())`;
+    return `Helpers.objectKeys(${parsedArg})`;
   }
   printObjectValuesCall(_node, _identation, parsedArg = void 0) {
-    return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${parsedArg}).values())`;
+    return `Helpers.objectValues(${parsedArg})`;
   }
   printJsonParseCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.parseJson(${parsedArg})`;
@@ -5840,25 +5886,11 @@ var JavaTranspiler = class extends BaseTranspiler {
       exp = exp.expression;
     }
     const allVarNames = [];
-    if (exp && exp?.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-      const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
-      allVarNames.push(...varsList);
-    } else if (exp && exp?.kind === ts6.SyntaxKind.CallExpression) {
-      const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(exp);
-      for (const objLiteral of objectsFromCall) {
+    if (exp) {
+      const objLiterals = this.collectCapturingObjectLiterals(exp);
+      for (const objLiteral of objLiterals) {
         const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
         allVarNames.push(...varsList);
-      }
-    } else if (exp && exp?.kind === ts6.SyntaxKind.ArrayLiteralExpression) {
-      const elements = exp?.elements ?? [];
-      for (const element of elements) {
-        if (element.kind === ts6.SyntaxKind.CallExpression) {
-          const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(element);
-          for (const objLiteral of objectsFromCall) {
-            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-            allVarNames.push(...varsList);
-          }
-        }
       }
     }
     let finalVars = allVarNames.length > 0 ? this.buildFinalVarDeclarations(allVarNames, identation) : "";
