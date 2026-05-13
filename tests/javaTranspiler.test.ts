@@ -622,13 +622,20 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // Two usage sites in distinct scopes → two anchored declarations
-        const declCount = (output.match(/final Object finalMarketId = marketId;/g) || []).length;
-        expect(declCount).toBe(2);
-        // all put() calls should use finalMarketId
+        // Two usage sites in distinct scopes → two anchored declarations. The
+        // analyzer's per-block version bump gives each region a distinct name
+        // (finalMarketId inside the if, finalMarketId_2 after the if) so the
+        // ancestor-scope dedup can never suppress the outer declaration.
+        expect((output.match(/final Object finalMarketId\w* = marketId;/g) || []).length).toBe(2);
+        // each put() must reference a declared finalMarketId variant
         const putMatches = output.match(/put\(\s*"symbol",\s*(\w+)\s*\)/g) || [];
         expect(putMatches.length).toBe(2);
-        putMatches.forEach(m => expect(m).toContain('finalMarketId'));
+        putMatches.forEach(m => expect(m).toMatch(/finalMarketId\w*/));
+        // every finalXxx reference has a matching declaration (no cannot-find-symbol)
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
     });
 
     test('finalXxx in if/else branches — each branch gets its own anchored declaration', () => {
@@ -644,9 +651,16 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // Each branch is a sibling scope → independent declarations
-        const declCount = (output.match(/final Object finalCode = code;/g) || []).length;
-        expect(declCount).toBe(2);
+        // Each sibling branch declares its own snapshot with a distinct version-suffixed
+        // name (finalCode in then, finalCode_2 in else). This avoids any conflict with
+        // ancestor-scope dedup if scope tracking ever leaks. Each literal references its
+        // branch's own snapshot.
+        expect(output).toMatch(/final Object finalCode = code;/);
+        expect(output).toMatch(/final Object finalCode_2 = code;/);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
     });
 
     test('finalXxx in for-loop body and after loop — anchored at each usage', () => {
@@ -1524,6 +1538,623 @@ describe('java transpiling tests', () => {
     });
 
     // --- Integration: realistic exchange pattern combining all features ---
+
+    // Regression: CCXT-style WS subscribe — `return await this.watch(..., { ...rawHash... }, rawHash)`.
+    // The HashMap argument capture needs an effectively-final snapshot of `rawHash`,
+    // even though the return expression is wrapped in `AwaitExpression`. Pre-fix,
+    // printReturnStatement only matched ObjectLiteralExpression/CallExpression/
+    // ArrayLiteralExpression at the top level, so AwaitExpression-wrapped returns
+    // produced raw `rawHash` inside the anon-inner-class — javac rejected it.
+    test('return await call(...{literal-capturing-reassigned}, ...): per-branch final snapshot is emitted', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async subscribe(symbol: string, type: string): Promise<any> {\n" +
+        "        let rawHash = undefined;\n" +
+        "        const messageHash = 'ticker:' + symbol;\n" +
+        "        if (type === 'spot') {\n" +
+        "            rawHash = 'spot/ticker:' + symbol;\n" +
+        "            return await this.watch('url', messageHash, { 'op': 'subscribe', 'args': [ rawHash ] }, rawHash);\n" +
+        "        } else {\n" +
+        "            rawHash = 'futures/ticker:' + symbol;\n" +
+        "            return await this.watch('url', messageHash, { 'op': 'subscribe', 'args': [ rawHash ] }, rawHash);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    async watch(url: string, hash: string, request: any, sub: string): Promise<any> { return [url, hash, request, sub]; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The HashMap argument must read a finalRawHash variant (per-branch unique name),
+        // never raw rawHash.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash(_\d+)?\s*\)/);
+        expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
+        // Each branch declares its own snapshot, after the reassignment. The
+        // analyzer assigns per-branch version names (finalRawHash + finalRawHash_2)
+        // so sibling branches can't suppress each other via ancestor-scope dedup.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        // Snapshot must be in the same branch as the reassignment.
+        const branchPattern =
+            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*return\b/g;
+        expect((output.match(branchPattern) || []).length).toBe(2);
+        // No method-scope snapshot before the if/else (which would capture null).
+        expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
+        // every finalXxx reference must have a matching declaration
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression (real CCXT bingx watchOrderBook shape): `params` is reassigned
+    // via tuple-destructure (`[marketType, params] = this.handle(...)`). The
+    // printer's ArrayLiteralExpression branch in printCustomBinaryExpressionIfAny
+    // flags each element in ReassignedVars at emit time. Pass 1 needs to mirror
+    // this so the version-bump fires; otherwise sibling if/else captures share
+    // `finalParameters` and the else-branch declaration can be suppressed.
+    test('object literal: tuple-destructure target captured in if/else literals — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async watchOrderBook(symbol, limit = undefined, params = {}) {\n" +
+        "        let marketType = undefined;\n" +
+        "        [ marketType, params ] = this.handleMarketTypeAndParams('watchOrderBook', undefined, params);\n" +
+        "        let subscriptionArgs = {};\n" +
+        "        if (this.someFlag(symbol)) {\n" +
+        "            subscriptionArgs = { 'params': params };\n" +
+        "        } else {\n" +
+        "            subscriptionArgs = { 'params': params };\n" +
+        "        }\n" +
+        "        return subscriptionArgs;\n" +
+        "    }\n" +
+        "    handleMarketTypeAndParams(method, market, params) { return [undefined, params]; }\n" +
+        "    someFlag(s) { return true; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both branches declare their own snapshot with distinct names.
+        expect(output).toMatch(/final Object finalParameters = parameters;/);
+        expect(output).toMatch(/final Object finalParameters_2 = parameters;/);
+        // Each literal references its branch's own snapshot.
+        expect(output).toMatch(/put\(\s*"params",\s*finalParameters\s*\)/);
+        expect(output).toMatch(/put\(\s*"params",\s*finalParameters_2\s*\)/);
+        // No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Coverage gap: deeply nested if/else where the inner branches and the
+    // outer post-if all capture the same reassigned symbol. The version bump
+    // must propagate up through nested IfStatement walks so each region gets
+    // a distinct snapshot name.
+    test('object literal: deeply nested if/else — each region gets a distinct snapshot', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f(type, sub) {\n" +
+        "        let x = 'init';\n" +
+        "        x = x + '!';\n" +
+        "        if (type === 'a') {\n" +
+        "            if (sub === 'x') {\n" +
+        "                return { 'v': x };\n" +
+        "            } else {\n" +
+        "                return { 'v': x };\n" +
+        "            }\n" +
+        "        }\n" +
+        "        return { 'v': x };\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Three distinct regions → three distinct snapshot names.
+        const decls = [...output.matchAll(/final Object (finalX\w*) = x;/g)].map(m => m[1]);
+        const unique = new Set(decls);
+        expect(unique.size).toBe(3);
+        expect(decls.length).toBe(3);
+        // Every finalXxx reference must resolve to a declaration.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Coverage gap: try/catch are sibling scopes like if/else. A captured
+    // reassigned symbol in both blocks gets the same un-suffixed name without
+    // intervention, leaving the catch block vulnerable to ancestor-scope dedup
+    // leak in the same way as the if/else case.
+    test('object literal: try/catch sibling blocks — distinct per-block snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f() {\n" +
+        "        let x = '';\n" +
+        "        x = x + '!';\n" +
+        "        let r = undefined;\n" +
+        "        try {\n" +
+        "            r = { 'v': x };\n" +
+        "        } catch (e) {\n" +
+        "            r = { 'v': x };\n" +
+        "        }\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/final Object finalX = x;/);
+        expect(output).toMatch(/final Object finalX_2 = x;/);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Ternary captures: both branches of a ConditionalExpression evaluate in
+    // the parent scope, so a single snapshot at parent scope serves both. No
+    // sibling-scope hazard here — just locks in the expected single-decl shape.
+    test('object literal: ternary branches share parent-scope snapshot — single declaration', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f(type) {\n" +
+        "        let x = '';\n" +
+        "        x = x + '!';\n" +
+        "        const r = (type === 'a') ? { 'v': x } : { 'v': x };\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both ternary branches share one snapshot at the enclosing scope.
+        expect((output.match(/final Object finalX = x;/g) || []).length).toBe(1);
+        expect((output.match(/put\(\s*"v",\s*finalX\s*\)/g) || []).length).toBe(2);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Negative regression: a var that is truly never reassigned and only read
+    // outside any BinaryExpression context must NOT get a snapshot in the
+    // captured literal. Catches accidental over-eager versioning from the
+    // pass-1 broadening (mirror of printCustomBinaryExpressionIfAny).
+    test('object literal: truly read-only var captured in if/else — NO snapshot emitted', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async f(type) {\n" +
+        "        const x = 'const';\n" +
+        "        let r = undefined;\n" +
+        "        if (type === 'a') {\n" +
+        "            r = { 'v': x };\n" +
+        "        } else {\n" +
+        "            r = { 'v': x };\n" +
+        "        }\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // x appears only as a read inside literals; never on the left of any
+        // BinaryExpression and never reassigned. No finalX snapshot expected.
+        expect(output).not.toMatch(/final Object finalX\b/);
+        expect(output).toMatch(/put\(\s*"v",\s*x\s*\)/);
+    });
+
+    // Regression (real CCXT bitmart authenticate shape): the var `timestamp` is
+    // declared `const` (never reassigned in source) but later used as the left
+    // side of a BinaryExpression (`timestamp + '#' + memo`). The printer flags
+    // this in ReassignedVars mid-print, then substitutes `timestamp` → `finalTimestamp`
+    // in every literal that captures it. Without analyzer awareness, both if/else
+    // branches share the same `finalTimestamp` name and the consumer's scope
+    // tracking can suppress the else-branch declaration.
+    //
+    // Pass 1 of the analyzer now mirrors the printer's heuristic: any
+    // BinaryExpression with an Identifier left flags the symbol, so the version
+    // bump fires for these too.
+    test('object literal: var read in BinaryExpression then captured in if/else literals — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async authenticate(type) {\n" +
+        "        const authenticated = this.safeValue(this.client.subscriptions, 'authenticated');\n" +
+        "        if (authenticated === undefined) {\n" +
+        "            const timestamp = '123';\n" +
+        "            const auth = timestamp + '#' + 'memo';\n" +
+        "            let request = undefined;\n" +
+        "            if (type === 'spot') {\n" +
+        "                request = { 'args': [ this.apiKey, timestamp, auth ] };\n" +
+        "            } else {\n" +
+        "                request = { 'args': [ this.apiKey, timestamp, auth, 'web' ] };\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "    apiKey = 'k';\n" +
+        "    client = { subscriptions: {} };\n" +
+        "    safeValue(o, k) { return undefined; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/final Object finalTimestamp = timestamp;/);
+        expect(output).toMatch(/final Object finalTimestamp_2 = timestamp;/);
+        // Each branch references its own snapshot, no cross-scope leaks.
+        expect(output).toMatch(/Arrays\.asList\([^)]*finalTimestamp,[^)]*\)/);
+        expect(output).toMatch(/Arrays\.asList\([^)]*finalTimestamp_2,[^)]*\)/);
+        // No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression (real CCXT bitmart/bingx authenticate shape with state leak):
+    // a var is marked in ReassignedVars from a prior transpile (cross-call leak)
+    // but is `const` in the current function body. Without analyzer awareness of
+    // the leak, sibling if/else branches share the same `finalTimestamp` name,
+    // and the consumer's scope-tracking suppresses the else-branch declaration.
+    //
+    // The analyzer now consults ReassignedVars during pass 1, so leaked-in symbols
+    // also get per-branch version bumps. We simulate the leak by transpiling a
+    // priming class first.
+    test('object literal: nested if/else with ReassignedVars state leak — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        // Prime ReassignedVars: T-authenticate-timestamp will get set.
+        const priming =
+        "class T {\n" +
+        "    async authenticate(type, params = {}) {\n" +
+        "        let timestamp = '0';\n" +
+        "        timestamp = timestamp + '!';\n" +
+        "        return timestamp;\n" +
+        "    }\n" +
+        "}";
+        fresh.transpileJava(priming);
+        // Target: same class+method shape but timestamp is now `const`.
+        const target =
+        "class T {\n" +
+        "    async authenticate(type, params = {}) {\n" +
+        "        if (true) {\n" +
+        "            const timestamp = '123';\n" +
+        "            const signature = 'sig';\n" +
+        "            let request = null;\n" +
+        "            if (type === 'spot') {\n" +
+        "                request = { 'args': [ timestamp, signature ] };\n" +
+        "            } else {\n" +
+        "                request = { 'args': [ timestamp, signature, 'web' ] };\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(target).content;
+        // Each sibling branch declares its own snapshot with a distinct name.
+        expect(output).toMatch(/final Object finalTimestamp = timestamp;/);
+        expect(output).toMatch(/final Object finalTimestamp_2 = timestamp;/);
+        // Each literal references its branch's own snapshot — no out-of-scope refs.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalTimestamp,/);
+        expect(output).toMatch(/Arrays\.asList\(\s*finalTimestamp_2,/);
+        // No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression (real CCXT parseWsTrade shape): a single if-without-else block
+    // contains a HashMap literal capturing `market`; a later return-statement
+    // literal also captures `market`. Pre-fix, both got the same `finalMarket`
+    // name and the second emission was suppressed by ancestor-scope dedup in
+    // some environments — leaving the return literal with an undeclared reference.
+    // The analyzer's per-block version bump gives each region a distinct name
+    // (finalMarket inside the if, finalMarket_2 after the if).
+    test('object literal: if-without-else inner capture + post-if outer capture — distinct snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    parseWsTrade(trade, market = undefined) {\n" +
+        "        market = this.safeMarket(this.safeString(trade, 'code'), market);\n" +
+        "        let fee = null;\n" +
+        "        const feeCost = this.safeString(trade, 'paid_fee');\n" +
+        "        if (feeCost !== undefined) {\n" +
+        "            fee = { 'currency': market['quote'], 'cost': feeCost };\n" +
+        "        }\n" +
+        "        return this.safeTrade({ 'symbol': market['symbol'], 'fee': fee });\n" +
+        "    }\n" +
+        "    safeMarket(a, b) { return b; }\n" +
+        "    safeString(o, k) { return undefined; }\n" +
+        "    safeTrade(t) { return t; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both regions declare their own snapshot with distinct names.
+        expect(output).toMatch(/final Object finalMarket = market;/);
+        expect(output).toMatch(/final Object finalMarket_2 = market;/);
+        // The if-block literal references finalMarket; the return literal references finalMarket_2.
+        expect(output).toMatch(/put\(\s*"currency",\s*Helpers\.GetValue\(finalMarket,/);
+        expect(output).toMatch(/put\(\s*"symbol",\s*Helpers\.GetValue\(finalMarket_2,/);
+        // No undeclared finalXxx references.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression (real CCXT bitmart subscribe shape): the else-branch has
+    // intervening statements (const speed = ..., a nested `if (speed !== undefined)`,
+    // and a different prop key 'action' vs the if-branch's 'op') between the
+    // reassignment and the literal. The if-branch's literal captures requestOp
+    // and rawHash; the else-branch captures them again. Pre-fix output (in some
+    // environments) had the else-branch reference `finalRequestOp`/`finalRawHash`
+    // without declaring them, producing `cannot find symbol`. The analyzer's
+    // per-branch version bump fixes this by giving sibling branches distinct
+    // snapshot names.
+    test('object literal: real-bitmart-shape if/else with intervening nested if — distinct per-branch snapshots', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async subscribe(unifiedName, channel, symbol, type, params = {}) {\n" +
+        "        const market = this.market(symbol);\n" +
+        "        let request = {};\n" +
+        "        let messageHash = undefined;\n" +
+        "        let rawHash = undefined;\n" +
+        "        const unsubscribe = this.safeBool(params, 'unsubscribe', false);\n" +
+        "        let prefix = '';\n" +
+        "        let requestOp = 'subscribe';\n" +
+        "        if (unsubscribe) {\n" +
+        "            params = this.omit(params, 'unsubscribe');\n" +
+        "            prefix = 'unsubscribe::';\n" +
+        "            requestOp = 'unsubscribe';\n" +
+        "        }\n" +
+        "        messageHash = unifiedName + '::' + symbol;\n" +
+        "        if (type === 'spot') {\n" +
+        "            rawHash = 'spot/' + channel + ':' + market['id'];\n" +
+        "            request = { 'op': requestOp, 'args': [ rawHash ] };\n" +
+        "        } else {\n" +
+        "            rawHash = 'futures/' + channel + ':' + market['id'];\n" +
+        "            const speed = this.safeString(params, 'speed');\n" +
+        "            if (speed !== undefined) {\n" +
+        "                params = this.omit(params, 'speed');\n" +
+        "                messageHash += ':' + speed;\n" +
+        "            }\n" +
+        "            request = { 'action': requestOp, 'args': [ rawHash ] };\n" +
+        "        }\n" +
+        "        messageHash = prefix + messageHash;\n" +
+        "        return await this.watch('url', messageHash, request, messageHash);\n" +
+        "    }\n" +
+        "    market(s) { return { 'id': s }; }\n" +
+        "    safeBool(p, k, d) { return d; }\n" +
+        "    safeString(p, k) { return undefined; }\n" +
+        "    omit(p, k) { return p; }\n" +
+        "    async watch(url, hash, req, sub) { return [url, hash, req, sub]; }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Each branch declares its own snapshot for both rawHash and requestOp.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalRequestOp\w* = requestOp;/g) || []).length).toBe(2);
+        // If-branch and else-branch use DIFFERENT snapshot names — both halves of
+        // the version-suffix pair must be present.
+        expect(output).toMatch(/final Object finalRawHash = rawHash;/);
+        expect(output).toMatch(/final Object finalRawHash_2 = rawHash;/);
+        expect(output).toMatch(/final Object finalRequestOp = requestOp;/);
+        expect(output).toMatch(/final Object finalRequestOp_2 = requestOp;/);
+        // The else-branch literal references the _2 names (the if-branch's names
+        // are scoped to its block). No undeclared finalXxx anywhere.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+        // Each finalRawHash variant declaration must be paired with a usage
+        // inside an Arrays.asList (the anonymous-inner-class HashMap capture).
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\s*\)/);
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash_2\s*\)/);
+    });
+
+    // Regression (user-reported reproducer): free-function shape with default-value
+    // param `op = 'subscribe'`. Asserts both branches emit `final Object finalRawHash`
+    // — the user's report claimed the else branch was missing its snapshot.
+    test('object literal: free-function default-param subscribe shape — both branches declare', () => {
+        const fresh = new Transpiler();
+        const input =
+        "async function subscribe (type, channel, symbol, op = 'subscribe') {\n" +
+        "    let request = {};\n" +
+        "    let rawHash = undefined;\n" +
+        "    if (type === 'spot') {\n" +
+        "        rawHash = 'spot/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    } else {\n" +
+        "        rawHash = 'futures/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    }\n" +
+        "    return request;\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Each branch declares its own per-branch snapshot. With the analyzer's
+        // sibling-branch version bump, the if-branch gets `finalRawHash` and the
+        // else-branch gets `finalRawHash_2` (or similar) — distinct names per
+        // branch so neither suppresses the other.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        // Both branches reference a finalRawHash variant; no raw rawHash leaks.
+        expect((output.match(/Arrays\.asList\(\s*finalRawHash\w*\s*\)/g) || []).length).toBe(2);
+        expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
+        // No `cannot find symbol`: every finalXxx reference has a declaration.
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression: same shape as above but with `op` actually reassigned inside the
+    // function — so `op` itself enters ReassignedVars and needs a per-branch snapshot too.
+    test('object literal: free-function with op reassigned + rawHash in if/else — both branches declare both', () => {
+        const fresh = new Transpiler();
+        const input =
+        "async function subscribe (type, channel, symbol, op = 'subscribe') {\n" +
+        "    op = op.toLowerCase();\n" +
+        "    let request = {};\n" +
+        "    let rawHash = undefined;\n" +
+        "    if (type === 'spot') {\n" +
+        "        rawHash = 'spot/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    } else {\n" +
+        "        rawHash = 'futures/' + channel + ':' + symbol;\n" +
+        "        request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "    }\n" +
+        "    return request;\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Both branches declare their own snapshots for both vars (with distinct
+        // version-suffixed names for the sibling branch).
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        expect((output.match(/final Object finalOp\w* = op;/g) || []).length).toBe(2);
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // Regression: bitmart-style subscribe helper. `rawHash` is declared with
+    // `undefined`, then reassigned inside each if/else branch and immediately
+    // used inside a HashMap literal in that same branch. The final-var snapshot
+    // must be placed *inside* each branch, *after* the reassignment — never at
+    // method scope before the if/else (which would capture null).
+    test('object literal: per-branch reassignment captures branch-local snapshot, not method-scope null', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    async subscribe(symbol: string, op: string, kind: string): Promise<any> {\n" +
+        "        let rawHash = undefined;\n" +
+        "        let request = {};\n" +
+        "        if (kind === 'spot') {\n" +
+        "            rawHash = 'spot/ticker:' + symbol;\n" +
+        "            request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "        } else {\n" +
+        "            rawHash = 'futures/ticker:' + symbol;\n" +
+        "            request = { 'op': op, 'args': [ rawHash ] };\n" +
+        "        }\n" +
+        "        return JSON.stringify(request);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The literal must read from a finalRawHash variant, not raw rawHash.
+        expect(output).toMatch(/Arrays\.asList\(\s*finalRawHash\w*\s*\)/);
+        expect(output).not.toMatch(/Arrays\.asList\(\s*rawHash\s*\)/);
+        // Each branch declares its own snapshot, after the reassignment, not at
+        // method scope before the if. Names are per-branch unique
+        // (finalRawHash + finalRawHash_2) so ancestor-scope dedup can't suppress.
+        expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
+        // The snapshot must come AFTER the corresponding reassignment in each branch.
+        const branchPattern =
+            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*request = new java\.util\.HashMap/g;
+        expect((output.match(branchPattern) || []).length).toBe(2);
+        // Must NOT emit a method-scope snapshot before the if/else
+        // (which the pre-fix output did, capturing the null seed value).
+        expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
+        // every finalXxx reference must have a matching declaration
+        const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+        const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+        const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
+        expect(undeclared).toEqual([]);
+    });
+
+    // --- Helpers.* indirection for Object.keys / Object.values / Array.isArray ---
+    //
+    // The Java emit routes most TS built-ins through a consumer-provided `Helpers`
+    // class (Helpers.add, Helpers.isEqual, Helpers.GetValue, Helpers.json, ...).
+    // Object.keys/values and Array.isArray were the outliers — they inlined raw
+    // stdlib calls (`new ArrayList<>(((Map<String,Object>)x).keySet())` etc.).
+    // Routing them through Helpers gives consumers a single place to choose
+    // semantics (thread-safety, null-handling, type coercion) and removes the
+    // need for downstream regex post-processing that misses non-trivial
+    // argument shapes (e.g. `this.x`, `obj[k].y`, nested calls).
+
+    test('Object.keys(x) emits Helpers.objectKeys(x) — bare identifier', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(obj) {\n" +
+        "        return Object.keys(obj);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectKeys\(\s*obj\s*\)/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.keys(this.tickers) emits Helpers.objectKeys(this.tickers) — property access', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    tickers = {};\n" +
+        "    f() {\n" +
+        "        return Object.keys(this.tickers);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The 13 sites CCXT's regex post-processor missed all had this.x as the
+        // argument. AST-level emit must handle this shape correctly.
+        expect(output).toMatch(/Helpers\.objectKeys\(\s*this\.tickers\s*\)/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.keys(obj[k]) emits Helpers.objectKeys for ElementAccess argument', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(obj, k) {\n" +
+        "        return Object.keys(obj[k]);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Argument is an ElementAccessExpression; emit must wrap whatever the
+        // arg parses to.
+        expect(output).toMatch(/Helpers\.objectKeys\(/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.values(x) emits Helpers.objectValues(x) — bare identifier', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(obj) {\n" +
+        "        return Object.values(obj);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectValues\(\s*obj\s*\)/);
+        expect(output).not.toMatch(/\.values\(\)/);
+    });
+
+    test('Object.values(this.x) emits Helpers.objectValues(this.x) — property access', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    cache = {};\n" +
+        "    f() {\n" +
+        "        return Object.values(this.cache);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectValues\(\s*this\.cache\s*\)/);
+        expect(output).not.toMatch(/\.values\(\)/);
+    });
+
+    test('Array.isArray(x) emits Helpers.isArray(x) — bare identifier', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(arg) {\n" +
+        "        return Array.isArray(arg);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.isArray\(\s*arg\s*\)/);
+        // The old emit was a raw instanceof check — must not appear.
+        expect(output).not.toMatch(/instanceof java\.util\.List/);
+    });
+
+    test('Array.isArray(this.x) emits Helpers.isArray(this.x) — property access', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    items = [];\n" +
+        "    f() {\n" +
+        "        return Array.isArray(this.items);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.isArray\(\s*this\.items\s*\)/);
+        expect(output).not.toMatch(/instanceof java\.util\.List/);
+    });
 
     test('async method with hoisted param, loop-local vars, ternaries, and two loops', () => {
         const input =

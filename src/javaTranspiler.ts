@@ -825,14 +825,48 @@ export class JavaTranspiler extends BaseTranspiler {
             return `n:${n.escapedText}`;
         };
 
-        // Pass 1 — discover which symbols are reassigned anywhere in this function body.
+        // Pass 1 — discover which symbols the printer will treat as reassigned.
+        //
+        // The printer's `printCustomBinaryExpressionIfAny` sets
+        // `ReassignedVars[varKey] = true` for the LEFT identifier of *every*
+        // BinaryExpression — not just assignment operators. So `timestamp + '#'`
+        // or `x === 5` will both flag `timestamp`/`x` later during emit, even
+        // though they're plain reads syntactically. The printer's substitution
+        // path then uses ReassignedVars as a fallback trigger for the finalXxx
+        // rewrite, so a literal capturing such an identifier ends up referring
+        // to `finalTimestamp` even when the analyzer thinks the symbol isn't
+        // reassigned.
+        //
+        // If the analyzer disagrees with the printer here, the printer's
+        // fallback substitution uses the un-suffixed base name for *every* use
+        // (including in sibling if/else branches), and any environment with
+        // ancestor-scope dedup leak will suppress one of the two declarations.
+        //
+        // Mirror the printer's over-broad heuristic in the analyzer so the
+        // version-bump machinery (a5c2036 / ac618b0 / 48a1786) can assign
+        // distinct names to sibling and post-block uses.
         const reassignedSyms = new Set<string>();
-        const discoverWalk = (node: any) => {
+        const discoverPotentialReassignments = (node: any) => {
             if (!node) return;
-            if (node.kind === ts.SyntaxKind.BinaryExpression &&
-                this.isAssignmentOperator(node.operatorToken.kind) &&
-                node.left?.kind === ts.SyntaxKind.Identifier) {
-                reassignedSyms.add(symbolIdOf(node.left));
+            if (node.kind === ts.SyntaxKind.BinaryExpression) {
+                if (node.left?.kind === ts.SyntaxKind.Identifier) {
+                    // Mirror printCustomBinaryExpressionIfAny: any BinaryExpression
+                    // with an Identifier left flags it, regardless of operator.
+                    reassignedSyms.add(symbolIdOf(node.left));
+                } else if (
+                    node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+                    node.left?.kind === ts.SyntaxKind.ArrayLiteralExpression
+                ) {
+                    // Tuple destructuring assignment: `[a, b] = expr`. The printer's
+                    // ArrayLiteralExpression branch in printCustomBinaryExpressionIfAny
+                    // flags each Identifier element in ReassignedVars, so mirror it
+                    // here for version-bump coverage.
+                    for (const elem of node.left.elements ?? []) {
+                        if (elem?.kind === ts.SyntaxKind.Identifier) {
+                            reassignedSyms.add(symbolIdOf(elem));
+                        }
+                    }
+                }
             }
             if ((node.kind === ts.SyntaxKind.PrefixUnaryExpression ||
                  node.kind === ts.SyntaxKind.PostfixUnaryExpression) &&
@@ -840,9 +874,25 @@ export class JavaTranspiler extends BaseTranspiler {
                 node.operand?.kind === ts.SyntaxKind.Identifier) {
                 reassignedSyms.add(symbolIdOf(node.operand));
             }
-            ts.forEachChild(node, discoverWalk);
+            // Cross-call / cross-method state leak: ReassignedVars accumulates
+            // across transpile calls and earlier-printed methods in the same
+            // class+method context, so a var declared `const` in this function
+            // body may still be flagged from a prior context. The printer's
+            // substitution path consults ReassignedVars as a fallback; if the
+            // analyzer disagrees, version-bump can't apply and sibling if/else
+            // branches end up with the same base name.
+            if (node.kind === ts.SyntaxKind.Identifier) {
+                const name = node.escapedText as string | undefined;
+                if (name && name !== 'undefined' && !name.startsWith?.('null')) {
+                    if (this.ReassignedVars[this.getVarKey(node)]) {
+                        reassignedSyms.add(symbolIdOf(node));
+                    }
+                }
+                return;
+            }
+            ts.forEachChild(node, discoverPotentialReassignments);
         };
-        discoverWalk(fnBody);
+        discoverPotentialReassignments(fnBody);
 
         if (reassignedSyms.size === 0) return;
 
@@ -907,7 +957,14 @@ export class JavaTranspiler extends BaseTranspiler {
                 });
                 return;
             }
-            // Other shapes (property access, literals, etc.) — ignore.
+            // Fallback for any other expression kind (ArrayLiteralExpression,
+            // SpreadElement, TemplateExpression, AsExpression, NonNullExpression,
+            // PropertyAccessExpression, TypeAssertion, etc.) — descend uniformly
+            // so identifiers nested inside `[rawHash]`, `{...x}`, `` `${x}` ``, and
+            // so on are still tagged. ObjectLiteralExpression is handled above so
+            // it doesn't fall through to the generic descent (which would re-walk
+            // the same prop initializers and double-count).
+            ts.forEachChild(n, visitExprInObjLit);
         };
 
         const walk = (node: any) => {
@@ -945,6 +1002,52 @@ export class JavaTranspiler extends BaseTranspiler {
                         walk(prop.initializer);
                     }
                 });
+                return;
+            }
+
+            // If/else branches introduce sibling scopes for declarations inside
+            // them. Without intervention, the analyzer assigns the same per-symbol
+            // version to uses across siblings and to uses after the branch.
+            // Java permits sibling-scope name reuse when the inner block has
+            // popped, but ancestor-scope dedup in buildFinalVarDeclarations +
+            // any scope tracking leak in the consumer environment can suppress
+            // the outer declaration, leaving an undeclared reference.
+            //
+            // The helper below records 'use' events inside a sub-block and emits
+            // a phantom reassign on exit for every symbol used inside, so each
+            // region gets a distinct per-symbol version → distinct finalXxx name.
+            const walkBlockAndBump = (subNode: ts.Node | undefined): Set<string> => {
+                const usedInBlock = new Set<string>();
+                if (!subNode) return usedInBlock;
+                const eventsBefore = events.length;
+                walk(subNode);
+                for (let i = eventsBefore; i < events.length; i++) {
+                    const e = events[i];
+                    if (e.kind === 'use') usedInBlock.add(e.sym);
+                }
+                for (const sym of usedInBlock) {
+                    events.push({ kind: 'reassign', sym });
+                }
+                return usedInBlock;
+            };
+
+            if (node.kind === ts.SyntaxKind.IfStatement) {
+                walk(node.expression);
+                walkBlockAndBump(node.thenStatement);
+                walkBlockAndBump(node.elseStatement);
+                // After walking either branch we've already bumped for every
+                // symbol used inside it, so post-if uses naturally land on a
+                // version higher than either branch's uses.
+                return;
+            }
+
+            // try / catch / finally: catch is a sibling scope to try; finally
+            // executes after both. Treat each block the same way as if/else
+            // branches so captures across them get distinct snapshot names.
+            if (node.kind === ts.SyntaxKind.TryStatement) {
+                walkBlockAndBump(node.tryBlock);
+                walkBlockAndBump(node.catchClause?.block);
+                walkBlockAndBump(node.finallyBlock);
                 return;
             }
 
@@ -1576,16 +1679,24 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, signature);
     }
 
+    // Route through Helpers so consumers control semantics (thread-safety,
+    // null-handling, type coercion) in one place — same pattern as
+    // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
+    // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
+    // forced any downstream that needed different semantics (e.g. synchronized
+    // map access in concurrent code) to post-process the generated Java with
+    // regex — which only catches the bare-identifier argument shape and misses
+    // property-access (`this.x`) and element-access (`obj[k]`) arguments.
     printArrayIsArrayCall(_node, _identation, parsedArg = undefined) {
-        return `((${parsedArg} instanceof java.util.List) || (${parsedArg}.getClass().isArray()))`;
+        return `Helpers.isArray(${parsedArg})`;
     }
 
     printObjectKeysCall(_node, _identation, parsedArg = undefined) {
-        return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${parsedArg}).keySet())`;
+        return `Helpers.objectKeys(${parsedArg})`;
     }
 
     printObjectValuesCall(_node, _identation, parsedArg = undefined) {
-        return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${parsedArg}).values())`;
+        return `Helpers.objectValues(${parsedArg})`;
     }
 
     printJsonParseCall(_node, _identation, parsedArg = undefined) {
@@ -1880,26 +1991,20 @@ export class JavaTranspiler extends BaseTranspiler {
         if (exp && exp.kind === ts.SyntaxKind.AsExpression && (exp.expression.kind === ts.SyntaxKind.ObjectLiteralExpression || ts.SyntaxKind.CallExpression)) {
             exp = exp.expression; // go over something like return {} as SomeType
         }
+        // Use collectCapturingObjectLiterals to walk through every wrapper
+        // (AwaitExpression, ParenthesizedExpression, CallExpression args, ArrayLiteral
+        // elements, ConditionalExpression branches, NewExpression args, etc.) and
+        // pick up every HashMap literal whose anonymous-inner-class body would
+        // need effectively-final captures. The previous narrow switch missed
+        // `return await this.watch(..., { literal capturing reassigned var }, ...)`
+        // entirely — the literal ended up referencing the raw (reassigned)
+        // identifier with no snapshot, which javac rejects.
         const allVarNames = [];
-        if (exp && exp?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(exp);
-            allVarNames.push(...varsList);
-        } else if (exp && exp?.kind === ts.SyntaxKind.CallExpression) {
-            const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(exp);
-            for (const objLiteral of objectsFromCall) {
+        if (exp) {
+            const objLiterals = this.collectCapturingObjectLiterals(exp);
+            for (const objLiteral of objLiterals) {
                 const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
                 allVarNames.push(...varsList);
-            }
-        } else if (exp && exp?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
-            const elements = exp?.elements ?? [];
-            for (const element of elements) {
-                if (element.kind === ts.SyntaxKind.CallExpression) {
-                    const objectsFromCall = this.getObjectLiteralFromCallExpressionArguments(element);
-                    for (const objLiteral of objectsFromCall) {
-                        const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                        allVarNames.push(...varsList);
-                    }
-                }
             }
         }
         let finalVars = allVarNames.length > 0 ? this.buildFinalVarDeclarations(allVarNames, identation) : '';
