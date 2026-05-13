@@ -2046,6 +2046,116 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
+    // --- Helpers.* indirection for Object.keys / Object.values / Array.isArray ---
+    //
+    // The Java emit routes most TS built-ins through a consumer-provided `Helpers`
+    // class (Helpers.add, Helpers.isEqual, Helpers.GetValue, Helpers.json, ...).
+    // Object.keys/values and Array.isArray were the outliers — they inlined raw
+    // stdlib calls (`new ArrayList<>(((Map<String,Object>)x).keySet())` etc.).
+    // Routing them through Helpers gives consumers a single place to choose
+    // semantics (thread-safety, null-handling, type coercion) and removes the
+    // need for downstream regex post-processing that misses non-trivial
+    // argument shapes (e.g. `this.x`, `obj[k].y`, nested calls).
+
+    test('Object.keys(x) emits Helpers.objectKeys(x) — bare identifier', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(obj) {\n" +
+        "        return Object.keys(obj);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectKeys\(\s*obj\s*\)/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.keys(this.tickers) emits Helpers.objectKeys(this.tickers) — property access', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    tickers = {};\n" +
+        "    f() {\n" +
+        "        return Object.keys(this.tickers);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // The 13 sites CCXT's regex post-processor missed all had this.x as the
+        // argument. AST-level emit must handle this shape correctly.
+        expect(output).toMatch(/Helpers\.objectKeys\(\s*this\.tickers\s*\)/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.keys(obj[k]) emits Helpers.objectKeys for ElementAccess argument', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(obj, k) {\n" +
+        "        return Object.keys(obj[k]);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Argument is an ElementAccessExpression; emit must wrap whatever the
+        // arg parses to.
+        expect(output).toMatch(/Helpers\.objectKeys\(/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.values(x) emits Helpers.objectValues(x) — bare identifier', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(obj) {\n" +
+        "        return Object.values(obj);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectValues\(\s*obj\s*\)/);
+        expect(output).not.toMatch(/\.values\(\)/);
+    });
+
+    test('Object.values(this.x) emits Helpers.objectValues(this.x) — property access', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    cache = {};\n" +
+        "    f() {\n" +
+        "        return Object.values(this.cache);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectValues\(\s*this\.cache\s*\)/);
+        expect(output).not.toMatch(/\.values\(\)/);
+    });
+
+    test('Array.isArray(x) emits Helpers.isArray(x) — bare identifier', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(arg) {\n" +
+        "        return Array.isArray(arg);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.isArray\(\s*arg\s*\)/);
+        // The old emit was a raw instanceof check — must not appear.
+        expect(output).not.toMatch(/instanceof java\.util\.List/);
+    });
+
+    test('Array.isArray(this.x) emits Helpers.isArray(this.x) — property access', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    items = [];\n" +
+        "    f() {\n" +
+        "        return Array.isArray(this.items);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.isArray\(\s*this\.items\s*\)/);
+        expect(output).not.toMatch(/instanceof java\.util\.List/);
+    });
+
     test('async method with hoisted param, loop-local vars, ternaries, and two loops', () => {
         const input =
         "class Exchange {\n" +

@@ -681,6 +681,25 @@ public class Helpers {
         return v[index];
     }
 
+    public static boolean isArray(Object value) {
+        if (value == null) return false;
+        return (value instanceof List) || value.getClass().isArray();
+    }
+
+    public static List<Object> objectKeys(Object target) {
+        if (target instanceof Map<?, ?> m) {
+            return new ArrayList<>(m.keySet());
+        }
+        return new ArrayList<>();
+    }
+
+    public static List<Object> objectValues(Object target) {
+        if (target instanceof Map<?, ?> m) {
+            return new ArrayList<>(m.values());
+        }
+        return new ArrayList<>();
+    }
+
 
     @SuppressWarnings("unchecked")
     public static void addElementToObject(Object target, Object... args) {

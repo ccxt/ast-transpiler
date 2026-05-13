@@ -1679,16 +1679,24 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, signature);
     }
 
+    // Route through Helpers so consumers control semantics (thread-safety,
+    // null-handling, type coercion) in one place — same pattern as
+    // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
+    // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
+    // forced any downstream that needed different semantics (e.g. synchronized
+    // map access in concurrent code) to post-process the generated Java with
+    // regex — which only catches the bare-identifier argument shape and misses
+    // property-access (`this.x`) and element-access (`obj[k]`) arguments.
     printArrayIsArrayCall(_node, _identation, parsedArg = undefined) {
-        return `((${parsedArg} instanceof java.util.List) || (${parsedArg}.getClass().isArray()))`;
+        return `Helpers.isArray(${parsedArg})`;
     }
 
     printObjectKeysCall(_node, _identation, parsedArg = undefined) {
-        return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${parsedArg}).keySet())`;
+        return `Helpers.objectKeys(${parsedArg})`;
     }
 
     printObjectValuesCall(_node, _identation, parsedArg = undefined) {
-        return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${parsedArg}).values())`;
+        return `Helpers.objectValues(${parsedArg})`;
     }
 
     printJsonParseCall(_node, _identation, parsedArg = undefined) {
