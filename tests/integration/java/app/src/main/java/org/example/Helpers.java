@@ -7,11 +7,14 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class Helpers {
@@ -517,7 +520,7 @@ public class Helpers {
         }
     }
 
-    public boolean inOp(Object obj, Object key) { return InOp(obj, key); }
+    public static boolean inOp(Object obj, Object key) { return InOp(obj, key); }
 
     public static boolean InOp(Object obj, Object key) {
         if (obj == null || key == null) return false;
@@ -761,5 +764,16 @@ public class Helpers {
         }
 
         return null;
+    }
+
+    public static Object split(Object str, Object splitter) {
+        if (str == null || splitter == null) {
+            return Collections.emptyList();
+        }
+
+        String s = String.valueOf(str);
+        String delim = String.valueOf(splitter);
+
+        return Arrays.asList(s.split(Pattern.quote(delim)));
     }
 }
