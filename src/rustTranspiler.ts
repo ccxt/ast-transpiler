@@ -519,6 +519,11 @@ export class RustTranspiler extends BaseTranspiler {
         let expression = node.expression?.escapedText;
         expression = expression ? expression : this.printNode(node.expression);
         const args = node.arguments.map(a => this.printNode(a, identation)).join(', ');
+        // Plain `new Error(msg)` becomes just the message Value so it can be
+        // formatted by `panic!("{:?}", ...)` in printThrowStatement.
+        if (expression === 'Error') {
+            return args || 'Value::Null';
+        }
         // CCXT exception classes end in "Error", "Required", "Found", etc. and
         // are constructed via `new XError(msg)`. Route them through the runtime
         // error constructors (snake_case fn calls).
@@ -865,7 +870,16 @@ export class RustTranspiler extends BaseTranspiler {
 
     printThrowStatement(node, identation) {
         const expression = this.printNode(node.expression, 0);
-        return `${this.getIden(identation)}panic!("{:?}", ${expression})`;
+        return `${this.getIden(identation)}panic!("{:?}", ${expression});`;
+    }
+
+    printTryStatement(node, identation) {
+        const tryBody = node.tryBlock.statements.map(s => this.printNode(s, identation + 1)).join('\n');
+        const catchBody = node.catchClause.block.statements.map(s => this.printNode(s, identation + 1)).join('\n');
+        const rawName = node.catchClause?.variableDeclaration?.name?.escapedText;
+        const errorName = rawName ? `_${rawName}` : '_e';
+        const iden = this.getIden(identation);
+        return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n${tryBody}\n${iden}}));\n${iden}if let Err(${errorName}) = _try_result {\n${catchBody}\n${iden}}`;
     }
 
     printReturnStatement(node, identation) {
