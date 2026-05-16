@@ -71,7 +71,7 @@ impl Test {
         println_val(&stringVar); // should print "hello"
         println_val(&s3); // should print "ab"
         let mut x: Value = Value::Bool(false);
-        if is_true(&(x)) {
+        if is_true(&x) {
             println_val(&Value::Str("x is true".to_string()));
         }  else {
             println_val(&Value::Str("x is false".to_string())); // should print "x is false"
@@ -82,7 +82,7 @@ impl Test {
         if is_equal(&instance.myBoolProp, &Value::Bool(false)) {
             println_val(&Value::Str("myBoolProp is false".to_string())); // should print "myBoolProp is false"
         }
-        let mut arr: Value = Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        let mut arr: Value = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
         println_val(&get_array_length(&arr)); // should print 4
         let mut first: Value = get_value(&arr, &Value::Int(0));
         println_val(&first); // should print 1
@@ -101,7 +101,7 @@ impl Test {
         }
         }
         println_val(&to_string_val(&i)); // should print 10
-        let mut list2: Value = Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4), Value::Int(5)]);
+        let mut list2: Value = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4), Value::Int(5)]);
         list2 = reverse(list2.clone());
         println_val(&get_value(&list2, &Value::Int(0))); // should print 5
         //should delete key from dict
@@ -115,8 +115,8 @@ impl Test {
         let mut dictKeys: Value = object_keys(&dict2);
         println_val(&get_array_length(&dictKeys)); // should print 1
         println_val(&get_value(&dictKeys, &Value::Int(0))); // should print "b"
-        let mut firstConcat: Value = Value::Array(vec![Value::Str("a".to_string()), Value::Str("b".to_string())]);
-        let mut secondConcat: Value = Value::Array(vec![Value::Str("c".to_string()), Value::Str("d".to_string())]);
+        let mut firstConcat: Value = Value::List(vec![Value::Str("a".to_string()), Value::Str("b".to_string())]);
+        let mut secondConcat: Value = Value::List(vec![Value::Str("c".to_string()), Value::Str("d".to_string())]);
         let mut both: Value = concat(firstConcat.clone(), secondConcat.clone());
         println_val(&get_array_length(&both)); // should print 4
         println_val(&get_value(&both, &Value::Int(2))); // should print "c"
@@ -126,7 +126,7 @@ impl Test {
         self.functionWithOptionals(Value::Str("hello".to_string()), &[]);
         self.functionWithOptionals(Value::Str("hello".to_string()), &[Value::Int(5)]);
         self.functionWithOptionals(Value::Str("hello".to_string()), &[Value::Int(5), Value::Int(1)]);
-        let mut list3: Value = Value::Array(vec![Value::Str("empty".to_string())]);
+        let mut list3: Value = Value::List(vec![Value::Str("empty".to_string())]);
         add_element_to_object(&mut list3, &Value::Int(0), Value::Str("first".to_string()));
         println_val(&get_value(&list3, &Value::Int(0))); // should print "first"
         let mut dict3: Value = Value::Map({
