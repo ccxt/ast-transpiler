@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -1293,4 +1294,8 @@ func setDefaults(p any) {
 			}
 		}
 	}
+}
+
+func Error(message any) error {
+	return errors.New(ToString(message))
 }
