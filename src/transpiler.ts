@@ -8,6 +8,7 @@ import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
+import { RustTranspiler } from './rustTranspiler.js';
 
 const __dirname_mock = currentPath;
 
@@ -51,6 +52,7 @@ export default class Transpiler {
     csharpTranspiler: CSharpTranspiler;
     goTranspiler: GoTranspiler;
     javaTranspiler: JavaTranspiler;
+    rustTranspiler: RustTranspiler;
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
@@ -58,6 +60,7 @@ export default class Transpiler {
         const csharpConfig = config["csharp"] || {};
         const goConfig = config["go"] || {};
         const javaConfig = config["java"] || {};
+        const rustConfig = config["rust"] || {};
 
         if ("verbose" in config) {
             Logger.setVerboseMode(Boolean(config['verbose']));
@@ -68,6 +71,7 @@ export default class Transpiler {
         this.csharpTranspiler = new CSharpTranspiler(csharpConfig);
         this.goTranspiler = new GoTranspiler(goConfig);
         this.javaTranspiler = new JavaTranspiler(javaConfig);
+        this.rustTranspiler = new RustTranspiler(rustConfig);
     }
 
     setVerboseMode(verbose: boolean) {
@@ -135,6 +139,9 @@ export default class Transpiler {
             break;
         case Languages.Java:
             transpiledContent = this.javaTranspiler.printNode(global.src, -1);
+            break;
+        case Languages.Rust:
+            transpiledContent = this.rustTranspiler.printNode(global.src, -1);
             break;
         }
         let imports = [];
@@ -252,6 +259,14 @@ export default class Transpiler {
         return this.transpile(Languages.Go, TranspilationMode.ByContent, content);
     }
 
+    transpileRust(content): ITranspiledFile {
+        return this.transpile(Languages.Rust, TranspilationMode.ByContent, content);
+    }
+
+    transpileRustByPath(path): ITranspiledFile {
+        return this.transpile(Languages.Rust, TranspilationMode.ByPath, path);
+    }
+
 
     getFileImports(content: string): IFileImport[] {
         this.createProgramInMemoryAndSetGlobals(content);
@@ -299,6 +314,8 @@ export default class Transpiler {
             return Languages.Go;
         case "java":
             return Languages.Java;
+        case "rust":
+            return Languages.Rust;
         }
     }
 }

@@ -1,0 +1,8 @@
+[package]
+name = "transpilable"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "transpilable"
+path = "src/main.rs"

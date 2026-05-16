@@ -3,12 +3,36 @@ function custom_echo($x){ echo (string)$x . "
 ";}
 class Second {
     public $myClassProperty = 'classProp';
+    public $myBoolProp = false;
 
     public function stringifyNumber($arg) {
         return ((string) $arg);
     }
 }
 class Test {
+    public function functionWithOptionals($a, $c = null, $d = 1) {
+        custom_echo($a);
+        if ($c !== null) {
+            custom_echo($c);
+        }
+        if ($d !== null) {
+            custom_echo($d);
+        }
+    }
+
+    public function getValue($x) {
+        return $x;
+    }
+
+    public function testJavaScope() {
+        $newObject = array(
+            'a' => $this->getValue(5),
+            'b' => $this->getValue($this->getValue($this->getValue(2))),
+        );
+        custom_echo($newObject['a']); // should print 5
+        custom_echo($newObject['b']); // should print 2
+    }
+
     public function test() {
         $a = 1;
         $b = 2;
@@ -30,6 +54,9 @@ class Test {
         $instance = new Second();
         custom_echo($instance->stringifyNumber(4)); // should print 4
         custom_echo($instance->myClassProperty); // should print "classProp"
+        if ($instance->myBoolProp == false) {
+            custom_echo('myBoolProp is false'); // should print "myBoolProp is false"
+        }
         $arr = [1, 2, 3, 4];
         custom_echo(count($arr)); // should print 4
         $first = $arr[0];
@@ -60,6 +87,19 @@ class Test {
         $both = array_merge($firstConcat, $secondConcat);
         custom_echo(count($both)); // should print 4
         custom_echo($both[2]); // should print "c"
+        $baseString = 'aabba';
+        $replacedAllString = str_replace('a', '', $baseString);
+        custom_echo($replacedAllString); // should print "bb"
+        $this->functionWithOptionals('hello');
+        $this->functionWithOptionals('hello', 5);
+        $this->functionWithOptionals('hello', 5, 1);
+        $list3 = ['empty'];
+        $list3[0] = 'first';
+        custom_echo($list3[0]); // should print "first"
+        $dict3 = array();
+        $dict3['key'] = 'value';
+        custom_echo($dict3['key']); // should print "value"
+        $this->testJavaScope();
     }
 }
 

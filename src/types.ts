@@ -42,7 +42,8 @@ enum Languages {
     Php,
     CSharp,
     Go,
-    Java
+    Java,
+    Rust
 }
 
 enum TranspilationMode {

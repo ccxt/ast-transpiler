@@ -92,7 +92,7 @@ class Test
             put( "b", 2 );
         }};
         ((java.util.Map<String,Object>)dict2).remove((String)"a");
-        Object dictKeys = new java.util.ArrayList<Object>(((java.util.Map<String, Object>)dict2).keySet());
+        Object dictKeys = Helpers.objectKeys(dict2);
         System.out.println(Helpers.getArrayLength(dictKeys)); // should print 1
         System.out.println(Helpers.GetValue(dictKeys, 0)); // should print "b"
         Object firstConcat = new java.util.ArrayList<Object>(java.util.Arrays.asList("a", "b"));

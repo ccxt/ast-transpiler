@@ -7,12 +7,13 @@ import (
 
 type Second struct {
     MyClassProperty string `default:"classProp"`
+    MyBoolProp bool `default:"false"`
 }
 
-func NewSecond() Second {
-   p := Second{}
-   setDefaults(&p)
-   return p
+func NewSecond() *Second {
+    p := &Second{}
+    setDefaults(p)
+    return p
 }
 
 func  (this *Second) StringifyNumber(arg any) any  {
@@ -22,12 +23,36 @@ type Test struct {
 
 }
 
-func NewTest() Test {
-   p := Test{}
-   setDefaults(&p)
-   return p
+func NewTest() *Test {
+    p := &Test{}
+    setDefaults(p)
+    return p
 }
 
+func  (this *Test) FunctionWithOptionals(a any, optionalArgs ...any)  {
+    c := GetArg(optionalArgs, 0, nil)
+    _ = c
+    d := GetArg(optionalArgs, 1, 1)
+    _ = d
+    fmt.Println(a)
+    if IsTrue(!IsEqual(c, nil)) {
+        fmt.Println(c)
+    }
+    if IsTrue(!IsEqual(d, nil)) {
+        fmt.Println(d)
+    }
+}
+func  (this *Test) GetValue(x any) any  {
+    return x
+}
+func  (this *Test) TestJavaScope()  {
+    var newObject any = map[string]any {
+        "a": this.GetValue(5),
+        "b": this.GetValue(this.GetValue(this.GetValue(2))),
+    }
+    fmt.Println(GetValue(newObject, "a")) // should print 5
+    fmt.Println(GetValue(newObject, "b")) // should print 2
+}
 func  (this *Test) Test()  {
     var a any = 1
     var b any = 2
@@ -49,6 +74,9 @@ func  (this *Test) Test()  {
     instance := NewSecond()
     fmt.Println(instance.StringifyNumber(4)) // should print 4
     fmt.Println(instance.MyClassProperty) // should print "classProp"
+    if IsTrue(IsEqual(instance.MyBoolProp, false)) {
+        fmt.Println("myBoolProp is false") // should print "myBoolProp is false"
+    }
     var arr any = []any{1, 2, 3, 4}
     fmt.Println(GetArrayLength(arr)) // should print 4
     var first any = GetValue(arr, 0)
@@ -79,4 +107,17 @@ func  (this *Test) Test()  {
     var both any = Concat(firstConcat, secondConcat)
     fmt.Println(GetArrayLength(both)) // should print 4
     fmt.Println(GetValue(both, 2)) // should print "c"
+    var baseString any = "aabba"
+    var replacedAllString any = Replace(baseString, "a", "")
+    fmt.Println(replacedAllString) // should print "bb"
+    this.FunctionWithOptionals("hello")
+    this.FunctionWithOptionals("hello", 5)
+    this.FunctionWithOptionals("hello", 5, 1)
+    var list3 any = []any{"empty"}
+    AddElementToObject(list3, 0, "first")
+    fmt.Println(GetValue(list3, 0)) // should print "first"
+    var dict3 any = map[string]any {}
+    AddElementToObject(dict3, "key", "value")
+    fmt.Println(GetValue(dict3, "key")) // should print "value"
+    this.TestJavaScope()
 }
