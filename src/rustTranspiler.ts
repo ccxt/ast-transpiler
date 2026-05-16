@@ -7,7 +7,7 @@ const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
     'OBJECT_OPENING': '{',
     'OBJECT_CLOSING': '}',
-    'ARRAY_OPENING_TOKEN': 'Value::Array(vec![',
+    'ARRAY_OPENING_TOKEN': 'Value::List(vec![',
     'ARRAY_CLOSING_TOKEN': '])',
     'PROPERTY_ASSIGNMENT_TOKEN': ':',
     'VAR_TOKEN': 'let mut',
@@ -114,6 +114,23 @@ export class RustTranspiler extends BaseTranspiler {
             'loop': 'loop_val',
             'match': 'match_val',
             'where': 'where_val',
+            'final': 'final_val',
+            'box': 'box_val',
+            'become': 'become_val',
+            'priv': 'priv_val',
+            'override': 'override_val',
+            'unsized': 'unsized_val',
+            'async': 'async_val',
+            'await': 'await_val',
+            'try': 'try_val',
+            'abstract': 'abstract_val',
+            'dyn': 'dyn_val',
+            'fn': 'fn_val',
+            'impl': 'impl_val',
+            'pub': 'pub_val',
+            'self': 'self_val',
+            'super': 'super_val',
+            'crate': 'crate_val',
         };
 
         // [fnName, close] — ensureRef adds & to each operand
@@ -590,10 +607,18 @@ export class RustTranspiler extends BaseTranspiler {
     ]);
 
     printCondition(node, identation) {
-    // Comparison binary expressions already return bool in Rust — skip is_true() wrapping
-        if (node.kind === SyntaxKind.BinaryExpression &&
-      (RustTranspiler as any).COMPARISON_OPS.has(node.operatorToken.kind)) {
-            return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+        if (node.kind === SyntaxKind.BinaryExpression) {
+            const opKind = node.operatorToken.kind;
+            // Comparison binary expressions already return bool — skip is_true() wrapping
+            if ((RustTranspiler as any).COMPARISON_OPS.has(opKind)) {
+                return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+            }
+            // Logical &&/|| operands are individually is_true()-wrapped in
+            // printBinaryExpression, so the whole expression is already bool.
+            if (opKind === SyntaxKind.AmpersandAmpersandToken ||
+                opKind === SyntaxKind.BarBarToken) {
+                return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+            }
         }
         // PrefixUnary ! — delegate to avoid double-wrapping
         if (node.kind === SyntaxKind.PrefixUnaryExpression &&
@@ -601,10 +626,7 @@ export class RustTranspiler extends BaseTranspiler {
             return this.printPrefixUnaryExpression(node, identation);
         }
         const expression = this.printNode(node, 0);
-        // Wrap the expression in parens so `&` binds to the whole thing.
-        // `is_true(&a || b)` (broken: `&a` is a ref) vs
-        // `is_true(&(a || b))` (correct: `&` borrows the whole expr).
-        return `${this.getIden(identation)}is_true(&(${expression}))`;
+        return `${this.getIden(identation)}is_true(&${expression})`;
     }
 
     printWhileStatement(node, identation) {
@@ -678,7 +700,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printArrayLiteralExpression(node, identation) {
         const elements = node.elements.map(e => this.printNode(e, 0)).join(', ');
-        return `Value::Array(vec![${elements}])`;
+        return `Value::List(vec![${elements}])`;
     }
 
     printDeleteExpression(node, identation) {
