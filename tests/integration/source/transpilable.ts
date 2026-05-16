@@ -135,6 +135,14 @@ class Test {
         this.funcWithParams([1,2,3], {"a": "value of a"});
 
         this.testStringMethods();
+
+        let threwError = false;
+        try {
+            this.functionThatThrows();
+        } catch (e) {
+            threwError = true;
+        }
+        console.log(this.boolToString(threwError)); // should print true
     }
 
     public handleOptionAndParamsTest(){
@@ -180,6 +188,10 @@ class Test {
         const c = a + b;
         console.log(c); // should print "ab"
 
+    }
+
+    public functionThatThrows() {
+        throw new Error("This is an error");
     }
 }
 
