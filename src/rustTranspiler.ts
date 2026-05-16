@@ -200,6 +200,18 @@ export class RustTranspiler extends BaseTranspiler {
         const right = node.right;
         const op = node.operatorToken.kind;
 
+        // Handle array destructuring reassignment: [a, b] = expr → bind once, reassign each
+        if (op === SyntaxKind.EqualsToken && left.kind === SyntaxKind.ArrayLiteralExpression) {
+            const elements = left.elements;
+            const rhs = this.printNode(right, 0);
+            const tmpName = '__destr_tmp';
+            const assignments = elements.map((e, idx) => {
+                const target = this.printNode(e, 0);
+                return `${target} = get_value(&${tmpName}, &Value::Int(${idx}))`;
+            }).join('; ');
+            return `{ let ${tmpName} = ${rhs}; ${assignments}; }`;
+        }
+
         // Handle element access assignment: a[b] = v → add_element_to_object(&mut a, &b, v)
         if (op === SyntaxKind.EqualsToken && left.kind === SyntaxKind.ElementAccessExpression) {
             const keys: any[] = [];
@@ -241,9 +253,9 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
 
-        // Handle in operator
+        // Handle in operator — wrap as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
-            return `in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)})`;
+            return `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
 
         // Handle += for regular variables
@@ -725,7 +737,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Built-in method call overrides
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
-        return `is_array(&${parsedArg})`;
+        return `Value::Bool(is_array(&${parsedArg}))`;
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
@@ -749,7 +761,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPromiseAllCall(node, identation, parsedArg = undefined) {
-        return `promise_all(&${parsedArg}).await`;
+        // No trailing `.await` here — when the TS source has
+        // `await Promise.all(...)`, `printAwaitExpression` will append it.
+        // Adding it here too would produce `.await.await` (double-await).
+        return `promise_all(&${parsedArg})`;
     }
 
     // Rust uses postfix `.await`; the base transpiler defaults to prefix.
@@ -776,7 +791,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
         const pRef = parsedArg?.startsWith('Value::') ? `&${parsedArg}` : `&${parsedArg}`;
-        return `contains(&${name}, ${pRef})`;
+        return `Value::Bool(contains(&${name}, ${pRef}))`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -784,11 +799,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `starts_with(&${name}, &${parsedArg})`;
+        return `Value::Bool(starts_with(&${name}, &${parsedArg}))`;
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `ends_with(&${name}, &${parsedArg})`;
+        return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
     }
 
     printTrimCall(node, identation, name = undefined) {
