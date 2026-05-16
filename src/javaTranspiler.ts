@@ -1893,6 +1893,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const newExpression = this.printNode(expression.expression, 0);
             if (expression.expression.kind === ts.SyntaxKind.Identifier) {
                 const id = expression.expression;
+                // java.lang.Error is a sibling of Exception under Throwable, so
+                // `catch (Exception e)` won't catch it. Map JS/TS `Error` to
+                // RuntimeException so standard catch blocks work.
+                const exceptionName = id.escapedText === "Error" ? "RuntimeException" : id.escapedText;
                 const symbol = (global as any).checker.getSymbolAtLocation(expression.expression);
                 if (symbol) {
                     const declarations =
@@ -1905,18 +1909,18 @@ export class JavaTranspiler extends BaseTranspiler {
                     if (isClassDeclaration) {
                         return (
                             this.getIden(identation) +
-                            `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText}((String)${parsedArg}) ${this.LINE_TERMINATOR}`
+                            `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${exceptionName}((String)${parsedArg}) ${this.LINE_TERMINATOR}`
                         );
                     } else {
                         return (
                             this.getIden(identation) +
-                            `Helpers.throwDynamicException(${id.escapedText}, ${parsedArg});return null;`
+                            `Helpers.throwDynamicException(${exceptionName}, ${parsedArg});return null;`
                         );
                     }
                 }
                 return (
                     this.getIden(identation) +
-                    `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression}(${parsedArg}) ${this.LINE_TERMINATOR}`
+                    `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${exceptionName}(${parsedArg}) ${this.LINE_TERMINATOR}`
                 );
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
                 return this.getIden(identation) + `Helpers.throwDynamicException(${newExpression}, ${parsedArg});`;
