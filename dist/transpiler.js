@@ -2327,6 +2327,16 @@ var PhpTranspiler = class extends BaseTranspiler {
     const expression = this.printNode(node.expression, 0);
     return `unset(${expression})`;
   }
+  printNewExpression(node, identation) {
+    let expression = node.expression?.escapedText;
+    expression = expression ? expression : this.printNode(node.expression);
+    if (expression === "Error") {
+      expression = "Exception";
+    }
+    const args = node.arguments.map((n) => this.printNode(n, identation)).join(", ");
+    const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
+    return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+  }
   getExceptionalAccessTokenIfAny(node) {
     const leftSide = node.expression.escapedText ?? node.expression.getFullText().trim();
     if (!leftSide) {
@@ -3223,6 +3233,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const key = this.printNode(node.expression.argumentExpression, 0);
     return `((IDictionary<string,object>)${object}).Remove((string)${key})`;
   }
+  printNewExpression(node, identation) {
+    let expression = node.expression?.escapedText;
+    expression = expression ? expression : this.printNode(node.expression);
+    if (expression === "Error") {
+      expression = "Exception";
+    }
+    const args = node.arguments.map((n) => this.printNode(n, identation)).join(", ");
+    const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
+    return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+  }
   printThrowStatement(node, identation) {
     if (node.expression.kind === ts4.SyntaxKind.Identifier) {
       return this.getIden(identation) + this.THROW_TOKEN + " " + this.printNode(node.expression, 0) + this.LINE_TERMINATOR;
@@ -3234,17 +3254,18 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === ts4.SyntaxKind.Identifier) {
         const id = expression.expression;
+        const idName = id.escapedText === "Error" ? "Exception" : id.escapedText;
         const symbol = global.checker.getSymbolAtLocation(expression.expression);
         if (symbol) {
           const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
           const isClassDeclaration = declarations.find((l) => l.kind === ts4.SyntaxKind.InterfaceDeclaration || l.kind === ts4.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
-            return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
+            return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${idName} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
           } else {
-            return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg});return null;`;
+            return this.getIden(identation) + `throwDynamicException(${idName}, ${parsedArg});return null;`;
           }
         }
-        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression} (${parsedArg}) ${this.LINE_TERMINATOR}`;
+        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${idName === id.escapedText ? newExpression : idName} (${parsedArg}) ${this.LINE_TERMINATOR}`;
       } else if (expression.expression.kind === ts4.SyntaxKind.ElementAccessExpression) {
         return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
       }
@@ -5816,6 +5837,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === ts6.SyntaxKind.Identifier) {
         const id = expression.expression;
+        const exceptionName = id.escapedText === "Error" ? "RuntimeException" : id.escapedText;
         const symbol = global.checker.getSymbolAtLocation(expression.expression);
         if (symbol) {
           const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
@@ -5823,12 +5845,12 @@ var JavaTranspiler = class extends BaseTranspiler {
             (l) => l.kind === ts6.SyntaxKind.InterfaceDeclaration || l.kind === ts6.SyntaxKind.ClassDeclaration
           );
           if (isClassDeclaration) {
-            return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText}((String)${parsedArg}) ${this.LINE_TERMINATOR}`;
+            return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${exceptionName}((String)${parsedArg}) ${this.LINE_TERMINATOR}`;
           } else {
-            return this.getIden(identation) + `Helpers.throwDynamicException(${id.escapedText}, ${parsedArg});return null;`;
+            return this.getIden(identation) + `Helpers.throwDynamicException(${exceptionName}, ${parsedArg});return null;`;
           }
         }
-        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression}(${parsedArg}) ${this.LINE_TERMINATOR}`;
+        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${exceptionName}(${parsedArg}) ${this.LINE_TERMINATOR}`;
       } else if (expression.expression.kind === ts6.SyntaxKind.ElementAccessExpression) {
         return this.getIden(identation) + `Helpers.throwDynamicException(${newExpression}, ${parsedArg});`;
       }

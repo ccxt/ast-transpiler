@@ -449,6 +449,7 @@ declare class PhpTranspiler extends BaseTranspiler {
     printDateNowCall(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
+    printNewExpression(node: any, identation: any): string;
     getExceptionalAccessTokenIfAny(node: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -523,6 +524,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPrefixUnaryExpression(node: any, identation: any): any;
     printConditionalExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
+    printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
     csModifiers: {};
     printPropertyAccessModifiers(node: any): string;
