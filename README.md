@@ -60,6 +60,7 @@ Currently the following languages are supported:
 - Python
 - PHP
 - C#
+- Go
 - Java
 - Rust
 
