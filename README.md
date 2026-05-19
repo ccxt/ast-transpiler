@@ -59,7 +59,9 @@ This library works better with ESM because has dedicated `import/export` tokens 
 Currently the following languages are supported:
 - Python
 - PHP
-- C# (WIP)
+- C#
+- Java
+- Rust
 
 ## 🔌 Installation
 
