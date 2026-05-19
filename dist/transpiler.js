@@ -46,7 +46,7 @@ var require_dirname = __commonJS({
 // src/transpiler.ts
 init_esm_shims();
 var import_dirname = __toESM(require_dirname(), 1);
-import ts7 from "typescript";
+import ts8 from "typescript";
 
 // src/pythonTranspiler.ts
 init_esm_shims();
@@ -5952,13 +5952,788 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
 };
 
+// src/rustTranspiler.ts
+init_esm_shims();
+import ts7 from "typescript";
+var SyntaxKind4 = ts7.SyntaxKind;
+var parserConfig6 = {
+  "ELSEIF_TOKEN": "else if",
+  "OBJECT_OPENING": "{",
+  "OBJECT_CLOSING": "}",
+  "ARRAY_OPENING_TOKEN": "Value::List(vec![",
+  "ARRAY_CLOSING_TOKEN": "])",
+  "PROPERTY_ASSIGNMENT_TOKEN": ":",
+  "VAR_TOKEN": "let mut",
+  "METHOD_TOKEN": "fn",
+  "FUNCTION_TOKEN": "fn",
+  "PROPERTY_ASSIGNMENT_OPEN": "",
+  "PROPERTY_ASSIGNMENT_CLOSE": "",
+  "SUPER_TOKEN": "super",
+  "SUPER_CALL_TOKEN": "super",
+  "FALSY_WRAPPER_OPEN": "is_true(&",
+  "FALSY_WRAPPER_CLOSE": ")",
+  "COMPARISON_WRAPPER_OPEN": "is_equal(&",
+  "COMPARISON_WRAPPER_CLOSE": ")",
+  "UKNOWN_PROP_WRAPPER_OPEN": "",
+  "UNKOWN_PROP_WRAPPER_CLOSE": "",
+  "UKNOWN_PROP_ASYNC_WRAPPER_OPEN": "",
+  "UNKOWN_PROP_ASYNC_WRAPPER_CLOSE": "",
+  "DYNAMIC_CALL_OPEN": "",
+  "EQUALS_EQUALS_WRAPPER_OPEN": "is_equal(&",
+  "EQUALS_EQUALS_WRAPPER_CLOSE": ")",
+  "DIFFERENT_WRAPPER_OPEN": "!is_equal(&",
+  "DIFFERENT_WRAPPER_CLOSE": ")",
+  "GREATER_THAN_WRAPPER_OPEN": "is_greater_than(&",
+  "GREATER_THAN_WRAPPER_CLOSE": ")",
+  "GREATER_THAN_EQUALS_WRAPPER_OPEN": "is_greater_than_or_equal(&",
+  "GREATER_THAN_EQUALS_WRAPPER_CLOSE": ")",
+  "LESS_THAN_WRAPPER_OPEN": "is_less_than(&",
+  "LESS_THAN_WRAPPER_CLOSE": ")",
+  "LESS_THAN_EQUALS_WRAPPER_OPEN": "is_less_than_or_equal(&",
+  "LESS_THAN_EQUALS_WRAPPER_CLOSE": ")",
+  "PLUS_WRAPPER_OPEN": "add(&",
+  "PLUS_WRAPPER_CLOSE": ")",
+  "MINUS_WRAPPER_OPEN": "subtract(&",
+  "MINUS_WRAPPER_CLOSE": ")",
+  "ARRAY_LENGTH_WRAPPER_OPEN": "get_array_length(&",
+  "ARRAY_LENGTH_WRAPPER_CLOSE": ")",
+  "DIVIDE_WRAPPER_OPEN": "divide(&",
+  "DIVIDE_WRAPPER_CLOSE": ")",
+  "MULTIPLY_WRAPPER_OPEN": "multiply(&",
+  "MULTIPLY_WRAPPER_CLOSE": ")",
+  "INDEXOF_WRAPPER_OPEN": "get_index_of(&",
+  "INDEXOF_WRAPPER_CLOSE": ")",
+  "MOD_WRAPPER_OPEN": "mod_val(&",
+  "MOD_WRAPPER_CLOSE": ")",
+  "LINE_TERMINATOR": ";",
+  "CONDITION_OPENING": "",
+  "CONDITION_CLOSE": "",
+  "AWAIT_TOKEN": "",
+  "NULL_TOKEN": "Value::Null",
+  "UNDEFINED_TOKEN": "Value::Null",
+  "WHILE_TOKEN": "while",
+  "ELEMENT_ACCESS_WRAPPER_OPEN": "get_value(&",
+  "ELEMENT_ACCESS_WRAPPER_CLOSE": ")",
+  "DEFAULT_PARAMETER_TYPE": "Value",
+  "DEFAULT_RETURN_TYPE": "Value",
+  "BLOCK_OPENING_TOKEN": "{",
+  "TRUE_KEYWORD": "Value::Bool(true)",
+  "FALSE_KEYWORD": "Value::Bool(false)"
+};
+var _RustTranspiler = class extends BaseTranspiler {
+  constructor(config = {}) {
+    config["parser"] = Object.assign({}, parserConfig6, config["parser"] ?? {});
+    super(config);
+    this.requiresParameterType = true;
+    this.requiresReturnType = false;
+    this.asyncTranspiling = true;
+    this.supportsFalsyOrTruthyValues = false;
+    this.id = "Rust";
+    this.className = "undefined";
+    this.methodSignatures = {};
+    this.initConfig();
+    this.applyUserOverrides(config);
+  }
+  initConfig() {
+    this.LeftPropertyAccessReplacements = {};
+    this.RightPropertyAccessReplacements = {};
+    this.FullPropertyAccessReplacements = {
+      "console.log": "println_val",
+      "Math.floor": "math_floor",
+      "Math.ceil": "math_ceil",
+      "Math.round": "math_round"
+    };
+    this.CallExpressionReplacements = {};
+    this.ReservedKeywordsReplacements = {
+      "type": "type_var",
+      "move": "move_val",
+      "ref": "ref_val",
+      "str": "str_val",
+      "use": "use_val",
+      "mod": "mod_kw",
+      "loop": "loop_val",
+      "match": "match_val",
+      "where": "where_val",
+      "final": "final_val",
+      "box": "box_val",
+      "become": "become_val",
+      "priv": "priv_val",
+      "override": "override_val",
+      "unsized": "unsized_val",
+      "async": "async_val",
+      "await": "await_val",
+      "try": "try_val",
+      "abstract": "abstract_val",
+      "dyn": "dyn_val",
+      "fn": "fn_val",
+      "impl": "impl_val",
+      "pub": "pub_val",
+      "self": "self_val",
+      "super": "super_val",
+      "crate": "crate_val"
+    };
+    this.binaryExpressionsWrappers = {
+      [SyntaxKind4.EqualsEqualsToken]: ["is_equal(", ")"],
+      [SyntaxKind4.EqualsEqualsEqualsToken]: ["is_equal(", ")"],
+      [SyntaxKind4.ExclamationEqualsToken]: ["!is_equal(", ")"],
+      [SyntaxKind4.ExclamationEqualsEqualsToken]: ["!is_equal(", ")"],
+      [SyntaxKind4.GreaterThanToken]: ["is_greater_than(", ")"],
+      [SyntaxKind4.GreaterThanEqualsToken]: ["is_greater_than_or_equal(", ")"],
+      [SyntaxKind4.LessThanToken]: ["is_less_than(", ")"],
+      [SyntaxKind4.LessThanEqualsToken]: ["is_less_than_or_equal(", ")"],
+      [SyntaxKind4.PlusToken]: ["add(", ")"],
+      [SyntaxKind4.MinusToken]: ["subtract(", ")"],
+      [SyntaxKind4.AsteriskToken]: ["multiply(", ")"],
+      [SyntaxKind4.PercentToken]: ["mod_val(", ")"],
+      [SyntaxKind4.SlashToken]: ["divide(", ")"]
+    };
+  }
+  capitalize(str) {
+    return str[0].toUpperCase() + str.slice(1);
+  }
+  printStringLiteral(node) {
+    let text = node.text;
+    if (text in this.StringLiteralReplacements) {
+      return this.StringLiteralReplacements[text];
+    }
+    text = text.replaceAll("\\", "\\\\");
+    text = text.replaceAll('"', '\\"');
+    text = text.replaceAll("\n", "\\n");
+    text = text.replaceAll("\r", "\\r");
+    text = text.replaceAll("	", "\\t");
+    return `Value::Str("${text}".to_string())`;
+  }
+  printNumericLiteral(node) {
+    const text = node.text;
+    if (text.includes(".")) {
+      return `Value::Float(${text})`;
+    }
+    return `Value::Int(${text})`;
+  }
+  printBooleanLiteral(node) {
+    if (ts7.SyntaxKind.TrueKeyword === node.kind) {
+      return "Value::Bool(true)";
+    }
+    return "Value::Bool(false)";
+  }
+  printNullKeyword(node, identation) {
+    return "Value::Null";
+  }
+  ensureRef(expr) {
+    if (expr.startsWith("&")) {
+      return expr;
+    }
+    return `&${expr}`;
+  }
+  printCustomBinaryExpressionIfAny(node, identation) {
+    const left = node.left;
+    const right = node.right;
+    const op = node.operatorToken.kind;
+    if (op === SyntaxKind4.EqualsToken && left.kind === SyntaxKind4.ArrayLiteralExpression) {
+      const elements = left.elements;
+      const rhs = this.printNode(right, 0);
+      const tmpName = "__destr_tmp";
+      const assignments = elements.map((e, idx) => {
+        const target = this.printNode(e, 0);
+        return `${target} = get_value(&${tmpName}, &Value::Int(${idx}))`;
+      }).join("; ");
+      return `{ let ${tmpName} = ${rhs}; ${assignments}; }`;
+    }
+    if (op === SyntaxKind4.EqualsToken && left.kind === SyntaxKind4.ElementAccessExpression) {
+      const keys = [];
+      let baseExpr = null;
+      let cur = left;
+      while (ts7.isElementAccessExpression(cur)) {
+        keys.unshift(cur.argumentExpression);
+        const expr = cur.expression;
+        if (!ts7.isElementAccessExpression(expr)) {
+          baseExpr = expr;
+          break;
+        }
+        cur = expr;
+      }
+      const containerStr = this.printNode(baseExpr, 0);
+      const keyStrs = keys.map((k) => this.printNode(k, 0));
+      let acc = `&mut ${containerStr}`;
+      for (let i = 0; i < keyStrs.length - 1; i++) {
+        acc = `get_value_mut(${acc}, &${keyStrs[i]})`;
+      }
+      const lastKey = keyStrs[keyStrs.length - 1];
+      const rhs = this.printNode(right, 0);
+      return `add_element_to_object(${acc}, &${lastKey}, ${rhs})`;
+    }
+    if (left.kind === SyntaxKind4.TypeOfExpression) {
+      const expression = left.expression;
+      const rightText = right.text;
+      const target = this.printNode(expression, 0);
+      const isDiff = op === SyntaxKind4.ExclamationEqualsEqualsToken || op === SyntaxKind4.ExclamationEqualsToken;
+      const not = isDiff ? "!" : "";
+      switch (rightText) {
+        case "string":
+          return `${not}is_string(&${target})`;
+        case "number":
+          return `${not}is_number(&${target})`;
+        case "boolean":
+          return `${not}is_bool(&${target})`;
+        case "object":
+          return `${not}is_object(&${target})`;
+        case "function":
+          return `${not}is_function(&${target})`;
+      }
+    }
+    if (op === SyntaxKind4.InKeyword) {
+      return `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
+    }
+    if (op === SyntaxKind4.PlusEqualsToken && left.kind !== SyntaxKind4.ElementAccessExpression) {
+      const leftText = this.printNode(left, 0);
+      const rightText = this.printNode(right, 0);
+      return `${leftText} = add(&${leftText}, &${rightText})`;
+    }
+    if (op === SyntaxKind4.MinusEqualsToken && left.kind !== SyntaxKind4.ElementAccessExpression) {
+      const leftText = this.printNode(left, 0);
+      const rightText = this.printNode(right, 0);
+      return `${leftText} = subtract(&${leftText}, &${rightText})`;
+    }
+    if (op in this.binaryExpressionsWrappers) {
+      const [fnName, close] = this.binaryExpressionsWrappers[op];
+      const leftText = this.printNode(left, 0);
+      const rightText = this.printNode(right, 0);
+      const leftRef = this.ensureRef(leftText);
+      const rightRef = this.ensureRef(rightText);
+      return `${fnName}${leftRef}, ${rightRef}${close}`;
+    }
+    return void 0;
+  }
+  printBinaryExpression(node, identation) {
+    const custom = this.printCustomBinaryExpressionIfAny(node, identation);
+    if (custom) {
+      return custom;
+    }
+    return super.printBinaryExpression(node, identation);
+  }
+  printVariableDeclarationList(node, identation) {
+    const declaration = node.declarations[0];
+    const isNew = declaration.initializer && declaration.initializer.kind === SyntaxKind4.NewExpression;
+    if (declaration?.name.kind === SyntaxKind4.ArrayBindingPattern) {
+      const elements = declaration.name.elements;
+      const parsedElements = elements.map((e) => this.printNode(e.name, 0));
+      const syntheticName = parsedElements.join("") + "Variable";
+      let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
+`;
+      parsedElements.forEach((e, idx) => {
+        const line = `${this.getIden(identation)}let mut ${e}: Value = get_value(&${syntheticName}, &Value::Int(${idx}))`;
+        stmt += idx < parsedElements.length - 1 ? line + ";\n" : line;
+      });
+      return stmt;
+    }
+    const varName = this.printNode(declaration.name, 0);
+    if (!declaration.initializer) {
+      return `${this.getIden(identation)}let mut ${varName}: Value = Value::Null`;
+    }
+    const parsedValue = this.printNode(declaration.initializer, identation).trim();
+    if (isNew) {
+      return `${this.getIden(identation)}let mut ${varName} = ${parsedValue}`;
+    }
+    return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
+  }
+  printPropertyDeclaration(node, identation) {
+    const name = this.printNode(node.name, 0);
+    if (node.initializer) {
+      const init = this.printNode(node.initializer, 0);
+      return `${this.getIden(identation)}${name}: Value, // default: ${init}`;
+    }
+    return `${this.getIden(identation)}${name}: Value,`;
+  }
+  getStructFields(node) {
+    const propDecls = node.members.filter((m) => m.kind === SyntaxKind4.PropertyDeclaration);
+    return propDecls.map((p) => {
+      const name = this.printNode(p.name, 0);
+      const init = p.initializer ? this.printNode(p.initializer, 0) : "Value::Null";
+      return { name, init };
+    });
+  }
+  printStruct(node, identation) {
+    const fields = this.getStructFields(node);
+    const fieldLines = fields.map((f) => `${this.getIden(identation + 1)}pub ${f.name}: Value,`).join("\n");
+    return `#[derive(Debug, Clone)]
+pub struct ${this.className} {
+${fieldLines}
+}`;
+  }
+  printNewMethod(node, identation) {
+    const fields = this.getStructFields(node);
+    const fieldInits = fields.map((f) => `${this.getIden(identation + 2)}${f.name}: ${f.init},`).join("\n");
+    return `
+impl ${this.className} {
+${this.getIden(identation + 1)}pub fn new() -> Self {
+${this.getIden(identation + 2)}${this.className} {
+${fieldInits}
+${this.getIden(identation + 2)}}
+${this.getIden(identation + 1)}}
+}`;
+  }
+  printClass(node, identation) {
+    this.className = node.name.escapedText;
+    const methods = node.members.filter((m) => m.kind === SyntaxKind4.MethodDeclaration);
+    methods.forEach((method) => {
+      const name = method.name.escapedText;
+      const params = method.parameters;
+      const requiredCount = params.filter((p) => !p.initializer && !p.questionToken).length;
+      const hasOptional = params.some((p) => p.initializer !== void 0 || p.questionToken !== void 0);
+      if (hasOptional) {
+        this.methodSignatures[name] = { requiredCount };
+      }
+    });
+    const struct = this.printStruct(node, identation);
+    const newMethod = this.printNewMethod(node, identation);
+    const classMethods = methods.map((m) => this.printMethodDeclaration(m, identation)).join("\n\n");
+    const implBlock = `
+impl ${this.className} {
+${classMethods}
+}`;
+    return struct + newMethod + implBlock;
+  }
+  printMethodDefinition(node, identation) {
+    const name = node.name.escapedText;
+    const params = node.parameters;
+    const hasOptional = params.some((p) => p.initializer !== void 0 || p.questionToken !== void 0);
+    const requiredParams = params.filter((p) => !p.initializer && !p.questionToken);
+    const optionalParams = params.filter((p) => p.initializer !== void 0 || p.questionToken !== void 0);
+    let parsedArgs = "&self";
+    if (requiredParams.length > 0) {
+      const reqArgs = requiredParams.map((p) => `${this.printNode(p.name, 0)}: Value`).join(", ");
+      parsedArgs += ", " + reqArgs;
+    }
+    if (hasOptional) {
+      parsedArgs += ", optional_args: &[Value]";
+    }
+    const returnType = this.printRustFunctionType(node);
+    const retStr = returnType ? ` -> ${returnType}` : "";
+    return `${this.getIden(identation + 1)}pub fn ${name}(${parsedArgs})${retStr}`;
+  }
+  printRustFunctionType(node) {
+    try {
+      const type = global.checker.getReturnTypeOfSignature(global.checker.getSignatureFromDeclaration(node));
+      if (type.flags === ts7.TypeFlags.Void) {
+        return "";
+      }
+    } catch (e) {
+    }
+    return "Value";
+  }
+  printMethodDeclaration(node, identation) {
+    const methodDef = this.printMethodDefinition(node, identation);
+    const params = node.parameters;
+    const optionalParams = params.filter((p) => p.initializer !== void 0 || p.questionToken !== void 0);
+    let optionalInits = "";
+    if (optionalParams.length > 0) {
+      const requiredCount = params.filter((p) => !p.initializer && !p.questionToken).length;
+      optionalInits = optionalParams.map((p, idx) => {
+        const pname = this.printNode(p.name, 0);
+        const defaultVal = p.initializer ? this.printNode(p.initializer, 0) : "Value::Null";
+        return `${this.getIden(identation + 2)}let ${pname} = get_arg(optional_args, ${idx}, ${defaultVal});`;
+      }).join("\n") + "\n";
+    }
+    const blockOpen = this.getBlockOpen(identation);
+    const blockClose = this.getBlockClose(identation);
+    const statements = node.body.statements.map((s) => this.printNode(s, identation + 2)).join("\n");
+    const body = blockOpen + optionalInits + statements + blockClose;
+    return this.printNodeCommentsIfAny(node, identation, methodDef + body);
+  }
+  printFunctionDefinition(node, identation) {
+    const name = node.name?.escapedText ?? "";
+    const params = node.parameters;
+    const parsedArgs = params.map((p) => `${this.printNode(p.name, 0)}: Value`).join(", ");
+    const returnType = this.printRustFunctionType(node);
+    const retStr = returnType ? ` -> ${returnType}` : "";
+    return `${this.getIden(identation)}fn ${name}(${parsedArgs})${retStr}`;
+  }
+  printFunctionDeclaration(node, identation) {
+    if (ts7.isArrowFunction(node)) {
+      const parameters = node.parameters.map((p) => `${this.printNode(p.name, 0)}: Value`).join(", ");
+      const body = this.printNode(node.body);
+      return `|${parameters}| ${body}`;
+    }
+    const funcDef = this.printFunctionDefinition(node, identation);
+    const funcBody = super.printFunctionBody(node, identation);
+    return this.printNodeCommentsIfAny(node, identation, funcDef + funcBody);
+  }
+  printOutOfOrderCallExpressionIfAny(node, identation) {
+    if (node.expression.kind !== SyntaxKind4.PropertyAccessExpression) {
+      return void 0;
+    }
+    const expr = node.expression;
+    const args = node.arguments;
+    if (expr.expression.kind === SyntaxKind4.ThisKeyword) {
+      const methodName = expr.name.escapedText;
+      const sig = this.methodSignatures[methodName];
+      if (sig) {
+        const requiredArgs = args.slice(0, sig.requiredCount).map((a) => this.printNode(a, 0)).join(", ");
+        const optionalArgsList = args.slice(sig.requiredCount).map((a) => this.printNode(a, 0)).join(", ");
+        const optSlice = optionalArgsList ? `&[${optionalArgsList}]` : "&[]";
+        const reqPart = requiredArgs ? `${requiredArgs}, ` : "";
+        return `self.${methodName}(${reqPart}${optSlice})`;
+      }
+    }
+    return void 0;
+  }
+  printCallExpression(node, identation) {
+    const expression = node.expression;
+    if (expression.kind === SyntaxKind4.PropertyAccessExpression) {
+      const exprText = expression.getText().trim();
+      if (exprText === "console.log") {
+        const args = node.arguments;
+        if (args.length === 1) {
+          const argText = this.printNode(args[0], 0).trim();
+          const ref = argText.startsWith("Value::") ? `&${argText}` : argText.startsWith("&") ? argText : `&${argText}`;
+          return `println_val(${ref})`;
+        }
+        const argParts = Array.from(args).map((a) => {
+          const t = this.printNode(a, 0).trim();
+          return t.startsWith("Value::") || !t.startsWith("&") ? `&${t}` : t;
+        }).join(", ");
+        return `println_val(${argParts})`;
+      }
+    }
+    const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
+    if (outOfOrder)
+      return outOfOrder;
+    return super.printCallExpression(node, identation);
+  }
+  printThisKeyword(node, identation) {
+    return "self";
+  }
+  printNewExpression(node, identation) {
+    let expression = node.expression?.escapedText;
+    expression = expression ? expression : this.printNode(node.expression);
+    const args = node.arguments.map((a) => this.printNode(a, identation)).join(", ");
+    if (expression === "Error") {
+      return args || "Value::Null";
+    }
+    const errorClassPattern = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
+    if (typeof expression === "string" && errorClassPattern.test(expression)) {
+      const snake = expression.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+      return `crate::exchange_errors::${snake}(${args})`;
+    }
+    return `${expression}::new(${args})`;
+  }
+  printPropertyAccessExpression(node, identation) {
+    const transformedProperty = this.transformPropertyAcessExpressionIfNeeded(node);
+    if (transformedProperty) {
+      return this.getIden(identation) + transformedProperty;
+    }
+    const rightSide = node.name.escapedText;
+    const rawExpression = node.getText().trim();
+    if (this.FullPropertyAccessReplacements.hasOwnProperty(rawExpression)) {
+      return this.FullPropertyAccessReplacements[rawExpression];
+    }
+    const leftExpr = this.printNode(node.expression, 0);
+    if (rightSide === "length") {
+      return `get_array_length(&${leftExpr})`;
+    }
+    return `${leftExpr}.${rightSide}`;
+  }
+  transformPropertyAcessExpressionIfNeeded(node) {
+    const rightSide = node.name.escapedText;
+    const leftExpr = this.printNode(node.expression, 0);
+    if (rightSide === "length") {
+      return `get_array_length(&${leftExpr})`;
+    }
+    return void 0;
+  }
+  printElementAccessExpression(node, identation) {
+    const special = this.printElementAccessExpressionExceptionIfAny(node);
+    if (special)
+      return special;
+    const keys = [];
+    let baseExpr = null;
+    let current = node;
+    while (ts7.isElementAccessExpression(current)) {
+      keys.unshift(current.argumentExpression);
+      const expr = current.expression;
+      if (!ts7.isElementAccessExpression(expr)) {
+        baseExpr = expr;
+        break;
+      }
+      current = expr;
+    }
+    const containerStr = this.printNode(baseExpr, 0);
+    const keyStrs = keys.map((k) => this.printNode(k, 0));
+    let acc = containerStr;
+    keyStrs.forEach((k) => {
+      const kRef = k.startsWith("Value::") ? `&${k}` : `&${k}`;
+      acc = `get_value(&${acc}, ${kRef})`;
+    });
+    return acc;
+  }
+  printForStatement(node, identation) {
+    const initNode = node.initializer;
+    const condNode = node.condition;
+    const incrNode = node.incrementor;
+    const initStr = initNode ? this.printNode(initNode, identation + 1) + ";\n" : "";
+    const condStr = condNode ? this.printNode(condNode, 0) : "true";
+    const incrStr = incrNode ? this.getIden(identation + 1) + this.printNode(incrNode, 0) + ";\n" : "";
+    const statements = node.statement.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
+    const body = `{
+${statements}
+${incrStr}${this.getIden(identation)}}`;
+    return `${this.getIden(identation)}{
+${this.getIden(identation + 1)}${initStr}${this.getIden(identation + 1)}while ${condStr} ${body}
+${this.getIden(identation)}}`;
+  }
+  printCondition(node, identation) {
+    if (node.kind === SyntaxKind4.BinaryExpression) {
+      const opKind = node.operatorToken.kind;
+      if (_RustTranspiler.COMPARISON_OPS.has(opKind)) {
+        return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+      }
+      if (opKind === SyntaxKind4.AmpersandAmpersandToken || opKind === SyntaxKind4.BarBarToken) {
+        return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+      }
+    }
+    if (node.kind === SyntaxKind4.PrefixUnaryExpression && node.operator === SyntaxKind4.ExclamationToken) {
+      return this.printPrefixUnaryExpression(node, identation);
+    }
+    const expression = this.printNode(node, 0);
+    return `${this.getIden(identation)}is_true(&${expression})`;
+  }
+  printWhileStatement(node, identation) {
+    const expr = this.printCondition(node.expression, 0);
+    const body = this.printBlock(node.statement, identation);
+    return `${this.getIden(identation)}while ${expr}${body}`;
+  }
+  printIfStatement(node, identation) {
+    const expression = this.printCondition(node.expression, 0);
+    const elseExists = node.elseStatement !== void 0;
+    const ifBody = this.printBlock(node.thenStatement, identation, elseExists);
+    let ifComplete = `${expression}${ifBody}`;
+    const isElseIf = node.parent.kind === SyntaxKind4.IfStatement;
+    if (isElseIf) {
+      ifComplete = `else if ${ifComplete}`;
+    } else {
+      ifComplete = `${this.getIden(identation)}if ${ifComplete}`;
+    }
+    const elseStatement = node.elseStatement;
+    if (elseStatement?.kind === SyntaxKind4.Block) {
+      ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
+    } else if (elseStatement?.kind === SyntaxKind4.IfStatement) {
+      ifComplete += " " + this.printIfStatement(elseStatement, identation);
+    }
+    return this.printNodeCommentsIfAny(node, identation, ifComplete);
+  }
+  printPostFixUnaryExpression(node, identation) {
+    const { operand, operator } = node;
+    const operandText = this.printNode(operand, 0);
+    if (operator === SyntaxKind4.PlusPlusToken) {
+      return `${this.getIden(identation)}${operandText} = add(&${operandText}, &Value::Int(1))`;
+    }
+    if (operator === SyntaxKind4.MinusMinusToken) {
+      return `${this.getIden(identation)}${operandText} = subtract(&${operandText}, &Value::Int(1))`;
+    }
+    return super.printPostFixUnaryExpression(node, identation);
+  }
+  printPrefixUnaryExpression(node, identation) {
+    const { operand, operator } = node;
+    if (operator === SyntaxKind4.ExclamationToken) {
+      return this.getIden(identation) + "!" + this.printCondition(node.operand, 0);
+    }
+    if (operator === SyntaxKind4.MinusToken) {
+      return this.getIden(identation) + `negate(&${this.printNode(operand, 0)})`;
+    }
+    return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
+  }
+  printObjectLiteralExpression(node, identation) {
+    if (node.properties.length === 0) {
+      return "Value::Map({\n" + this.getIden(identation + 1) + "let mut m = std::collections::HashMap::new();\n" + this.getIden(identation + 1) + "m\n" + this.getIden(identation) + "})";
+    }
+    const lines = node.properties.map((p) => {
+      if (ts7.isShorthandPropertyAssignment(p)) {
+        const name2 = p.name.escapedText;
+        return `${this.getIden(identation + 2)}m.insert("${name2}".to_string(), ${name2}.clone());`;
+      }
+      const { name, initializer } = p;
+      const keyText = ts7.isStringLiteral(name) ? name.text : name.escapedText;
+      const valText = this.printNode(initializer, 0);
+      return `${this.getIden(identation + 2)}m.insert("${keyText}".to_string(), ${valText});`;
+    }).join("\n");
+    return `Value::Map({
+${this.getIden(identation + 1)}let mut m = std::collections::HashMap::new();
+${lines}
+${this.getIden(identation + 1)}m
+${this.getIden(identation)}})`;
+  }
+  printArrayLiteralExpression(node, identation) {
+    const elements = node.elements.map((e) => this.printNode(e, 0)).join(", ");
+    return `Value::List(vec![${elements}])`;
+  }
+  printDeleteExpression(node, identation) {
+    const object = this.printNode(node.expression.expression, 0);
+    const key = this.printNode(node.expression.argumentExpression, 0);
+    const keyRef = key.startsWith("Value::") ? `&${key}` : `&${key}`;
+    return `remove(&mut ${object}, ${keyRef})`;
+  }
+  printInstanceOfExpression(node, identation) {
+    const left = this.printNode(node.left, 0);
+    const right = this.printNode(node.right, 0);
+    return `${this.getIden(identation)}is_instance(&${left}, &${right})`;
+  }
+  printConditionalExpression(node, identation) {
+    const condition = this.printCondition(node.condition, 0);
+    const whenTrue = this.printNode(node.whenTrue, 0);
+    const whenFalse = this.printNode(node.whenFalse, 0);
+    return `ternary(${condition}, ${whenTrue}, ${whenFalse})`;
+  }
+  printArrayIsArrayCall(node, identation, parsedArg = void 0) {
+    return `Value::Bool(is_array(&${parsedArg}))`;
+  }
+  printObjectKeysCall(node, identation, parsedArg = void 0) {
+    return `object_keys(&${parsedArg})`;
+  }
+  printObjectValuesCall(node, identation, parsedArg = void 0) {
+    return `object_values(&${parsedArg})`;
+  }
+  printJsonParseCall(node, identation, parsedArg = void 0) {
+    return `json_parse(&${parsedArg})`;
+  }
+  printJsonStringifyCall(node, identation, parsedArg = void 0) {
+    return `json_stringify(&${parsedArg})`;
+  }
+  printMathFloorCall(node, identation, parsedArg = void 0) {
+    return `math_floor(&${parsedArg})`;
+  }
+  printPromiseAllCall(node, identation, parsedArg = void 0) {
+    return `promise_all(&${parsedArg})`;
+  }
+  printAwaitExpression(node, identation) {
+    const expr = this.printNode(node.expression, identation);
+    return `${expr}.await`;
+  }
+  printMathRoundCall(node, identation, parsedArg = void 0) {
+    return `math_round(&${parsedArg})`;
+  }
+  printMathCeilCall(node, identation, parsedArg = void 0) {
+    return `math_ceil(&${parsedArg})`;
+  }
+  printNumberIsIntegerCall(node, identation, parsedArg = void 0) {
+    return `is_integer(&${parsedArg})`;
+  }
+  printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `append_to_array(&mut ${name}, ${parsedArg})`;
+  }
+  printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
+    const pRef = parsedArg?.startsWith("Value::") ? `&${parsedArg}` : `&${parsedArg}`;
+    return `Value::Bool(contains(&${name}, ${pRef}))`;
+  }
+  printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `get_index_of(&${name}, &${parsedArg})`;
+  }
+  printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `Value::Bool(starts_with(&${name}, &${parsedArg}))`;
+  }
+  printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
+  }
+  printTrimCall(node, identation, name = void 0) {
+    return `trim(&${name})`;
+  }
+  printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `join(&${name}, &${parsedArg})`;
+  }
+  printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `split(&${name}, &${parsedArg})`;
+  }
+  printConcatCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `concat(${name}.clone(), ${parsedArg}.clone())`;
+  }
+  printToFixedCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `to_fixed(&${name}, &${parsedArg})`;
+  }
+  printToStringCall(node, identation, name = void 0) {
+    return `to_string_val(&${name})`;
+  }
+  printToUpperCaseCall(node, identation, name = void 0) {
+    return `to_upper(&${name})`;
+  }
+  printToLowerCaseCall(node, identation, name = void 0) {
+    return `to_lower(&${name})`;
+  }
+  printShiftCall(node, identation, name = void 0) {
+    return `shift(${name}.clone())`;
+  }
+  printReverseCall(node, identation, name = void 0) {
+    return `${name} = reverse(${name}.clone())`;
+  }
+  printPopCall(node, identation, name = void 0) {
+    return `pop(${name}.clone())`;
+  }
+  printSliceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    const arg2 = parsedArg2 ?? "Value::Null";
+    return `slice(&${name}, &${parsedArg}, &${arg2})`;
+  }
+  printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    return `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+  }
+  printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    return `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+  }
+  printThrowStatement(node, identation) {
+    const expression = this.printNode(node.expression, 0);
+    return `${this.getIden(identation)}panic!("{:?}", ${expression});`;
+  }
+  printTryStatement(node, identation) {
+    const tryBody = node.tryBlock.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
+    const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
+    const rawName = node.catchClause?.variableDeclaration?.name?.escapedText;
+    const errorName = rawName ? `_${rawName}` : "_e";
+    const iden = this.getIden(identation);
+    return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+${tryBody}
+${iden}}));
+${iden}if let Err(${errorName}) = _try_result {
+${catchBody}
+${iden}}`;
+  }
+  printReturnStatement(node, identation) {
+    const exp = node.expression;
+    if (!exp) {
+      return `${this.getIden(identation)}return;`;
+    }
+    const rightPart = this.printNode(exp, 0).trim();
+    return `${this.getIden(identation)}return ${rightPart};`;
+  }
+  printBreakStatement(node, identation) {
+    return `${this.getIden(identation)}break;`;
+  }
+  printContinueStatement(node, identation) {
+    return `${this.getIden(identation)}continue;`;
+  }
+  printConstructorDeclaration(node, identation) {
+    return "";
+  }
+  printSpreadElement(node, identation) {
+    const expression = this.printNode(node.expression, 0);
+    return `${this.getIden(identation)}${expression}`;
+  }
+};
+var RustTranspiler = _RustTranspiler;
+RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
+  SyntaxKind4.EqualsEqualsToken,
+  SyntaxKind4.EqualsEqualsEqualsToken,
+  SyntaxKind4.ExclamationEqualsToken,
+  SyntaxKind4.ExclamationEqualsEqualsToken,
+  SyntaxKind4.LessThanToken,
+  SyntaxKind4.LessThanEqualsToken,
+  SyntaxKind4.GreaterThanToken,
+  SyntaxKind4.GreaterThanEqualsToken
+]);
+
 // src/transpiler.ts
 var __dirname_mock = import_dirname.default;
 function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}) {
-  options = options || ts7.getDefaultCompilerOptions();
+  options = options || ts8.getDefaultCompilerOptions();
   const inMemoryFilePath = path2.resolve(path2.join(rootDir, "__dummy-file.ts"));
-  const textAst = ts7.createSourceFile(inMemoryFilePath, text, options.target || ts7.ScriptTarget.Latest);
-  const host = ts7.createCompilerHost(options, true);
+  const textAst = ts8.createSourceFile(inMemoryFilePath, text, options.target || ts8.ScriptTarget.Latest);
+  const host = ts8.createCompilerHost(options, true);
   function overrideIfInMemoryFile(methodName, inMemoryValue) {
     const originalMethod = host[methodName];
     host[methodName] = (...args) => {
@@ -5971,7 +6746,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}) {
   overrideIfInMemoryFile("getSourceFile", textAst);
   overrideIfInMemoryFile("readFile", text);
   overrideIfInMemoryFile("fileExists", true);
-  const program = ts7.createProgram({
+  const program = ts8.createProgram({
     options,
     rootNames: [inMemoryFilePath],
     host
@@ -5988,6 +6763,7 @@ var Transpiler = class {
     const csharpConfig = config["csharp"] || {};
     const goConfig = config["go"] || {};
     const javaConfig = config["java"] || {};
+    const rustConfig = config["rust"] || {};
     if ("verbose" in config) {
       Logger.setVerboseMode(Boolean(config["verbose"]));
     }
@@ -5996,6 +6772,7 @@ var Transpiler = class {
     this.csharpTranspiler = new CSharpTranspiler(csharpConfig);
     this.goTranspiler = new GoTranspiler(goConfig);
     this.javaTranspiler = new JavaTranspiler(javaConfig);
+    this.rustTranspiler = new RustTranspiler(rustConfig);
   }
   setVerboseMode(verbose) {
     Logger.setVerboseMode(verbose);
@@ -6007,7 +6784,7 @@ var Transpiler = class {
     global.program = memProgram;
   }
   createProgramByPathAndSetGlobals(path3) {
-    const program = ts7.createProgram([path3], {});
+    const program = ts8.createProgram([path3], {});
     const sourceFile = program.getSourceFile(path3);
     const typeChecker = program.getTypeChecker();
     global.src = sourceFile;
@@ -6015,7 +6792,7 @@ var Transpiler = class {
     global.program = program;
   }
   checkFileDiagnostics() {
-    const diagnostics = ts7.getPreEmitDiagnostics(global.program, global.src);
+    const diagnostics = ts8.getPreEmitDiagnostics(global.program, global.src);
     if (diagnostics.length > 0) {
       let errorMessage = "Errors found in the typescript code. Transpilation might produce invalid results:\n";
       diagnostics.forEach((msg) => {
@@ -6053,6 +6830,9 @@ var Transpiler = class {
         break;
       case 4 /* Java */:
         transpiledContent = this.javaTranspiler.printNode(global.src, -1);
+        break;
+      case 5 /* Rust */:
+        transpiledContent = this.rustTranspiler.printNode(global.src, -1);
         break;
     }
     let imports = [];
@@ -6145,6 +6925,12 @@ var Transpiler = class {
   transpileGo(content) {
     return this.transpile(3 /* Go */, 1 /* ByContent */, content);
   }
+  transpileRust(content) {
+    return this.transpile(5 /* Rust */, 1 /* ByContent */, content);
+  }
+  transpileRustByPath(path3) {
+    return this.transpile(5 /* Rust */, 0 /* ByPath */, path3);
+  }
   getFileImports(content) {
     this.createProgramInMemoryAndSetGlobals(content);
     return this.phpTranspiler.getFileImports(global.src);
@@ -6183,6 +6969,8 @@ var Transpiler = class {
         return 3 /* Go */;
       case "java":
         return 4 /* Java */;
+      case "rust":
+        return 5 /* Rust */;
     }
   }
 };
