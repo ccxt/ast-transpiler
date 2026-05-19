@@ -106,9 +106,9 @@ console.log(transpiled.imports) // prints unified imports statements if any
 console.log(transpiled.exports) // prints unified export statements if any
 ```
 
-## ⚡ C# Notes
+## ⚡ C#/Go/Java/Rust Notes
 ### Helpers
-C# is very different from languages like Typescript, Python or PHP since it's statically typed and much more restricted than the others mentioned. Things like falsy values, empty default objects, dynamic properties, different type comparison, untyped arguments/return type, etc do not exist so I had to create a set of wrappers that will emulate these features in C#. So in order to make your code run you need to make all the **helper** methods available [here](https://github.com/carlosmiei/ast-transpiler/blob/c%23/helpers/c%23/helpers.cs) accessible from your code (wip).
+C#/Go/Java/Rust are very different from languages like Typescript, Python or PHP since it's statically typed and much more restricted than the others mentioned. Things like falsy values, empty default objects, dynamic properties, different type comparison, untyped arguments/return type, etc do not exist so I had to create a set of wrappers that will emulate these features in C#/Go/Java/Rust. So in order to make your code run you need to make all the **helper** methods available [here](https://github.com/carlosmiei/ast-transpiler/blob/c%23/helpers/c%23/helpers.cs) accessible from your code (wip).
 
 
 ### Mandatory return type/parameter type
