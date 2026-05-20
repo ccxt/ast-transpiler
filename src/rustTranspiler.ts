@@ -293,6 +293,16 @@ export class RustTranspiler extends BaseTranspiler {
         return super.printBinaryExpression(node, identation);
     }
 
+    // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers
+    // (`pad_start` / `pad_end` take `(&Value, &Value, &Value)`).
+    printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
+        return `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
+    }
+
+    printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
+        return `pad_end(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
+    }
+
     printVariableDeclarationList(node, identation) {
         const declaration = node.declarations[0];
         const isNew = declaration.initializer && declaration.initializer.kind === SyntaxKind.NewExpression;
