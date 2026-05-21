@@ -293,6 +293,11 @@ export class RustTranspiler extends BaseTranspiler {
         return super.printBinaryExpression(node, identation);
     }
 
+    // `Date.now()` → runtime helper returning current epoch millis.
+    printDateNowCall(node, identation) {
+        return 'date_now()';
+    }
+
     // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers
     // (`pad_start` / `pad_end` take `(&Value, &Value, &Value)`).
     printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
@@ -711,16 +716,19 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.properties.length === 0) {
             return 'Value::Map({\n' + this.getIden(identation + 1) + 'let mut m = std::collections::HashMap::new();\n' + this.getIden(identation + 1) + 'm\n' + this.getIden(identation) + '})';
         }
+        const escapeKey = (s: any): string => {
+            return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+        };
         const lines = node.properties.map(p => {
             // Shorthand: { foo }  →  m.insert("foo", foo.clone());
             if (ts.isShorthandPropertyAssignment(p)) {
                 const name = p.name.escapedText;
-                return `${this.getIden(identation + 2)}m.insert("${name}".to_string(), ${name}.clone());`;
+                return `${this.getIden(identation + 2)}m.insert("${escapeKey(name)}".to_string(), ${name}.clone());`;
             }
             const { name, initializer } = p;
             const keyText = ts.isStringLiteral(name) ? name.text : name.escapedText;
             const valText = this.printNode(initializer, 0);
-            return `${this.getIden(identation + 2)}m.insert("${keyText}".to_string(), ${valText});`;
+            return `${this.getIden(identation + 2)}m.insert("${escapeKey(keyText)}".to_string(), ${valText});`;
         }).join('\n');
         return `Value::Map({\n${this.getIden(identation + 1)}let mut m = std::collections::HashMap::new();\n${lines}\n${this.getIden(identation + 1)}m\n${this.getIden(identation)}})`;
     }
