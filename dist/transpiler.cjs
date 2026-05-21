@@ -1502,7 +1502,10 @@ var BaseTranspiler = class {
       }
       return "";
     } catch (e) {
-      throw new TranspilationError(this.id, e.messageText, node.getFullText(), node.pos, node.end);
+      if (!(e instanceof TranspilationError)) {
+        console.error("[ast-transpiler] underlying error:", e && (e.stack || e.message || e));
+      }
+      throw new TranspilationError(this.id, _nullishCoalesce((e && (_nullishCoalesce(e.messageText, () => ( e.message)))), () => ( String(e))), node.getFullText(), node.pos, node.end);
     }
   }
   getFileESMImports(node) {
@@ -6204,6 +6207,12 @@ var _RustTranspiler = class extends BaseTranspiler {
       return custom;
     }
     return super.printBinaryExpression(node, identation);
+  }
+  printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
+    return `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
+  }
+  printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
+    return `pad_end(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];

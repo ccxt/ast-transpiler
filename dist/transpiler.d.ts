@@ -769,6 +769,8 @@ declare class RustTranspiler extends BaseTranspiler {
     ensureRef(expr: string): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
+    printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
+    printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
     printPropertyDeclaration(node: any, identation: any): string;
     getStructFields(node: any): Array<{
