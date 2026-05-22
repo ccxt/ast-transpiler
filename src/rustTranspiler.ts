@@ -73,6 +73,7 @@ export class RustTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     className: string;
     methodSignatures: Record<string, { requiredCount: number }>;
+    forLoopCounter: number;
 
     constructor(config = {}) {
         config['parser'] = Object.assign({}, parserConfig, config['parser'] ?? {});
@@ -85,6 +86,7 @@ export class RustTranspiler extends BaseTranspiler {
         this.id = "Rust";
         this.className = "undefined";
         this.methodSignatures = {};
+        this.forLoopCounter = 0;
 
         this.initConfig();
         this.applyUserOverrides(config);
@@ -617,14 +619,28 @@ export class RustTranspiler extends BaseTranspiler {
         const condNode = node.condition;
         const incrNode = node.incrementor;
 
+        const idn = this.getIden(identation);
+        const idn1 = this.getIden(identation + 1);
+
         const initStr = initNode ? this.printNode(initNode, identation + 1) + ';\n' : '';
         const condStr = condNode ? this.printNode(condNode, 0) : 'true';
-        const incrStr = incrNode ? this.getIden(identation + 1) + this.printNode(incrNode, 0) + ';\n' : '';
+        const incrStr = incrNode ? this.printNode(incrNode, 0) : '';
 
         const statements = node.statement.statements.map(s => this.printNode(s, identation + 1)).join('\n');
-        const body = `{\n${statements}\n${incrStr}${this.getIden(identation)}}`;
+        const body = `{\n${statements}\n${idn}}`;
 
-        return `${this.getIden(identation)}{\n${this.getIden(identation + 1)}${initStr}${this.getIden(identation + 1)}while ${condStr} ${body}\n${this.getIden(identation)}}`;
+        // A C-style `for` becomes a Rust `while`. The increment must run on
+        // every iteration *including* one ended by `continue` — a `continue`
+        // re-evaluates the loop condition, so the increment is folded into
+        // it (guarded by a first-iteration flag). Putting the increment at
+        // the end of the body instead would let `continue` skip it and spin
+        // the loop forever.
+        if (incrStr !== '') {
+            const flag = `__for_first_${this.forLoopCounter++}`;
+            const cond = `{ if !${flag} { ${incrStr}; } ${flag} = false; ${condStr} }`;
+            return `${idn}{\n${idn1}${initStr}${idn1}let mut ${flag}: bool = true;\n${idn1}while ${cond} ${body}\n${idn}}`;
+        }
+        return `${idn}{\n${idn1}${initStr}${idn1}while ${condStr} ${body}\n${idn}}`;
     }
 
     private static readonly COMPARISON_OPS = new Set([
@@ -888,7 +904,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     printThrowStatement(node, identation) {
         const expression = this.printNode(node.expression, 0);
-        return `${this.getIden(identation)}panic!("{:?}", ${expression});`;
+        // `{}` (Display) renders an ExchangeError as `[Kind] message`;
+        // `{:?}` would dump the struct fields.
+        return `${this.getIden(identation)}panic!("{}", ${expression});`;
     }
 
     printTryStatement(node, identation) {
