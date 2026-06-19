@@ -356,17 +356,17 @@ transpiler.pythonTranspiler.printOutOfOrderCallExpressionIfAny = printOutOfOrder
 ## 📚 Supported Methods & Operators
 
 Below is a detailed reference of the TypeScript constructs that the transpiler is able to convert
-(derived from `src/baseTranspiler.ts` and the language specific transpilers). The Python column/notes show the resulting conversion as an example.
+(derived from `src/baseTranspiler.ts` and the language specific transpilers).
 
-## Operators
+### Operators
 
 `!==`, `!=`, `!`, `%`, `&&`, `*`, `++`, `+=`, `+`, `--`, `-`, `/`, `<=`, `<`, `===`, `==`, `=`, `>=`, `>`, `in`, `||`
 
-## Keywords / Modifiers
+### Keywords / Modifiers
 
 `async`, `await`, `boolean`, `number`, `private`, `public`, `static`, `string`, `void`
 
-## Built-in Global Functions
+### Built-in Global Functions
 
 These global calls are recognized and converted to each target language:
 
@@ -382,7 +382,7 @@ These global calls are recognized and converted to each target language:
 - `Object.values`
 - `Promise.all`
 
-## Built-in Instance Methods (string / array / object)
+### Built-in Instance Methods (string / array / object)
 
 These instance methods are recognized and converted to each target language:
 
@@ -410,120 +410,7 @@ These instance methods are recognized and converted to each target language:
 - `trim`
 
 ## Per-language Conversions
-
-The explicit replacement maps defined in each language transpiler:
-
-### Python
-
-| TypeScript | Python |
-| --- | --- |
-| `console.log` | `print` |
-| `JSON.stringify` | `json.dumps` |
-| `JSON.parse` | `json.loads` |
-| `Math.log` | `math.log` |
-| `Math.abs` | `abs` |
-| `Math.min` | `min` |
-| `Math.max` | `max` |
-| `Math.ceil` | `math.ceil` |
-| `Math.round` | `math.round` |
-| `Math.floor` | `math.floor` |
-| `Math.pow` | `math.pow` |
-| `process.exit` | `sys.exit` |
-| `Number.MAX_SAFE_INTEGER` | `float(\'inf\')` |
-| `x.push(...)` | `x.append(...)` |
-| `x.toUpperCase(...)` | `x.upper(...)` |
-| `x.toLowerCase(...)` | `x.lower(...)` |
-| `x.parseFloat(...)` | `x.float(...)` |
-| `x.parseInt(...)` | `x.int(...)` |
-| `x.indexOf(...)` | `x.find(...)` |
-| `x.padEnd(...)` | `x.ljust(...)` |
-| `x.padStart(...)` | `x.rjust(...)` |
-| `parseInt(...)` | `int(...)` |
-| `parseFloat(...)` | `float(...)` |
-
-### PHP
-
-| TypeScript | PHP |
-| --- | --- |
-| `Number.MAX_SAFE_INTEGER` | `PHP_INT_MAX` |
-| `JSON.stringify` | `json_encode` |
-| `console.log` | `var_dump` |
-| `process.exit` | `exit` |
-| `Math.log` | `log` |
-| `Math.abs` | `abs` |
-| `Math.floor` | `(int) floor` |
-| `Math.ceil` | `(int) ceil` |
-| `Math.round` | `(int) round` |
-| `Math.pow` | `pow` |
-| `Math.min` | `min` |
-| `Math.max` | `max` |
-| `Promise.all` | `\\React\\Promise\\all` |
-| `parseFloat(...)` | `floatval(...)` |
-| `parseInt(...)` | `intval(...)` |
-
-### C#
-
-| TypeScript | C# |
-| --- | --- |
-| `JSON.parse` | `parseJson` |
-| `console.log` | `Console.WriteLine` |
-| `Number.MAX_SAFE_INTEGER` | `Int32.MaxValue` |
-| `Math.min` | `Math.Min` |
-| `Math.max` | `Math.Max` |
-| `Math.log` | `Math.Log` |
-| `Math.abs` | `Math.Abs` |
-| `Math.ceil` | `Math.Ceiling` |
-| `Math.round` | `Math.Round` |
-| `Math.floor` | `Math.Floor` |
-| `Math.pow` | `Math.Pow` |
-| `Promise.all` | `Task.WhenAll` |
-| `x.push(...)` | `x.Add(...)` |
-| `x.indexOf(...)` | `x.IndexOf(...)` |
-| `x.toUpperCase(...)` | `x.ToUpper(...)` |
-| `x.toLowerCase(...)` | `x.ToLower(...)` |
-| `x.toString(...)` | `x.ToString(...)` |
-| `parseInt(...)` | `parseINt(...)` |
-| `parseFloat(...)` | `float.Parse(...)` |
-
-### Go
-
-| TypeScript | Go |
-| --- | --- |
-| `JSON.parse` | `parseJson` |
-| `console.log` | `fmt.Println` |
-| `Number.MAX_SAFE_INTEGER` | `Int32.MaxValue` |
-| `Math.min` | `Math.Min` |
-| `Math.max` | `Math.Max` |
-| `Math.log` | `Math.Log` |
-| `Math.abs` | `Math.Abs` |
-| `Math.ceil` | `Math.Ceiling` |
-| `Math.round` | `Math.Round` |
-| `Math.floor` | `Math.Floor` |
-| `Math.pow` | `Math.Pow` |
-| `Promise.all` | `Task.WhenAll` |
-| `x.push(...)` | `x.Add(...)` |
-| `x.indexOf(...)` | `x.IndexOf(...)` |
-| `x.toUpperCase(...)` | `x.ToUpper(...)` |
-| `x.toLowerCase(...)` | `x.ToLower(...)` |
-| `x.toString(...)` | `x.ToString(...)` |
-| `parseInt(...)` | `parseINt(...)` |
-| `parseFloat(...)` | `float.Parse(...)` |
-
-### Java
-
-| TypeScript | Java |
-| --- | --- |
-| `JSON.parse` | `parseJson` |
-| `console.log` | `System.out.println` |
-| `Number.MAX_SAFE_INTEGER` | `Long.MAX_VALUE` |
-| `Math.min` | `Math.min` |
-| `Math.max` | `Math.max` |
-| `Math.log` | `Math.log` |
-| `Math.abs` | `Math.abs` |
-| `Math.floor` | `Math.floor` |
-| `Math.pow` | `Math.pow` |
-| `parseInt(...)` | `Helpers.parseInt(...)` |
-| `parseFloat(...)` | `Helpers.parseFloat(...)` |
+Conversions of global calls and string/array methods are also detailed. Explicit replacements are documented in [language-conversions.md](./language-conversions.md).
 
 > ⚠️ Many of these conversions rely on type information. Make sure to annotate
 > types (especially function arguments) so the transpiler can disambiguate
