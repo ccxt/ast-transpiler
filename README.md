@@ -155,129 +155,6 @@ Warning: Under active development so can change at any time!
 
 We will try to add more features/conversions in the future but this process is also customizable, check the Overrides section.
 
-## 📚 Supported Methods & Operators
-
-Below is a detailed reference of the TypeScript constructs that the transpiler is able to convert (derived from `baseTranspiler.ts` and the language specific transpilers such as `pythonTranspiler.ts`). The Python column shows the resulting conversion as an example.
-
-### Language Constructs / Statements
-These TypeScript AST nodes are handled by `printNode`:
-
-| Construct | Notes |
-| --- | --- |
-| Variable declarations | `const`/`let`/`var` declaration lists |
-| Function declarations | function declarations, function expressions and arrow functions |
-| Class declarations | including `extends` (single level heritage) |
-| Method declarations | including access modifiers (`public`/`private`/`static`) |
-| Constructor declarations | mapped to the target constructor (e.g. `__init__` + `super().__init__`) |
-| Property declarations | class properties with/without initializer |
-| `if` / `else if` / `else` | conditional statements |
-| `for` loops | C-style `for` loop (Python converts to `range`) |
-| `while` loops | |
-| `break` / `continue` | loop control statements |
-| `return` statements | |
-| `throw` statements | mapped to `raise` in Python |
-| `try` / `catch` | mapped to `try` / `except` |
-| `new` expressions | object instantiation |
-| `await` expressions | async support (configurable) |
-| Conditional (ternary) expressions | `cond ? a : b` |
-| `as` expressions | type cast (stripped where not needed) |
-| `delete` expressions | mapped to `del` in Python |
-| `instanceof` expressions | mapped to `isinstance(...)` in Python |
-| `typeof` expressions | mapped to `isinstance(...)` checks (Python) |
-| Object literal expressions | object/dictionary literals |
-| Array literal expressions | |
-| Property assignments | inside object literals |
-| Property access expressions | `a.b` (with replacements) |
-| Element access expressions | `a["b"]` / `a[0]` |
-| Array binding patterns | array destructuring `[a, b] = ...` |
-| Spread elements | `...args` |
-| Parenthesized expressions | |
-| Identifiers | with optional snake_casing |
-| String / numeric / boolean literals | |
-| `this` / `super` keywords | |
-| `null` / `undefined` keywords | mapped to `None` in Python |
-| Comments | leading & trailing (some AST-detached comments are lost) |
-| Import / Export statements | parsed and returned separately (ESM & CJS) |
-
-### Operators
-
-| Category | Operators |
-| --- | --- |
-| Arithmetic | `+` `-` `*` `/` `%` |
-| Increment / Decrement | `++` `--` (Python: `+= 1` / `-= 1`) |
-| Comparison | `<` `<=` `>` `>=` `==` `===` `!=` `!==` |
-| Logical | `&&` (Python `and`), `||` (Python `or`), `!` (Python `not`) |
-| Assignment | `=` `+=` |
-| Membership | `in` |
-| Type | `instanceof`, `typeof` |
-| Unary prefix | `!` `-` |
-
-> Note: in languages that don't support falsy/truthy values (e.g. C#), comparisons and conditions are automatically wrapped with helper functions.
-
-### Built-in Function Calls
-The following global/built-in calls are recognized and converted (Python examples shown):
-
-| TypeScript | Python |
-| --- | --- |
-| `console.log(x)` | `print(x)` |
-| `JSON.parse(x)` | `json.loads(x)` |
-| `JSON.stringify(x)` | `json.dumps(x)` |
-| `Array.isArray(x)` | `isinstance(x, list)` |
-| `Object.keys(x)` | `list(x.keys())` |
-| `Object.values(x)` | `list(x.values())` |
-| `Promise.all(x)` | `asyncio.gather(*x)` |
-| `Math.floor(x)` | `int(math.floor(x))` |
-| `Math.ceil(x)` | `int(math.ceil(x))` |
-| `Math.round(x)` | `int(round(x))` |
-| `Math.min` / `Math.max` | `min` / `max` |
-| `Math.abs` / `Math.log` / `Math.pow` | `abs` / `math.log` / `math.pow` |
-| `Number.isInteger(x)` | `isinstance(x, int)` |
-| `Number.MAX_SAFE_INTEGER` | `float('inf')` |
-| `parseInt(x)` | `int(x)` |
-| `parseFloat(x)` | `float(x)` |
-| `Date.now()` | `int(time.time() * 1000)` |
-| `assert(x)` | `assert x` |
-| `process.exit()` | `sys.exit()` |
-
-### String Methods
-
-| TypeScript | Python |
-| --- | --- |
-| `s.length` | `len(s)` |
-| `s.toString()` | `str(s)` |
-| `s.toUpperCase()` | `s.upper()` |
-| `s.toLowerCase()` | `s.lower()` |
-| `s.trim()` | `s.strip()` |
-| `s.indexOf(x)` | `s.find(x)` |
-| `s.search(x)` | `s.find(x)` |
-| `s.includes(x)` | `x in s` |
-| `s.startsWith(x)` | `s.startswith(x)` |
-| `s.endsWith(x)` | `s.endswith(x)` |
-| `s.split(x)` | `s.split(x)` |
-| `s.replace(a, b)` | `s.replace(a, b)` |
-| `s.replaceAll(a, b)` | `s.replace(a, b)` |
-| `s.padStart(n, c)` | `s.rjust(n, c)` |
-| `s.padEnd(n, c)` | `s.ljust(n, c)` |
-| `s.slice(a, b)` | slicing |
-| `s.toFixed(n)` | number formatting |
-| `s.concat(x)` | `s + x` |
-
-### Array Methods
-
-| TypeScript | Python |
-| --- | --- |
-| `a.length` | `len(a)` |
-| `a.push(x)` | `a.append(x)` |
-| `a.pop()` | `a.pop()` |
-| `a.shift()` | `a.pop(0)` |
-| `a.reverse()` | `a.reverse()` |
-| `a.includes(x)` | `x in a` |
-| `a.indexOf(x)` | `a.find(x)` |
-| `a.join(x)` | `x.join(a)` |
-| `a.slice(i, j)` | slicing |
-
-> The exact output depends on the target language. The Python column is provided as an illustrative example; PHP and C# have their own equivalent conversions defined in their respective transpilers.
-
 ## 🔧 Options
 
 As mentioned above, this library allows for some customization through the offered options and available overrides.
@@ -467,6 +344,193 @@ function printOutOfOrderCallExpressionIfAny(node, identation) {
 
 transpiler.pythonTranspiler.printOutOfOrderCallExpressionIfAny = printOutOfOrderCallExpressionIfAny;
 ```
+
+
+<!-- START_SUPPORTED_LIST -->
+<!--
+  AUTO-GENERATED SECTION - DO NOT EDIT MANUALLY.
+  Generated by `src/generate-supported-md.ts` (runs in CI on every push).
+  To update, modify the transpiler source and re-run the generator.
+-->
+
+## 📚 Supported Methods & Operators
+
+Below is a detailed reference of the TypeScript constructs that the transpiler is able to convert
+(derived from `src/baseTranspiler.ts` and the language specific transpilers). The Python column/notes show the resulting conversion as an example.
+
+## Operators
+
+`!==`, `!=`, `!`, `%`, `&&`, `*`, `++`, `+=`, `+`, `--`, `-`, `/`, `<=`, `<`, `===`, `==`, `=`, `>=`, `>`, `in`, `||`
+
+## Keywords / Modifiers
+
+`async`, `await`, `boolean`, `number`, `private`, `public`, `static`, `string`, `void`
+
+## Built-in Global Functions
+
+These global calls are recognized and converted to each target language:
+
+- `Array.isArray`
+- `Date.now`
+- `JSON.parse`
+- `JSON.stringify`
+- `Math.ceil`
+- `Math.floor`
+- `Math.round`
+- `Number.isInteger`
+- `Object.keys`
+- `Object.values`
+- `Promise.all`
+
+## Built-in Instance Methods (string / array / object)
+
+These instance methods are recognized and converted to each target language:
+
+- `concat`
+- `endsWith`
+- `includes`
+- `indexOf`
+- `join`
+- `padEnd`
+- `padStart`
+- `pop`
+- `push`
+- `replace`
+- `replaceAll`
+- `reverse`
+- `search`
+- `shift`
+- `slice`
+- `split`
+- `startsWith`
+- `toFixed`
+- `toLowerCase`
+- `toString`
+- `toUpperCase`
+- `trim`
+
+## Per-language Conversions
+
+The explicit replacement maps defined in each language transpiler:
+
+### Python
+
+| TypeScript | Python |
+| --- | --- |
+| `console.log` | `print` |
+| `JSON.stringify` | `json.dumps` |
+| `JSON.parse` | `json.loads` |
+| `Math.log` | `math.log` |
+| `Math.abs` | `abs` |
+| `Math.min` | `min` |
+| `Math.max` | `max` |
+| `Math.ceil` | `math.ceil` |
+| `Math.round` | `math.round` |
+| `Math.floor` | `math.floor` |
+| `Math.pow` | `math.pow` |
+| `process.exit` | `sys.exit` |
+| `Number.MAX_SAFE_INTEGER` | `float(\'inf\')` |
+| `x.push(...)` | `x.append(...)` |
+| `x.toUpperCase(...)` | `x.upper(...)` |
+| `x.toLowerCase(...)` | `x.lower(...)` |
+| `x.parseFloat(...)` | `x.float(...)` |
+| `x.parseInt(...)` | `x.int(...)` |
+| `x.indexOf(...)` | `x.find(...)` |
+| `x.padEnd(...)` | `x.ljust(...)` |
+| `x.padStart(...)` | `x.rjust(...)` |
+| `parseInt(...)` | `int(...)` |
+| `parseFloat(...)` | `float(...)` |
+
+### PHP
+
+| TypeScript | PHP |
+| --- | --- |
+| `Number.MAX_SAFE_INTEGER` | `PHP_INT_MAX` |
+| `JSON.stringify` | `json_encode` |
+| `console.log` | `var_dump` |
+| `process.exit` | `exit` |
+| `Math.log` | `log` |
+| `Math.abs` | `abs` |
+| `Math.floor` | `(int) floor` |
+| `Math.ceil` | `(int) ceil` |
+| `Math.round` | `(int) round` |
+| `Math.pow` | `pow` |
+| `Math.min` | `min` |
+| `Math.max` | `max` |
+| `Promise.all` | `\\React\\Promise\\all` |
+| `parseFloat(...)` | `floatval(...)` |
+| `parseInt(...)` | `intval(...)` |
+
+### C#
+
+| TypeScript | C# |
+| --- | --- |
+| `JSON.parse` | `parseJson` |
+| `console.log` | `Console.WriteLine` |
+| `Number.MAX_SAFE_INTEGER` | `Int32.MaxValue` |
+| `Math.min` | `Math.Min` |
+| `Math.max` | `Math.Max` |
+| `Math.log` | `Math.Log` |
+| `Math.abs` | `Math.Abs` |
+| `Math.ceil` | `Math.Ceiling` |
+| `Math.round` | `Math.Round` |
+| `Math.floor` | `Math.Floor` |
+| `Math.pow` | `Math.Pow` |
+| `Promise.all` | `Task.WhenAll` |
+| `x.push(...)` | `x.Add(...)` |
+| `x.indexOf(...)` | `x.IndexOf(...)` |
+| `x.toUpperCase(...)` | `x.ToUpper(...)` |
+| `x.toLowerCase(...)` | `x.ToLower(...)` |
+| `x.toString(...)` | `x.ToString(...)` |
+| `parseInt(...)` | `parseINt(...)` |
+| `parseFloat(...)` | `float.Parse(...)` |
+
+### Go
+
+| TypeScript | Go |
+| --- | --- |
+| `JSON.parse` | `parseJson` |
+| `console.log` | `fmt.Println` |
+| `Number.MAX_SAFE_INTEGER` | `Int32.MaxValue` |
+| `Math.min` | `Math.Min` |
+| `Math.max` | `Math.Max` |
+| `Math.log` | `Math.Log` |
+| `Math.abs` | `Math.Abs` |
+| `Math.ceil` | `Math.Ceiling` |
+| `Math.round` | `Math.Round` |
+| `Math.floor` | `Math.Floor` |
+| `Math.pow` | `Math.Pow` |
+| `Promise.all` | `Task.WhenAll` |
+| `x.push(...)` | `x.Add(...)` |
+| `x.indexOf(...)` | `x.IndexOf(...)` |
+| `x.toUpperCase(...)` | `x.ToUpper(...)` |
+| `x.toLowerCase(...)` | `x.ToLower(...)` |
+| `x.toString(...)` | `x.ToString(...)` |
+| `parseInt(...)` | `parseINt(...)` |
+| `parseFloat(...)` | `float.Parse(...)` |
+
+### Java
+
+| TypeScript | Java |
+| --- | --- |
+| `JSON.parse` | `parseJson` |
+| `console.log` | `System.out.println` |
+| `Number.MAX_SAFE_INTEGER` | `Long.MAX_VALUE` |
+| `Math.min` | `Math.min` |
+| `Math.max` | `Math.max` |
+| `Math.log` | `Math.log` |
+| `Math.abs` | `Math.abs` |
+| `Math.floor` | `Math.floor` |
+| `Math.pow` | `Math.pow` |
+| `parseInt(...)` | `Helpers.parseInt(...)` |
+| `parseFloat(...)` | `Helpers.parseFloat(...)` |
+
+> ⚠️ Many of these conversions rely on type information. Make sure to annotate
+> types (especially function arguments) so the transpiler can disambiguate
+> (e.g. `.length` → `len`/`count`, `+` → string concat vs numeric addition).
+
+<!-- END_SUPPORTED_LIST -->
+
 
 ## Contributing
 
