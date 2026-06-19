@@ -303,6 +303,18 @@ export class PhpTranspiler extends BaseTranspiler {
         return `unset(${expression})`;
     }
 
+    printNewExpression(node, identation) {
+        let expression = node.expression?.escapedText;
+        expression = expression ? expression : this.printNode(node.expression);
+        // JS's built-in `Error` maps to PHP's `Exception` (PHP's `Error` is reserved for internal engine errors)
+        if (expression === 'Error') {
+            expression = 'Exception';
+        }
+        const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
+        const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
+        return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+    }
+
     getExceptionalAccessTokenIfAny(node) {
         const leftSide = node.expression.escapedText ?? node.expression.getFullText().trim();
 

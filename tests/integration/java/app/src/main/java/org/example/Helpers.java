@@ -7,11 +7,14 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class Helpers {
@@ -517,7 +520,7 @@ public class Helpers {
         }
     }
 
-    public boolean inOp(Object obj, Object key) { return InOp(obj, key); }
+    public static boolean inOp(Object obj, Object key) { return InOp(obj, key); }
 
     public static boolean InOp(Object obj, Object key) {
         if (obj == null || key == null) return false;
@@ -681,6 +684,25 @@ public class Helpers {
         return v[index];
     }
 
+    public static boolean isArray(Object value) {
+        if (value == null) return false;
+        return (value instanceof List) || value.getClass().isArray();
+    }
+
+    public static List<Object> objectKeys(Object target) {
+        if (target instanceof Map<?, ?> m) {
+            return new ArrayList<>(m.keySet());
+        }
+        return new ArrayList<>();
+    }
+
+    public static List<Object> objectValues(Object target) {
+        if (target instanceof Map<?, ?> m) {
+            return new ArrayList<>(m.values());
+        }
+        return new ArrayList<>();
+    }
+
 
     @SuppressWarnings("unchecked")
     public static void addElementToObject(Object target, Object... args) {
@@ -742,5 +764,16 @@ public class Helpers {
         }
 
         return null;
+    }
+
+    public static Object split(Object str, Object splitter) {
+        if (str == null || splitter == null) {
+            return Collections.emptyList();
+        }
+
+        String s = String.valueOf(str);
+        String delim = String.valueOf(splitter);
+
+        return Arrays.asList(s.split(Pattern.quote(delim)));
     }
 }

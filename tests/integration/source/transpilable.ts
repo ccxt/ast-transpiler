@@ -10,6 +10,14 @@ class Second {
 
 class Test {
 
+    public boolToString(x: boolean) {
+        if (x) {
+            return "true";
+        } else {
+            return "false";
+        }
+    }
+
     public functionWithOptionals(a: string, c: number | undefined = undefined, d = 1) {
         console.log(a);
         if (c !== undefined) {
@@ -113,6 +121,77 @@ class Test {
         console.log(dict3["key"]) // should print "value"
 
         this.testJavaScope();
+
+        const [first1, second1] = this.handleOptionAndParamsTest();
+        console.log(first1); // should print 1
+        console.log(second1); // should print "a"
+
+        let first2 = undefined;
+        let second2 = undefined;
+        [first2, second2] = this.handleOptionAndParamsTest();
+        console.log(first2); // should print 1
+        console.log(second2); // should print "a"
+
+        this.funcWithParams([1,2,3], {"a": "value of a"});
+
+        this.testStringMethods();
+
+        let threwError = false;
+        try {
+            this.functionThatThrows();
+        } catch (e) {
+            threwError = true;
+        }
+        console.log(this.boolToString(threwError)); // should print true
+    }
+
+    public handleOptionAndParamsTest(){
+        return [1, 'a'];
+    }
+
+    public funcWithParams (a = undefined, params = {}) {
+        if (Array.isArray(a)) {
+            console.log(a.length);
+        }
+        if ("a" in params) {
+            console.log(params["a"]);
+        }
+    }
+
+    public testStringMethods() {
+
+        const str = "hello world";
+        // isEqual test
+        if (str === "hello world") {
+            console.log("str is hello world"); // should print "str is hello world"
+        }
+        console.log(str.toUpperCase());
+        const startsWithHello = str.startsWith("hello");
+        console.log(this.boolToString(startsWithHello)); // should print true
+        const endsWithWorld = str.endsWith("world");
+        console.log(this.boolToString(endsWithWorld)); // should print true
+
+        const stringParts = str.split(" ");
+        console.log(stringParts.length); // should print 2
+        console.log(stringParts[0]); // should print "hello"
+        console.log(stringParts[1]); // should print "world"
+
+        const indexOfResult = str.indexOf("o");
+        console.log(indexOfResult); // should print 4
+
+        const strReplaced = str.replaceAll("l", "x");
+        console.log(strReplaced); // should print "hexxo worxd"
+
+        // concatenation test
+        const a = "a";
+        const b = "b";
+        const c = a + b;
+        console.log(c); // should print "ab"
+
+    }
+
+    public functionThatThrows() {
+        throw new Error("This is an error");
     }
 }
 

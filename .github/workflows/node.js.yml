@@ -2,19 +2,18 @@ name: Build
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
     paths-ignore:
-      - '**/README.md'
-      - '**.cs'
-      - 'examples/'
-      - '.npmignore'
-      - '.gitignore'
+      - "**/README.md"
+      - "**.cs"
+      - "examples/"
+      - ".npmignore"
+      - ".gitignore"
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     strategy:
@@ -27,6 +26,9 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node-version }}
+      - uses: taiki-e/cache-cargo-install-action@v3
+        with:
+          tool: cargo-hack
       - name: Install
         run: npm ci
       - name: Build

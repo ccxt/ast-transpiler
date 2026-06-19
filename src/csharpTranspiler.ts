@@ -1024,6 +1024,18 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `((IDictionary<string,object>)${object}).Remove((string)${key})`;
     }
 
+    printNewExpression(node, identation) {
+        let expression = node.expression?.escapedText;
+        expression = expression ? expression : this.printNode(node.expression);
+        // JS's built-in `Error` maps to C#'s `Exception` (C# has no `Error` type in the BCL)
+        if (expression === 'Error') {
+            expression = 'Exception';
+        }
+        const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
+        const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
+        return newToken + expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
+    }
+
     printThrowStatement(node, identation) {
         // const expression = this.printNode(node.expression, 0);
         // return this.getIden(node) + this.THROW_TOKEN + " " + expression + this.LINE_TERMINATOR;
@@ -1040,17 +1052,19 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (expression.expression.kind === ts.SyntaxKind.Identifier) {
                 // handle throw new X
                 const id = expression.expression;
+                // JS's built-in `Error` maps to C#'s `Exception` (C# has no `Error` type in the BCL)
+                const idName = id.escapedText === 'Error' ? 'Exception' : id.escapedText;
                 const symbol = global.checker.getSymbolAtLocation(expression.expression);
                 if (symbol) {
                     const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
                     const isClassDeclaration = declarations.find(l => l.kind === ts.SyntaxKind.InterfaceDeclaration ||  l.kind === ts.SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
-                        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
+                        return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${idName} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
                     } else {
-                        return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg});return null;`;
+                        return this.getIden(identation) + `throwDynamicException(${idName}, ${parsedArg});return null;`;
                     }
                 }
-                return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${newExpression} (${parsedArg}) ${this.LINE_TERMINATOR}`;
+                return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${idName === id.escapedText ? newExpression : idName} (${parsedArg}) ${this.LINE_TERMINATOR}`;
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
                 return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
             }

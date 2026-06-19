@@ -10,6 +10,7 @@ const PHP_TRANSPILABLE_FILE = "./tests/integration/php/transpilable.php";
 const CS_TRANSPILABLE_FILE = "./tests/integration/cs/transpilable.cs";
 const GO_TRANSPILABLE_FILE = "./tests/integration/go/transpilable.go";
 const JAVA_TRANSPILABLE_FILE = "./tests/integration/java/app/src/main/java/org/example/Transpilable.java";
+const RUST_TRANSPILABLE_FILE = "./tests/integration/rust/src/transpilable.rs";
 
 
 const TS_FILE = "./tests/integration/source/init.ts";
@@ -18,6 +19,7 @@ const PHP_FILE = "./tests/integration/php/init.php";
 const CS_FILE = "./tests/integration/cs";
 const GO_FILE = "./tests/integration/go";
 const JAVA_FILE = "./tests/integration/java/"
+const RUST_FILE = "./tests/integration/rust";
 
 
 const langConfig = [
@@ -39,6 +41,9 @@ const langConfig = [
     },
     {
         language: "java",
+    },
+    {
+        language: "rust",
     },
 ]
 
@@ -76,8 +81,17 @@ function transpileTests() {
     writeFileSync(PHP_TRANSPILABLE_FILE, phpRes.toString());
     writeFileSync(PY_TRANSPILABLE_FILE, pythonAsync);
     writeFileSync(CS_TRANSPILABLE_FILE, csharp);
+    const rustPreamble = [
+        '#![allow(non_snake_case, dead_code, unused_variables, unused_mut)]',
+        'use crate::helpers::*;',
+        'use std::collections::HashMap;',
+        '',
+    ].join('\n');
+    const rust = rustPreamble + result[5].content;
+
     writeFileSync(GO_TRANSPILABLE_FILE, go);
     writeFileSync(JAVA_TRANSPILABLE_FILE, java);
+    writeFileSync(RUST_TRANSPILABLE_FILE, rust);
 }
 
 function runCommand(command) {
@@ -161,6 +175,13 @@ async function runGO() {
     return result;
 }
 
+async function runRust() {
+    const command = `cargo run --manifest-path ${RUST_FILE}/Cargo.toml -q 2>/dev/null`;
+    const result = await runCommand(command);
+    console.log(blue("Executed RUST"))
+    return result;
+}
+
 async function runJava() {
     try {
         // ./tests/integration/java/gradlew -p ./tests/integration/java/ run
@@ -187,9 +208,10 @@ async function main() {
         runCS(),
         runGO(),
         runJava(),
+        runRust(),
     ];
     const results = await Promise.all(promises);
-    const [ts, php, py, cs, go, java]: any = results;
+    const [ts, php, py, cs, go, java, rust]: any = results;
 
     let success = true;
     if (php !== ts) {
@@ -213,6 +235,11 @@ async function main() {
     if (java !== ts) {
         success = false;
         compareOutputs("JAVA", ts, java);
+    }
+
+    if (rust !== ts) {
+        success = false;
+        compareOutputs("RUST", ts, rust);
     }
 
     if (success) {

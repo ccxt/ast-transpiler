@@ -1884,7 +1884,10 @@ class BaseTranspiler {
             return "";
 
         } catch (e) {
-            throw new TranspilationError(this.id, e.messageText, node.getFullText(), node.pos, node.end);
+            if (!(e instanceof TranspilationError)) {
+                console.error('[ast-transpiler] underlying error:', e && (e.stack || e.message || e));
+            }
+            throw new TranspilationError(this.id, (e && (e.messageText ?? e.message)) ?? String(e), node.getFullText(), node.pos, node.end);
         }
     }
 
