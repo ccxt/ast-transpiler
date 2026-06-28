@@ -1875,6 +1875,12 @@ class BaseTranspiler {
             }
 
             if (node.statements) {
+                if (ts.isSourceFile(node)) {
+                    // reset the current class name when entering a new file so a
+                    // class name from a previously transpiled file does not leak
+                    // into a class-less file (e.g. try/catch wrappers in tests)
+                    this.className = "undefined";
+                }
                 const transformedStatements = node.statements.map((m)=> {
                     return this.printNode(m, identation + 1);
                 });
