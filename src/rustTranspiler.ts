@@ -71,7 +71,6 @@ const parserConfig = {
 export class RustTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
-    className: string;
     methodSignatures: Record<string, { requiredCount: number }>;
     forLoopCounter: number;
 
