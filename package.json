@@ -29,6 +29,7 @@
     "testv": "jest --verbose --coverage",
     "integration": "tsx tests/integration/test.ts",
     "lint": "eslint src/ --ext .ts",
+    "generate-supported": "node src/generate-supported-md.ts",
     "publishPackage": "npm run build && sh publish.sh && git push && git push --tags && npm publish"
   },
   "devDependencies": {
