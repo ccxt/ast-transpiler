@@ -186,6 +186,7 @@ class BaseTranspiler {
     defaultPropertyAccess = 'public';
 
     currentClassName = "";
+    className = "undefined";
 
     uncamelcaseIdentifiers;
     asyncTranspiling;
