@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import fs from 'fs';
 import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
@@ -9,6 +10,7 @@ import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile
 import { GoTranspiler } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler } from './rustTranspiler.js';
+import { ISourcePreprocessingConfig, preprocessSource, stripOverloadSignatures, reAsyncPromiseDelegators } from './sourcePreprocess.js';
 
 const __dirname_mock = currentPath;
 
@@ -53,8 +55,10 @@ export default class Transpiler {
     goTranspiler: GoTranspiler;
     javaTranspiler: JavaTranspiler;
     rustTranspiler: RustTranspiler;
+    sourcePreprocessing: ISourcePreprocessingConfig;
     constructor(config = {}) {
         this.config = config;
+        this.sourcePreprocessing = config["sourcePreprocessing"] || {};
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
@@ -79,15 +83,29 @@ export default class Transpiler {
     }
 
     createProgramInMemoryAndSetGlobals(content) {
-        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content);
+        const preprocessed = preprocessSource(content, this.sourcePreprocessing);
+        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, preprocessed);
         global.src = memSource;
         global.checker = memType as ts.TypeChecker;
         global.program = memProgram;
     }
 
-    createProgramByPathAndSetGlobals(path) {
-        const program = ts.createProgram([path], {});
-        const sourceFile = program.getSourceFile(path);
+    createProgramByPathAndSetGlobals(filePath) {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const preprocessed = preprocessSource(content, this.sourcePreprocessing);
+        if (preprocessed !== content) {
+            // preprocessing changed the source, so the file on disk can no longer be
+            // used directly; build the program from memory instead, rooted in the
+            // file's own directory so that relative imports keep resolving
+            const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(path.dirname(filePath), preprocessed);
+            global.src = memSource;
+            global.checker = memType as ts.TypeChecker;
+            global.program = memProgram;
+            return;
+        }
+
+        const program = ts.createProgram([filePath], {});
+        const sourceFile = program.getSourceFile(filePath);
         const typeChecker = program.getTypeChecker();
 
         global.src = sourceFile;
@@ -321,5 +339,9 @@ export default class Transpiler {
 }
 
 export {
-    Transpiler
+    Transpiler,
+    stripOverloadSignatures,
+    reAsyncPromiseDelegators,
+    preprocessSource,
 };
+export type { ISourcePreprocessingConfig };
