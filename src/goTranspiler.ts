@@ -70,7 +70,6 @@ export class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
-    className: string;
     classNameMap: { [key: string]: string };
     DEFAULT_RETURN_TYPE = 'any';
 
