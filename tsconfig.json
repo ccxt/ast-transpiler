@@ -1,6 +1,5 @@
 {
     "compilerOptions": {
-        "baseUrl": "./src",
         "module": "Node16",
         "outDir": "./dist",
         "allowJs": true,
@@ -11,7 +10,13 @@
         "declarationMap": true,
         "sourceMap": true,
         "rootDir": "./src",
-        "skipLibCheck": true
+        "skipLibCheck": true,
+        "strict": false,
+        "types": [
+            "node",
+            "jest"
+        ],
+        "ignoreDeprecations": "6.0"
     },
     "include": [
         "./src/**/*"
