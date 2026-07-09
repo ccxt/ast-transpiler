@@ -190,6 +190,7 @@ class BaseTranspiler {
 
     uncamelcaseIdentifiers;
     asyncTranspiling;
+    implicitAsyncTranspiling;
     requiresReturnType;
     requiresParameterType;
     supportsFalsyOrTruthyValues;
@@ -310,14 +311,28 @@ class BaseTranspiler {
         Logger.warning(`[${this.id}] Line: ${line} char: ${character}: ${target} : ${message}`);
     }
 
-    isAsyncFunction(node) {
-        let modifiers = node.modifiers;
-        if (modifiers === undefined) {
+    hasAsyncModifier(node) {
+        return (node.modifiers ?? []).some(mod => mod.kind === ts.SyntaxKind.AsyncKeyword);
+    }
+
+    isPromiseType(type) {
+        return type !== undefined && this.getTypeFromRawType(type) === this.PROMISE_TYPE_KEYWORD;
+    }
+
+    isImplicitAsyncFunction(node) {
+        // a function declared WITHOUT the `async` keyword that returns a Promise
+        // directly, ie: `watchTicker (symbol: string): Promise<Ticker> { return this.watch (...); }`
+        // (a common fast-path in JS for pure delegator/pass-through methods);
+        // target languages without that distinction transpile it as if it were `async`
+        if (!this.implicitAsyncTranspiling || !ts.isFunctionLike(node) || this.hasAsyncModifier(node)) {
             return false;
         }
-        modifiers = modifiers.filter(mod => mod.kind === ts.SyntaxKind.AsyncKeyword);
+        const signature = global.checker.getSignatureFromDeclaration(node);
+        return signature !== undefined && this.isPromiseType(global.checker.getReturnTypeOfSignature(signature));
+    }
 
-        return modifiers.length > 0;
+    isAsyncFunction(node) {
+        return this.hasAsyncModifier(node) || this.isImplicitAsyncFunction(node);
     }
 
     getMethodOverride(node: ts.Node): ts.Node {
@@ -607,16 +622,19 @@ class BaseTranspiler {
     }
 
     printModifiers(node) {
-        let modifiers = node.modifiers;
-        if (modifiers === undefined) {
-            return "";
-        }
+        let modifiers = node.modifiers ?? [];
         modifiers = modifiers.filter(mod => this.FuncModifiers[mod.kind]);
 
         if (!this.asyncTranspiling) {
             modifiers = modifiers.filter(mod => mod.kind !== ts.SyntaxKind.AsyncKeyword);
         }
-        const res = modifiers.map(modifier => this.FuncModifiers[modifier.kind]).join(" ");
+        let res = modifiers.map(modifier => this.FuncModifiers[modifier.kind]).join(" ");
+
+        if (this.asyncTranspiling && this.ASYNC_TOKEN && this.isImplicitAsyncFunction(node)) {
+            // non-async functions returning a Promise directly are transpiled
+            // as if they had been declared `async`
+            res = res ? res + " " + this.ASYNC_TOKEN : this.ASYNC_TOKEN;
+        }
 
         return res;
     }
@@ -1663,6 +1681,35 @@ class BaseTranspiler {
         return awaitToken + expression;
     }
 
+    wrapSyntheticNode(synthetic, original) {
+        // give the synthetic wrapper the original node's source range and splice it
+        // into the parent chain, so position/type based helpers keep working
+        synthetic.pos = original.pos;
+        synthetic.end = original.end;
+        synthetic.parent = original.parent;
+        original.parent = synthetic;
+        return synthetic;
+    }
+
+    wrapImplicitReturnAwait(node) {
+        // inside a non-async function transpiled as async (isImplicitAsyncFunction),
+        // returned Promises must be awaited to keep the generated code equivalent to
+        // the classic `async`/`return await` form: wrap them in a synthetic await
+        // expression so every language prints them through its usual await path
+        let exp = node.expression;
+        if (!exp || ts.isAwaitExpression(exp)
+                || !this.isImplicitAsyncFunction(ts.findAncestor(node, ts.isFunctionLike))
+                || !this.isPromiseType(global.checker.getTypeAtLocation(exp))) {
+            return node;
+        }
+        if (ts.isConditionalExpression(exp) || ts.isBinaryExpression(exp)) {
+            // an await-token prefix would change precedence (e.g. `await a ? b : c`)
+            exp = this.wrapSyntheticNode(ts.factory.createParenthesizedExpression(exp), exp);
+        }
+        node.expression = this.wrapSyntheticNode(ts.factory.createAwaitExpression(exp), exp);
+        return node;
+    }
+
     printConditionalExpression(node, identation) {
         const condition = this.printCondition(node.condition, identation);
         const whenTrue = this.printNode(node.whenTrue, 0);
@@ -1856,7 +1903,7 @@ class BaseTranspiler {
             } else if (ts.isAsExpression(node)) {
                 return this.printAsExpression(node, identation);
             } else if (ts.isReturnStatement(node)) {
-                return this.printReturnStatement(node, identation);
+                return this.printReturnStatement(this.wrapImplicitReturnAwait(node), identation);
             } else if (ts.isArrayBindingPattern(node)) {
                 return this.printArrayBindingPattern(node, identation);
             } else if (ts.isParameter(node)) {
