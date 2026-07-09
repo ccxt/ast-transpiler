@@ -17,7 +17,7 @@ function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, opti
     const inMemoryFilePath = path.resolve(path.join(rootDir, "__dummy-file.ts"));
     const textAst = ts.createSourceFile(inMemoryFilePath, text, options.target || ts.ScriptTarget.Latest);
     const host = ts.createCompilerHost(options, true);
-    function overrideIfInMemoryFile(methodName: keyof ts.CompilerHost, inMemoryValue: any) {
+    function overrideIfInMemoryFile(methodName: 'getSourceFile' | 'readFile' | 'fileExists', inMemoryValue: any) {
         const originalMethod = host[methodName] as Function; // eslint-disable-line
         host[methodName] = (...args: unknown[]) => {
             // resolve the path because typescript will normalize it
