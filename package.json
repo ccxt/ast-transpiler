@@ -20,7 +20,7 @@
   },
   "readme": "README.md",
   "scripts": {
-    "build": "npm run lint &&  tsup src/transpiler.ts --format cjs,esm --dts --clean --splitting --shims --sourcemap",
+    "build": "npm run lint && tsup",
     "build2": "npm run lint && tsc",
     "start": "tsx manual.ts",
     "start-py": "tsx src/pythonTranspiler.ts",
