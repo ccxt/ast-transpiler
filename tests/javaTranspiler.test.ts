@@ -2196,4 +2196,36 @@ describe('java transpiling tests', () => {
         expect((output.match(/final Object finalI\b/g) || []).length).toBe(2);
         expect((output.match(/final Object finalType/g) || []).length).toBe(1);
     });
+    test('non-async Promise-returning delegator transpiles like async return await', () => {
+        // a method without `async` that returns a Promise (e.g. WS delegators
+        // like `watchTicker(...) { return this.watchTickerInner(...); }`)
+        // must produce the exact same Java as its `async`/`return await` twin:
+        // CompletableFuture signature + supplyAsync wrapper + `.join()` on the
+        // inner future (instead of returning the raw CompletableFuture, which
+        // would make the outer future resolve to a future).
+        const input =
+        "class Exchange {\n" +
+        "    async watchTickerInner(symbol: string): Promise<any> {\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "    watchTicker(symbol: string): Promise<any> {\n" +
+        "        return this.watchTickerInner(symbol);\n" +
+        "    }\n" +
+        "    async watchTickerClassic(symbol: string): Promise<any> {\n" +
+        "        return await this.watchTickerInner(symbol);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.concurrent.CompletableFuture<Object> watchTicker(");
+        expect(output).toContain("return (this.watchTickerInner(symbol)).join();");
+        // the delegator must be wrapped in supplyAsync like any async method
+        expect((output.match(/supplyAsync/g) || []).length).toBe(3);
+        // delegator body must be identical to the classic async/return await version
+        const getBody = (name: string) => {
+            const start = output.indexOf(`CompletableFuture<Object> ${name}(`);
+            const end = output.indexOf('});', start);
+            return output.slice(output.indexOf('{', start), end);
+        };
+        expect(getBody('watchTicker')).toBe(getBody('watchTickerClassic'));
+    });
 });

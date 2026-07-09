@@ -81,6 +81,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.requiresParameterType = true;
         this.requiresReturnType = true;
         this.asyncTranspiling = false;
+        this.implicitAsyncTranspiling = true;
         this.supportsFalsyOrTruthyValues = false;
         this.requiresCallExpressionCast = true;
         this.wrapThisCalls = false;
@@ -1148,7 +1149,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
               ts.isFunctionExpression(currentNode) ||
               ts.isArrowFunction(currentNode) ||
               ts.isMethodDeclaration(currentNode)) {
-                return currentNode.modifiers && currentNode.modifiers.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword);
+                return this.isAsyncFunction(currentNode);
             }
             // Move up the tree to the parent node
             currentNode = currentNode.parent;
