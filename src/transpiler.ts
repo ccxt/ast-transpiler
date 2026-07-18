@@ -4,6 +4,7 @@ import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
 import { CSharpTranspiler } from './csharpTranspiler.js';
 import * as path from "path";
+import * as fs from "fs";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
@@ -53,6 +54,12 @@ export default class Transpiler {
     goTranspiler: GoTranspiler;
     javaTranspiler: JavaTranspiler;
     rustTranspiler: RustTranspiler;
+    // ByPath transpilation cache: parsed SourceFiles (libs + the whole import graph)
+    // are reused across createProgram calls — without this every transpile*ByPath call
+    // re-parses the full import closure of the target file (~1s+ per file on big repos)
+    private byPathHost: ts.CompilerHost | undefined;
+    private byPathOldProgram: ts.Program | undefined;
+    private sourceFileCache: Map<string, { mtimeMs: number, sourceFile: ts.SourceFile }> = new Map();
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
@@ -85,8 +92,40 @@ export default class Transpiler {
         global.program = memProgram;
     }
 
+    getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost {
+        if (this.byPathHost === undefined) {
+            const host = ts.createCompilerHost(options, true);
+            const originalGetSourceFile = host.getSourceFile.bind(host);
+            const cache = this.sourceFileCache;
+            host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+                let mtimeMs = 0;
+                try {
+                    mtimeMs = fs.statSync(fileName).mtimeMs;
+                } catch (e) {
+                    // e.g. synthetic lib paths — fall through with mtime 0
+                }
+                const cached = cache.get(fileName);
+                if (cached && cached.mtimeMs === mtimeMs && !shouldCreateNewSourceFile) {
+                    return cached.sourceFile;
+                }
+                const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+                if (sourceFile !== undefined) {
+                    cache.set(fileName, { mtimeMs, sourceFile });
+                }
+                return sourceFile;
+            };
+            this.byPathHost = host;
+        }
+        return this.byPathHost;
+    }
+
     createProgramByPathAndSetGlobals(path) {
-        const program = ts.createProgram([path], {});
+        const options: ts.CompilerOptions = {};
+        const host = this.getByPathCompilerHost(options);
+        // passing the previous program lets typescript reuse its internal state where
+        // possible; the cached host makes every already-seen dependency parse-free
+        const program = ts.createProgram([path], options, host, this.byPathOldProgram);
+        this.byPathOldProgram = program;
         const sourceFile = program.getSourceFile(path);
         const typeChecker = program.getTypeChecker();
 
