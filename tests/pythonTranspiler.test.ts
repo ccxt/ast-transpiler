@@ -812,6 +812,12 @@ describe('python tests', () => {
         const output = transpiler.transpilePython(ts).content;
         expect(output).toBe(python);
     });
+    test('string literal with backslash escapes', () => {
+        const ts = "const string2 = '{\"k\":123.1,\"k2\":\"{\\\\\"k3\\\\\":456}\"}';";
+        const python = "string2 = '{\"k\":123.1,\"k2\":\"{\\\\\"k3\\\\\":456}\"}'";
+        const output = transpiler.transpilePython(ts).content;
+        expect(output).toBe(python);
+    });
     test('should convert isArray', () => {
         const ts = "Array.isArray(x)";
         const result = "isinstance(x, list)";
