@@ -87,6 +87,7 @@ export class JavaTranspiler extends BaseTranspiler {
         this.requiresParameterType = true;
         this.requiresReturnType = true;
         this.asyncTranspiling = true;
+        this.implicitAsyncTranspiling = true;
         this.supportsFalsyOrTruthyValues = false;
         this.requiresCallExpressionCast = true;
         this.id = "Java";

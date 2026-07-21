@@ -158,4 +158,41 @@ describe('go transpiling tests', () => {
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
     });
+    test('non-async Promise-returning delegator transpiles like async return await', () => {
+        // a method without `async` that returns a Promise (e.g. WS delegators
+        // like `watchTicker(...) { return this.watchTickerInner(...); }`)
+        // must produce the exact same Go as its `async`/`return await` twin:
+        // channel-wrapped body with `<-` receive + PanicOnError on the result.
+        const input =
+        "class Exchange {\n" +
+        "    async watchTickerInner(symbol: string): Promise<any> {\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "    watchTicker(symbol: string): Promise<any> {\n" +
+        "        return this.watchTickerInner(symbol);\n" +
+        "    }\n" +
+        "    async watchTickerClassic(symbol: string): Promise<any> {\n" +
+        "        return await this.watchTickerInner(symbol);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        // extract each method body
+        const methods = output.split(/func\s+\(this \*Exchange\)/).slice(1);
+        expect(methods.length).toBe(3);
+        const [inner, delegator, classic] = methods;
+        // the delegator must be channel-wrapped and receive from the inner channel
+        expect(delegator).toContain("ch := make(chan any)");
+        expect(delegator).toContain("<-this.WatchTickerInner(symbol)");
+        expect(delegator).toContain("PanicOnError(retRes");
+        // must NOT return the raw channel of the inner call
+        expect(delegator).not.toContain("ch <- this.WatchTickerInner");
+        // normalized (method name + line-based retRes suffix stripped), the
+        // delegator must be identical to the classic async/return await version
+        const normalize = (s: string) => s
+            .replace(/retRes\d+/g, 'retRes')
+            .replace(/WatchTickerClassic|WatchTicker\b/g, 'METHOD')
+            .trim();
+        expect(normalize(delegator)).toBe(normalize(classic));
+        void inner;
+    });
 });

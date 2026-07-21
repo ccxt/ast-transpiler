@@ -4,6 +4,7 @@ import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
 import { CSharpTranspiler } from './csharpTranspiler.js';
 import * as path from "path";
+import * as fs from "fs";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
@@ -12,30 +13,84 @@ import { RustTranspiler } from './rustTranspiler.js';
 
 const __dirname_mock = currentPath;
 
+// minimal type environment: skip the auto-included @types/* packages (with empty
+// options typescript scans node_modules/@types and pulls every package it finds —
+// 160+ extra files) and replace the default es5+dom lib (lib.dom.d.ts alone is ~8MB)
+// with the es-only lib chain. Neither dom nor @types globals affect transpilation
+// output, but they dominate program creation time (~10x) and make the type
+// environment depend on whatever @types happen to be installed in the host project.
+const fastCompilerOptions: ts.CompilerOptions = {
+    target: ts.ScriptTarget.Latest,
+    lib: ["lib.esnext.d.ts"],
+    types: [],
+};
+
+// the host globals (console, Buffer, setTimeout, ...) previously came from the
+// auto-included @types packages; declare them here so references to them neither
+// produce "Cannot find name" diagnostics nor trigger typescript's (very expensive)
+// spelling-suggestion scans while computing those diagnostics
+const globalsShim = `
+declare var require: any;
+declare var module: any;
+declare var exports: any;
+declare var console: any;
+declare var process: any;
+declare var Buffer: any;
+declare var __dirname: string;
+declare var __filename: string;
+declare var setTimeout: any;
+declare var clearTimeout: any;
+declare var setInterval: any;
+declare var clearInterval: any;
+declare var setImmediate: any;
+declare var fetch: any;
+declare var URL: any;
+declare var URLSearchParams: any;
+declare var TextEncoder: any;
+declare var TextDecoder: any;
+declare var crypto: any;
+declare var performance: any;
+declare var AbortController: any;
+declare var WebSocket: any;
+declare var atob: any;
+declare var btoa: any;
+`;
+const globalsShimPath = path.resolve(path.join(__dirname_mock, "__globals-shim.d.ts"));
+
+function overrideHostForVirtualFiles(host: ts.CompilerHost, files: Map<string, ts.SourceFile>) {
+    const originalGetSourceFile = host.getSourceFile.bind(host);
+    const originalReadFile = host.readFile.bind(host);
+    const originalFileExists = host.fileExists.bind(host);
+    // resolve paths because typescript will normalize them
+    // to forward slashes on windows
+    host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+        const virtual = files.get(path.resolve(fileName));
+        return virtual !== undefined ? virtual : originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+    };
+    host.readFile = (fileName: string) => {
+        const virtual = files.get(path.resolve(fileName));
+        return virtual !== undefined ? virtual.text : originalReadFile(fileName);
+    };
+    host.fileExists = (fileName: string) => {
+        return files.has(path.resolve(fileName)) || originalFileExists(fileName);
+    };
+}
+
 function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, options: any = {}): [any,any,any]  {
     options = options || ts.getDefaultCompilerOptions();
     const inMemoryFilePath = path.resolve(path.join(rootDir, "__dummy-file.ts"));
     const textAst = ts.createSourceFile(inMemoryFilePath, text, options.target || ts.ScriptTarget.Latest);
+    const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, options.target || ts.ScriptTarget.Latest);
     const host = ts.createCompilerHost(options, true);
-    function overrideIfInMemoryFile(methodName: keyof ts.CompilerHost, inMemoryValue: any) {
-        const originalMethod = host[methodName] as Function; // eslint-disable-line
-        host[methodName] = (...args: unknown[]) => {
-            // resolve the path because typescript will normalize it
-            // to forward slashes on windows
-            const filePath = path.resolve(args[0] as string);
-            if (filePath === inMemoryFilePath)
-                return inMemoryValue;
-            return originalMethod.apply(host, args);
-        };
-    }
 
-    overrideIfInMemoryFile("getSourceFile", textAst);
-    overrideIfInMemoryFile("readFile", text);
-    overrideIfInMemoryFile("fileExists", true);
+    overrideHostForVirtualFiles(host, new Map([
+        [inMemoryFilePath, textAst],
+        [globalsShimPath, shimAst],
+    ]));
 
     const program = ts.createProgram({
         options,
-        rootNames: [inMemoryFilePath],
+        rootNames: [inMemoryFilePath, globalsShimPath],
         host
     });
 
@@ -53,6 +108,12 @@ export default class Transpiler {
     goTranspiler: GoTranspiler;
     javaTranspiler: JavaTranspiler;
     rustTranspiler: RustTranspiler;
+    // ByPath transpilation cache: parsed SourceFiles (libs + the whole import graph)
+    // are reused across createProgram calls — without this every transpile*ByPath call
+    // re-parses the full import closure of the target file (~1s+ per file on big repos)
+    private byPathHost: ts.CompilerHost | undefined;
+    private byPathOldProgram: ts.Program | undefined;
+    private sourceFileCache: Map<string, { mtimeMs: number, sourceFile: ts.SourceFile }> = new Map();
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
@@ -79,14 +140,48 @@ export default class Transpiler {
     }
 
     createProgramInMemoryAndSetGlobals(content) {
-        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content);
+        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions);
         global.src = memSource;
         global.checker = memType as ts.TypeChecker;
         global.program = memProgram;
     }
 
+    getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost {
+        if (this.byPathHost === undefined) {
+            const host = ts.createCompilerHost(options, true);
+            const originalGetSourceFile = host.getSourceFile.bind(host);
+            const cache = this.sourceFileCache;
+            host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+                let mtimeMs = 0;
+                try {
+                    mtimeMs = fs.statSync(fileName).mtimeMs;
+                } catch (e) {
+                    // e.g. synthetic lib paths — fall through with mtime 0
+                }
+                const cached = cache.get(fileName);
+                if (cached && cached.mtimeMs === mtimeMs && !shouldCreateNewSourceFile) {
+                    return cached.sourceFile;
+                }
+                const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+                if (sourceFile !== undefined) {
+                    cache.set(fileName, { mtimeMs, sourceFile });
+                }
+                return sourceFile;
+            };
+            const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, ts.ScriptTarget.Latest);
+            overrideHostForVirtualFiles(host, new Map([[globalsShimPath, shimAst]]));
+            this.byPathHost = host;
+        }
+        return this.byPathHost;
+    }
+
     createProgramByPathAndSetGlobals(path) {
-        const program = ts.createProgram([path], {});
+        const options: ts.CompilerOptions = fastCompilerOptions;
+        const host = this.getByPathCompilerHost(options);
+        // passing the previous program lets typescript reuse its internal state where
+        // possible; the cached host makes every already-seen dependency parse-free
+        const program = ts.createProgram([path, globalsShimPath], options, host, this.byPathOldProgram);
+        this.byPathOldProgram = program;
         const sourceFile = program.getSourceFile(path);
         const typeChecker = program.getTypeChecker();
 

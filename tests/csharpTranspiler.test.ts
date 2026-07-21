@@ -991,4 +991,35 @@ describe('csharp transpiling tests', () => {
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     });
+    test('non-async Promise-returning delegator transpiles like async return await', () => {
+        // a method without `async` that returns a Promise (e.g. WS delegators
+        // like `watchTicker(...) { return this.watchTickerInner(...); }`)
+        // must produce the exact same C# as its `async`/`return await` twin:
+        // `async ... Task<object>` signature + `return await ...`.
+        const input =
+        "class Exchange {\n" +
+        "    async watchTickerInner(symbol: string): Promise<any> {\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "    watchTicker(symbol: string): Promise<any> {\n" +
+        "        return this.watchTickerInner(symbol);\n" +
+        "    }\n" +
+        "    async watchTickerClassic(symbol: string): Promise<any> {\n" +
+        "        return await this.watchTickerInner(symbol);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public async virtual Task<object> watchTicker(object symbol)");
+        expect(output).toContain("return await this.watchTickerInner(symbol);");
+        // must not return the bare Task without awaiting it
+        expect(output).not.toContain("return this.watchTickerInner(symbol);");
+        // delegator body must be identical to the classic async/return await version
+        const getBody = (name: string) => {
+            const start = output.indexOf(`Task<object> ${name}(`);
+            const open = output.indexOf('{', start);
+            const close = output.indexOf('}', open);
+            return output.slice(open, close + 1);
+        };
+        expect(getBody('watchTicker')).toBe(getBody('watchTickerClassic'));
+    });
   });
