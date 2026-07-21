@@ -39,6 +39,8 @@ jobs:
         run: npm run test-ci
       - name: Integration test
         run: npm run integration
+      - name: Generate supported.md
+        run: npm run generate-supported
       - name: Generating coverage badges
         if: github.ref == 'refs/heads/master'
         uses: jpb06/jest-badges-action@latest
@@ -48,5 +50,7 @@ jobs:
       #   if: github.ref == 'refs/heads/master'
       #   uses: EndBug/add-and-commit@v9 # You can change this to use a specific version.
       #   with:
-      #     add: "dist/ -f"
-      #     message: "Update generated files"
+      #     add: |
+      #       dist/ -f
+      #       README.md
+      #     message: 'Update generated files'
