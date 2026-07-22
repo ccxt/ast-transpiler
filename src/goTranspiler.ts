@@ -175,6 +175,17 @@ export class GoTranspiler extends BaseTranspiler {
             text = text.replaceAll("\"", "\\" + "\"");
             text = text.replaceAll("\n", "\\n");
         }
+        // Preserve real backslashes
+        const backslashPlaceholder = "\x00";
+        text = text.replaceAll("\\", backslashPlaceholder);
+        text = text.replaceAll("\b", "\\b");
+        text = text.replaceAll("\f", "\\f");
+        text = text.replaceAll("\n", "\\n");
+        text = text.replaceAll("\r", "\\r");
+        text = text.replaceAll("\t", "\\t");
+        text = text.replaceAll(backslashPlaceholder, "\\\\");
+        text = text.replaceAll("'", "\\'");
+        text = text.replaceAll("\"", "\\\"");
         return token + text + token;
     }
 
