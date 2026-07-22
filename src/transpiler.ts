@@ -76,6 +76,41 @@ function overrideHostForVirtualFiles(host: ts.CompilerHost, files: Map<string, t
     };
 }
 
+// transpiling one file to several languages queries the checker repeatedly for the
+// same nodes (identifiers, binary operands, conditions). Types and symbols are
+// deterministic per (checker, node), so memoize the two hot lookups on the checker
+// instance itself — the caches die with the checker when a new program is created
+const NO_SYMBOL_SENTINEL = Symbol("noSymbol");
+function memoizeCheckerCalls(checker: ts.TypeChecker): void {
+    if ((checker as any).__astTranspilerMemoized) {
+        return;
+    }
+    (checker as any).__astTranspilerMemoized = true;
+
+    const typeCache = new WeakMap<ts.Node, ts.Type>();
+    const originalGetTypeAtLocation = checker.getTypeAtLocation.bind(checker);
+    checker.getTypeAtLocation = (node: ts.Node): ts.Type => {
+        let type = typeCache.get(node);
+        if (type === undefined) {
+            type = originalGetTypeAtLocation(node);
+            typeCache.set(node, type);
+        }
+        return type;
+    };
+
+    const symbolCache = new WeakMap<ts.Node, ts.Symbol | typeof NO_SYMBOL_SENTINEL>();
+    const originalGetSymbolAtLocation = checker.getSymbolAtLocation.bind(checker);
+    checker.getSymbolAtLocation = (node: ts.Node): ts.Symbol | undefined => {
+        const cached = symbolCache.get(node);
+        if (cached !== undefined) {
+            return cached === NO_SYMBOL_SENTINEL ? undefined : cached;
+        }
+        const symbol = originalGetSymbolAtLocation(node);
+        symbolCache.set(node, symbol === undefined ? NO_SYMBOL_SENTINEL : symbol);
+        return symbol;
+    };
+}
+
 function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, options: any = {}): [any,any,any]  {
     options = options || ts.getDefaultCompilerOptions();
     const inMemoryFilePath = path.resolve(path.join(rootDir, "__dummy-file.ts"));
@@ -95,6 +130,7 @@ function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, opti
     });
 
     const typeChecker = program.getTypeChecker();
+    memoizeCheckerCalls(typeChecker);
     const sourceFile = program.getSourceFile(inMemoryFilePath);
 
     return [ program, typeChecker, sourceFile];
@@ -184,6 +220,7 @@ export default class Transpiler {
         this.byPathOldProgram = program;
         const sourceFile = program.getSourceFile(path);
         const typeChecker = program.getTypeChecker();
+        memoizeCheckerCalls(typeChecker);
 
         global.src = sourceFile;
         global.checker = typeChecker;

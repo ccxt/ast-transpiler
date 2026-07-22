@@ -169,9 +169,12 @@ export class GoTranspiler extends BaseTranspiler {
         if (text in this.StringLiteralReplacements) {
             return this.StringLiteralReplacements[text];
         }
-        text = text.replaceAll("'", "\\\\" + "'");
-        text = text.replaceAll("\"", "\\" + "\"");
-        text = text.replaceAll("\n", "\\n");
+        // skip the replaceAll passes when there is nothing to escape
+        if (/['"\n]/.test(text)) {
+            text = text.replaceAll("'", "\\\\" + "'");
+            text = text.replaceAll("\"", "\\" + "\"");
+            text = text.replaceAll("\n", "\\n");
+        }
         return token + text + token;
     }
 
@@ -870,19 +873,21 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `InOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
-        const leftText = this.printNode(left, 0);
-        const rightText = this.printNode(right, 0);
+        // only print the operands when this op is actually handled here; otherwise
+        // the base printBinaryExpression prints them, and doing it eagerly means
+        // every unhandled binary expression gets its subtrees printed twice
+        if (op === ts.SyntaxKind.PlusEqualsToken || op === ts.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
+            const leftText = this.printNode(left, 0);
+            const rightText = this.printNode(right, 0);
 
-        if (op === ts.SyntaxKind.PlusEqualsToken) {
-            return `${leftText} = Add(${leftText}, ${rightText})`;
-        }
+            if (op === ts.SyntaxKind.PlusEqualsToken) {
+                return `${leftText} = Add(${leftText}, ${rightText})`;
+            }
 
-        if (op === ts.SyntaxKind.MinusEqualsToken) {
-            return `${leftText} = Subtract(${leftText}, ${rightText})`;
-        }
+            if (op === ts.SyntaxKind.MinusEqualsToken) {
+                return `${leftText} = Subtract(${leftText}, ${rightText})`;
+            }
 
-
-        if (op in this.binaryExpressionsWrappers) {
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];

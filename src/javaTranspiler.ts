@@ -263,28 +263,30 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.UNDEFINED_TOKEN;
         }
 
-        // keep the same class-reference typeof-guarding logic as your original file
-        const type = (global as any).checker.getTypeAtLocation(node);
-        const symbol = type?.symbol;
-        if (symbol !== undefined) {
-            const decl = symbol?.declarations ?? [];
-            let isBuiltIn = undefined;
-            if (decl.length > 0) {
-                isBuiltIn =
-                    decl[0].getSourceFile().fileName.indexOf("typescript") > -1;
-            }
+        // keep the same class-reference typeof-guarding logic as your original file,
+        // but run the syntactic (parent-position) checks first: they exclude the vast
+        // majority of identifiers without paying for a type-checker lookup
+        const isInsideNewExpression =
+            node?.parent?.kind === ts.SyntaxKind.NewExpression;
+        const isInsideCatch =
+            node?.parent?.kind === ts.SyntaxKind.ThrowStatement;
+        const isLeftSide =
+            node?.parent?.name === node || node?.parent?.left === node;
+        const isCallOrPropertyAccess =
+            node?.parent?.kind === ts.SyntaxKind.PropertyAccessExpression ||
+            node?.parent?.kind === ts.SyntaxKind.ElementAccessExpression;
+        if (!isLeftSide && !isCallOrPropertyAccess && !isInsideCatch && !isInsideNewExpression) {
+            const type = (global as any).checker.getTypeAtLocation(node);
+            const typeSymbol = type?.symbol;
+            if (typeSymbol !== undefined) {
+                const decl = typeSymbol?.declarations ?? [];
+                let isBuiltIn = undefined;
+                if (decl.length > 0) {
+                    isBuiltIn =
+                        decl[0].getSourceFile().fileName.indexOf("typescript") > -1;
+                }
 
-            if (isBuiltIn !== undefined && !isBuiltIn) {
-                const isInsideNewExpression =
-                    node?.parent?.kind === ts.SyntaxKind.NewExpression;
-                const isInsideCatch =
-                    node?.parent?.kind === ts.SyntaxKind.ThrowStatement;
-                const isLeftSide =
-                    node?.parent?.name === node || node?.parent?.left === node;
-                const isCallOrPropertyAccess =
-                    node?.parent?.kind === ts.SyntaxKind.PropertyAccessExpression ||
-                    node?.parent?.kind === ts.SyntaxKind.ElementAccessExpression;
-                if (!isLeftSide && !isCallOrPropertyAccess && !isInsideCatch && !isInsideNewExpression) {
+                if (isBuiltIn !== undefined && !isBuiltIn) {
                     const symbol = (global as any).checker.getSymbolAtLocation(node);
                     let isClassDeclaration = false;
                     if (symbol) {
@@ -509,11 +511,13 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     getVarMethodIfAny(node) {
-        // should return the name of the method this node belongs to, if any
+        // should return the name of the method this node belongs to, if any;
+        // the raw AST name is enough here — the result is only used as a scoping
+        // key, and printNode on an identifier consults the type checker
         let current = node?.parent;
         while (current) {
             if (ts.isMethodDeclaration(current) || ts.isFunctionDeclaration(current)) {
-                return this.printNode(current.name, 0);
+                return String((current.name as any)?.escapedText ?? '');
             }
             current = current.parent;
         }
@@ -521,11 +525,12 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     getVarClassIfAny(node) {
-        // should return the name of the class this node belongs to, if any
+        // should return the name of the class this node belongs to, if any;
+        // raw AST name for the same reason as getVarMethodIfAny
         let current = node?.parent;
         while (current) {
             if (ts.isClassDeclaration(current)) {
-                return this.printNode(current.name, 0);
+                return String((current.name as any)?.escapedText ?? '');
             }
             current = current.parent;
         }
@@ -631,18 +636,21 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
-        const leftText = this.printNode(left, 0);
-        const rightText = this.printNode(right, 0);
+        // only print the operands when this op is actually handled here; otherwise
+        // the base printBinaryExpression prints them, and doing it eagerly means
+        // every unhandled binary expression gets its subtrees printed twice
+        if (op === ts.SyntaxKind.PlusEqualsToken || op === ts.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
+            const leftText = this.printNode(left, 0);
+            const rightText = this.printNode(right, 0);
 
-        if (op === ts.SyntaxKind.PlusEqualsToken) {
-            return `${leftText} = Helpers.add(${leftText}, ${rightText})`;
-        }
+            if (op === ts.SyntaxKind.PlusEqualsToken) {
+                return `${leftText} = Helpers.add(${leftText}, ${rightText})`;
+            }
 
-        if (op === ts.SyntaxKind.MinusEqualsToken) {
-            return `${leftText} = Helpers.subtract(${leftText}, ${rightText})`;
-        }
+            if (op === ts.SyntaxKind.MinusEqualsToken) {
+                return `${leftText} = Helpers.subtract(${leftText}, ${rightText})`;
+            }
 
-        if (op in this.binaryExpressionsWrappers) {
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
