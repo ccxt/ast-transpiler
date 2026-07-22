@@ -170,22 +170,19 @@ export class GoTranspiler extends BaseTranspiler {
             return this.StringLiteralReplacements[text];
         }
         // skip the replaceAll passes when there is nothing to escape
-        if (/['"\n]/.test(text)) {
-            text = text.replaceAll("'", "\\\\" + "'");
-            text = text.replaceAll("\"", "\\" + "\"");
+        // note: single quotes must NOT be escaped — \' is an invalid escape in Go string literals
+        if (/[\\"\b\f\n\r\t]/.test(text)) {
+            // Preserve real backslashes
+            const backslashPlaceholder = "\x00";
+            text = text.replaceAll("\\", backslashPlaceholder);
+            text = text.replaceAll("\b", "\\b");
+            text = text.replaceAll("\f", "\\f");
             text = text.replaceAll("\n", "\\n");
+            text = text.replaceAll("\r", "\\r");
+            text = text.replaceAll("\t", "\\t");
+            text = text.replaceAll(backslashPlaceholder, "\\\\");
+            text = text.replaceAll("\"", "\\\"");
         }
-        // Preserve real backslashes
-        const backslashPlaceholder = "\x00";
-        text = text.replaceAll("\\", backslashPlaceholder);
-        text = text.replaceAll("\b", "\\b");
-        text = text.replaceAll("\f", "\\f");
-        text = text.replaceAll("\n", "\\n");
-        text = text.replaceAll("\r", "\\r");
-        text = text.replaceAll("\t", "\\t");
-        text = text.replaceAll(backslashPlaceholder, "\\\\");
-        text = text.replaceAll("'", "\\'");
-        text = text.replaceAll("\"", "\\\"");
         return token + text + token;
     }
 
