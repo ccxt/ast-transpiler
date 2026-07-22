@@ -28,6 +28,12 @@ describe('go transpiling tests', () => {
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
     });
+    test('string literal escaping', () => {
+        const ts = 'const x = "foo, \'single\', \\"double\\" \\t \\n \\r \\b \\f \\\\ ";'
+        const go = 'var x any = "foo, \'single\', \\"double\\" \\t \\n \\r \\b \\f \\\\ "'
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toBe(go);
+    });
     test('basic while loop', () => {
         const ts =
         "while (true) {\n" +
