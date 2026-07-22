@@ -462,19 +462,21 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
-        const leftText = this.printNode(left, 0);
-        const rightText = this.printNode(right, 0);
+        // only print the operands when this op is actually handled here; otherwise
+        // the base printBinaryExpression prints them, and doing it eagerly means
+        // every unhandled binary expression gets its subtrees printed twice
+        if (op === ts.SyntaxKind.PlusEqualsToken || op === ts.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
+            const leftText = this.printNode(left, 0);
+            const rightText = this.printNode(right, 0);
 
-        if (op === ts.SyntaxKind.PlusEqualsToken) {
-            return `${leftText} = add(${leftText}, ${rightText})`;
-        }
+            if (op === ts.SyntaxKind.PlusEqualsToken) {
+                return `${leftText} = add(${leftText}, ${rightText})`;
+            }
 
-        if (op === ts.SyntaxKind.MinusEqualsToken) {
-            return `${leftText} = subtract(${leftText}, ${rightText})`;
-        }
+            if (op === ts.SyntaxKind.MinusEqualsToken) {
+                return `${leftText} = subtract(${leftText}, ${rightText})`;
+            }
 
-
-        if (op in this.binaryExpressionsWrappers) {
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];

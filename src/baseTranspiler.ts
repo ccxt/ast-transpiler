@@ -1584,17 +1584,10 @@ class BaseTranspiler {
             return this.printPrefixUnaryExpression(node, identation); // avoid infinite recursion
         }
 
-        let expression = this.printNode(node, 0);
-        // wrap falsy/truty expressions if needed
-        if ( (1+1) || (node.kind !== ts.SyntaxKind.BinaryExpression && node.kind !== ts.SyntaxKind.ParenthesizedExpression)) {
-
-            const typeFlags = global.checker.getTypeAtLocation(node).flags;
-            if ( (1+1) || typeFlags !== ts.TypeFlags.BooleanLiteral && typeFlags  !== ts.TypeFlags.Boolean) {
-                expression = this.printNode(node, 0);
-                // this.warn(node, node.getText(), "Falsy/Truthy expressions are not supported by this language, so adding the defined wrapper!");
-                expression = `${this.FALSY_WRAPPER_OPEN}${expression}${this.FALSY_WRAPPER_CLOSE}`;
-            }
-        }
+        // wrap falsy/truthy expressions unconditionally: printing the node once and
+        // wrapping is equivalent to the previous always-true branches, which printed
+        // the subtree twice and queried the type checker without using the result
+        const expression = `${this.FALSY_WRAPPER_OPEN}${this.printNode(node, 0)}${this.FALSY_WRAPPER_CLOSE}`;
         return `${this.getIden(identation)}${expression}`; // stub to override
     }
 
@@ -1839,89 +1832,96 @@ class BaseTranspiler {
     printNode(node, identation = 0): string {
 
         try {
-            if(ts.isExpressionStatement(node)) {
+            // dispatch on node.kind directly: every ts.isX predicate used here is a
+            // plain kind comparison, and a switch avoids running ~45 predicate calls
+            // for nodes that match late (or not at all) in the former if-else chain
+            switch (node.kind) {
+            case ts.SyntaxKind.ExpressionStatement:
                 return this.printExpressionStatement(node, identation);
-            } else if(ts.isBlock(node)) {
+            case ts.SyntaxKind.Block:
                 return this.printBlock(node, identation);
-            } else if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)){
+            case ts.SyntaxKind.FunctionDeclaration:
+            case ts.SyntaxKind.FunctionExpression:
+            case ts.SyntaxKind.ArrowFunction:
                 return this.printFunctionDeclaration(node, identation);
-            } else if (ts.isClassDeclaration(node)) {
+            case ts.SyntaxKind.ClassDeclaration:
                 return this.printClass(node, identation);
-            } else if (ts.isVariableStatement(node)) {
+            case ts.SyntaxKind.VariableStatement:
                 return this.printVariableStatement(node, identation);
-            } else if (ts.isMethodDeclaration(node)) {
+            case ts.SyntaxKind.MethodDeclaration:
                 return this.printMethodDeclaration(node, identation);
-            } else if (ts.isStringLiteral(node)) {
+            case ts.SyntaxKind.StringLiteral:
                 return this.printStringLiteral(node);
-            } else if (ts.isNumericLiteral(node)) {
+            case ts.SyntaxKind.NumericLiteral:
                 return this.printNumericLiteral(node);
-            } else if (ts.isPropertyAccessExpression(node)) {
+            case ts.SyntaxKind.PropertyAccessExpression:
                 return this.printPropertyAccessExpression(node, identation);
-            } else if (ts.isArrayLiteralExpression(node)) {
+            case ts.SyntaxKind.ArrayLiteralExpression:
                 return this.printArrayLiteralExpression(node, identation);
-            } else if (ts.isCallExpression(node)) {
+            case ts.SyntaxKind.CallExpression:
                 return this.printCallExpression(node, identation);
-            } else if (ts.isWhileStatement(node)) {
+            case ts.SyntaxKind.WhileStatement:
                 return this.printWhileStatement(node, identation);
-            } else if (ts.isBinaryExpression(node)) {
+            case ts.SyntaxKind.BinaryExpression:
                 return this.printBinaryExpression(node, identation);
-            } else if (ts.isBreakStatement(node)) {
+            case ts.SyntaxKind.BreakStatement:
                 return this.printBreakStatement(node, identation);
-            } else if (ts.isForStatement(node)) {
+            case ts.SyntaxKind.ForStatement:
                 return this.printForStatement(node, identation);
-            } else if (ts.isPostfixUnaryExpression(node)) {
+            case ts.SyntaxKind.PostfixUnaryExpression:
                 return this.printPostFixUnaryExpression(node, identation);
-            } else if (ts.isVariableDeclarationList(node)) {
+            case ts.SyntaxKind.VariableDeclarationList:
                 return this.printVariableDeclarationList(node, identation); // statements are slightly different if inside a for
-            } else if (ts.isObjectLiteralExpression(node)) {
+            case ts.SyntaxKind.ObjectLiteralExpression:
                 return this.printObjectLiteralExpression(node, identation);
-            } else if (ts.isPropertyAssignment(node)) {
+            case ts.SyntaxKind.PropertyAssignment:
                 return this.printPropertyAssignment(node, identation);
-            } else if (ts.isIdentifier(node)) {
+            case ts.SyntaxKind.Identifier:
                 return this.printIdentifier(node);
-            } else if (ts.isElementAccessExpression(node)) {
+            case ts.SyntaxKind.ElementAccessExpression:
                 return this.printElementAccessExpression(node, identation);
-            } else if (ts.isIfStatement(node)) {
+            case ts.SyntaxKind.IfStatement:
                 return this.printIfStatement(node, identation);
-            } else if (ts.isParenthesizedExpression(node)) {
+            case ts.SyntaxKind.ParenthesizedExpression:
                 return this.printParenthesizedExpression(node, identation);
-            } else if ((ts as any).isBooleanLiteral(node)) {
+            case ts.SyntaxKind.TrueKeyword:
+            case ts.SyntaxKind.FalseKeyword:
                 return this.printBooleanLiteral(node);
-            } else if (ts.SyntaxKind.ThisKeyword === node.kind) {
+            case ts.SyntaxKind.ThisKeyword:
                 return this.printThisKeyword(node, identation);
-            } else if (ts.SyntaxKind.SuperKeyword === node.kind) {
+            case ts.SyntaxKind.SuperKeyword:
                 return this.SUPER_TOKEN;
-            }else if (ts.isTryStatement(node)){
+            case ts.SyntaxKind.TryStatement:
                 return this.printTryStatement(node, identation);
-            } else if (ts.isPrefixUnaryExpression(node)) {
+            case ts.SyntaxKind.PrefixUnaryExpression:
                 return this.printPrefixUnaryExpression(node, identation);
-            } else if (ts.isThrowStatement(node)) {
+            case ts.SyntaxKind.ThrowStatement:
                 return this.printThrowStatement(node, identation);
-            } else if (ts.isNewExpression(node)) {
+            case ts.SyntaxKind.NewExpression:
                 return this.printNewExpression(node, identation);
-            } else if (ts.isAwaitExpression(node)) {
+            case ts.SyntaxKind.AwaitExpression:
                 return this.printAwaitExpression(node, identation);
-            } else if (ts.isConditionalExpression(node)) {
+            case ts.SyntaxKind.ConditionalExpression:
                 return this.printConditionalExpression(node, identation);
-            } else if (ts.isAsExpression(node)) {
+            case ts.SyntaxKind.AsExpression:
                 return this.printAsExpression(node, identation);
-            } else if (ts.isReturnStatement(node)) {
+            case ts.SyntaxKind.ReturnStatement:
                 return this.printReturnStatement(this.wrapImplicitReturnAwait(node), identation);
-            } else if (ts.isArrayBindingPattern(node)) {
+            case ts.SyntaxKind.ArrayBindingPattern:
                 return this.printArrayBindingPattern(node, identation);
-            } else if (ts.isParameter(node)) {
+            case ts.SyntaxKind.Parameter:
                 return this.printParameter(node);
-            } else if (ts.isConstructorDeclaration(node)) {
+            case ts.SyntaxKind.Constructor:
                 return this.printConstructorDeclaration(node, identation);
-            } else if (ts.isPropertyDeclaration(node)) {
+            case ts.SyntaxKind.PropertyDeclaration:
                 return this.printPropertyDeclaration(node, identation);
-            } else if (ts.isSpreadElement(node)) {
+            case ts.SyntaxKind.SpreadElement:
                 return this.printSpreadElement(node, identation);
-            } else if (ts.SyntaxKind.NullKeyword === node.kind) {
+            case ts.SyntaxKind.NullKeyword:
                 return this.printNullKeyword(node, identation);
-            } else if (ts.isContinueStatement(node)) {
+            case ts.SyntaxKind.ContinueStatement:
                 return this.printContinueStatement(node, identation);
-            } else if (ts.isDeleteExpression(node)) {
+            case ts.SyntaxKind.DeleteExpression:
                 return this.printDeleteExpression(node, identation);
             }
 
