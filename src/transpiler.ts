@@ -6,7 +6,7 @@ import { CSharpTranspiler } from './csharpTranspiler.js';
 import * as path from "path";
 import * as fs from "fs";
 import { Logger } from './logger.js';
-import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput } from './types.js';
+import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler } from './rustTranspiler.js';
@@ -150,6 +150,8 @@ export default class Transpiler {
     private byPathHost: ts.CompilerHost | undefined;
     private byPathOldProgram: ts.Program | undefined;
     private sourceFileCache: Map<string, { mtimeMs: number, sourceFile: ts.SourceFile }> = new Map();
+    // typescript state of the transpilation in flight, shared with the language printers
+    private context: ITranspileContext | undefined;
     constructor(config = {}) {
         this.config = config;
         const phpConfig = config["php"] || {};
@@ -175,11 +177,13 @@ export default class Transpiler {
         Logger.setVerboseMode(verbose);
     }
 
-    createProgramInMemoryAndSetGlobals(content) {
+    createProgramInMemoryAndSetContext(content): ITranspileContext {
         const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions);
-        global.src = memSource;
-        global.checker = memType as ts.TypeChecker;
-        global.program = memProgram;
+        return this.setContext({
+            src: memSource,
+            checker: memType as ts.TypeChecker,
+            program: memProgram,
+        });
     }
 
     getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost {
@@ -211,7 +215,7 @@ export default class Transpiler {
         return this.byPathHost;
     }
 
-    createProgramByPathAndSetGlobals(path) {
+    createProgramByPathAndSetContext(path): ITranspileContext {
         const options: ts.CompilerOptions = fastCompilerOptions;
         const host = this.getByPathCompilerHost(options);
         // passing the previous program lets typescript reuse its internal state where
@@ -222,13 +226,46 @@ export default class Transpiler {
         const typeChecker = program.getTypeChecker();
         memoizeCheckerCalls(typeChecker);
 
-        global.src = sourceFile;
-        global.checker = typeChecker;
-        global.program = program;
+        return this.setContext({
+            src: sourceFile,
+            checker: typeChecker,
+            program,
+        });
     }
 
-    checkFileDiagnostics() {
-        const diagnostics = ts.getPreEmitDiagnostics(global.program, global.src);
+    // the language printers read the typescript state (source file, checker, program)
+    // off the context handed to them here, so two Transpiler instances never share
+    // state and a nested transpile can restore whatever its caller was working on
+    setContext(context: ITranspileContext): ITranspileContext {
+        this.context = context;
+        this.pythonTranspiler.setContext(context);
+        this.phpTranspiler.setContext(context);
+        this.csharpTranspiler.setContext(context);
+        this.goTranspiler.setContext(context);
+        this.javaTranspiler.setContext(context);
+        this.rustTranspiler.setContext(context);
+        return context;
+    }
+
+    getContext(): ITranspileContext {
+        if (this.context === undefined) {
+            throw new Error("No transpilation context set: the typescript program must be created before transpiling.");
+        }
+        return this.context;
+    }
+
+    /** @deprecated renamed to createProgramInMemoryAndSetContext */
+    createProgramInMemoryAndSetGlobals(content): ITranspileContext {
+        return this.createProgramInMemoryAndSetContext(content);
+    }
+
+    /** @deprecated renamed to createProgramByPathAndSetContext */
+    createProgramByPathAndSetGlobals(path): ITranspileContext {
+        return this.createProgramByPathAndSetContext(path);
+    }
+
+    checkFileDiagnostics(context: ITranspileContext = this.getContext()) {
+        const diagnostics = ts.getPreEmitDiagnostics(context.program, context.src);
         if (diagnostics.length > 0) {
             let errorMessage = "Errors found in the typescript code. Transpilation might produce invalid results:\n";
             diagnostics.forEach( msg => {
@@ -238,53 +275,55 @@ export default class Transpiler {
         }
     }
 
-    transpile(lang: Languages, mode: TranspilationMode, file: string, sync = false, setGlobals = true, handleImports = true): ITranspiledFile {
+    transpile(lang: Languages, mode: TranspilationMode, file: string, sync = false, createContext = true, handleImports = true): ITranspiledFile {
         // improve this logic later
-        if (setGlobals) {
+        if (createContext) {
             if (mode === TranspilationMode.ByPath) {
-                this.createProgramByPathAndSetGlobals(file);
+                this.createProgramByPathAndSetContext(file);
             } else {
-                this.createProgramInMemoryAndSetGlobals(file);
+                this.createProgramInMemoryAndSetContext(file);
             }
 
             // check for warnings and errors
             this.checkFileDiagnostics();
         }
 
+        const src = this.getContext().src;
+
         let transpiledContent = undefined;
         switch(lang) {
         case Languages.Python:
             this.pythonTranspiler.asyncTranspiling = !sync;
-            transpiledContent = this.pythonTranspiler.printNode(global.src, -1);
+            transpiledContent = this.pythonTranspiler.printNode(src, -1);
             this.pythonTranspiler.asyncTranspiling = true; // reset to default
             break;
         case Languages.Php:
             this.phpTranspiler.asyncTranspiling = !sync;
-            transpiledContent = this.phpTranspiler.printNode(global.src, -1);
+            transpiledContent = this.phpTranspiler.printNode(src, -1);
             this.phpTranspiler.asyncTranspiling = true; // reset to default
             break;
         case Languages.CSharp:
-            transpiledContent = this.csharpTranspiler.printNode(global.src, -1);
+            transpiledContent = this.csharpTranspiler.printNode(src, -1);
             break;
         case Languages.Go:
-            transpiledContent = this.goTranspiler.printNode(global.src, -1);
+            transpiledContent = this.goTranspiler.printNode(src, -1);
             break;
         case Languages.Java:
-            transpiledContent = this.javaTranspiler.printNode(global.src, -1);
+            transpiledContent = this.javaTranspiler.printNode(src, -1);
             break;
         case Languages.Rust:
-            transpiledContent = this.rustTranspiler.printNode(global.src, -1);
+            transpiledContent = this.rustTranspiler.printNode(src, -1);
             break;
         }
         let imports = [];
         let exports = [];
 
         if (handleImports) {
-            imports = this.pythonTranspiler.getFileImports(global.src);
-            exports = this.pythonTranspiler.getFileExports(global.src);
+            imports = this.pythonTranspiler.getFileImports(src);
+            exports = this.pythonTranspiler.getFileExports(src);
         }
 
-        const methodsTypes = this.pythonTranspiler.getMethodTypes(global.src);
+        const methodsTypes = this.pythonTranspiler.getMethodTypes(src);
         Logger.success("transpilation finished successfully");
 
         return {
@@ -296,14 +335,15 @@ export default class Transpiler {
     }
 
     transpileDifferentLanguagesGeneric(mode: TranspilationMode, input: IInput[], content: string): ITranspiledFile[] {
+        let context: ITranspileContext;
         if (mode === TranspilationMode.ByPath) {
-            this.createProgramByPathAndSetGlobals(content);
+            context = this.createProgramByPathAndSetContext(content);
         } else {
-            this.createProgramInMemoryAndSetGlobals(content);
+            context = this.createProgramInMemoryAndSetContext(content);
         }
 
         // check for warnings and errors
-        this.checkFileDiagnostics();
+        this.checkFileDiagnostics(context);
 
         const files = [];
         input.forEach( (inp) => {
@@ -314,10 +354,10 @@ export default class Transpiler {
             });
         });
 
-        const methodsTypes = this.pythonTranspiler.getMethodTypes(global.src);
+        const methodsTypes = this.pythonTranspiler.getMethodTypes(context.src);
 
-        const imports = this.pythonTranspiler.getFileImports(global.src);
-        const exports = this.pythonTranspiler.getFileExports(global.src);
+        const imports = this.pythonTranspiler.getFileImports(context.src);
+        const exports = this.pythonTranspiler.getFileExports(context.src);
 
         const output =  files.map( (file) => {
             return {
@@ -401,13 +441,13 @@ export default class Transpiler {
 
 
     getFileImports(content: string): IFileImport[] {
-        this.createProgramInMemoryAndSetGlobals(content);
-        return this.phpTranspiler.getFileImports(global.src);
+        const context = this.createProgramInMemoryAndSetContext(content);
+        return this.phpTranspiler.getFileImports(context.src);
     }
 
     getFileExports(content: string): IFileExport[] {
-        this.createProgramInMemoryAndSetGlobals(content);
-        return this.phpTranspiler.getFileExports(global.src);
+        const context = this.createProgramInMemoryAndSetContext(content);
+        return this.phpTranspiler.getFileExports(context.src);
     }
 
     setPHPPropResolution(props: string[]) {

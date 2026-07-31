@@ -182,10 +182,10 @@ export class CSharpTranspiler extends BaseTranspiler {
 
         // check if it is a class declaration that we need to wrap arounf typeof
         // example: const x = Error -> var x = typeof(Error)
-        const type = global.checker.getTypeAtLocation(node);
+        const type = this.getChecker().getTypeAtLocation(node);
         const symbol = type?.symbol;
         if (symbol !== undefined) {
-            // const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+            // const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
             const decl = symbol?.declarations ?? [];
             let isBuiltIn = undefined;
             if (decl.length > 0) {
@@ -205,7 +205,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                     // const b = instance;
                     // gets transpiled to
                     // var instance = typeof(x);
-                    const symbol = global.checker.getSymbolAtLocation(node);
+                    const symbol = this.getChecker().getSymbolAtLocation(node);
                     let isClassDeclaration = false;
                     if (symbol) {
                         const first = symbol.declarations[0];
@@ -213,7 +213,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                             isClassDeclaration = true;
                         }
                         if (first.kind === ts.SyntaxKind.ImportSpecifier) {
-                            const importedSymbol = global.checker.getAliasedSymbol(symbol);
+                            const importedSymbol = this.getChecker().getAliasedSymbol(symbol);
                             if (importedSymbol?.declarations[0]?.kind === ts.SyntaxKind.ClassDeclaration) {
                                 isClassDeclaration = true;
                             }
@@ -317,7 +317,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printWrappedUnknownThisProperty(node) {
-        const type = global.checker.getResolvedSignature(node);
+        const type = this.getChecker().getResolvedSignature(node);
         if (type?.declaration === undefined) {
             let parsedArguments = node.arguments?.map((a) => this.printNode(a, 0)).join(", ");
             parsedArguments = parsedArguments ? parsedArguments : "";
@@ -440,7 +440,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 // const type = this.getType(node);
                 // const parsedType = this.getTypeFromRawType(type);
                 const leftElement = arrayBindingPatternElements[index];
-                const leftType = global.checker.getTypeAtLocation(leftElement);
+                const leftType = this.getChecker().getTypeAtLocation(leftElement);
                 const parsedType = this.getTypeFromRawType(leftType);
 
                 const castExp = parsedType ? `(${parsedType})` : "";
@@ -486,8 +486,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         // x = y
         // cast y to x type when y is unknown
         // if (op === ts.SyntaxKind.EqualsToken) {
-        //     const leftType = global.checker.getTypeAtLocation(left);
-        //     const rightType = global.checker.getTypeAtLocation(right);
+        //     const leftType = this.getChecker().getTypeAtLocation(left);
+        //     const rightType = this.getChecker().getTypeAtLocation(right);
 
         //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
         //         // const parsedType = this.getTypeFromRawType(leftType);
@@ -499,8 +499,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // castVariableAssignmentIfNeeded(left, right, identation) {
-    //     const leftType = global.checker.getTypeAtLocation(left);
-    //     const rightType = global.checker.getTypeAtLocation(right);
+    //     const leftType = this.getChecker().getTypeAtLocation(left);
+    //     const rightType = this.getChecker().getTypeAtLocation(right);
 
     //     const leftText = this.printNode(left, 0);
     //     const rightText = this.printNode(right, 0);
@@ -558,7 +558,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (parsedValue === this.UNDEFINED_TOKEN) {
             let specificVarToken = "object";
             if (this.INFER_VAR_TYPE) {
-                const variableType = global.checker.typeToString(global.checker.getTypeAtLocation(declaration));
+                const variableType = this.getChecker().typeToString(this.getChecker().getTypeAtLocation(declaration));
                 if (this.VariableTypeReplacements[variableType]) {
                     specificVarToken = this.VariableTypeReplacements[variableType] + '?';
                 }
@@ -577,7 +577,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
         switch(rightSide) {
         case 'length':
-                const type = (global.checker as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
+                const type = (this.getChecker() as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
             this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
             rawExpression = this.isStringType(type.flags) ? `((string)${leftSide}).Length` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
@@ -602,7 +602,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
 
         // convert x: number = undefined (invalid) into x = -1 (valid)
-        if (node?.escapedText === "undefined" && global.checker.getTypeAtLocation(node?.parent)?.flags === ts.TypeFlags.Number) {
+        if (node?.escapedText === "undefined" && this.getChecker().getTypeAtLocation(node?.parent)?.flags === ts.TypeFlags.Number) {
             // return "-1";
             return this.UNDEFINED_TOKEN;
         }
@@ -726,7 +726,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (elems.length > 0) {
             const first = elems[0];
             if (first.kind === ts.SyntaxKind.CallExpression) {
-                // const type = global.checker.getTypeAtLocation(first);
+                // const type = this.getChecker().getTypeAtLocation(first);
                 let type = this.getFunctionType(first);
                 // const parsedType = this.getTypeFromRawType(type);
                 // parsedType === "Task" ||
@@ -978,7 +978,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     printLengthProperty(node, identation, name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        const type = (global.checker as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
+        const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSide, "length");
         return this.isStringType(type.flags) ? `((string)${leftSide}).Length` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
     }
@@ -1057,9 +1057,9 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const id = expression.expression;
                 // JS's built-in `Error` maps to C#'s `Exception` (C# has no `Error` type in the BCL)
                 const idName = id.escapedText === 'Error' ? 'Exception' : id.escapedText;
-                const symbol = global.checker.getSymbolAtLocation(expression.expression);
+                const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
-                    const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                    const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
                     const isClassDeclaration = declarations.find(l => l.kind === ts.SyntaxKind.InterfaceDeclaration ||  l.kind === ts.SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
                         return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${idName} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
@@ -1104,7 +1104,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // printLeadingComments(node, identation) {
-    //     const fullText = global.src.getFullText();
+    //     const fullText = this.getSrc().getFullText();
     //     const commentsRangeList = ts.getLeadingCommentRanges(fullText, node.pos);
     //     const commentsRange = commentsRangeList ? commentsRangeList : undefined;
     //     let res = "";
@@ -1140,11 +1140,11 @@ export class CSharpTranspiler extends BaseTranspiler {
 // }
 
 // getTypesFromCallExpressionParameters(node) {
-//     const resolvedParams = global.checker.getResolvedSignature(node).parameters;
+//     const resolvedParams = this.getChecker().getResolvedSignature(node).parameters;
 //     const parsedTypes = [];
 //     resolvedParams.forEach((p) => {
 //         const decl = p.declarations[0];
-//         const type = global.checker.getTypeAtLocation(decl);
+//         const type = this.getChecker().getTypeAtLocation(decl);
 //         const parsedType = this.getTypeFromRawType(type);
 //         parsedTypes.push(parsedType);
 //     });

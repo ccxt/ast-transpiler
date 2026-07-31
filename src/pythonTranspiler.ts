@@ -374,7 +374,7 @@ export class PythonTranspiler extends BaseTranspiler {
             const parsedArg =  (args && args.length > 0) ? this.printNode(args[0], 0): undefined;
             const leftSideOfIndexOf = left.expression.expression;  // myString in myString.indexOf
             const leftSide = this.printNode(leftSideOfIndexOf, 0);
-            // const rightType = global.checker.getTypeAtLocation(leftSideOfIndexOf); // type of myString in myString.indexOf ("b") >= 0;
+            // const rightType = this.getChecker().getTypeAtLocation(leftSideOfIndexOf); // type of myString in myString.indexOf ("b") >= 0;
 
             switch(prop) {
             case 'indexOf':

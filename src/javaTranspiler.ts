@@ -276,7 +276,7 @@ export class JavaTranspiler extends BaseTranspiler {
             node?.parent?.kind === ts.SyntaxKind.PropertyAccessExpression ||
             node?.parent?.kind === ts.SyntaxKind.ElementAccessExpression;
         if (!isLeftSide && !isCallOrPropertyAccess && !isInsideCatch && !isInsideNewExpression) {
-            const type = (global as any).checker.getTypeAtLocation(node);
+            const type = this.getChecker().getTypeAtLocation(node);
             const typeSymbol = type?.symbol;
             if (typeSymbol !== undefined) {
                 const decl = typeSymbol?.declarations ?? [];
@@ -287,7 +287,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 }
 
                 if (isBuiltIn !== undefined && !isBuiltIn) {
-                    const symbol = (global as any).checker.getSymbolAtLocation(node);
+                    const symbol = this.getChecker().getSymbolAtLocation(node);
                     let isClassDeclaration = false;
                     if (symbol) {
                         const first = symbol.declarations[0];
@@ -295,7 +295,7 @@ export class JavaTranspiler extends BaseTranspiler {
                             isClassDeclaration = true;
                         }
                         if (first.kind === ts.SyntaxKind.ImportSpecifier) {
-                            const importedSymbol = (global as any).checker.getAliasedSymbol(symbol);
+                            const importedSymbol = this.getChecker().getAliasedSymbol(symbol);
                             if (
                                 importedSymbol?.declarations[0]?.kind ===
                                 ts.SyntaxKind.ClassDeclaration
@@ -422,7 +422,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // }
 
     printWrappedUnknownThisProperty(node) {
-        const type = (global as any).checker.getResolvedSignature(node);
+        const type = this.getChecker().getResolvedSignature(node);
         if (type?.declaration === undefined) {
             let parsedArguments = node.arguments
                 ?.map((a) => this.printNode(a, 0))
@@ -824,7 +824,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // sibling for-loops (separate `let i` declarations = separate symbols).
         const symbolIdOf = (n: any): string => {
             try {
-                const checker = (global as any).checker;
+                const checker = this.getChecker();
                 const sym = checker?.getSymbolAtLocation?.(n);
                 const decl = sym?.declarations?.[0] ?? sym?.valueDeclaration;
                 if (decl) return `s:${decl.pos}:${decl.end}`;
@@ -1292,8 +1292,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (parsedValue === this.UNDEFINED_TOKEN) {
             let specificVarToken = "Object";
             if (this.INFER_VAR_TYPE) {
-                const variableType = (global as any).checker.typeToString(
-                    (global as any).checker.getTypeAtLocation(declaration)
+                const variableType = this.getChecker().typeToString(
+                    this.getChecker().getTypeAtLocation(declaration)
                 );
                 if (this.VariableTypeReplacements[variableType]) {
                     specificVarToken = this.VariableTypeReplacements[variableType];
@@ -1343,7 +1343,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
         switch (rightSide) {
         case "length": {
-            const type = (global.checker as TypeChecker).getTypeAtLocation(
+            const type = (this.getChecker() as TypeChecker).getTypeAtLocation(
                 expression
             );
             this.warnIfAnyType(node, (type as any).flags, leftSide, "length");
@@ -1375,7 +1375,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
         if (
             node?.escapedText === "undefined" &&
-            (global as any).checker.getTypeAtLocation(node?.parent)?.flags ===
+            this.getChecker().getTypeAtLocation(node?.parent)?.flags ===
             ts.TypeFlags.Number
         ) {
             return this.UNDEFINED_TOKEN;
@@ -1840,7 +1840,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printLengthProperty(node, _identation, _name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        const type = (global.checker as TypeChecker).getTypeAtLocation(node.expression);
+        const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression);
         this.warnIfAnyType(node, (type as any).flags, leftSide, "length");
         return this.isStringType((type as any).flags)
             ? `((String)${leftSide}).length()`
@@ -1906,10 +1906,10 @@ export class JavaTranspiler extends BaseTranspiler {
                 // `catch (Exception e)` won't catch it. Map JS/TS `Error` to
                 // RuntimeException so standard catch blocks work.
                 const exceptionName = id.escapedText === "Error" ? "RuntimeException" : id.escapedText;
-                const symbol = (global as any).checker.getSymbolAtLocation(expression.expression);
+                const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
                     const declarations =
-                        (global as any).checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                        this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
                     const isClassDeclaration = declarations.find(
                         (l) =>
                             l.kind === ts.SyntaxKind.InterfaceDeclaration ||

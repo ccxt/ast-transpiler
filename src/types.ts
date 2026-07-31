@@ -1,7 +1,17 @@
+import ts from 'typescript';
 
 interface IInput {
     language: Languages;
     async: boolean;
+}
+
+// per-transpile typescript state. Holding it in an explicit object (owned by the
+// Transpiler instance and handed to the language printers) instead of process
+// globals keeps concurrent/nested transpilations from clobbering each other.
+interface ITranspileContext {
+    src: ts.SourceFile;
+    checker: ts.TypeChecker;
+    program: ts.Program;
 }
 
 
@@ -85,6 +95,7 @@ export {
     IFileImport,
     ITranspiledFile,
     IFileExport,
+    ITranspileContext,
     TranspilationError,
     // FunctionReturnTypeError,
     // FunctionArgumentTypeError,
