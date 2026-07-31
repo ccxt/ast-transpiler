@@ -247,13 +247,6 @@ export default class Transpiler {
         return context;
     }
 
-    getContext(): ITranspileContext {
-        if (this.context === undefined) {
-            throw new Error("No transpilation context set: the typescript program must be created before transpiling.");
-        }
-        return this.context;
-    }
-
     /** @deprecated renamed to createProgramInMemoryAndSetContext */
     createProgramInMemoryAndSetGlobals(content): ITranspileContext {
         return this.createProgramInMemoryAndSetContext(content);
@@ -264,7 +257,7 @@ export default class Transpiler {
         return this.createProgramByPathAndSetContext(path);
     }
 
-    checkFileDiagnostics(context: ITranspileContext = this.getContext()) {
+    checkFileDiagnostics(context: ITranspileContext = this.context) {
         const diagnostics = ts.getPreEmitDiagnostics(context.program, context.src);
         if (diagnostics.length > 0) {
             let errorMessage = "Errors found in the typescript code. Transpilation might produce invalid results:\n";
@@ -288,7 +281,7 @@ export default class Transpiler {
             this.checkFileDiagnostics();
         }
 
-        const src = this.getContext().src;
+        const src = this.context.src;
 
         let transpiledContent = undefined;
         switch(lang) {

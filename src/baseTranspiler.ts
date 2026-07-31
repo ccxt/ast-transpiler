@@ -3,6 +3,9 @@ import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterTy
 import { unCamelCase } from "./utils.js";
 import { Logger } from "./logger.js";
 import { timingSafeEqual } from 'crypto';
+
+const NO_CONTEXT_ERROR = "No transpilation context set: the typescript program must be created before printing nodes.";
+
 class BaseTranspiler {
 
     NUM_LINES_BETWEEN_CLASS_MEMBERS = 1;
@@ -219,23 +222,19 @@ class BaseTranspiler {
         this.context = context;
     }
 
-    getContext(): ITranspileContext {
-        if (this.context === undefined) {
-            throw new Error("No transpilation context set: the typescript program must be created before printing nodes.");
-        }
-        return this.context;
-    }
-
     getSrc(): ts.SourceFile {
-        return this.getContext().src;
+        if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
+        return this.context.src;
     }
 
     getChecker(): ts.TypeChecker {
-        return this.getContext().checker;
+        if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
+        return this.context.checker;
     }
 
     getProgram(): ts.Program {
-        return this.getContext().program;
+        if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
+        return this.context.program;
     }
 
     initOperators() {

@@ -29,8 +29,8 @@ describe('transpile context isolation', () => {
         const bContext = (b as any).createProgramInMemoryAndSetContext("const beta = 2;");
 
         expect(aContext.src).not.toBe(bContext.src);
-        expect((a as any).getContext().src).toBe(aContext.src);
-        expect((b as any).getContext().src).toBe(bContext.src);
+        expect((a as any).context.src).toBe(aContext.src);
+        expect((b as any).context.src).toBe(bContext.src);
         expect((a as any).pythonTranspiler.getSrc()).toBe(aContext.src);
         expect((b as any).pythonTranspiler.getSrc()).toBe(bContext.src);
 
@@ -44,7 +44,7 @@ describe('transpile context isolation', () => {
 
         const printers = [ 'pythonTranspiler', 'phpTranspiler', 'csharpTranspiler', 'goTranspiler', 'javaTranspiler', 'rustTranspiler' ];
         printers.forEach((printer) => {
-            expect((transpiler as any)[printer].getContext()).toBe(context);
+            expect((transpiler as any)[printer].context).toBe(context);
             expect((transpiler as any)[printer].getChecker()).toBe(context.checker);
             expect((transpiler as any)[printer].getProgram()).toBe(context.program);
         });
@@ -52,7 +52,7 @@ describe('transpile context isolation', () => {
 
     test('printing without a context throws instead of reading stale state', () => {
         const transpiler = new Transpiler(config);
-        expect(() => (transpiler as any).getContext()).toThrow(/No transpilation context set/);
+        expect((transpiler as any).context).toBeUndefined();
         expect(() => (transpiler as any).goTranspiler.getChecker()).toThrow(/No transpilation context set/);
     });
 
