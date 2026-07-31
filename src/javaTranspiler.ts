@@ -1954,12 +1954,14 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printThrowStatement(node, identation) {
         if (node.expression.kind === ts.SyntaxKind.Identifier) {
+            // a bare rethrow (`throw e`) of a caught java.lang.Exception is a checked
+            // exception, which the surrounding async lambdas cannot declare - keep
+            // unchecked exceptions (ccxt errors extend RuntimeException) as-is and
+            // wrap checked ones, preserving the original as the cause
+            const name = this.printNode(node.expression, 0);
             return (
                 this.getIden(identation) +
-                this.THROW_TOKEN +
-                " " +
-                this.printNode(node.expression, 0) +
-                this.LINE_TERMINATOR
+                `${this.THROW_TOKEN} (${name} instanceof RuntimeException ? (RuntimeException)${name} : new RuntimeException(${name}))${this.LINE_TERMINATOR}`
             );
         }
         if (node.expression.kind === ts.SyntaxKind.NewExpression) {
