@@ -106,6 +106,44 @@ console.log(transpiled.imports) // prints unified imports statements if any
 console.log(transpiled.exports) // prints unified export statements if any
 ```
 
+## 🧵 Concurrency and sharing work between threads
+
+A `Transpiler` instance owns its typescript state, so several instances can be used at the same time in one process. Instances can additionally share a **program cache** — the parsed `SourceFile`s (the es lib chain plus the import closure of everything transpiled so far) and the last program built from them:
+
+```js
+const cache = Transpiler.createProgramCache();
+
+const a = new Transpiler(config, cache);
+const b = new Transpiler(config, cache); // reuses everything a has parsed
+// or, from an existing instance:
+const c = a.cloneSharingProgramCache();
+```
+
+Each instance keeps its own printers and its own transpile context, so they can be driven independently and interleaved; only the parse/typecheck work is shared. Transpilation output is unaffected.
+
+### Worker threads
+
+**A `ts.Program` cannot be shared between worker threads.** Each worker is a separate V8 isolate, and `postMessage` uses structured clone, which rejects a `Program`, a `TypeChecker`, a `SourceFile` and even a single AST node (they carry functions and cyclic internal state). A `SharedArrayBuffer` only shares raw bytes, so it cannot hold one either.
+
+What works in practice:
+
+- **Within a thread** — share one program cache across as many `Transpiler` instances as you like (above). This is where the reuse happens.
+- **Across worker threads** — send file paths or source text, and give each worker a long-lived cache of its own, e.g. a module-level `const cache = Transpiler.createProgramCache()` in the worker entry point reused by every task that worker handles. The parse work is then done once per worker instead of once per task:
+
+```js
+// worker.js — one cache per worker, reused across tasks
+import { Transpiler } from 'ast-transpiler';
+
+const cache = Transpiler.createProgramCache();
+
+export default async ({ transpilerConfig, files }) => {
+    const transpiler = new Transpiler(transpilerConfig, cache);
+    return files.map((f) => transpiler.transpileGoByPath(f));
+};
+```
+
+A cache is bound to the thread that created it; do not attempt to post one to another thread.
+
 ## ⚡ C#/Go/Java/Rust Notes
 ### Helpers
 C#/Go/Java/Rust are very different from languages like Typescript, Python or PHP since it's statically typed and much more restricted than the others mentioned. Things like falsy values, empty default objects, dynamic properties, different type comparison, untyped arguments/return type, etc do not exist so I had to create a set of wrappers that will emulate these features in C#/Go/Java/Rust. So in order to make your code run you need to make all the **helper** methods available [here](https://github.com/carlosmiei/ast-transpiler/blob/c%23/helpers/c%23/helpers.cs) accessible from your code (wip).

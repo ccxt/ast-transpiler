@@ -6,7 +6,7 @@ import { CSharpTranspiler } from './csharpTranspiler.js';
 import * as path from "path";
 import * as fs from "fs";
 import { Logger } from './logger.js';
-import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext } from './types.js';
+import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext, ITranspileProgramCache } from './types.js';
 import { GoTranspiler } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler } from './rustTranspiler.js';
@@ -111,7 +111,7 @@ function memoizeCheckerCalls(checker: ts.TypeChecker): void {
     };
 }
 
-function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, options: any = {}): [any,any,any]  {
+function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, options: any = {}, cache?: ITranspileProgramCache): [any,any,any]  {
     options = options || ts.getDefaultCompilerOptions();
     const inMemoryFilePath = path.resolve(path.join(rootDir, "__dummy-file.ts"));
     const textAst = ts.createSourceFile(inMemoryFilePath, text, options.target || ts.ScriptTarget.Latest);
@@ -123,11 +123,36 @@ function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, opti
         [globalsShimPath, shimAst],
     ]));
 
+    if (cache !== undefined) {
+        // the dummy file changes every call, but the es lib chain behind it does not:
+        // serve those from the shared cache so they are parsed once per cache
+        const originalGetSourceFile = host.getSourceFile.bind(host);
+        host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+            const resolved = path.resolve(fileName);
+            if (resolved === inMemoryFilePath) {
+                return textAst;
+            }
+            const cached = cache.sourceFiles.get(resolved);
+            if (cached !== undefined && !shouldCreateNewSourceFile) {
+                return cached.sourceFile;
+            }
+            const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+            if (sourceFile !== undefined) {
+                cache.sourceFiles.set(resolved, { mtimeMs: 0, sourceFile });
+            }
+            return sourceFile;
+        };
+    }
+
     const program = ts.createProgram({
         options,
         rootNames: [inMemoryFilePath, globalsShimPath],
-        host
+        host,
+        oldProgram: cache?.memoryOldProgram,
     });
+    if (cache !== undefined) {
+        cache.memoryOldProgram = program;
+    }
 
     const typeChecker = program.getTypeChecker();
     memoizeCheckerCalls(typeChecker);
@@ -146,14 +171,27 @@ export default class Transpiler {
     rustTranspiler: RustTranspiler;
     // ByPath transpilation cache: parsed SourceFiles (libs + the whole import graph)
     // are reused across createProgram calls — without this every transpile*ByPath call
-    // re-parses the full import closure of the target file (~1s+ per file on big repos)
-    private byPathHost: ts.CompilerHost | undefined;
-    private byPathOldProgram: ts.Program | undefined;
-    private sourceFileCache: Map<string, { mtimeMs: number, sourceFile: ts.SourceFile }> = new Map();
+    // re-parses the full import closure of the target file (~1s+ per file on big repos).
+    // Lives in a standalone object so several Transpiler instances on the same thread
+    // can be pointed at one cache (see Transpiler.createProgramCache).
+    private programCache: ITranspileProgramCache;
     // typescript state of the transpilation in flight, shared with the language printers
     private context: ITranspileContext | undefined;
-    constructor(config = {}) {
+
+    // A program cache holds parsed typescript SourceFiles and the last program built
+    // from them. Hand the same cache to several Transpiler instances to reuse one
+    // parse/typecheck of the es lib chain and of every shared import across all of
+    // them. Callers that need isolation simply omit it and get a private cache.
+    //
+    // Same-thread only: these are live V8 objects, so a cache cannot be posted to a
+    // worker_threads isolate — give each worker its own long-lived cache instead.
+    static createProgramCache(): ITranspileProgramCache {
+        return { sourceFiles: new Map() };
+    }
+
+    constructor(config = {}, programCache?: ITranspileProgramCache) {
         this.config = config;
+        this.programCache = programCache ?? Transpiler.createProgramCache();
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
@@ -177,8 +215,21 @@ export default class Transpiler {
         Logger.setVerboseMode(verbose);
     }
 
+    // the cache this instance parses into, to hand to further Transpiler instances
+    // that should reuse this one's parsed SourceFiles
+    getProgramCache(): ITranspileProgramCache {
+        return this.programCache;
+    }
+
+    // a second Transpiler over the same parsed typescript state, with its own
+    // printers and its own transpile context, so both can be driven independently
+    // on this thread without either clobbering the other's program
+    cloneSharingProgramCache(config = this.config): Transpiler {
+        return new Transpiler(config, this.programCache);
+    }
+
     createProgramInMemoryAndSetContext(content): ITranspileContext {
-        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions);
+        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions, this.programCache);
         return this.setContext({
             src: memSource,
             checker: memType as ts.TypeChecker,
@@ -187,10 +238,10 @@ export default class Transpiler {
     }
 
     getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost {
-        if (this.byPathHost === undefined) {
+        if (this.programCache.byPathHost === undefined) {
             const host = ts.createCompilerHost(options, true);
             const originalGetSourceFile = host.getSourceFile.bind(host);
-            const cache = this.sourceFileCache;
+            const cache = this.programCache.sourceFiles;
             host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
                 let mtimeMs = 0;
                 try {
@@ -210,9 +261,9 @@ export default class Transpiler {
             };
             const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, ts.ScriptTarget.Latest);
             overrideHostForVirtualFiles(host, new Map([[globalsShimPath, shimAst]]));
-            this.byPathHost = host;
+            this.programCache.byPathHost = host;
         }
-        return this.byPathHost;
+        return this.programCache.byPathHost;
     }
 
     createProgramByPathAndSetContext(path): ITranspileContext {
@@ -220,8 +271,8 @@ export default class Transpiler {
         const host = this.getByPathCompilerHost(options);
         // passing the previous program lets typescript reuse its internal state where
         // possible; the cached host makes every already-seen dependency parse-free
-        const program = ts.createProgram([path, globalsShimPath], options, host, this.byPathOldProgram);
-        this.byPathOldProgram = program;
+        const program = ts.createProgram([path, globalsShimPath], options, host, this.programCache.byPathOldProgram);
+        this.programCache.byPathOldProgram = program;
         const sourceFile = program.getSourceFile(path);
         const typeChecker = program.getTypeChecker();
         memoizeCheckerCalls(typeChecker);

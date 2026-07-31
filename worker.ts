@@ -1,5 +1,10 @@
 import { Transpiler } from './src/transpiler.js'
 
+// one cache per worker thread, reused by every task this worker handles: a
+// ts.Program cannot cross the isolate boundary, but the parse work it needs can
+// at least be done once per worker instead of once per task
+const programCache = Transpiler.createProgramCache();
+
 // expected files config
 // const filesConfig = [
 //     {
@@ -13,7 +18,7 @@ import { Transpiler } from './src/transpiler.js'
 // ];
 
 export default async ({transpilerConfig, filesConfig}) => {
-    const transpiler = new Transpiler(transpilerConfig);
+    const transpiler = new Transpiler(transpilerConfig, programCache);
 
     const result = [] as any[];
     for (const fileConfig of filesConfig) {

@@ -14,6 +14,18 @@ interface ITranspileContext {
     program: ts.Program;
 }
 
+// Parsed SourceFiles (the es lib chain plus the import closure of everything
+// transpiled so far) and the last program built from them, so the next program
+// reuses that work instead of re-parsing it. Shareable between Transpiler
+// instances running on the same thread; these are plain V8 heap objects, so a
+// worker_threads isolate cannot receive one and needs a cache of its own.
+interface ITranspileProgramCache {
+    sourceFiles: Map<string, { mtimeMs: number, sourceFile: ts.SourceFile }>;
+    byPathHost?: ts.CompilerHost;
+    byPathOldProgram?: ts.Program;
+    memoryOldProgram?: ts.Program;
+}
+
 
 interface IParameterType {
     name: string;
@@ -96,6 +108,7 @@ export {
     ITranspiledFile,
     IFileExport,
     ITranspileContext,
+    ITranspileProgramCache,
     TranspilationError,
     // FunctionReturnTypeError,
     // FunctionArgumentTypeError,
