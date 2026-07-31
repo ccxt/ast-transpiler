@@ -86,7 +86,7 @@ export class PhpTranspiler extends BaseTranspiler {
         }
 
         // Get the symbol for the identifier
-        const symbol = global.checker.getSymbolAtLocation(node);
+        const symbol = this.getChecker().getSymbolAtLocation(node);
 
         // Check if the symbol references a function declaration or expression
         if (symbol && symbol.valueDeclaration) {
@@ -128,8 +128,8 @@ export class PhpTranspiler extends BaseTranspiler {
                 return TOKEN;
             }
 
-            const leftType = global.checker.getTypeAtLocation(left);
-            const rightType = global.checker.getTypeAtLocation(right);
+            const leftType = this.getChecker().getTypeAtLocation(left);
+            const rightType = this.getChecker().getTypeAtLocation(right);
 
             if (leftType.flags === ts.TypeFlags.String || rightType.flags === ts.TypeFlags.String) {
                 return TOKEN;
@@ -143,7 +143,7 @@ export class PhpTranspiler extends BaseTranspiler {
 
     printLengthProperty(node, identation, name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        const type = (global.checker as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
+        const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSide, "length");
         return this.isStringType(type.flags) ? `strlen(${leftSide})` : `count(${leftSide})`;
     }
@@ -228,7 +228,7 @@ export class PhpTranspiler extends BaseTranspiler {
         // "ol".includes("o") -> str_contains("ol", "o") or [12,3,4].includes(3) -> in_array(3, [12,3,4])
         const leftSide = node.expression?.expression;
         const leftSideText = this.printNode(leftSide, 0);
-        const type = global.checker.getTypeAtLocation(leftSide); // eslint-disable-line
+        const type = this.getChecker().getTypeAtLocation(leftSide); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSideText, "includes");
         this.warnIfAnyType(node, type.flags, leftSideText, "includes");
         if (this.isStringType(type.flags)) {
@@ -241,7 +241,7 @@ export class PhpTranspiler extends BaseTranspiler {
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
         const leftSide = node.expression?.expression;
         const leftSideText = this.printNode(leftSide, 0);
-        const type = global.checker.getTypeAtLocation(leftSide); // eslint-disable-line
+        const type = this.getChecker().getTypeAtLocation(leftSide); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSideText, "indexOf");
         if (this.isStringType(type.flags)) {
             return `mb_strpos(${name}, ${parsedArg})`;
@@ -384,7 +384,7 @@ export class PhpTranspiler extends BaseTranspiler {
             const parsedArg =  (args && args.length > 0) ? this.printNode(args[0], 0): undefined;
             const leftSideOfIndexOf = left.expression.expression;  // myString in myString.indexOf
             const leftSide = this.printNode(leftSideOfIndexOf, 0);
-            const rightType = global.checker.getTypeAtLocation(leftSideOfIndexOf); // type of myString in myString.indexOf ("b") >= 0;
+            const rightType = this.getChecker().getTypeAtLocation(leftSideOfIndexOf); // type of myString in myString.indexOf ("b") >= 0;
             switch(prop) {
             case 'indexOf':
                 if (op === SyntaxKind.GreaterThanEqualsToken && right === '0') {

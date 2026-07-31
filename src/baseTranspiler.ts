@@ -1,8 +1,11 @@
 import ts from 'typescript';
-import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType } from './types.js';
+import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType, ITranspileContext } from './types.js';
 import { unCamelCase } from "./utils.js";
 import { Logger } from "./logger.js";
 import { timingSafeEqual } from 'crypto';
+
+const NO_CONTEXT_ERROR = "No transpilation context set: the typescript program must be created before printing nodes.";
+
 class BaseTranspiler {
 
     NUM_LINES_BETWEEN_CLASS_MEMBERS = 1;
@@ -198,6 +201,9 @@ class BaseTranspiler {
     removeVariableDeclarationForFunctionExpression;
     includeFunctionNameInFunctionExpressionDeclaration;
     id;
+    // typescript state for the transpilation currently in flight. Set by the owning
+    // Transpiler before it walks the AST, so nothing leaks through process globals.
+    context: ITranspileContext | undefined;
 
     constructor(config) {
         Object.assign (this, (config['parser'] || {}));
@@ -210,6 +216,25 @@ class BaseTranspiler {
         this.removeVariableDeclarationForFunctionExpression = true;
         this.includeFunctionNameInFunctionExpressionDeclaration = true;
         this.initOperators();
+    }
+
+    setContext(context: ITranspileContext | undefined): void {
+        this.context = context;
+    }
+
+    getSrc(): ts.SourceFile {
+        if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
+        return this.context.src;
+    }
+
+    getChecker(): ts.TypeChecker {
+        if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
+        return this.context.checker;
+    }
+
+    getProgram(): ts.Program {
+        if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
+        return this.context.program;
     }
 
     initOperators() {
@@ -282,7 +307,7 @@ class BaseTranspiler {
 
     getLineAndCharacterOfNode(node): [number,number] {
         const { line, character } =
-        global.src.getLineAndCharacterOfPosition(node.getStart());
+        this.getSrc().getLineAndCharacterOfPosition(node.getStart());
         return [line + 1,character];
     }
 
@@ -327,8 +352,8 @@ class BaseTranspiler {
         if (!this.implicitAsyncTranspiling || !ts.isFunctionLike(node) || this.hasAsyncModifier(node)) {
             return false;
         }
-        const signature = global.checker.getSignatureFromDeclaration(node);
-        return signature !== undefined && this.isPromiseType(global.checker.getReturnTypeOfSignature(signature));
+        const signature = this.getChecker().getSignatureFromDeclaration(node);
+        return signature !== undefined && this.isPromiseType(this.getChecker().getReturnTypeOfSignature(signature));
     }
 
     isAsyncFunction(node) {
@@ -361,7 +386,7 @@ class BaseTranspiler {
         let parentClass = (ts as any).getAllSuperTypeNodes(node.parent)[0];
 
         while (parentClass !== undefined) {
-            const parentClassType = global.checker.getTypeAtLocation(parentClass);
+            const parentClassType = this.getChecker().getTypeAtLocation(parentClass);
             const parentClassDecl = parentClassType?.symbol?.valueDeclaration;
 
             if (parentClassDecl === undefined) {
@@ -369,7 +394,7 @@ class BaseTranspiler {
                 return undefined;
             }
 
-            const parentClassMembers = parentClassDecl.members ?? [];
+            const parentClassMembers = (parentClassDecl as any).members ?? [];
 
             parentClassMembers.forEach(elem=> {
                 if (ts.isMethodDeclaration(elem)) {
@@ -648,7 +673,7 @@ class BaseTranspiler {
     }
 
     printLeadingComments(node, identation) {
-        const fullText = global.src.getFullText();
+        const fullText = this.getSrc().getFullText();
         const commentsRangeList = ts.getLeadingCommentRanges(fullText, node.pos);
         const commentsRange = commentsRangeList ? commentsRangeList : undefined;
         let res = "";
@@ -668,7 +693,7 @@ class BaseTranspiler {
     }
 
     printTraillingComment(node, identation) {
-        const fullText = global.src.getFullText();
+        const fullText = this.getSrc().getFullText();
         const commentsRangeList = ts.getTrailingCommentRanges(fullText, node.end);
         const commentsRange = commentsRangeList ? commentsRangeList : undefined;
         let res = "";
@@ -800,19 +825,20 @@ class BaseTranspiler {
 
     getFunctionType(node, async = true){
         // use type checker to do it here
-        const type = global.checker.getReturnTypeOfSignature(global.checker.getSignatureFromDeclaration(node));
+        const type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
 
         const parsedTtype = this.getTypeFromRawType(type);
 
         if (parsedTtype === this.PROMISE_TYPE_KEYWORD) {
-            if (type.resolvedTypeArguments.length === 0) {
+            const resolvedTypeArguments = (type as any).resolvedTypeArguments; // internal typescript property
+            if (resolvedTypeArguments.length === 0) {
                 return this.PROMISE_TYPE_KEYWORD;
             }
-            if (type.resolvedTypeArguments.length === 1 && type.resolvedTypeArguments[0].flags === ts.TypeFlags.Void) {
+            if (resolvedTypeArguments.length === 1 && resolvedTypeArguments[0].flags === ts.TypeFlags.Void) {
                 return this.PROMISE_TYPE_KEYWORD;
             }
 
-            const insideTypes = type.resolvedTypeArguments.map(type => this.getTypeFromRawType(type)).join(",");
+            const insideTypes = resolvedTypeArguments.map(type => this.getTypeFromRawType(type)).join(",");
             if (insideTypes.length > 0) {
                 if (async) {
                     return `${this.PROMISE_TYPE_KEYWORD}<${insideTypes}>`;
@@ -838,7 +864,7 @@ class BaseTranspiler {
             return this.DEFAULT_PARAMETER_TYPE;
         }
 
-        const type = global.checker.typeToString(global.checker.getTypeAtLocation(node));
+        const type = this.getChecker().typeToString(this.getChecker().getTypeAtLocation(node));
 
         if (this.ArgTypeReplacements[type]) {
             return this.ArgTypeReplacements[type];
@@ -1028,7 +1054,7 @@ class BaseTranspiler {
     }
 
     isBuiltInFunctionCall(node) {
-        const symbol = global.checker.getSymbolAtLocation(node);
+        const symbol = this.getChecker().getSymbolAtLocation(node);
         const isInLibFiles = symbol?.getDeclarations()
             ?.some(s => s.getSourceFile().fileName.includes("/node_modules/typescript/lib/"))
             ?? false;
@@ -1038,11 +1064,11 @@ class BaseTranspiler {
     }
 
     getTypesFromCallExpressionParameters(node) {
-        const resolvedParams = global.checker.getResolvedSignature(node).parameters;
+        const resolvedParams = this.getChecker().getResolvedSignature(node).parameters;
         const parsedTypes = [];
         resolvedParams.forEach((p) => {
             const decl = p.declarations[0];
-            const type = global.checker.getTypeAtLocation(decl);
+            const type = this.getChecker().getTypeAtLocation(decl);
             const parsedType = this.getTypeFromRawType(type);
             parsedTypes.push(parsedType);
         });
@@ -1540,12 +1566,12 @@ class BaseTranspiler {
         }
         // cast order["test"] to ((Dictionariy<string, object>)order)["test"] or List<object>
         if (isLeftSideOfAssignment && this.ELEMENT_ACCESS_WRAPPER_OPEN && this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
-            const type = global.checker.getTypeAtLocation(argumentExpression);
+            const type = this.getChecker().getTypeAtLocation(argumentExpression);
             const isString = this.isStringType(type.flags);
 
             let isUnionString = false; // handle unions later
             if (type.flags === ts.TypeFlags.Union) {
-                isUnionString = this.isStringType(type?.types[0].flags);
+                isUnionString = this.isStringType((type as any)?.types[0].flags);
             }
 
             if (isString || isUnionString || type.flags === ts.TypeFlags.Any) { // default to string when unknown
@@ -1695,7 +1721,7 @@ class BaseTranspiler {
         let exp = node.expression;
         if (!exp || ts.isAwaitExpression(exp)
                 || !this.isImplicitAsyncFunction(ts.findAncestor(node, ts.isFunctionLike))
-                || !this.isPromiseType(global.checker.getTypeAtLocation(exp))) {
+                || !this.isPromiseType(this.getChecker().getTypeAtLocation(exp))) {
             return node;
         }
         if (ts.isConditionalExpression(exp) || ts.isBinaryExpression(exp)) {
@@ -2150,14 +2176,14 @@ class BaseTranspiler {
     getReturnTypeFromMethod(node): string {
         // first try custom type
 
-        const bType = global.checker.getTypeAtLocation(node);
+        const bType = this.getChecker().getTypeAtLocation(node);
         // const func2Symbol = bType.getProperty("test1")!;
-        const func2Type = global.checker.getTypeOfSymbolAtLocation(bType.symbol, bType.symbol.valueDeclaration);
-        const func2Signature = global.checker.getSignaturesOfType(func2Type, ts.SignatureKind.Call)[0];
+        const func2Type = this.getChecker().getTypeOfSymbolAtLocation(bType.symbol, bType.symbol.valueDeclaration);
+        const func2Signature = this.getChecker().getSignaturesOfType(func2Type, ts.SignatureKind.Call)[0];
         const rawType = func2Signature.getReturnType();
         // const parsed = ts.TypeFlags[rawType.flags];
         // console.log(parsed);
-        const res = global.checker.typeToString(rawType); // C
+        const res = this.getChecker().typeToString(rawType); // C
         if (res === undefined) {
             const name = node.type?.typeName?.escapedText;
             if (name){
@@ -2184,8 +2210,8 @@ class BaseTranspiler {
         if (node.type === undefined) {
             // does not have a type or uses a initializer
             if (node.initializer !== undefined) {
-                const type = global.checker.getTypeAtLocation(node.initializer);
-                const res = global.checker.typeToString(type); // C
+                const type = this.getChecker().getTypeAtLocation(node.initializer);
+                const res = this.getChecker().typeToString(type); // C
                 // console.log("initializer", res);
                 // result.initializer = node.initializer.text;
                 result.type = ts.TypeFlags[type.flags];
@@ -2203,8 +2229,8 @@ class BaseTranspiler {
         }
 
         if (node.type != undefined) {
-            const type = global.checker.getTypeAtLocation(node.type);
-            const res = global.checker.typeToString(type); // C
+            const type = this.getChecker().getTypeAtLocation(node.type);
+            const res = this.getChecker().typeToString(type); // C
             result.type = res as string;
             return result;
         }

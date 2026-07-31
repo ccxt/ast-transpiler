@@ -628,7 +628,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     printWrappedUnknownThisProperty(node) {
-        const type = global.checker.getResolvedSignature(node);
+        const type = this.getChecker().getResolvedSignature(node);
         if (type?.declaration === undefined) {
             let parsedArguments = node.arguments?.map((a) => this.printNode(a, 0)).join(", ");
             parsedArguments = parsedArguments ? parsedArguments : "";
@@ -905,8 +905,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // x = y
         // cast y to x type when y is unknown
         // if (op === ts.SyntaxKind.EqualsToken) {
-        //     const leftType = global.checker.getTypeAtLocation(left);
-        //     const rightType = global.checker.getTypeAtLocation(right);
+        //     const leftType = this.getChecker().getTypeAtLocation(left);
+        //     const rightType = this.getChecker().getTypeAtLocation(right);
 
         //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
         //         // const parsedType = this.getTypeFromRawType(leftType);
@@ -918,8 +918,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     // castVariableAssignmentIfNeeded(left, right, identation) {
-    //     const leftType = global.checker.getTypeAtLocation(left);
-    //     const rightType = global.checker.getTypeAtLocation(right);
+    //     const leftType = this.getChecker().getTypeAtLocation(left);
+    //     const rightType = this.getChecker().getTypeAtLocation(right);
 
     //     const leftText = this.printNode(left, 0);
     //     const rightText = this.printNode(right, 0);
@@ -940,7 +940,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         switch(rightSide) {
         case 'length':
-                const type = (global.checker as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
+                const type = (this.getChecker() as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
             // this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
             rawExpression = this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
@@ -1126,7 +1126,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     getLineBasedSuffix(node): string {
-        const { line, character } = global.src.getLineAndCharacterOfPosition(node.getStart());
+        const { line, character } = this.getSrc().getLineAndCharacterOfPosition(node.getStart());
         return `${line}${character}`;
     }
 
@@ -1141,7 +1141,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         const exprStm = this.printNode(node.expression, identation);
 
-        // const { line, character } = global.src.getLineAndCharacterOfPosition(node.getStart());
+        // const { line, character } = this.getSrc().getLineAndCharacterOfPosition(node.getStart());
         // console.log(`line: ${line}, character: ${character}`);
         const returnRandName = "retRes" + this.getLineBasedSuffix(node);
 
@@ -1254,7 +1254,7 @@ ${this.getIden(identation)}return nil`;
         if (elems.length > 0) {
             const first = elems[0];
             if (first.kind === ts.SyntaxKind.CallExpression) {
-                // const type = global.checker.getTypeAtLocation(first);
+                // const type = this.getChecker().getTypeAtLocation(first);
                 const type = this.getFunctionType(first);
                 // const parsedType = this.getTypeFromRawType(type);
                 // parsedType === "Task" ||
@@ -1455,7 +1455,7 @@ ${this.getIden(identation)}return nil`;
 
     printLengthProperty(node, identation, name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        // const type = (global.checker as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
+        // const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
         // this.warnIfAnyType(node, type.flags, leftSide, "length");
         return `GetLength(${leftSide})`;
     }
@@ -1520,9 +1520,9 @@ ${this.getIden(identation)}return nil`;
             if (expression.expression.kind === ts.SyntaxKind.Identifier) {
                 // handle throw new X
                 const id = expression.expression;
-                const symbol = global.checker.getSymbolAtLocation(expression.expression);
+                const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
-                    const declarations = global.checker.getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                    const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
                     const isClassDeclaration = declarations.find(l => l.kind === ts.SyntaxKind.InterfaceDeclaration ||  l.kind === ts.SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
                         // return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
@@ -1588,7 +1588,7 @@ ${this.getIden(identation)}return nil`;
                 // const type = this.getType(node);
                 // const parsedType = this.getTypeFromRawType(type);
                 const leftElement = arrayBindingPatternElements[index];
-                const leftType = global.checker.getTypeAtLocation(leftElement);
+                const leftType = this.getChecker().getTypeAtLocation(leftElement);
                 const parsedType = this.getTypeFromRawType(leftType);
 
                 const castExp = parsedType ? `(${parsedType})` : "";

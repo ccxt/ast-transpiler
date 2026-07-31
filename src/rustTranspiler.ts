@@ -425,7 +425,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printRustFunctionType(node): string {
         try {
-            const type = global.checker.getReturnTypeOfSignature(global.checker.getSignatureFromDeclaration(node));
+            const type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
             if (type.flags === ts.TypeFlags.Void) {
                 return '';
             }
