@@ -1780,18 +1780,17 @@ describe('java transpiling tests', () => {
         expect(undeclared).toEqual([]);
     });
 
-    // Regression (real CCXT bitmart/bingx authenticate shape with state leak):
-    // a var is marked in ReassignedVars from a prior transpile (cross-call leak)
-    // but is `const` in the current function body. Without analyzer awareness of
-    // the leak, sibling if/else branches share the same `finalTimestamp` name,
-    // and the consumer's scope-tracking suppresses the else-branch declaration.
+    // Regression (real CCXT bitmart/bingx authenticate shape): a var was marked in
+    // ReassignedVars by a PRIOR transpile call and then read back while transpiling
+    // a different file where the same class+method+var name is `const`. That
+    // cross-call leak produced spurious `finalXxx` snapshots whose presence depended
+    // on emit order, so re-emitting the same file gave different Java.
     //
-    // The analyzer now consults ReassignedVars during pass 1, so leaked-in symbols
-    // also get per-branch version bumps. We simulate the leak by transpiling a
-    // priming class first.
-    test('object literal: nested if/else with ReassignedVars state leak — distinct per-branch snapshots', () => {
+    // ReassignedVars is now reset per source file, so the priming call below cannot
+    // reach the target: `timestamp` is `const` here and must be captured directly.
+    test('object literal: prior transpile does not leak ReassignedVars into the next file', () => {
         const fresh = new Transpiler();
-        // Prime ReassignedVars: T-authenticate-timestamp will get set.
+        // Would previously prime ReassignedVars with T-authenticate-timestamp.
         const priming =
         "class T {\n" +
         "    async authenticate(type, params = {}) {\n" +
@@ -1818,17 +1817,19 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}";
         const output = fresh.transpileJava(target).content;
-        // Each sibling branch declares its own snapshot with a distinct name.
-        expect(output).toMatch(/final Object finalTimestamp = timestamp;/);
-        expect(output).toMatch(/final Object finalTimestamp_2 = timestamp;/);
-        // Each literal references its branch's own snapshot — no out-of-scope refs.
-        expect(output).toMatch(/Arrays\.asList\(\s*finalTimestamp,/);
-        expect(output).toMatch(/Arrays\.asList\(\s*finalTimestamp_2,/);
+        // `timestamp` is effectively final in the target — no snapshot is needed, and
+        // none may be invented from the previous call's state.
+        expect(output).not.toMatch(/final Object finalTimestamp\b/);
+        expect(output).toMatch(/Arrays\.asList\(\s*timestamp,\s*signature\s*\)/);
+        expect(output).toMatch(/Arrays\.asList\(\s*timestamp,\s*signature,\s*"web"\s*\)/);
         // No undeclared finalXxx anywhere.
         const allRefs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
         const allDecls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
         const undeclared = [...new Set(allRefs)].filter(r => !allDecls.has(r));
         expect(undeclared).toEqual([]);
+        // Transpiling the target standalone must give exactly the same Java.
+        const standalone = new Transpiler().transpileJava(target).content;
+        expect(output).toEqual(standalone);
     });
 
     // Regression (real CCXT parseWsTrade shape): a single if-without-else block
@@ -2227,5 +2228,68 @@ describe('java transpiling tests', () => {
             return output.slice(output.indexOf('{', start), end);
         };
         expect(getBody('watchTicker')).toBe(getBody('watchTickerClassic'));
+    });
+
+    // Idempotency: the Java emit must not be able to tell whether it is the first
+    // or the tenth for the same input. The parsed SourceFile is cached and reused
+    // across transpile calls, so the in-place `x` -> `finalX` identifier rewrite and
+    // the ReassignedVars / object-literal caches all have to be unwound per file.
+    // Before the fix, emit #2 dropped most `final Object finalX = x;` hoists while
+    // keeping their usages (javac: cannot find symbol) or degenerated them into
+    // `final Object finalX = finalX;` (javac: illegal self reference).
+    test('java emit is idempotent — repeated emits of the same source are byte-identical', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchThing(symbol, params = {}) {\n" +
+        "        let request = { 'symbol': symbol };\n" +
+        "        request = this.extend(request, params);\n" +
+        "        const timestamp = this.milliseconds();\n" +
+        "        const payload = { 'ts': timestamp, 'req': request };\n" +
+        "        return payload;\n" +
+        "    }\n" +
+        "}";
+        const shared = new Transpiler();
+        const emit1 = shared.transpileJava(input).content;
+        const emit2 = shared.transpileJava(input).content;
+        const emit3 = shared.transpileJava(input).content;
+        expect(emit2).toEqual(emit1);
+        expect(emit3).toEqual(emit1);
+        // A reused instance must agree with a pristine one.
+        expect(emit1).toEqual(new Transpiler().transpileJava(input).content);
+        // Every finalXxx reference is declared, and no declaration is self-referential.
+        for (const output of [ emit1, emit2, emit3 ]) {
+            const refs = [...output.matchAll(/\b(final[A-Z]\w+)\b/g)].map(m => m[1]);
+            const decls = new Set([...output.matchAll(/final Object (final\w+)\s*=/g)].map(m => m[1]));
+            expect([...new Set(refs)].filter(r => !decls.has(r))).toEqual([]);
+            expect(output).not.toMatch(/final Object (final\w+)\s*=\s*\1\s*;/);
+        }
+    });
+
+    // Interleaving two files through one transpiler must not let either contaminate
+    // the other: each file's Java has to match what it produces on its own.
+    test('java emit is order-independent across files', () => {
+        const fileA =
+        "class A {\n" +
+        "    async run(params = {}) {\n" +
+        "        let request = 'a';\n" +
+        "        request = request + '!';\n" +
+        "        return { 'r': request };\n" +
+        "    }\n" +
+        "}";
+        const fileB =
+        "class A {\n" +
+        "    async run(params = {}) {\n" +
+        "        const request = 'b';\n" +
+        "        return { 'r': request };\n" +
+        "    }\n" +
+        "}";
+        const soloA = new Transpiler().transpileJava(fileA).content;
+        const soloB = new Transpiler().transpileJava(fileB).content;
+        const shared = new Transpiler();
+        expect(shared.transpileJava(fileA).content).toEqual(soloA);
+        expect(shared.transpileJava(fileB).content).toEqual(soloB);
+        expect(shared.transpileJava(fileA).content).toEqual(soloA);
+        // fileB's `request` is const — it must never acquire a snapshot from fileA.
+        expect(soloB).not.toMatch(/final Object finalRequest/);
     });
 });

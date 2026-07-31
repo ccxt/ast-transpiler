@@ -4,6 +4,20 @@ interface IInput {
     language: Languages;
     async: boolean;
 }
+interface ITranspileContext {
+    src: ts.SourceFile;
+    checker: ts.TypeChecker;
+    program: ts.Program;
+}
+interface ITranspileProgramCache {
+    sourceFiles: Map<string, {
+        mtimeMs: number;
+        sourceFile: ts.SourceFile;
+    }>;
+    byPathHost?: ts.CompilerHost;
+    byPathOldProgram?: ts.Program;
+    memoryOldProgram?: ts.Program;
+}
 interface IParameterType {
     name: string;
     type: string;
@@ -191,8 +205,10 @@ declare class BaseTranspiler {
     FuncModifiers: {};
     defaultPropertyAccess: string;
     currentClassName: string;
+    className: string;
     uncamelcaseIdentifiers: any;
     asyncTranspiling: any;
+    implicitAsyncTranspiling: any;
     requiresReturnType: any;
     requiresParameterType: any;
     supportsFalsyOrTruthyValues: any;
@@ -200,17 +216,25 @@ declare class BaseTranspiler {
     removeVariableDeclarationForFunctionExpression: any;
     includeFunctionNameInFunctionExpressionDeclaration: any;
     id: any;
+    context: ITranspileContext | undefined;
     constructor(config: any);
+    setContext(context: ITranspileContext | undefined): void;
+    getSrc(): ts.SourceFile;
+    getChecker(): ts.TypeChecker;
+    getProgram(): ts.Program;
     initOperators(): void;
     capitalize(str: string): string;
     applyUserOverrides(config: any): void;
     getLineAndCharacterOfNode(node: any): [number, number];
     isComment(line: string): boolean;
-    isStringType(flags: ts.TypeFlags): boolean;
-    isAnyType(flags: ts.TypeFlags): boolean;
+    isStringType(flags: ts.TypeFlags): flags is ts.TypeFlags.String | ts.TypeFlags.StringLiteral;
+    isAnyType(flags: ts.TypeFlags): flags is ts.TypeFlags.Any;
     warnIfAnyType(node: any, flags: any, variable: any, target: any): void;
     warn(node: any, target: any, message: any): void;
-    isAsyncFunction(node: any): boolean;
+    hasAsyncModifier(node: any): any;
+    isPromiseType(type: any): boolean;
+    isImplicitAsyncFunction(node: any): boolean;
+    isAsyncFunction(node: any): any;
     getMethodOverride(node: ts.Node): ts.Node;
     getIden(num: any): string;
     getBlockOpen(identation: any): string;
@@ -261,7 +285,7 @@ declare class BaseTranspiler {
     printVariableStatement(node: any, identation: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): any;
     printSuperCallInsideConstructor(node: any, identation: any): string;
-    isBuiltInFunctionCall(node: any): any;
+    isBuiltInFunctionCall(node: any): boolean;
     getTypesFromCallExpressionParameters(node: any): any[];
     printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): any;
@@ -324,6 +348,8 @@ declare class BaseTranspiler {
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
     printAwaitExpression(node: any, identation: any): string;
+    wrapSyntheticNode(synthetic: any, original: any): any;
+    wrapImplicitReturnAwait(node: any): any;
     printConditionalExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
     getFunctionNodeFromReturn(node: any): any;
@@ -535,7 +561,6 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
-    className: string;
     classNameMap: {
         [key: string]: string;
     };
@@ -579,7 +604,7 @@ declare class GoTranspiler extends BaseTranspiler {
     getRandomNameSuffix(): string;
     getLineBasedSuffix(node: any): string;
     printExpressionStatement(node: any, identation: any): string;
-    isInsideAsyncFunction(returnStatementNode: any): boolean;
+    isInsideAsyncFunction(returnStatementNode: any): any;
     printReturnStatement(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any): string;
@@ -648,6 +673,12 @@ declare class JavaTranspiler extends BaseTranspiler {
     varListFromObjectLiterals: {};
     usageToFinalName: WeakMap<ts.Node, string>;
     finalVarScopeStack: Array<Set<string>>;
+    finalVarMutations: Array<{
+        node: any;
+        escapedText: any;
+        ownGetFullText: boolean;
+        getFullText: any;
+    }>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -682,6 +713,9 @@ declare class JavaTranspiler extends BaseTranspiler {
         final: string;
     }>, identation: number): string;
     getObjectLiteralId(node: any): string;
+    recordFinalVarMutation(node: any): void;
+    restoreFinalVarMutations(): void;
+    printNode(node: any, identation?: number): string;
     createNewNodeForFinalVar(originalName: string): ts.Identifier;
     getVarListFromObjectLiteralAndUpdateInPlace(node: any): Array<{
         orig: string;
@@ -755,10 +789,10 @@ declare class JavaTranspiler extends BaseTranspiler {
 
 declare class RustTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
-    className: string;
     methodSignatures: Record<string, {
         requiredCount: number;
     }>;
+    forLoopCounter: number;
     constructor(config?: {});
     initConfig(): void;
     capitalize(str: string): string;
@@ -769,6 +803,7 @@ declare class RustTranspiler extends BaseTranspiler {
     ensureRef(expr: string): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
+    printDateNowCall(node: any, identation: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
@@ -851,12 +886,23 @@ declare class Transpiler {
     goTranspiler: GoTranspiler;
     javaTranspiler: JavaTranspiler;
     rustTranspiler: RustTranspiler;
-    constructor(config?: {});
+    private programCache;
+    private context;
+    static createProgramCache(): ITranspileProgramCache;
+    constructor(config?: {}, programCache?: ITranspileProgramCache);
     setVerboseMode(verbose: boolean): void;
-    createProgramInMemoryAndSetGlobals(content: any): void;
-    createProgramByPathAndSetGlobals(path: any): void;
-    checkFileDiagnostics(): void;
-    transpile(lang: Languages, mode: TranspilationMode, file: string, sync?: boolean, setGlobals?: boolean, handleImports?: boolean): ITranspiledFile;
+    getProgramCache(): ITranspileProgramCache;
+    cloneSharingProgramCache(config?: any): Transpiler;
+    createProgramInMemoryAndSetContext(content: any): ITranspileContext;
+    getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost;
+    createProgramByPathAndSetContext(path: any): ITranspileContext;
+    setContext(context: ITranspileContext): ITranspileContext;
+    /** @deprecated renamed to createProgramInMemoryAndSetContext */
+    createProgramInMemoryAndSetGlobals(content: any): ITranspileContext;
+    /** @deprecated renamed to createProgramByPathAndSetContext */
+    createProgramByPathAndSetGlobals(path: any): ITranspileContext;
+    checkFileDiagnostics(context?: ITranspileContext): void;
+    transpile(lang: Languages, mode: TranspilationMode, file: string, sync?: boolean, createContext?: boolean, handleImports?: boolean): ITranspiledFile;
     transpileDifferentLanguagesGeneric(mode: TranspilationMode, input: IInput[], content: string): ITranspiledFile[];
     transpileDifferentLanguages(input: any[], content: string): ITranspiledFile[];
     transpileDifferentLanguagesByPath(input: any[], content: string): ITranspiledFile[];

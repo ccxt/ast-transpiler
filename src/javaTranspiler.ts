@@ -79,6 +79,13 @@ export class JavaTranspiler extends BaseTranspiler {
     // entry, popped on exit. Used by buildFinalVarDeclarations to dedup: skip if the
     // finalName is already in scope via any ancestor.
     finalVarScopeStack: Array<Set<string>> = [];
+    // Identifiers rewritten in place to their finalXxx name during the current emit.
+    // The parsed ts.SourceFile is cached and reused across transpile calls, so the
+    // rewrite has to be undone when the emit ends — otherwise a second emit of the
+    // same file reads `finalX` where the first read `x`, the symbol no longer
+    // resolves, and the hoisted `final Object finalX = x;` declaration is dropped
+    // while its usages remain.
+    finalVarMutations: Array<{ node: any; escapedText: any; ownGetFullText: boolean; getFullText: any }> = [];
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -1132,7 +1139,56 @@ export class JavaTranspiler extends BaseTranspiler {
     getObjectLiteralId(node): string {
         const start = node.getStart();
         const end = node.getEnd();
-        return `${start}-${end}`;
+        // Qualify with the file: the offsets alone collide between two files whose
+        // object literals happen to sit at the same character range.
+        const fileName = node.getSourceFile?.()?.fileName ?? '';
+        return `${fileName}:${start}-${end}`;
+    }
+
+    // Remember an identifier's pre-rewrite state so restoreFinalVarMutations can put
+    // the shared AST back exactly as it was parsed.
+    recordFinalVarMutation(node: any): void {
+        this.finalVarMutations.push({
+            node,
+            escapedText: node.escapedText,
+            ownGetFullText: Object.prototype.hasOwnProperty.call(node, 'getFullText'),
+            getFullText: node.getFullText,
+        });
+    }
+
+    // Undo every in-place identifier rewrite made during the current emit, newest
+    // first so repeated rewrites of one node unwind to the original value.
+    restoreFinalVarMutations(): void {
+        for (let i = this.finalVarMutations.length - 1; i >= 0; i--) {
+            const mutation = this.finalVarMutations[i];
+            mutation.node.escapedText = mutation.escapedText;
+            if (mutation.ownGetFullText) {
+                mutation.node.getFullText = mutation.getFullText;
+            } else {
+                delete mutation.node.getFullText;
+            }
+        }
+        this.finalVarMutations = [];
+    }
+
+    printNode(node, identation = 0): string {
+        if (node && node.kind === ts.SyntaxKind.SourceFile) {
+            // Everything below influences emitted text and outlives a single
+            // transpile call (the transpiler instance and the parsed SourceFile are
+            // both reused), so reset it per file: an emit must not be able to tell
+            // whether it is the first or the tenth for the same input.
+            this.restoreFinalVarMutations();
+            this.ReassignedVars = {};
+            this.varListFromObjectLiterals = {};
+            this.usageToFinalName = new WeakMap();
+            this.finalVarScopeStack = [];
+            try {
+                return super.printNode(node, identation);
+            } finally {
+                this.restoreFinalVarMutations();
+            }
+        }
+        return super.printNode(node, identation);
     }
 
     createNewNodeForFinalVar(originalName: string): ts.Identifier {
@@ -1181,6 +1237,7 @@ export class JavaTranspiler extends BaseTranspiler {
                     if (isReassignedAhead || this.ReassignedVars[this.getVarKey(n)]) {
                         const finalName = finalNameFor(n, name);
                         res.push({ orig: name, final: finalName });
+                        this.recordFinalVarMutation(n);
                         n.escapedText = finalName;
                         // Some downstream print paths read from getFullText (which
                         // reflects the source text, not escapedText) — shim it so
@@ -1385,6 +1442,11 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printFunctionBody(node, identation) {
+        // Save/restore rather than clobber: a nested function re-enters this method
+        // and must not destroy the enclosing body's analysis state on the way out.
+        const savedVarList = this.varListFromObjectLiterals;
+        const savedUsageToFinalName = this.usageToFinalName;
+        const savedScopeStack = this.finalVarScopeStack;
         this.varListFromObjectLiterals = {};
         this.analyzeFinalVars(node.body);
         this.finalVarScopeStack = [new Set<string>()];
@@ -1393,10 +1455,15 @@ export class JavaTranspiler extends BaseTranspiler {
         const isAsync = this.isAsyncFunction(node);
         const initParams = [];
         const processedParts = [];
-        for (let i = 0; i < bodyStatements.length; i++) {
-            processedParts.push(this.printNode(bodyStatements[i], identation + 1));
+        try {
+            for (let i = 0; i < bodyStatements.length; i++) {
+                processedParts.push(this.printNode(bodyStatements[i], identation + 1));
+            }
+        } finally {
+            this.varListFromObjectLiterals = savedVarList;
+            this.usageToFinalName = savedUsageToFinalName;
+            this.finalVarScopeStack = savedScopeStack;
         }
-        this.finalVarScopeStack = [];
         let firstStatement = processedParts[0] || '';
         const remainingString = processedParts.slice(1).join("\n");
         let offSetIndex = 0;
