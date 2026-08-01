@@ -6202,7 +6202,8 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   printThrowStatement(node, identation) {
     if (node.expression.kind === ts6.SyntaxKind.Identifier) {
-      return this.getIden(identation) + this.THROW_TOKEN + " " + this.printNode(node.expression, 0) + this.LINE_TERMINATOR;
+      const name = this.printNode(node.expression, 0);
+      return this.getIden(identation) + `${this.THROW_TOKEN} (${name} instanceof RuntimeException ? (RuntimeException)${name} : new RuntimeException(${name}))${this.LINE_TERMINATOR}`;
     }
     if (node.expression.kind === ts6.SyntaxKind.NewExpression) {
       const expression = node.expression;
@@ -7348,6 +7349,29 @@ var Transpiler = class _Transpiler {
       program
     });
   }
+  // One program over N root files, instead of one program per file. Every
+  // transpile*ByPath call pays for a full program: even with the SourceFile cache
+  // making the ~340-file import closure parse-free, the binder/checker work behind
+  // getPreEmitDiagnostics is redone per file. Batching N files into one program
+  // pays it once for the whole set.
+  //
+  // Files that import each other (a derived exchange and its parent) are fine in
+  // one batch — they are separate root files of the same program, exactly as
+  // typescript would compile a project.
+  //
+  // The batch deliberately does not become the cache's byPathOldProgram: an N-file
+  // program never structurally reuses a program built from a different root set, so
+  // there is nothing to gain, and keeping the previous chunk's checker alive while
+  // the next one is built would double peak memory — the opposite of why callers
+  // chunk. The cross-batch saving comes from the shared host + SourceFile cache.
+  createProgramBatch(paths) {
+    const options = fastCompilerOptions;
+    const host = this.getByPathCompilerHost(options);
+    const program = ts8.createProgram([...paths, globalsShimPath], options, host);
+    const checker = program.getTypeChecker();
+    memoizeCheckerCalls(checker);
+    return new TranspileProgramBatch(this, program, checker);
+  }
   // the language printers read the typescript state (source file, checker, program)
   // off the context handed to them here, so two Transpiler instances never share
   // state and a nested transpile can restore whatever its caller was working on
@@ -7554,7 +7578,52 @@ var Transpiler = class _Transpiler {
     }
   }
 };
+var TranspileProgramBatch = class {
+  constructor(transpiler, program, checker) {
+    this.transpiler = transpiler;
+    this.program = program;
+    this.checker = checker;
+  }
+  getProgram() {
+    return this.program;
+  }
+  // point the owning Transpiler at one file of this batch, then run the same
+  // diagnostics pass the single-file path runs — the printers read checker state
+  // back from it, so it is not optional
+  setContextForPath(filePath) {
+    const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path2.resolve(filePath));
+    if (src === void 0) {
+      throw new Error(`ast-transpiler: "${filePath}" is not a file of this program batch`);
+    }
+    const context = this.transpiler.setContext({ src, checker: this.checker, program: this.program });
+    this.transpiler.checkFileDiagnostics(context);
+    return context;
+  }
+  transpileByPath(lang, filePath, sync = false) {
+    this.setContextForPath(filePath);
+    return this.transpiler.transpile(lang, 0 /* ByPath */, filePath, sync, false);
+  }
+  transpilePythonByPath(filePath) {
+    return this.transpileByPath(0 /* Python */, filePath, !this.transpiler.pythonTranspiler.asyncTranspiling);
+  }
+  transpilePhpByPath(filePath) {
+    return this.transpileByPath(1 /* Php */, filePath, !this.transpiler.phpTranspiler.asyncTranspiling);
+  }
+  transpileCSharpByPath(filePath) {
+    return this.transpileByPath(2 /* CSharp */, filePath);
+  }
+  transpileGoByPath(filePath) {
+    return this.transpileByPath(3 /* Go */, filePath);
+  }
+  transpileJavaByPath(filePath) {
+    return this.transpileByPath(4 /* Java */, filePath);
+  }
+  transpileRustByPath(filePath) {
+    return this.transpileByPath(5 /* Rust */, filePath);
+  }
+};
 export {
+  TranspileProgramBatch,
   Transpiler,
   Transpiler as default
 };

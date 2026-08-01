@@ -284,6 +284,30 @@ export default class Transpiler {
         });
     }
 
+    // One program over N root files, instead of one program per file. Every
+    // transpile*ByPath call pays for a full program: even with the SourceFile cache
+    // making the ~340-file import closure parse-free, the binder/checker work behind
+    // getPreEmitDiagnostics is redone per file. Batching N files into one program
+    // pays it once for the whole set.
+    //
+    // Files that import each other (a derived exchange and its parent) are fine in
+    // one batch — they are separate root files of the same program, exactly as
+    // typescript would compile a project.
+    //
+    // The batch deliberately does not become the cache's byPathOldProgram: an N-file
+    // program never structurally reuses a program built from a different root set, so
+    // there is nothing to gain, and keeping the previous chunk's checker alive while
+    // the next one is built would double peak memory — the opposite of why callers
+    // chunk. The cross-batch saving comes from the shared host + SourceFile cache.
+    createProgramBatch(paths: string[]): TranspileProgramBatch {
+        const options: ts.CompilerOptions = fastCompilerOptions;
+        const host = this.getByPathCompilerHost(options);
+        const program = ts.createProgram([...paths, globalsShimPath], options, host);
+        const checker = program.getTypeChecker();
+        memoizeCheckerCalls(checker);
+        return new TranspileProgramBatch(this, program, checker);
+    }
+
     // the language printers read the typescript state (source file, checker, program)
     // off the context handed to them here, so two Transpiler instances never share
     // state and a nested transpile can restore whatever its caller was working on
@@ -536,6 +560,78 @@ export default class Transpiler {
     }
 }
 
+// A set of root files compiled as one typescript program, transpiled one at a time.
+// Obtained from Transpiler.createProgramBatch; mirrors the transpile*ByPath methods
+// of the Transpiler it came from, so a caller batches by replacing
+//     for (const f of files) transpiler.transpileGoByPath(f)
+// with
+//     const batch = transpiler.createProgramBatch(files);
+//     for (const f of files) batch.transpileGoByPath(f)
+//
+// A failing file throws out of its own call and leaves the batch usable: the context
+// is rebuilt from the program on every call, so the caller can try/catch per file and
+// keep going. The batch borrows the Transpiler's printers and context, so do not
+// drive that Transpiler through another path while a batch loop is in flight — use
+// cloneSharingProgramCache() for a second, independent driver.
+class TranspileProgramBatch {
+    private readonly transpiler: Transpiler;
+    private readonly program: ts.Program;
+    private readonly checker: ts.TypeChecker;
+
+    constructor(transpiler: Transpiler, program: ts.Program, checker: ts.TypeChecker) {
+        this.transpiler = transpiler;
+        this.program = program;
+        this.checker = checker;
+    }
+
+    getProgram(): ts.Program {
+        return this.program;
+    }
+
+    // point the owning Transpiler at one file of this batch, then run the same
+    // diagnostics pass the single-file path runs — the printers read checker state
+    // back from it, so it is not optional
+    setContextForPath(filePath: string): ITranspileContext {
+        const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path.resolve(filePath));
+        if (src === undefined) {
+            throw new Error(`ast-transpiler: "${filePath}" is not a file of this program batch`);
+        }
+        const context = this.transpiler.setContext({ src, checker: this.checker, program: this.program });
+        this.transpiler.checkFileDiagnostics(context);
+        return context;
+    }
+
+    transpileByPath(lang: Languages, filePath: string, sync = false): ITranspiledFile {
+        this.setContextForPath(filePath);
+        return this.transpiler.transpile(lang, TranspilationMode.ByPath, filePath, sync, false);
+    }
+
+    transpilePythonByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.Python, filePath, !this.transpiler.pythonTranspiler.asyncTranspiling);
+    }
+
+    transpilePhpByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.Php, filePath, !this.transpiler.phpTranspiler.asyncTranspiling);
+    }
+
+    transpileCSharpByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.CSharp, filePath);
+    }
+
+    transpileGoByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.Go, filePath);
+    }
+
+    transpileJavaByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.Java, filePath);
+    }
+
+    transpileRustByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.Rust, filePath);
+    }
+}
+
 export {
-    Transpiler
+    Transpiler,
+    TranspileProgramBatch
 };
