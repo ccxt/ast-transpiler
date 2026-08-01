@@ -896,6 +896,7 @@ declare class Transpiler {
     createProgramInMemoryAndSetContext(content: any): ITranspileContext;
     getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost;
     createProgramByPathAndSetContext(path: any): ITranspileContext;
+    createProgramBatch(paths: string[]): TranspileProgramBatch;
     setContext(context: ITranspileContext): ITranspileContext;
     /** @deprecated renamed to createProgramInMemoryAndSetContext */
     createProgramInMemoryAndSetGlobals(content: any): ITranspileContext;
@@ -928,5 +929,20 @@ declare class Transpiler {
     setPythonStringLiteralReplacements(replacements: any): void;
     convertStringToLanguageEnum(lang: string): Languages;
 }
+declare class TranspileProgramBatch {
+    private readonly transpiler;
+    private readonly program;
+    private readonly checker;
+    constructor(transpiler: Transpiler, program: ts.Program, checker: ts.TypeChecker);
+    getProgram(): ts.Program;
+    setContextForPath(filePath: string): ITranspileContext;
+    transpileByPath(lang: Languages, filePath: string, sync?: boolean): ITranspiledFile;
+    transpilePythonByPath(filePath: string): ITranspiledFile;
+    transpilePhpByPath(filePath: string): ITranspiledFile;
+    transpileCSharpByPath(filePath: string): ITranspiledFile;
+    transpileGoByPath(filePath: string): ITranspiledFile;
+    transpileJavaByPath(filePath: string): ITranspiledFile;
+    transpileRustByPath(filePath: string): ITranspiledFile;
+}
 
-export { Transpiler, Transpiler as default };
+export { TranspileProgramBatch, Transpiler, Transpiler as default };
