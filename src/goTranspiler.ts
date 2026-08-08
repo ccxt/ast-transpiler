@@ -1061,7 +1061,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // const hasCatchInside = bodySplit.indexOf("recover()") > -1;
             // if ((1+1 == 2) || hasCatchInside) {
             functionBody = `{
-        ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
+        ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)
         ${this.getIden(identation + 1)}go func() any {
         ${this.getIden(identation + 2)}defer close(ch)
         ${this.getIden(identation + 2)}defer ReturnPanicError(ch)

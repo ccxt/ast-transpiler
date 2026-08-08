@@ -187,7 +187,7 @@ describe('go transpiling tests', () => {
         expect(methods.length).toBe(3);
         const [inner, delegator, classic] = methods;
         // the delegator must be channel-wrapped and receive from the inner channel
-        expect(delegator).toContain("ch := make(chan any)");
+        expect(delegator).toContain("ch := make(chan any, 1)");
         expect(delegator).toContain("<-this.WatchTickerInner(symbol)");
         expect(delegator).toContain("PanicOnError(retRes");
         // must NOT return the raw channel of the inner call
@@ -200,5 +200,21 @@ describe('go transpiling tests', () => {
             .trim();
         expect(normalize(delegator)).toBe(normalize(classic));
         void inner;
+    });
+    test('async method result channel is buffered with capacity 1', () => {
+        // the generated async core deposits exactly one value and returns.
+        // With an unbuffered channel the goroutine blocks on `ch <- ...` until
+        // somebody receives, so an abandoned result leaks the goroutine forever.
+        // Capacity 1 lets the producer deposit-and-exit for this one-shot,
+        // promise-like channel.
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker(symbol: string): Promise<any> {\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("ch := make(chan any, 1)");
+        expect(output).not.toContain("ch := make(chan any)");
     });
 });
