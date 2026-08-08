@@ -3514,6 +3514,7 @@ var GoTranspiler = class extends BaseTranspiler {
     super(config);
     this.wrapCallMethods = [];
     this.DEFAULT_RETURN_TYPE = "any";
+    this.ASYNC_RESULT_NAME = "out";
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = false;
@@ -3758,6 +3759,40 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return typeText;
   }
+  /**
+   * Name of the named result used by async (channel-returning) functions.
+   *
+   * The async core recovers panics via `defer ReturnPanicError(ch)`, which means a
+   * panicking function returns *normally*. With an unnamed `<- chan any` result the
+   * zero value is a nil channel, and every caller doing `<-f()` would block forever.
+   * Declaring the result gives us a slot we can pre-assign to `ch` before the
+   * deferred recover can fire.
+   */
+  getAsyncResultName(node) {
+    const base = this.ASYNC_RESULT_NAME;
+    const taken = /* @__PURE__ */ new Set();
+    const collect = (current) => {
+      if (!current) {
+        return;
+      }
+      if (ts5.isIdentifier(current) && current.escapedText) {
+        taken.add(String(current.escapedText));
+      }
+      ts5.forEachChild(current, collect);
+    };
+    try {
+      (node?.parameters ?? []).forEach((param) => collect(param.name));
+      collect(node?.body);
+    } catch {
+    }
+    let name = base;
+    let suffix = 0;
+    while (taken.has(name)) {
+      suffix++;
+      name = `${base}${suffix}`;
+    }
+    return name;
+  }
   printFunctionType(node) {
     const typeText = this.getFunctionType(node);
     if (typeText === "void") {
@@ -3766,7 +3801,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (typeText === void 0 || typeText !== this.VOID_KEYWORD && typeText !== this.PROMISE_TYPE_KEYWORD) {
       let res = "";
       if (this.isAsyncFunction(node)) {
-        res = `<- chan ${this.DEFAULT_RETURN_TYPE}`;
+        res = `(${this.getAsyncResultName(node)} <- chan ${this.DEFAULT_RETURN_TYPE})`;
       } else {
         res = this.DEFAULT_RETURN_TYPE;
       }
@@ -3774,6 +3809,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return res;
     }
     if (typeText === this.PROMISE_TYPE_KEYWORD) {
+      if (this.isAsyncFunction(node)) {
+        return `(${this.getAsyncResultName(node)} <- chan any)`;
+      }
       return `<- chan any`;
     }
     if (typeText && typeText.endsWith("[]")) {
@@ -4188,8 +4226,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (wrapInChannel) {
       const functionBodySplit = functionBody.split("\n");
       const bodyWithIndentationExtraAndNoReturn = functionBodySplit.map((line) => {
-        const trimmedLine = line.trim();
-        return this.getIden(identation + 2) + line;
+        return this.getIden(identation + 1) + line;
       }).join("\n");
       let shouldAddLastReturn = true;
       const bodySplit = functionBodySplit;
@@ -4200,18 +4237,22 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       if (node.body && this.blockEndsWithConditionalReturn(node.body.statements)) {
         shouldAddLastReturn = false;
       }
-      const lastReturn = shouldAddLastReturn ? this.getIden(identation + 2) + "return nil" : "";
-      functionBody = `{
-        ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-        ${this.getIden(identation + 1)}go func() any {
-        ${this.getIden(identation + 2)}defer close(ch)
-        ${this.getIden(identation + 2)}defer ReturnPanicError(ch)
-        ${bodyWithIndentationExtraAndNoReturn}
-        ${lastReturn}
-        ${this.getIden(identation + 1)}}()
-        ${this.getIden(identation + 1)}return ch
-        ${this.getIden(identation)}}`;
-      functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\snil(\s*\})/gm, "$1return nil$2");
+      const resultName = this.getAsyncResultName(node);
+      const lastReturn = shouldAddLastReturn ? this.getIden(identation + 1) + "return ch" : "";
+      const lines = [
+        "{",
+        `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
+        `${this.getIden(identation + 1)}${resultName} = ch`,
+        `${this.getIden(identation + 1)}defer close(ch)`,
+        `${this.getIden(identation + 1)}defer ReturnPanicError(ch)`,
+        bodyWithIndentationExtraAndNoReturn
+      ];
+      if (lastReturn) {
+        lines.push(lastReturn);
+      }
+      lines.push(`${this.getIden(identation)}}`);
+      functionBody = lines.join("\n");
+      functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\s(nil|ch)(\s*\})/gm, "$1return $2$3");
     }
     return functionBody;
   }
@@ -4258,6 +4299,39 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     }
     return false;
   }
+  /**
+   * True when `node` sits inside a try/catch belonging to the *same* function.
+   *
+   * try/catch is emulated in Go with synthetic closures (`func (ret_ any) {...}` for
+   * the try block, `func any {...}` for the catch block), so a `return` printed there
+   * leaves that closure, not the enclosing function. Such returns must keep the
+   * closure's `return nil` shape, while returns at the function's own level have to
+   * return the result channel instead.
+   */
+  isInsideTryBlockOfSameFunction(node) {
+    let currentNode = node?.parent;
+    while (currentNode) {
+      if (ts5.isFunctionDeclaration(currentNode) || ts5.isFunctionExpression(currentNode) || ts5.isArrowFunction(currentNode) || ts5.isMethodDeclaration(currentNode)) {
+        return false;
+      }
+      if (ts5.isTryStatement(currentNode)) {
+        return true;
+      }
+      currentNode = currentNode.parent;
+    }
+    return false;
+  }
+  /**
+   * Statement that terminates an async (channel returning) function.
+   *
+   * At the function's own level we must hand back the channel: the result is named
+   * (see `printFunctionType`) so that a recovered panic still yields a usable channel,
+   * and `return nil` would overwrite it with a nil channel that deadlocks every
+   * receiver. Inside the try/catch closures the plain `return nil` is still correct.
+   */
+  getAsyncReturnStatement(node) {
+    return this.isInsideTryBlockOfSameFunction(node) ? "return nil" : "return ch";
+  }
   printReturnStatement(node, identation) {
     const isAsyncFunction = this.isInsideAsyncFunction(node);
     if (!isAsyncFunction) {
@@ -4269,6 +4343,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     const exp = node.expression;
     let rightPart = exp ? " " + this.printNode(exp, identation) : "";
     rightPart = rightPart.trim();
+    const returnStatement = this.getAsyncReturnStatement(node);
     if (node?.expression?.kind === ts5.SyntaxKind.AsExpression) {
       node = node.expression;
     }
@@ -4279,15 +4354,15 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     ${this.getIden(identation)}${returnRandName} := ${rightPart}
     ${this.getIden(identation)}PanicOnError(${returnRandName})
     ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
-    ${this.getIden(identation)}return nil`;
+    ${this.getIden(identation)}${returnStatement}`;
     }
     if (rightPart.length === 0) {
       return `
-${this.getIden(identation)}return nil`;
+${this.getIden(identation)}${returnStatement}`;
     }
     return `
 ${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
-${this.getIden(identation)}return nil`;
+${this.getIden(identation)}${returnStatement}`;
   }
   printAsExpression(node, identation) {
     const type = node.type;
@@ -4598,12 +4673,14 @@ ${this.getIden(identation)}`;
     const returNil = "return nil";
     const isVoid = this.isInsideVoidFunction(node);
     const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
+    const isAsyncFunctionLevel = this.isInsideAsyncFunction(node) && !this.isInsideTryBlockOfSameFunction(node);
+    const capturesResult = nodeEndsWithReturn && !isAsyncFunctionLevel;
     const errorName = node.catchClause.variableDeclaration.name.escapedText;
     const classPrefix = this.className !== "undefined" ? `(this *${this.className})` : "()";
     const thisWord = this.className !== "undefined" ? "this" : "";
     const catchBlock = `
     {
-        ${nodeEndsWithReturn ? "ret__ :=" : ""} func${classPrefix} (ret_ any) {
+        ${capturesResult ? "ret__ :=" : ""} func${classPrefix} (ret_ any) {
 		    defer func() {
                 if ${errorName} := recover(); ${errorName} != nil {
                     if ${errorName} == "break" {
@@ -4620,7 +4697,8 @@ ${this.getIden(identation)}`;
             ${tryBody}
 		    ${tryBodyEndsWithReturn ? "" : returNil}
 	    }(${thisWord})
-    ${nodeEndsWithReturn ? `
+    ${nodeEndsWithReturn ? isAsyncFunctionLevel ? `
+            return ch` : `
             if ret__ != nil {
                 return ret__
             }
