@@ -4841,6 +4841,19 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.initConfig();
     this.applyUserOverrides(config);
   }
+  printArgsForCallExpression(node, identation) {
+    let args = node.arguments ?? [];
+    const callee = node.expression;
+    const isThisCall = callee?.kind === ts6.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts6.SyntaxKind.ThisKeyword;
+    if (isThisCall && args.length > 0) {
+      const last = args[args.length - 1];
+      const isNullish = last.kind === ts6.SyntaxKind.NullKeyword || last.kind === ts6.SyntaxKind.Identifier && last.escapedText === "undefined";
+      if (isNullish) {
+        args = args.slice(0, -1);
+      }
+    }
+    return args.map((a) => this.printNode(a, identation).trim()).join(", ");
+  }
   initConfig() {
     this.LeftPropertyAccessReplacements = {
       // 'this': '$this',
