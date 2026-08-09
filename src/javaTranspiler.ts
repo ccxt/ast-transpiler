@@ -69,6 +69,30 @@ const parserConfig = {
 };
 
 export class JavaTranspiler extends BaseTranspiler {
+
+    printArgsForCallExpression(node, identation) {
+        let args: readonly any[] = node.arguments ?? [];
+        const callee = node.expression;
+        const isThisCall = callee?.kind === ts.SyntaxKind.PropertyAccessExpression
+            && callee.expression?.kind === ts.SyntaxKind.ThisKeyword;
+        if (isThisCall && args.length > 0) {
+            const last = args[args.length - 1];
+            const isNullish = last.kind === ts.SyntaxKind.NullKeyword
+                || (last.kind === ts.SyntaxKind.Identifier && last.escapedText === 'undefined');
+            if (isNullish) {
+                // drop exactly one trailing null/undefined argument: the generated java
+                // surface is uniformly (required..., Object... optionals), and a bare
+                // trailing null is ambiguous to javac ("non-varargs call of varargs
+                // method with inexact argument type for last parameter"). Omission is
+                // behaviorally identical - both Helpers.getArg and SafeMethods.opt
+                // treat a null varargs array and an empty one the same, see
+                // https://github.com/ccxt/ccxt/pull/29617 for the warning inventory
+                args = args.slice(0, -1);
+            }
+        }
+        return args.map((a) => this.printNode(a, identation).trim()).join(", ");
+    }
+
     binaryExpressionsWrappers;
 
     varListFromObjectLiterals = {};
