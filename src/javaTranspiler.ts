@@ -70,6 +70,18 @@ const parserConfig = {
 
 export class JavaTranspiler extends BaseTranspiler {
 
+    countRequiredParameters(declaration) {
+        // parameters with no default, no question token and no rest are required positionally
+        const params = declaration?.parameters ?? [];
+        let required = 0;
+        for (const p of params) {
+            if (p.initializer === undefined && p.questionToken === undefined && p.dotDotDotToken === undefined) {
+                required++;
+            }
+        }
+        return required;
+    }
+
     printArgsForCallExpression(node, identation) {
         let args: readonly any[] = node.arguments ?? [];
         const callee = node.expression;
@@ -79,7 +91,19 @@ export class JavaTranspiler extends BaseTranspiler {
             const last = args[args.length - 1];
             const isNullish = last.kind === ts.SyntaxKind.NullKeyword
                 || (last.kind === ts.SyntaxKind.Identifier && last.escapedText === 'undefined');
+            // the trailing nullish may only be dropped when it sits in the OPTIONAL tail
+            // of the resolved signature - a required positional parameter passed as an
+            // explicit undefined (e.g. dydx signDydxTx) must be kept, otherwise the
+            // emitted call breaks arity, see https://github.com/ccxt/ccxt/actions/runs/31321542066
+            let inOptionalTail = false;
             if (isNullish) {
+                const signature = this.getChecker().getResolvedSignature(node);
+                const declaration = signature?.declaration;
+                if (declaration !== undefined) {
+                    inOptionalTail = args.length > this.countRequiredParameters(declaration);
+                }
+            }
+            if (isNullish && inOptionalTail) {
                 // drop exactly one trailing null/undefined argument: the generated java
                 // surface is uniformly (required..., Object... optionals), and a bare
                 // trailing null is ambiguous to javac ("non-varargs call of varargs

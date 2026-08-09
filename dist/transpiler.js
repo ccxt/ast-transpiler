@@ -4841,6 +4841,16 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.initConfig();
     this.applyUserOverrides(config);
   }
+  countRequiredParameters(declaration) {
+    const params = declaration?.parameters ?? [];
+    let required = 0;
+    for (const p of params) {
+      if (p.initializer === void 0 && p.questionToken === void 0 && p.dotDotDotToken === void 0) {
+        required++;
+      }
+    }
+    return required;
+  }
   printArgsForCallExpression(node, identation) {
     let args = node.arguments ?? [];
     const callee = node.expression;
@@ -4848,7 +4858,15 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (isThisCall && args.length > 0) {
       const last = args[args.length - 1];
       const isNullish = last.kind === ts6.SyntaxKind.NullKeyword || last.kind === ts6.SyntaxKind.Identifier && last.escapedText === "undefined";
+      let inOptionalTail = false;
       if (isNullish) {
+        const signature = this.getChecker().getResolvedSignature(node);
+        const declaration = signature?.declaration;
+        if (declaration !== void 0) {
+          inOptionalTail = args.length > this.countRequiredParameters(declaration);
+        }
+      }
+      if (isNullish && inOptionalTail) {
         args = args.slice(0, -1);
       }
     }

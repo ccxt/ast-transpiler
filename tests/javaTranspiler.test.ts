@@ -2346,3 +2346,29 @@ describe('trailing null/undefined omission on this-calls (varargs ambiguity)', (
         expect(output).toContain('f("x", null)');
     });
 });
+
+describe('trailing undefined into a REQUIRED positional parameter is kept', () => {
+    test('six required params, sixth passed as undefined - arity preserved', () => {
+        const input =
+        "class T {\n" +
+        "    signDydxTx(pk, orderRequest, sub, chainName, account, authenticators) { return undefined; }\n" +
+        "    test() {\n" +
+        "        const signedTx = this.signDydxTx('pk', {}, '', 'chain', {}, undefined);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('this.signDydxTx("pk", new java.util.HashMap<String, Object>() {{}}, "", "chain", new java.util.HashMap<String, Object>() {{}}, null)');
+    });
+
+    test('optional tail still gets dropped', () => {
+        const input =
+        "class T {\n" +
+        "    safeString2(o, k1, k2, d = undefined) { return undefined; }\n" +
+        "    test() {\n" +
+        "        const a = this.safeString2({}, 'x', 'y', undefined);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
+    });
+});
