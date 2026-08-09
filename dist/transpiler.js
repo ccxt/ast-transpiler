@@ -3114,7 +3114,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return `(IList<object>)(${this.printNode(node.expression, identation)})`;
       }
       if (type.elementType.kind === ts4.SyntaxKind.StringKeyword) {
-        return `(IList<string>)(${this.printNode(node.expression, identation)})`;
+        return `(IList<object>)(${this.printNode(node.expression, identation)})`;
       }
     }
     return this.printNode(node.expression, identation);

@@ -1023,3 +1023,22 @@ describe('csharp transpiling tests', () => {
         expect(getBody('watchTicker')).toBe(getBody('watchTickerClassic'));
     });
   });
+
+describe('as string[] assertion must not emit a hard IList<string> runtime cast', () => {
+    test('element access through as string[] stays covariance-safe', () => {
+        const input =
+        "class T {\n" +
+        "    helper(argSymbols) {\n" +
+        "        const first = (argSymbols as string[])[0];\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "    test() {\n" +
+        "        const symbol = 'BTC/USDT';\n" +
+        "        this.helper([ symbol ]);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('(IList<object>)');
+        expect(output).not.toContain('(IList<string>)');
+    });
+});
