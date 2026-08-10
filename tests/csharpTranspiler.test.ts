@@ -1038,7 +1038,9 @@ describe('as string[] assertion must not emit a hard IList<string> runtime cast'
         "    }\n" +
         "}"
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain('(IList<object>)');
+        // no runtime cast of either flavor - IList<T> is invariant both ways,
+        // so any hard cast breaks one of the two legitimate runtime list types
+        expect(output).not.toContain('(IList<object>)');
         expect(output).not.toContain('(IList<string>)');
     });
 });

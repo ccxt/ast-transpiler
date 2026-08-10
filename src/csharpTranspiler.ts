@@ -687,15 +687,15 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return `(IList<object>)(${this.printNode(node.expression, identation)})`;
             }
             if (type.elementType.kind === ts.SyntaxKind.StringKeyword) {
-                // ts 'as string[]' is a compile-time-only assertion, but a C# interface
-                // cast is a checked runtime conversion - and the untyped transpiled core
-                // builds every list as List<object>, which has no covariance to
-                // IList<string>: the hard cast throws InvalidCastException at runtime
-                // (observed across 6 exchanges in ccxt's cs ws test lane, see
-                // https://github.com/ccxt/ccxt/actions/runs/31173663316). Emit the
-                // object-list view instead - element consumers in the untyped core are
-                // object-typed anyway.
-                return `(IList<object>)(${this.printNode(node.expression, identation)})`;
+                // ts 'as string[]' is a compile-time-only assertion with no runtime
+                // effect, and C# IList<T> is invariant in BOTH directions: a hard
+                // (IList<string>) cast throws on the untyped core's List<object>
+                // (ccxt cs ws test lane, https://github.com/ccxt/ccxt/actions/runs/31173663316)
+                // while a hard (IList<object>) cast throws on genuinely typed
+                // List<string> values (starknet typedData via the paradex broker-id
+                // leg, https://github.com/ccxt/ccxt/actions/runs/31322911365). The
+                // honest emission is the bare expression, like the fallthrough below.
+                return this.printNode(node.expression, identation);
             }
         }
 
