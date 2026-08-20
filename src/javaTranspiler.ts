@@ -69,6 +69,54 @@ const parserConfig = {
 };
 
 export class JavaTranspiler extends BaseTranspiler {
+
+    countRequiredParameters(declaration) {
+        // parameters with no default, no question token and no rest are required positionally
+        const params = declaration?.parameters ?? [];
+        let required = 0;
+        for (const p of params) {
+            if (p.initializer === undefined && p.questionToken === undefined && p.dotDotDotToken === undefined) {
+                required++;
+            }
+        }
+        return required;
+    }
+
+    printArgsForCallExpression(node, identation) {
+        let args: readonly any[] = node.arguments ?? [];
+        const callee = node.expression;
+        const isThisCall = callee?.kind === ts.SyntaxKind.PropertyAccessExpression
+            && callee.expression?.kind === ts.SyntaxKind.ThisKeyword;
+        if (isThisCall && args.length > 0) {
+            const last = args[args.length - 1];
+            const isNullish = last.kind === ts.SyntaxKind.NullKeyword
+                || (last.kind === ts.SyntaxKind.Identifier && last.escapedText === 'undefined');
+            // the trailing nullish may only be dropped when it sits in the OPTIONAL tail
+            // of the resolved signature - a required positional parameter passed as an
+            // explicit undefined (e.g. dydx signDydxTx) must be kept, otherwise the
+            // emitted call breaks arity, see https://github.com/ccxt/ccxt/actions/runs/31321542066
+            let inOptionalTail = false;
+            if (isNullish) {
+                const signature = this.getChecker().getResolvedSignature(node);
+                const declaration = signature?.declaration;
+                if (declaration !== undefined) {
+                    inOptionalTail = args.length > this.countRequiredParameters(declaration);
+                }
+            }
+            if (isNullish && inOptionalTail) {
+                // drop exactly one trailing null/undefined argument: the generated java
+                // surface is uniformly (required..., Object... optionals), and a bare
+                // trailing null is ambiguous to javac ("non-varargs call of varargs
+                // method with inexact argument type for last parameter"). Omission is
+                // behaviorally identical - both Helpers.getArg and SafeMethods.opt
+                // treat a null varargs array and an empty one the same, see
+                // https://github.com/ccxt/ccxt/pull/29617 for the warning inventory
+                args = args.slice(0, -1);
+            }
+        }
+        return args.map((a) => this.printNode(a, identation).trim()).join(", ");
+    }
+
     binaryExpressionsWrappers;
 
     varListFromObjectLiterals = {};

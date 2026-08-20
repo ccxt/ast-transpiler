@@ -699,6 +699,8 @@ declare class GoTranspiler extends BaseTranspiler {
 }
 
 declare class JavaTranspiler extends BaseTranspiler {
+    countRequiredParameters(declaration: any): number;
+    printArgsForCallExpression(node: any, identation: any): string;
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
     usageToFinalName: WeakMap<ts.Node, string>;

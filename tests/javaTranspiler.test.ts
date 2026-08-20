@@ -2293,3 +2293,82 @@ describe('java transpiling tests', () => {
         expect(soloB).not.toMatch(/final Object finalRequest/);
     });
 });
+
+describe('trailing null/undefined omission on this-calls (varargs ambiguity)', () => {
+    // the generated java surface is uniformly varargs - a trailing bare null
+    // triggers javac's "non-varargs call of varargs method" warning; the
+    // transpiler drops exactly one trailing null/undefined on this.-calls
+    const classWrap = (body: string) =>
+        "class T {\n" +
+        "    safeString2(o, k1, k2, d = undefined) { return undefined; }\n" +
+        "    safeValue(o, k, d = undefined) { return undefined; }\n" +
+        "    parseOrders(orders, market = undefined, since = undefined, limit = undefined) { return undefined; }\n" +
+        "    handleParamString2(p, n1, n2, d = undefined) { return undefined; }\n" +
+        "    method(a, b = undefined) { return undefined; }\n" +
+        body +
+        "}";
+
+    test('drops trailing undefined on safe-family and parse helpers', () => {
+        const input = classWrap(
+            "    test() {\n" +
+            "        const a = this.safeString2({}, 'x', 'y', undefined);\n" +
+            "        const b = this.safeValue({}, 'x', undefined);\n" +
+            "        const c = this.parseOrders([], undefined);\n" +
+            "        const d = this.handleParamString2({}, 'x', 'y', undefined);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
+        expect(output).not.toContain('safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y", null)');
+        expect(output).toContain('this.safeValue(new java.util.HashMap<String, Object>() {{}}, "x")');
+        expect(output).toContain('this.parseOrders(new java.util.ArrayList<Object>(java.util.Arrays.asList()))');
+        expect(output).toContain('this.handleParamString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
+    });
+
+    test('drops only one trailing nullish and leaves interior nulls intact', () => {
+        const input = classWrap(
+            "    test() {\n" +
+            "        this.method(undefined, undefined);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('this.method(null)');
+        expect(output).not.toContain('this.method(null, null)');
+    });
+
+    test('non-this calls keep trailing null', () => {
+        const input =
+            "function f(a, b = undefined) { return a; }\n" +
+            "class T {\n" +
+            "    test() {\n" +
+            "        f('x', undefined);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('f("x", null)');
+    });
+});
+
+describe('trailing undefined into a REQUIRED positional parameter is kept', () => {
+    test('six required params, sixth passed as undefined - arity preserved', () => {
+        const input =
+        "class T {\n" +
+        "    signDydxTx(pk, orderRequest, sub, chainName, account, authenticators) { return undefined; }\n" +
+        "    test() {\n" +
+        "        const signedTx = this.signDydxTx('pk', {}, '', 'chain', {}, undefined);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('this.signDydxTx("pk", new java.util.HashMap<String, Object>() {{}}, "", "chain", new java.util.HashMap<String, Object>() {{}}, null)');
+    });
+
+    test('optional tail still gets dropped', () => {
+        const input =
+        "class T {\n" +
+        "    safeString2(o, k1, k2, d = undefined) { return undefined; }\n" +
+        "    test() {\n" +
+        "        const a = this.safeString2({}, 'x', 'y', undefined);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
+    });
+});

@@ -3114,7 +3114,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return `(IList<object>)(${this.printNode(node.expression, identation)})`;
       }
       if (type.elementType.kind === ts4.SyntaxKind.StringKeyword) {
-        return `(IList<string>)(${this.printNode(node.expression, identation)})`;
+        return this.printNode(node.expression, identation);
       }
     }
     return this.printNode(node.expression, identation);
@@ -4918,6 +4918,37 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.id = "Java";
     this.initConfig();
     this.applyUserOverrides(config);
+  }
+  countRequiredParameters(declaration) {
+    const params = declaration?.parameters ?? [];
+    let required = 0;
+    for (const p of params) {
+      if (p.initializer === void 0 && p.questionToken === void 0 && p.dotDotDotToken === void 0) {
+        required++;
+      }
+    }
+    return required;
+  }
+  printArgsForCallExpression(node, identation) {
+    let args = node.arguments ?? [];
+    const callee = node.expression;
+    const isThisCall = callee?.kind === ts6.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts6.SyntaxKind.ThisKeyword;
+    if (isThisCall && args.length > 0) {
+      const last = args[args.length - 1];
+      const isNullish = last.kind === ts6.SyntaxKind.NullKeyword || last.kind === ts6.SyntaxKind.Identifier && last.escapedText === "undefined";
+      let inOptionalTail = false;
+      if (isNullish) {
+        const signature = this.getChecker().getResolvedSignature(node);
+        const declaration = signature?.declaration;
+        if (declaration !== void 0) {
+          inOptionalTail = args.length > this.countRequiredParameters(declaration);
+        }
+      }
+      if (isNullish && inOptionalTail) {
+        args = args.slice(0, -1);
+      }
+    }
+    return args.map((a) => this.printNode(a, identation).trim()).join(", ");
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {

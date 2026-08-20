@@ -1023,3 +1023,24 @@ describe('csharp transpiling tests', () => {
         expect(getBody('watchTicker')).toBe(getBody('watchTickerClassic'));
     });
   });
+
+describe('as string[] assertion must not emit a hard IList<string> runtime cast', () => {
+    test('element access through as string[] stays covariance-safe', () => {
+        const input =
+        "class T {\n" +
+        "    helper(argSymbols) {\n" +
+        "        const first = (argSymbols as string[])[0];\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "    test() {\n" +
+        "        const symbol = 'BTC/USDT';\n" +
+        "        this.helper([ symbol ]);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileCSharp(input).content;
+        // no runtime cast of either flavor - IList<T> is invariant both ways,
+        // so any hard cast breaks one of the two legitimate runtime list types
+        expect(output).not.toContain('(IList<object>)');
+        expect(output).not.toContain('(IList<string>)');
+    });
+});
