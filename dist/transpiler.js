@@ -3515,6 +3515,8 @@ var GoTranspiler = class extends BaseTranspiler {
     this.wrapCallMethods = [];
     this.DEFAULT_RETURN_TYPE = "any";
     this.ASYNC_RESULT_NAME = "out";
+    this.ASYNC_SPAWN_TOKEN = "this.Spawn";
+    this.ASYNC_SPAWN_AWAIT_TOKEN = "Await";
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = false;
@@ -3850,6 +3852,10 @@ ${this.getIden(identation)}${parsedName}:= ${parsedInitializer}
 ${this.getIden(identation)}PanicOnError(${parsedName})`;
     }
     const isNew = declaration.initializer && declaration.initializer.kind === ts5.SyntaxKind.NewExpression;
+    const concurrentStart = declaration.initializer ? this.printConcurrentStartCall(declaration.initializer, identation) : void 0;
+    if (concurrentStart !== void 0) {
+      return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + concurrentStart;
+    }
     const parsedValue = declaration.initializer ? this.printNode(declaration.initializer, identation) : this.NULL_TOKEN;
     if (parsedValue === this.UNDEFINED_TOKEN) {
       return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + parsedValue;
@@ -4374,11 +4380,68 @@ ${this.getIden(identation)}${returnStatement}`;
     }
     return this.printNode(node.expression, identation);
   }
+  /**
+   * True when `node` is a call of an async (channel-returning) method on `this`,
+   * ie. the Go shape `this.Method(a, b)` whose result is a `<- chan any`.
+   *
+   * Used to decide whether a *deferred* (not immediately awaited) call has to be
+   * started on its own goroutine — see `printConcurrentStartCall`.
+   */
+  isAsyncThisCall(node) {
+    if (!node || node.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const expression = node.expression;
+    if (expression?.kind !== ts5.SyntaxKind.PropertyAccessExpression || expression.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    try {
+      const signature = this.getChecker().getResolvedSignature(node);
+      const declaration = signature?.declaration;
+      if (declaration === void 0) {
+        return false;
+      }
+      return this.isAsyncFunction(declaration);
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
+   * channel, instead of running to completion at the point of evaluation.
+   *
+   * Async cores are flat: the body runs on the caller's goroutine and the returned
+   * capacity-1 channel is already filled by the time the call expression yields. That
+   * is exactly right for `await`ed calls, but it silently serializes the fan-out
+   * idiom, where a call is stored first and only awaited later:
+   *
+   *     const a = this.fetchSpotMarkets (params);   // JS: starts, does not block
+   *     const b = this.fetchSwapMarkets (params);   // JS: starts, does not block
+   *     await Promise.all ([ a, b ]);               // both already in flight
+   *
+   * `this.Spawn(this.Method, args...)` is the runtime's own fire-and-forget helper: it
+   * calls the method on a fresh goroutine and returns a *Future. `.Await()` turns that
+   * Future back into a `<- chan any`, so the value keeps the exact static type the
+   * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
+   *
+   * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
+   * body panic into its channel, Spawn resolves the Future with that panic string, and
+   * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
+   */
+  printConcurrentStartCall(node, identation) {
+    if (!this.isAsyncThisCall(node)) {
+      return void 0;
+    }
+    const methodName = this.transformCallExpressionName(this.printNode(node.expression.name, 0));
+    const parsedArgs = this.printArgsForCallExpression(node, identation);
+    const args = parsedArgs ? `, ${parsedArgs}` : "";
+    return `${this.ASYNC_SPAWN_TOKEN}(this.${methodName}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
+  }
   printArrayLiteralExpression(node) {
     let arrayOpen = this.ARRAY_OPENING_TOKEN;
     const elems = node.elements;
     const elements = node.elements.map((e) => {
-      return this.printNode(e);
+      return this.printConcurrentStartCall(e, 0) ?? this.printNode(e);
     }).join(", ");
     if (elems.length > 0) {
       const first = elems[0];
@@ -4451,7 +4514,8 @@ ${this.getIden(identation)}${returnStatement}`;
       returnValue = `${returnRandName} := ${name}
 ${this.getIden(identation)}`;
     }
-    return `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
+    const pushedArg = node.arguments?.length === 1 ? this.printConcurrentStartCall(node.arguments[0], 0) : void 0;
+    return `${returnValue}AppendToArray(&${returnRandName}, ${pushedArg ?? parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Contains(${name},${parsedArg})`;

@@ -566,6 +566,8 @@ declare class GoTranspiler extends BaseTranspiler {
     };
     DEFAULT_RETURN_TYPE: string;
     ASYNC_RESULT_NAME: string;
+    ASYNC_SPAWN_TOKEN: string;
+    ASYNC_SPAWN_AWAIT_TOKEN: string;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
@@ -637,6 +639,37 @@ declare class GoTranspiler extends BaseTranspiler {
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
+    /**
+     * True when `node` is a call of an async (channel-returning) method on `this`,
+     * ie. the Go shape `this.Method(a, b)` whose result is a `<- chan any`.
+     *
+     * Used to decide whether a *deferred* (not immediately awaited) call has to be
+     * started on its own goroutine — see `printConcurrentStartCall`.
+     */
+    isAsyncThisCall(node: any): boolean;
+    /**
+     * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
+     * channel, instead of running to completion at the point of evaluation.
+     *
+     * Async cores are flat: the body runs on the caller's goroutine and the returned
+     * capacity-1 channel is already filled by the time the call expression yields. That
+     * is exactly right for `await`ed calls, but it silently serializes the fan-out
+     * idiom, where a call is stored first and only awaited later:
+     *
+     *     const a = this.fetchSpotMarkets (params);   // JS: starts, does not block
+     *     const b = this.fetchSwapMarkets (params);   // JS: starts, does not block
+     *     await Promise.all ([ a, b ]);               // both already in flight
+     *
+     * `this.Spawn(this.Method, args...)` is the runtime's own fire-and-forget helper: it
+     * calls the method on a fresh goroutine and returns a *Future. `.Await()` turns that
+     * Future back into a `<- chan any`, so the value keeps the exact static type the
+     * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
+     *
+     * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
+     * body panic into its channel, Spawn resolves the Future with that panic string, and
+     * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
+     */
+    printConcurrentStartCall(node: any, identation: any): string | undefined;
     printArrayLiteralExpression(node: any): string;
     printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
