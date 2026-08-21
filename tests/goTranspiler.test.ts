@@ -575,4 +575,81 @@ describe('go Promise.all concurrent start', () => {
         expect(output).toContain("var p any = callDynamically(\"someUnknownMethod\", params)");
         expect(output).not.toContain("Spawn");
     });
+    test('a deferred module-scope async function call is started concurrently', () => {
+        // the transpiled test harness is written as module-scope `async function`s, not
+        // methods, so there is no `this` to hang Spawn off. Those calls use the
+        // package-level `Spawn(Helper, args...)` twin instead — without it, the flat core
+        // runs to completion inline and the Promise.all fan-out is serial.
+        const input =
+        "async function testWatchTickersHelper (exchange, skippedProperties, argSymbols): Promise<any> {\n" +
+        "    return [];\n" +
+        "}\n" +
+        "async function testWatchTickers (exchange, skippedProperties, symbol): Promise<any> {\n" +
+        "    const withoutSymbol = testWatchTickersHelper (exchange, skippedProperties, undefined);\n" +
+        "    const withSymbol = testWatchTickersHelper (exchange, skippedProperties, [ symbol ]);\n" +
+        "    await Promise.all ([ withSymbol, withoutSymbol ]);\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var withoutSymbol any = Spawn(TestWatchTickersHelper, exchange, skippedProperties, nil).Await()");
+        expect(output).toContain("var withSymbol any = Spawn(TestWatchTickersHelper, exchange, skippedProperties, []any{symbol}).Await()");
+        // a free function has no receiver, so it must NOT be emitted as a method call
+        expect(output).not.toContain("this.Spawn(TestWatchTickersHelper");
+        // and the direct (serializing) call must be gone
+        expect(output).not.toContain("var withoutSymbol any = TestWatchTickersHelper(exchange");
+    });
+    test('a deferred module-scope async function inside Promise.all is started concurrently', () => {
+        const input =
+        "async function helperA (x): Promise<any> {\n" +
+        "    return x;\n" +
+        "}\n" +
+        "async function helperB (x): Promise<any> {\n" +
+        "    return x;\n" +
+        "}\n" +
+        "async function joinThem (x): Promise<any> {\n" +
+        "    const res = await Promise.all ([ helperA (x), helperB (x) ]);\n" +
+        "    return res;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("promiseAll([]any{Spawn(HelperA, x).Await(), Spawn(HelperB, x).Await()})");
+    });
+    test('a SYNC module-scope function call is NOT spawned', () => {
+        // the free-function gate must still require the declaration to be async
+        const input =
+        "function syncHelper (x) {\n" +
+        "    return x;\n" +
+        "}\n" +
+        "async function useIt (x): Promise<any> {\n" +
+        "    const v = syncHelper (x);\n" +
+        "    return v;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var v any = SyncHelper(x)");
+        expect(output).not.toContain("Spawn");
+    });
+    test('an immediately awaited module-scope async call is NOT spawned', () => {
+        // awaiting right away is already correct on a flat core: nothing to overlap
+        const input =
+        "async function helperA (x): Promise<any> {\n" +
+        "    return x;\n" +
+        "}\n" +
+        "async function useIt (x): Promise<any> {\n" +
+        "    const v = await helperA (x);\n" +
+        "    return v;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("v:= (<-HelperA(x))");
+        expect(output).not.toContain("Spawn");
+    });
+    test('a call to a non-function binding is NOT spawned', () => {
+        // an async ARROW stored in a const is not a FunctionDeclaration: there is no
+        // package-level Go symbol to hand to Spawn, so it must keep its direct shape.
+        const input =
+        "const arrow = async (x) => x;\n" +
+        "async function useIt (x): Promise<any> {\n" +
+        "    const v = arrow (x);\n" +
+        "    return v;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("Spawn");
+    });
 });
