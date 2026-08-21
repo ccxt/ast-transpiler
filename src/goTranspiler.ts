@@ -72,6 +72,9 @@ export class GoTranspiler extends BaseTranspiler {
     wrapCallMethods: string[] = [];
     classNameMap: { [key: string]: string };
     DEFAULT_RETURN_TYPE = 'any';
+    ASYNC_RESULT_NAME = 'out';
+    ASYNC_SPAWN_TOKEN = 'this.Spawn';
+    ASYNC_SPAWN_AWAIT_TOKEN = 'Await';
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -413,6 +416,45 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     }
 
+    /**
+     * Name of the named result used by async (channel-returning) functions.
+     *
+     * The async core recovers panics via `defer ReturnPanicError(ch)`, which means a
+     * panicking function returns *normally*. With an unnamed `<- chan any` result the
+     * zero value is a nil channel, and every caller doing `<-f()` would block forever.
+     * Declaring the result gives us a slot we can pre-assign to `ch` before the
+     * deferred recover can fire.
+     */
+    getAsyncResultName(node): string {
+        const base = this.ASYNC_RESULT_NAME;
+        // Collect every identifier used anywhere in the function so the named result
+        // cannot collide with a parameter or local: in Go `out := x` on an already
+        // declared result is a "no new variables on left side of :=" compile error.
+        const taken = new Set<string>();
+        const collect = (current) => {
+            if (!current) {
+                return;
+            }
+            if (ts.isIdentifier(current) && current.escapedText) {
+                taken.add(String(current.escapedText));
+            }
+            ts.forEachChild(current, collect);
+        };
+        try {
+            (node?.parameters ?? []).forEach((param) => collect(param.name));
+            collect(node?.body);
+        } catch {
+            // a malformed/synthesised node must never break emission
+        }
+        let name = base;
+        let suffix = 0;
+        while (taken.has(name)) {
+            suffix++;
+            name = `${base}${suffix}`;
+        }
+        return name;
+    }
+
     printFunctionType(node){
         const typeText = this.getFunctionType(node);
         if (typeText === 'void') {
@@ -428,7 +470,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // throw new FunctionReturnTypeError("Function return type is not supported");
             let res = "";
             if (this.isAsyncFunction(node)) {
-                res = `<- chan ${this.DEFAULT_RETURN_TYPE}`;
+                res = `(${this.getAsyncResultName(node)} <- chan ${this.DEFAULT_RETURN_TYPE})`;
             } else {
                 res = this.DEFAULT_RETURN_TYPE;
             }
@@ -436,6 +478,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return res;
         }
         if (typeText === this.PROMISE_TYPE_KEYWORD) {
+            if (this.isAsyncFunction(node)) {
+                return `(${this.getAsyncResultName(node)} <- chan any)`;
+            }
             return `<- chan any`;
         }
 
@@ -489,6 +534,18 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         }
 
         const isNew = declaration.initializer && (declaration.initializer.kind === ts.SyntaxKind.NewExpression);
+
+        // `const p = this.fetchX (params);` — an async call whose result is *stored*, not
+        // awaited. In JS that starts the work and yields a pending promise; a flat Go core
+        // would instead run to completion right here, serializing the fan-out that a later
+        // `await Promise.all ([ p, q ])` is written to parallelize. Start it on its own
+        // goroutine so the value is a channel of work already in flight.
+        const concurrentStart = declaration.initializer
+            ? this.printConcurrentStartCall(declaration.initializer, identation)
+            : undefined;
+        if (concurrentStart !== undefined) {
+            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + concurrentStart;
+        }
 
         const parsedValue = (declaration.initializer) ? this.printNode(declaration.initializer, identation) : this.NULL_TOKEN;
 
@@ -1027,21 +1084,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // functionBody = functionBody.replace(/(\s*)return\s+([^\n]+\n?)/g, '$1ch <- $2$1');
             const functionBodySplit = functionBody.split("\n");
             const bodyWithIndentationExtraAndNoReturn = functionBodySplit.map((line) => {
-
-                const trimmedLine = line.trim();
-
-                // should we do this inside printReturn statement?
-                // if(trimmedLine.startsWith("return") && trimmedLine !== "return") {
-                //     const returnIndentation = line.indexOf("return")/4 + this.getIden(1);
-                //     let channelReturn = this.getIden(returnIndentation) + "ch <-" + line.replace("return", "").trimStart();
-                //     if (trimmedLine === "return nil") {
-                //         channelReturn = this.getIden(returnIndentation) + "ch <- nil\n" + this.getIden(returnIndentation) + "return nil";
-                //         // it's hard because we don't want to remove the treturns from the emulated try-catches we have that are also functions
-                //         // with return statements
-                //     }
-                //     return channelReturn;
-                // }
-                return this.getIden(identation+2) + line;
+                return this.getIden(identation+1) + line;
             }).join("\n");
             let shouldAddLastReturn = true;
 
@@ -1057,50 +1100,36 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 shouldAddLastReturn = false;
             }
 
-            const lastReturn = shouldAddLastReturn ? this.getIden(identation+2) + "return nil" : "";
-            // const hasCatchInside = bodySplit.indexOf("recover()") > -1;
-            // if ((1+1 == 2) || hasCatchInside) {
-            functionBody = `{
-        ${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-        ${this.getIden(identation + 1)}go func() any {
-        ${this.getIden(identation + 2)}defer close(ch)
-        ${this.getIden(identation + 2)}defer ReturnPanicError(ch)
-        ${bodyWithIndentationExtraAndNoReturn}
-        ${lastReturn}
-        ${this.getIden(identation + 1)}}()
-        ${this.getIden(identation + 1)}return ch
-        ${this.getIden(identation)}}`;
-            // } else {
-            // functionBody = `{
-            // ${id1}ch := make(chan ${this.DEFAULT_RETURN_TYPE})
-            // ${id1}var panicError any = nil
-            // ${id1}var wg sync.WaitGroup
-            // ${id1}wg.Add(1)
-            // ${id1}go func() any {
-            // ${id2}defer wg.Done()
-            // ${id2}defer close(ch)
-            // ${id2}defer func() {
-            // ${id3}if r := recover(); r != nil {
-            // ${id4}panicError = r
-            // ${id4}return
-            // ${id3}}
-            // ${id2}}()
-            // ${bodySplit}
-            // ${lastReturn}
-            // ${id1}}()
-            // ${id1}wg.Wait()
-            // ${id1}if panicError != nil {
-            // ${id2}panic(panicError)
-            // ${id1}}
-            // ${id1}return ch
-            // ${id}}`;
-            // }
+            const resultName = this.getAsyncResultName(node);
+            const lastReturn = shouldAddLastReturn ? this.getIden(identation+1) + "return ch" : "";
+
+            // The async core runs inline instead of inside a `go func() any {...}()`:
+            //
+            //   - `ch` is buffered (cap 1) so the single `ch <- value` never blocks even
+            //     though nobody is receiving yet, and `defer close(ch)` always runs.
+            //   - the result is *named* (`out`) and pre-assigned to `ch` right away:
+            //     `defer ReturnPanicError(ch)` recovers, so a panicking function returns
+            //     normally, and an unnamed result would hand callers a nil channel that
+            //     deadlocks every `<-` receiver.
+            const lines = [
+                "{",
+                `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
+                `${this.getIden(identation + 1)}${resultName} = ch`,
+                `${this.getIden(identation + 1)}defer close(ch)`,
+                `${this.getIden(identation + 1)}defer ReturnPanicError(ch)`,
+                bodyWithIndentationExtraAndNoReturn,
+            ];
+            if (lastReturn) {
+                lines.push(lastReturn);
+            }
+            lines.push(`${this.getIden(identation)}}`);
+            functionBody = lines.join("\n");
 
             // to do fix this later
             // we can't pass nil to the channel when we just want to
             // return from the try catch, otherwise the channel will close with nil
             // instead of the proper result
-            functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\snil(\s*\})/gm, "$1return nil$2");
+            functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\s(nil|ch)(\s*\})/gm, "$1return $2$3");
 
         }
 
@@ -1172,6 +1201,46 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         return false;
     }
 
+    /**
+     * True when `node` sits inside a try/catch belonging to the *same* function.
+     *
+     * try/catch is emulated in Go with synthetic closures (`func (ret_ any) {...}` for
+     * the try block, `func any {...}` for the catch block), so a `return` printed there
+     * leaves that closure, not the enclosing function. Such returns must keep the
+     * closure's `return nil` shape, while returns at the function's own level have to
+     * return the result channel instead.
+     */
+    isInsideTryBlockOfSameFunction(node): boolean {
+        let currentNode = node?.parent;
+
+        while (currentNode) {
+            if (ts.isFunctionDeclaration(currentNode) ||
+              ts.isFunctionExpression(currentNode) ||
+              ts.isArrowFunction(currentNode) ||
+              ts.isMethodDeclaration(currentNode)) {
+                return false;
+            }
+            if (ts.isTryStatement(currentNode)) {
+                return true;
+            }
+            currentNode = currentNode.parent;
+        }
+
+        return false;
+    }
+
+    /**
+     * Statement that terminates an async (channel returning) function.
+     *
+     * At the function's own level we must hand back the channel: the result is named
+     * (see `printFunctionType`) so that a recovered panic still yields a usable channel,
+     * and `return nil` would overwrite it with a nil channel that deadlocks every
+     * receiver. Inside the try/catch closures the plain `return nil` is still correct.
+     */
+    getAsyncReturnStatement(node): string {
+        return this.isInsideTryBlockOfSameFunction(node) ? "return nil" : "return ch";
+    }
+
     printReturnStatement(node, identation) {
 
         const isAsyncFunction = this.isInsideAsyncFunction(node);
@@ -1189,6 +1258,10 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
 
+        // `return nil` only exits the synthetic try/catch closure; at the function's own
+        // level the async core has to hand the (named) result channel back instead.
+        const returnStatement = this.getAsyncReturnStatement(node);
+
         if (node?.expression?.kind === ts.SyntaxKind.AsExpression) {
             node = node.expression;
         }
@@ -1202,17 +1275,17 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     ${this.getIden(identation)}${returnRandName} := ${rightPart}
     ${this.getIden(identation)}PanicOnError(${returnRandName})
     ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
-    ${this.getIden(identation)}return nil`;
+    ${this.getIden(identation)}${returnStatement}`;
             // ${this.getIden(identation)}return ${returnRandName}`;
         }
 
         if (rightPart.length === 0) {
-            return `\n${this.getIden(identation)}return nil`;
+            return `\n${this.getIden(identation)}${returnStatement}`;
         }
 
         return `
 ${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
-${this.getIden(identation)}return nil`;
+${this.getIden(identation)}${returnStatement}`;
         // ${this.getIden(identation)}return ${rightPart}`;
         // ${this.getIden(identation)}return ${rightPart}`;
     }
@@ -1241,13 +1314,79 @@ ${this.getIden(identation)}return nil`;
         return this.printNode(node.expression, identation);
     }
 
+    /**
+     * True when `node` is a call of an async (channel-returning) method on `this`,
+     * ie. the Go shape `this.Method(a, b)` whose result is a `<- chan any`.
+     *
+     * Used to decide whether a *deferred* (not immediately awaited) call has to be
+     * started on its own goroutine — see `printConcurrentStartCall`.
+     */
+    isAsyncThisCall(node): boolean {
+        if (!node || node.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const expression = node.expression;
+        if (expression?.kind !== ts.SyntaxKind.PropertyAccessExpression
+                || expression.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        try {
+            const signature = this.getChecker().getResolvedSignature(node);
+            const declaration = signature?.declaration;
+            if (declaration === undefined) {
+                // unresolved `this.X()` is emitted through callInternal/callDynamically,
+                // which already hands back a channel started elsewhere: leave it alone
+                return false;
+            }
+            return this.isAsyncFunction(declaration);
+        } catch {
+            // a malformed/synthesised node must never break emission
+            return false;
+        }
+    }
+
+    /**
+     * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
+     * channel, instead of running to completion at the point of evaluation.
+     *
+     * Async cores are flat: the body runs on the caller's goroutine and the returned
+     * capacity-1 channel is already filled by the time the call expression yields. That
+     * is exactly right for `await`ed calls, but it silently serializes the fan-out
+     * idiom, where a call is stored first and only awaited later:
+     *
+     *     const a = this.fetchSpotMarkets (params);   // JS: starts, does not block
+     *     const b = this.fetchSwapMarkets (params);   // JS: starts, does not block
+     *     await Promise.all ([ a, b ]);               // both already in flight
+     *
+     * `this.Spawn(this.Method, args...)` is the runtime's own fire-and-forget helper: it
+     * calls the method on a fresh goroutine and returns a *Future. `.Await()` turns that
+     * Future back into a `<- chan any`, so the value keeps the exact static type the
+     * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
+     *
+     * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
+     * body panic into its channel, Spawn resolves the Future with that panic string, and
+     * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
+     */
+    printConcurrentStartCall(node, identation): string | undefined {
+        if (!this.isAsyncThisCall(node)) {
+            return undefined;
+        }
+        const methodName = this.transformCallExpressionName(this.printNode(node.expression.name, 0));
+        const parsedArgs = this.printArgsForCallExpression(node, identation);
+        const args = parsedArgs ? `, ${parsedArgs}` : "";
+        return `${this.ASYNC_SPAWN_TOKEN}(this.${methodName}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
+    }
+
     printArrayLiteralExpression(node) {
 
         let arrayOpen = this.ARRAY_OPENING_TOKEN;
         const elems = node.elements;
 
+        // `Promise.all ([ this.fetchA (), this.fetchB () ])` — every async element has to be
+        // started before the next one is evaluated, otherwise a flat core runs each call to
+        // completion in argument order and the fan-out is serial. See printConcurrentStartCall.
         const elements = node.elements.map((e) => {
-            return this.printNode(e);
+            return this.printConcurrentStartCall(e, 0) ?? this.printNode(e);
         }).join(", ");
 
         // take into consideration list of promises
@@ -1353,7 +1492,13 @@ ${this.getIden(identation)}return nil`;
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
             returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
         }
-        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
+        // `promises.push (this.fetchX (symbol))` collects a promise to await later, so the
+        // call has to start now rather than run to completion inside the argument. See
+        // printConcurrentStartCall.
+        const pushedArg = node.arguments?.length === 1
+            ? this.printConcurrentStartCall(node.arguments[0], 0)
+            : undefined;
+        return  `${returnValue}AppendToArray(&${returnRandName}, ${pushedArg ?? parsedArg})`;
         // works with:
         //  func AppendToArray(slicePtr *any, element any)
         //  func AppendToArrayValue(slice any, element any) any
@@ -1666,12 +1811,19 @@ ${this.getIden(identation)}return nil`;
         const isVoid   = this.isInsideVoidFunction(node);
 
         const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
+        // A try/catch sitting directly in an async function (not nested inside another
+        // try) now runs inline in the function itself, so its trailing statement has to
+        // return the result channel. `ret__` is an `any` and can no longer be returned
+        // from a channel-typed function, and the value was discarded by the goroutine
+        // anyway -- so drop the capture entirely and just hand back `ch`.
+        const isAsyncFunctionLevel = this.isInsideAsyncFunction(node) && !this.isInsideTryBlockOfSameFunction(node);
+        const capturesResult = nodeEndsWithReturn && !isAsyncFunctionLevel;
         const errorName = node.catchClause.variableDeclaration.name.escapedText;
         const classPrefix = this.className !== 'undefined' ? `(this *${this.className})` : "()";
         const thisWord = this.className !== 'undefined' ? "this" : "";
         const catchBlock =`
     {
-        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func${classPrefix} (ret_ any) {
+        ${capturesResult ? 'ret__ :=' : ''} func${classPrefix} (ret_ any) {
 		    defer func() {
                 if ${errorName} := recover(); ${errorName} != nil {
                     if ${errorName} == "break" {
@@ -1689,11 +1841,14 @@ ${this.getIden(identation)}return nil`;
 		    ${tryBodyEndsWithReturn ? "" : returNil}
 	    }(${thisWord})
     ${nodeEndsWithReturn
-        ? `
+        ? (isAsyncFunctionLevel
+            ? `
+            return ch`
+            : `
             if ret__ != nil {
                 return ret__
             }
-            return nil`
+            return nil`)
         : ''}
         }`;
         // add identation
