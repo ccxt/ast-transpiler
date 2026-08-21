@@ -3516,6 +3516,9 @@ var GoTranspiler = class extends BaseTranspiler {
     this.DEFAULT_RETURN_TYPE = "any";
     this.ASYNC_RESULT_NAME = "out";
     this.ASYNC_SPAWN_TOKEN = "this.Spawn";
+    // module-scope `async function` has no receiver: the generated package exposes a
+    // package-level Spawn with the same (method any, args ...any) *Future signature
+    this.ASYNC_SPAWN_FREE_TOKEN = "Spawn";
     this.ASYNC_SPAWN_AWAIT_TOKEN = "Await";
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -4381,18 +4384,27 @@ ${this.getIden(identation)}${returnStatement}`;
     return this.printNode(node.expression, identation);
   }
   /**
-   * True when `node` is a call of an async (channel-returning) method on `this`,
-   * ie. the Go shape `this.Method(a, b)` whose result is a `<- chan any`.
+   * True when `node` resolves to an async (channel-returning) function declaration,
+   * ie. something whose Go result is a `<- chan any`.
+   *
+   * Two callee shapes qualify:
+   *   - a method on `this`  -> `this.Method(a, b)`
+   *   - a module-scope function -> `helper(a, b)` (how the transpiled test harness
+   *     is written: `async function testWatchTickersHelper (...)` at file scope)
+   * Anything else (`exchange.fetchTicker()`, `this.someObj.method()`, an unresolved
+   * dynamic call) is left alone.
    *
    * Used to decide whether a *deferred* (not immediately awaited) call has to be
    * started on its own goroutine — see `printConcurrentStartCall`.
    */
-  isAsyncThisCall(node) {
+  isAsyncCallToStart(node) {
     if (!node || node.kind !== ts5.SyntaxKind.CallExpression) {
       return false;
     }
     const expression = node.expression;
-    if (expression?.kind !== ts5.SyntaxKind.PropertyAccessExpression || expression.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+    const isThisMethod = expression?.kind === ts5.SyntaxKind.PropertyAccessExpression && expression.expression?.kind === ts5.SyntaxKind.ThisKeyword;
+    const isBareIdentifier = expression?.kind === ts5.SyntaxKind.Identifier;
+    if (!isThisMethod && !isBareIdentifier) {
       return false;
     }
     try {
@@ -4401,10 +4413,19 @@ ${this.getIden(identation)}${returnStatement}`;
       if (declaration === void 0) {
         return false;
       }
+      if (isBareIdentifier) {
+        if (declaration.kind !== ts5.SyntaxKind.FunctionDeclaration) {
+          return false;
+        }
+      }
       return this.isAsyncFunction(declaration);
     } catch {
       return false;
     }
+  }
+  // kept as the historical name used by the `this.X()` gate
+  isAsyncThisCall(node) {
+    return this.isAsyncCallToStart(node);
   }
   /**
    * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
@@ -4424,18 +4445,25 @@ ${this.getIden(identation)}${returnStatement}`;
    * Future back into a `<- chan any`, so the value keeps the exact static type the
    * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
    *
+   * A module-scope `async function` has no receiver to hang Spawn off, so it uses the
+   * package-level twin `Spawn(Helper, args...)` instead. Same Future, same contract.
+   *
    * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
    * body panic into its channel, Spawn resolves the Future with that panic string, and
    * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
    */
   printConcurrentStartCall(node, identation) {
-    if (!this.isAsyncThisCall(node)) {
+    if (!this.isAsyncCallToStart(node)) {
       return void 0;
     }
-    const methodName = this.transformCallExpressionName(this.printNode(node.expression.name, 0));
+    const isThisMethod = node.expression.kind === ts5.SyntaxKind.PropertyAccessExpression;
+    const nameNode = isThisMethod ? node.expression.name : node.expression;
+    const calleeName = this.transformCallExpressionName(this.printNode(nameNode, 0));
+    const spawnToken = isThisMethod ? this.ASYNC_SPAWN_TOKEN : this.ASYNC_SPAWN_FREE_TOKEN;
+    const callee = isThisMethod ? `this.${calleeName}` : calleeName;
     const parsedArgs = this.printArgsForCallExpression(node, identation);
     const args = parsedArgs ? `, ${parsedArgs}` : "";
-    return `${this.ASYNC_SPAWN_TOKEN}(this.${methodName}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
+    return `${spawnToken}(${callee}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
   }
   printArrayLiteralExpression(node) {
     let arrayOpen = this.ARRAY_OPENING_TOKEN;

@@ -567,6 +567,7 @@ declare class GoTranspiler extends BaseTranspiler {
     DEFAULT_RETURN_TYPE: string;
     ASYNC_RESULT_NAME: string;
     ASYNC_SPAWN_TOKEN: string;
+    ASYNC_SPAWN_FREE_TOKEN: string;
     ASYNC_SPAWN_AWAIT_TOKEN: string;
     constructor(config?: {});
     initConfig(): void;
@@ -640,12 +641,20 @@ declare class GoTranspiler extends BaseTranspiler {
     printReturnStatement(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
     /**
-     * True when `node` is a call of an async (channel-returning) method on `this`,
-     * ie. the Go shape `this.Method(a, b)` whose result is a `<- chan any`.
+     * True when `node` resolves to an async (channel-returning) function declaration,
+     * ie. something whose Go result is a `<- chan any`.
+     *
+     * Two callee shapes qualify:
+     *   - a method on `this`  -> `this.Method(a, b)`
+     *   - a module-scope function -> `helper(a, b)` (how the transpiled test harness
+     *     is written: `async function testWatchTickersHelper (...)` at file scope)
+     * Anything else (`exchange.fetchTicker()`, `this.someObj.method()`, an unresolved
+     * dynamic call) is left alone.
      *
      * Used to decide whether a *deferred* (not immediately awaited) call has to be
      * started on its own goroutine — see `printConcurrentStartCall`.
      */
+    isAsyncCallToStart(node: any): boolean;
     isAsyncThisCall(node: any): boolean;
     /**
      * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
@@ -664,6 +673,9 @@ declare class GoTranspiler extends BaseTranspiler {
      * calls the method on a fresh goroutine and returns a *Future. `.Await()` turns that
      * Future back into a `<- chan any`, so the value keeps the exact static type the
      * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
+     *
+     * A module-scope `async function` has no receiver to hang Spawn off, so it uses the
+     * package-level twin `Spawn(Helper, args...)` instead. Same Future, same contract.
      *
      * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
      * body panic into its channel, Spawn resolves the Future with that panic string, and
