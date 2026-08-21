@@ -74,6 +74,9 @@ export class GoTranspiler extends BaseTranspiler {
     DEFAULT_RETURN_TYPE = 'any';
     ASYNC_RESULT_NAME = 'out';
     ASYNC_SPAWN_TOKEN = 'this.Spawn';
+    // module-scope `async function` has no receiver: the generated package exposes a
+    // package-level Spawn with the same (method any, args ...any) *Future signature
+    ASYNC_SPAWN_FREE_TOKEN = 'Spawn';
     ASYNC_SPAWN_AWAIT_TOKEN = 'Await';
 
     constructor(config = {}) {
@@ -1315,19 +1318,30 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     /**
-     * True when `node` is a call of an async (channel-returning) method on `this`,
-     * ie. the Go shape `this.Method(a, b)` whose result is a `<- chan any`.
+     * True when `node` resolves to an async (channel-returning) function declaration,
+     * ie. something whose Go result is a `<- chan any`.
+     *
+     * Two callee shapes qualify:
+     *   - a method on `this`  -> `this.Method(a, b)`
+     *   - a module-scope function -> `helper(a, b)` (how the transpiled test harness
+     *     is written: `async function testWatchTickersHelper (...)` at file scope)
+     * Anything else (`exchange.fetchTicker()`, `this.someObj.method()`, an unresolved
+     * dynamic call) is left alone.
      *
      * Used to decide whether a *deferred* (not immediately awaited) call has to be
      * started on its own goroutine — see `printConcurrentStartCall`.
      */
-    isAsyncThisCall(node): boolean {
+    isAsyncCallToStart(node): boolean {
         if (!node || node.kind !== ts.SyntaxKind.CallExpression) {
             return false;
         }
         const expression = node.expression;
-        if (expression?.kind !== ts.SyntaxKind.PropertyAccessExpression
-                || expression.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+        const isThisMethod = expression?.kind === ts.SyntaxKind.PropertyAccessExpression
+                && expression.expression?.kind === ts.SyntaxKind.ThisKeyword;
+        // a bare identifier callee: only a module-scope `async function` qualifies, and
+        // the declaration check below is what actually proves it
+        const isBareIdentifier = expression?.kind === ts.SyntaxKind.Identifier;
+        if (!isThisMethod && !isBareIdentifier) {
             return false;
         }
         try {
@@ -1338,11 +1352,24 @@ ${this.getIden(identation)}${returnStatement}`;
                 // which already hands back a channel started elsewhere: leave it alone
                 return false;
             }
+            if (isBareIdentifier) {
+                // only free FUNCTION declarations: a local `const f = async () => …`, a
+                // parameter, or an imported binding is not something we can name as a Go
+                // package-level symbol, and arrow/function expressions are emitted inline
+                if (declaration.kind !== ts.SyntaxKind.FunctionDeclaration) {
+                    return false;
+                }
+            }
             return this.isAsyncFunction(declaration);
         } catch {
             // a malformed/synthesised node must never break emission
             return false;
         }
+    }
+
+    // kept as the historical name used by the `this.X()` gate
+    isAsyncThisCall(node): boolean {
+        return this.isAsyncCallToStart(node);
     }
 
     /**
@@ -1363,18 +1390,27 @@ ${this.getIden(identation)}${returnStatement}`;
      * Future back into a `<- chan any`, so the value keeps the exact static type the
      * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
      *
+     * A module-scope `async function` has no receiver to hang Spawn off, so it uses the
+     * package-level twin `Spawn(Helper, args...)` instead. Same Future, same contract.
+     *
      * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
      * body panic into its channel, Spawn resolves the Future with that panic string, and
      * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
      */
     printConcurrentStartCall(node, identation): string | undefined {
-        if (!this.isAsyncThisCall(node)) {
+        if (!this.isAsyncCallToStart(node)) {
             return undefined;
         }
-        const methodName = this.transformCallExpressionName(this.printNode(node.expression.name, 0));
+        const isThisMethod = node.expression.kind === ts.SyntaxKind.PropertyAccessExpression;
+        // `this.fetchX()` -> `this.Spawn(this.FetchX, …)`;
+        // `helper()`      -> `Spawn(Helper, …)` (package-level Spawn, no receiver)
+        const nameNode = isThisMethod ? node.expression.name : node.expression;
+        const calleeName = this.transformCallExpressionName(this.printNode(nameNode, 0));
+        const spawnToken = isThisMethod ? this.ASYNC_SPAWN_TOKEN : this.ASYNC_SPAWN_FREE_TOKEN;
+        const callee = isThisMethod ? `this.${calleeName}` : calleeName;
         const parsedArgs = this.printArgsForCallExpression(node, identation);
         const args = parsedArgs ? `, ${parsedArgs}` : "";
-        return `${this.ASYNC_SPAWN_TOKEN}(this.${methodName}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
+        return `${spawnToken}(${callee}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
     }
 
     printArrayLiteralExpression(node) {
