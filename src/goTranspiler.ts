@@ -65,6 +65,74 @@ const parserConfig = {
     'ELEMENT_ACCESS_WRAPPER_CLOSE': ')',
 };
 
+// Go static type of the value each base helper returns. A local initialised by
+// one of these already holds that concrete type inside its `any` box, so naming
+// the type at the declaration site keeps the very same runtime value and only
+// refines what the Go compiler knows about it.
+const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
+    'GetArrayLength': 'int',
+    'GetIndexOf': 'int',
+    'ToString': 'string',
+    'ToLower': 'string',
+    'ToUpper': 'string',
+    'JsonStringify': 'string',
+    'Capitalize': 'string',
+    'this.Uuid': 'string',
+    'this.Hmac': 'string',
+    'this.Ymdhms': 'string',
+    'this.Yyyymmdd': 'string',
+    'this.Ymd': 'string',
+    'Split': '[]string',
+    'ObjectKeys': '[]string',
+    'this.Extend': 'map[string]any',
+    'this.DeepExtend': 'map[string]any',
+    'this.Keysort': 'map[string]any',
+    'this.IndexBy': 'map[string]any',
+    'this.GroupBy': 'map[string]any',
+    'this.Milliseconds': 'int64',
+    'this.Seconds': 'int64',
+    'this.Microseconds': 'int64',
+    'ParseInt': 'int64',
+    'MathFloor': 'float64',
+    'MathCeil': 'float64',
+    'MathRound': 'float64',
+    'MathAbs': 'float64',
+    'MathPow': 'float64',
+    'ToFloat64': 'float64',
+    'IsTrue': 'bool',
+    'IsEqual': 'bool',
+    'IsGreaterThan': 'bool',
+    'IsLessThan': 'bool',
+    'IsGreaterThanOrEqual': 'bool',
+    'IsLessThanOrEqual': 'bool',
+    'InOp': 'bool',
+    'IsArray': 'bool',
+    'IsString': 'bool',
+    'IsInt': 'bool',
+    'IsBool': 'bool',
+    'IsNumber': 'bool',
+    'IsObject': 'bool',
+    'IsDictionary': 'bool',
+    'StartsWith': 'bool',
+    'EndsWith': 'bool',
+    'IsInstance': 'bool',
+    'IsInteger': 'bool',
+    'this.InArray': 'bool',
+    'this.ValueIsDefined': 'bool',
+    'Precise.StringGt': 'bool',
+    'Precise.StringGe': 'bool',
+    'Precise.StringLt': 'bool',
+    'Precise.StringLe': 'bool',
+    'Precise.StringEq': 'bool',
+    'Precise.StringEquals': 'bool',
+};
+
+// helpers whose Go signature is `any` (SafeString, GetValue, Ternary, Add,
+// Precise.StringMul, ...) are deliberately absent above: their box holds a value
+// the printer cannot name, so those locals stay `any`.
+
+const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -586,6 +654,187 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return typeText;
     }
 
+    // true when the printed expression is a single call `Callee(...)` covering the
+    // whole string, so its Go type is the callee's return type and nothing else
+    isWholePrintedCall(value: string, open: number): boolean {
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let i = open; i < value.length; i++) {
+            const c = value[i];
+            if (inString) {
+                if (escaped) { escaped = false; }
+                else if (c === '\\') { escaped = true; }
+                else if (c === '"') { inString = false; }
+                continue;
+            }
+            if (c === '"') { inString = true; continue; }
+            if (c === '(') { depth++; continue; }
+            if (c === ')') {
+                depth--;
+                if (depth === 0) { return i === value.length - 1; }
+            }
+        }
+        return false;
+    }
+
+    // the concrete Go type the initializer already produces, or undefined when the
+    // printer cannot name it (this.SafeString, GetValue, Ternary, Add, ... return any)
+    goTypeOfInitializer(initializer, printedValue: string): string | undefined {
+        switch (initializer?.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return 'string';
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return 'bool';
+        case ts.SyntaxKind.ObjectLiteralExpression:
+            return 'map[string]any';
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return '[]any';
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            // `!x` prints `!IsTrue(x)`
+            return (initializer.operator === ts.SyntaxKind.ExclamationToken) ? 'bool' : undefined;
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goTypeOfInitializer(initializer.expression, printedValue);
+        case ts.SyntaxKind.BinaryExpression: {
+            // `a || b` prints `IsTrue(a) || IsTrue(b)`, a Go bool
+            const op = initializer.operatorToken.kind;
+            if ((op === ts.SyntaxKind.BarBarToken) || (op === ts.SyntaxKind.AmpersandAmpersandToken)) {
+                return 'bool';
+            }
+            break;
+        }
+        }
+        let value = printedValue.trim();
+        // `const x = (a === b)` prints the wrapping parentheses of the source
+        while (value.startsWith('(') && this.isWholePrintedCall(value, 0)) {
+            value = value.substring(1, value.length - 1).trim();
+        }
+        const open = value.indexOf('(');
+        if (open <= 0 || !this.isWholePrintedCall(value, open)) {
+            return undefined;
+        }
+        const callee = value.substring(0, open);
+        if (!/^[A-Za-z_][\w.]*$/.test(callee)) {
+            return undefined;
+        }
+        return GO_HELPER_RETURN_TYPES[callee];
+    }
+
+    goEnclosingFunction(node) {
+        let current = node?.parent;
+        while (current) {
+            switch (current.kind) {
+            case ts.SyntaxKind.MethodDeclaration:
+            case ts.SyntaxKind.FunctionDeclaration:
+            case ts.SyntaxKind.FunctionExpression:
+            case ts.SyntaxKind.ArrowFunction:
+            case ts.SyntaxKind.Constructor:
+            case ts.SyntaxKind.SourceFile:
+                return current;
+            }
+            current = current.parent;
+        }
+        return undefined;
+    }
+
+    // a transpiled parameter or local can literally be named `string`, which would
+    // turn `var x string = ...` into a reference to that value instead of the type
+    goTypeNameIsShadowed(scope, goType: string): boolean {
+        const names = goType.match(/[A-Za-z_]\w*/g) ?? [];
+        const relevant = names.filter((n) => GO_TYPE_NAMES.indexOf(n) >= 0);
+        if (relevant.length === 0 || scope === undefined) {
+            return false;
+        }
+        let shadowed = false;
+        const visit = (n) => {
+            if (shadowed) { return; }
+            const isBinding = (n.kind === ts.SyntaxKind.Parameter) || (n.kind === ts.SyntaxKind.VariableDeclaration);
+            if (isBinding && (n.name?.kind === ts.SyntaxKind.Identifier)) {
+                if (relevant.indexOf(n.name.escapedText as string) >= 0) { shadowed = true; return; }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return shadowed;
+    }
+
+    // reject the refinement when something downstream needs the local to stay `any`:
+    // `x.push(v)` prints `AppendToArray(&x, v)` (a *T is not a *any) and a later
+    // assignment of a value with another concrete type would stop compiling
+    goLocalIsSafeToType(scope, declaration, varName: string, goType: string): boolean {
+        if (scope === undefined) {
+            return false;
+        }
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) { return; }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === varName) && (n !== declaration.name)) {
+                const parent = n.parent;
+                if (parent?.kind === ts.SyntaxKind.PropertyAccessExpression && parent.expression === n
+                    && parent.name?.escapedText === 'push') {
+                    safe = false; // AppendToArray(&x, ...)
+                    return;
+                }
+                if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name === n) {
+                    return; // a sibling block-scoped declaration; it gets its own type
+                }
+                if ((parent?.kind === ts.SyntaxKind.PostfixUnaryExpression) || (parent?.kind === ts.SyntaxKind.PrefixUnaryExpression)) {
+                    const op = parent.operator;
+                    if ((op === ts.SyntaxKind.PlusPlusToken) || (op === ts.SyntaxKind.MinusMinusToken)) {
+                        safe = false;
+                        return;
+                    }
+                }
+                if (parent?.kind === ts.SyntaxKind.SpreadElement) {
+                    safe = false; // `x...` only forwards a slice whose element type matches
+                    return;
+                }
+                if (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression
+                    && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
+                    && parent.parent.left === parent
+                    && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+                    safe = false; // [x, y] = f() destructures into `x = GetValue(...)`
+                    return;
+                }
+                if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
+                    const op = parent.operatorToken.kind;
+                    if (op === ts.SyntaxKind.EqualsToken) {
+                        if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType) {
+                            safe = false;
+                            return;
+                        }
+                    } else if ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment)) {
+                        safe = false;
+                        return;
+                    }
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    getGoLocalType(declaration, parsedValue: string): string {
+        const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
+        if (goType === undefined) {
+            return 'any';
+        }
+        // the scan matches AST identifiers, so it needs the source name, not the
+        // printed one (`type` is renamed to `typeVar` on the way out)
+        const sourceName = declaration.name?.escapedText;
+        if (sourceName === undefined) {
+            return 'any';
+        }
+        const scope = this.goEnclosingFunction(declaration);
+        if (this.goTypeNameIsShadowed(scope, goType) || !this.goLocalIsSafeToType(scope, declaration, sourceName, goType)) {
+            return 'any';
+        }
+        return goType;
+    }
+
     printVariableDeclarationList(node,identation) {
         const declaration = node.declarations[0];
         // const varToken = this.VAR_TOKEN ? this.VAR_TOKEN + " ": "";
@@ -636,7 +885,8 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue;
             }
             const varName = this.printNode(declaration.name);
-            const stm = this.getIden(identation) + "var " + varName + " any = " + parsedValue;
+            const declaredType = this.getGoLocalType(declaration, parsedValue);
+            const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue;
             if (parsedValue.startsWith("<-this.callInternal(")) {
                 return `
 ${stm}

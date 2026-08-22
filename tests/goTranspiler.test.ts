@@ -30,7 +30,7 @@ describe('go transpiling tests', () => {
     });
     test('string literal escaping', () => {
         const ts = 'const x = "foo, \'single\', \\"double\\" \\t \\n \\r \\b \\f \\\\ ";'
-        const go = 'var x any = "foo, \'single\', \\"double\\" \\t \\n \\r \\b \\f \\\\ "'
+        const go = 'var x string = "foo, \'single\', \\"double\\" \\t \\n \\r \\b \\f \\\\ "'
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
     });
@@ -83,11 +83,11 @@ describe('go transpiling tests', () => {
         "    const f = 1;\n" +
         "}";
         const go =
-        "var a any = \"hi\"\n" +
-        "var b any = false\n" +
-        "var c any = IsTrue(a) && IsTrue(b)\n" +
-        "var d any = !IsTrue(a) && !IsTrue(b)\n" +
-        "var e any = (IsTrue(a) || !IsTrue(b))\n" +
+        "var a string = \"hi\"\n" +
+        "var b bool = false\n" +
+        "var c bool = IsTrue(a) && IsTrue(b)\n" +
+        "var d bool = !IsTrue(a) && !IsTrue(b)\n" +
+        "var e bool = (IsTrue(a) || !IsTrue(b))\n" +
         "if IsTrue(a) {\n" +
         "    var f any = 1\n" +
         "}"
@@ -377,6 +377,103 @@ describe('go transpiling tests', () => {
         expect(output).toContain("recover()");
         expect(output).toContain("return ret__");
         expect(output).toContain("return ch");
+    });
+});
+
+describe('go typed body locals', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/ +/g, ' ');
+    test('locals whose initializer has a concrete Go type are declared with it', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market) {\n" +
+        "        const upper = market.toUpperCase();\n" +
+        "        const parts = market.split('/');\n" +
+        "        const count = parts.length;\n" +
+        "        const same = (upper === market);\n" +
+        "        const merged = this.extend({}, market);\n" +
+        "        return [upper, parts, count, same, merged];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var upper string = ToUpper(market)");
+        expect(output).toContain("var parts []string = Split(market, \"/\")");
+        expect(output).toContain("var count int = GetArrayLength(parts)");
+        expect(output).toContain("var same bool = (IsEqual(upper, market))");
+        expect(output).toContain("var merged map[string]any = this.Extend(");
+    });
+    test('helpers that return any keep the local untyped', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item, a, b) {\n" +
+        "        const income = this.safeString(item, 'income');\n" +
+        "        const first = item['first'];\n" +
+        "        const sum = a + b;\n" +
+        "        const picked = a ? b : item;\n" +
+        "        return [income, first, sum, picked];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var income any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var first any = GetValue(item, \"first\")");
+        expect(output).toContain("var sum any = Add(a, b)");
+        expect(output).toContain("var picked any = Ternary(");
+    });
+    test('a local reassigned with another type, appended to or spread stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(market, other) {\n" +
+        "        const reassigned = market.toUpperCase();\n" +
+        "        reassigned = this.safeString(other, 'x');\n" +
+        "        const appended = market.split('/');\n" +
+        "        appended.push('extra');\n" +
+        "        return [reassigned, appended];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var reassigned any = ToUpper(market)");
+        expect(output).toContain("var appended any = Split(market, \"/\")");
+    });
+    test('a local reassigned with the same concrete type keeps the type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market, other) {\n" +
+        "        const upper = market.toUpperCase();\n" +
+        "        upper = other.toUpperCase();\n" +
+        "        return upper;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var upper string = ToUpper(market)");
+    });
+    test('a renamed local is scanned under its source name', () => {
+        // `type` prints as `typeVar`; the reject scan must still see the
+        // destructuring assignment that reassigns it from GetValue
+        const input =
+        "class Exchange {\n" +
+        "    handleMarketTypeAndParams(a, b, c, d) { return [a, b]; }\n" +
+        "    main(params) {\n" +
+        "        let type = 'spot';\n" +
+        "        [ type, params ] = this.handleMarketTypeAndParams('fetchBalance', undefined, params, type);\n" +
+        "        return type;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var typeVar any = \"spot\"");
+    });
+    test('a parameter shadowing a Go type name blocks that refinement', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(string, other) {\n" +
+        "        const upper = other.toUpperCase();\n" +
+        "        return [string, upper];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var upper any = ToUpper(other)");
     });
 });
 
