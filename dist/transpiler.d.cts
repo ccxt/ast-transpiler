@@ -565,6 +565,7 @@ declare class GoTranspiler extends BaseTranspiler {
         [key: string]: string;
     };
     DEFAULT_RETURN_TYPE: string;
+    ASYNC_BODY_SUFFIX: string;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
@@ -578,6 +579,51 @@ declare class GoTranspiler extends BaseTranspiler {
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     printFunctionDeclaration(node: any, identation: any): string;
+    /**
+     * Name of the sibling *body* method/function an async core hands its work to.
+     *
+     * `FetchTicker` -> `fetchTickerBody`. Deliberately UNEXPORTED: the body is an
+     * implementation detail of the trampoline, so it must not show up on the generated
+     * interfaces (ICoreExchange) nor on the typed `*_wrapper.go` facades, and it stays
+     * invisible to the reflection based `callInternal`/`callDynamically` dispatch.
+     *
+     * If that name is already taken by a real declaration (a hand written
+     * `fetchTickerBody`), a numeric suffix is appended instead of silently clobbering it.
+     */
+    getAsyncBodyName(node: any, goName: string): string;
+    /**
+     * Parameter list of the body: the channel it must fill, then the original parameters
+     * verbatim (including the `optionalArgs ...any` tail), so the trampoline can forward
+     * its own arguments unchanged.
+     */
+    printAsyncBodyParameters(node: any): string;
+    /**
+     * Arguments the trampoline forwards to its body, matching printMethodParameters:
+     * the declared parameters in order, plus the variadic `optionalArgs...` tail when
+     * the function has any defaulted parameter.
+     */
+    printAsyncTrampolineArgs(node: any): string;
+    /**
+     * The trampoline: an async core hands back a *hot handle*.
+     *
+     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *         ch := make(chan any, 1)
+     *         go this.fetchTickerBody(ch, symbol)
+     *         return ch
+     *     }
+     *
+     *   - `ch` is buffered (cap 1): the body's single `ch <- value` never blocks, so a
+     *     result nobody ever receives still lets the goroutine finish and run
+     *     `defer close(ch)` (no leak for abandoned calls).
+     *   - the body runs on its own goroutine, so the call expression returns immediately
+     *     with work already in flight. That is what makes
+     *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
+     *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
+     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
+     *     lives on the body, not here.
+     */
+    printAsyncTrampolineBlock(node: any, identation: any, callee: string): string;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printMethodParameters(node: any): any;
