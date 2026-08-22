@@ -565,10 +565,7 @@ declare class GoTranspiler extends BaseTranspiler {
         [key: string]: string;
     };
     DEFAULT_RETURN_TYPE: string;
-    ASYNC_RESULT_NAME: string;
-    ASYNC_SPAWN_TOKEN: string;
-    ASYNC_SPAWN_FREE_TOKEN: string;
-    ASYNC_SPAWN_AWAIT_TOKEN: string;
+    ASYNC_BODY_SUFFIX: string;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
@@ -582,21 +579,56 @@ declare class GoTranspiler extends BaseTranspiler {
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     printFunctionDeclaration(node: any, identation: any): string;
+    /**
+     * Name of the sibling *body* method/function an async core hands its work to.
+     *
+     * `FetchTicker` -> `fetchTickerBody`. Deliberately UNEXPORTED: the body is an
+     * implementation detail of the trampoline, so it must not show up on the generated
+     * interfaces (ICoreExchange) nor on the typed `*_wrapper.go` facades, and it stays
+     * invisible to the reflection based `callInternal`/`callDynamically` dispatch.
+     *
+     * If that name is already taken by a real declaration (a hand written
+     * `fetchTickerBody`), a numeric suffix is appended instead of silently clobbering it.
+     */
+    getAsyncBodyName(node: any, goName: string): string;
+    /**
+     * Parameter list of the body: the channel it must fill, then the original parameters
+     * verbatim (including the `optionalArgs ...any` tail), so the trampoline can forward
+     * its own arguments unchanged.
+     */
+    printAsyncBodyParameters(node: any): string;
+    /**
+     * Arguments the trampoline forwards to its body, matching printMethodParameters:
+     * the declared parameters in order, plus the variadic `optionalArgs...` tail when
+     * the function has any defaulted parameter.
+     */
+    printAsyncTrampolineArgs(node: any): string;
+    /**
+     * The trampoline: an async core hands back a *hot handle*.
+     *
+     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *         ch := make(chan any, 1)
+     *         go this.fetchTickerBody(ch, symbol)
+     *         return ch
+     *     }
+     *
+     *   - `ch` is buffered (cap 1): the body's single `ch <- value` never blocks, so a
+     *     result nobody ever receives still lets the goroutine finish and run
+     *     `defer close(ch)` (no leak for abandoned calls).
+     *   - the body runs on its own goroutine, so the call expression returns immediately
+     *     with work already in flight. That is what makes
+     *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
+     *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
+     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
+     *     lives on the body, not here.
+     */
+    printAsyncTrampolineBlock(node: any, identation: any, callee: string): string;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): any;
-    /**
-     * Name of the named result used by async (channel-returning) functions.
-     *
-     * The async core recovers panics via `defer ReturnPanicError(ch)`, which means a
-     * panicking function returns *normally*. With an unnamed `<- chan any` result the
-     * zero value is a nil channel, and every caller doing `<-f()` would block forever.
-     * Declaring the result gives us a slot we can pre-assign to `ch` before the
-     * deferred recover can fire.
-     */
-    getAsyncResultName(node: any): string;
     printFunctionType(node: any): any;
     printVariableDeclarationList(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
@@ -620,68 +652,16 @@ declare class GoTranspiler extends BaseTranspiler {
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): any;
     /**
-     * True when `node` sits inside a try/catch belonging to the *same* function.
+     * Statement that terminates an async (channel returning) function body.
      *
-     * try/catch is emulated in Go with synthetic closures (`func (ret_ any) {...}` for
-     * the try block, `func any {...}` for the catch block), so a `return` printed there
-     * leaves that closure, not the enclosing function. Such returns must keep the
-     * closure's `return nil` shape, while returns at the function's own level have to
-     * return the result channel instead.
-     */
-    isInsideTryBlockOfSameFunction(node: any): boolean;
-    /**
-     * Statement that terminates an async (channel returning) function.
-     *
-     * At the function's own level we must hand back the channel: the result is named
-     * (see `printFunctionType`) so that a recovered panic still yields a usable channel,
-     * and `return nil` would overwrite it with a nil channel that deadlocks every
-     * receiver. Inside the try/catch closures the plain `return nil` is still correct.
+     * The body is the trampoline's sibling method (`go this.fetchTickerBody(ch, ...)`),
+     * and the synthetic try/catch closures nest inside it: in both cases `return` leaves
+     * a function whose result is a plain `any`, never the channel. The trampoline itself
+     * owns the single `return ch`, emitted by printFunctionBody.
      */
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
-    /**
-     * True when `node` resolves to an async (channel-returning) function declaration,
-     * ie. something whose Go result is a `<- chan any`.
-     *
-     * Two callee shapes qualify:
-     *   - a method on `this`  -> `this.Method(a, b)`
-     *   - a module-scope function -> `helper(a, b)` (how the transpiled test harness
-     *     is written: `async function testWatchTickersHelper (...)` at file scope)
-     * Anything else (`exchange.fetchTicker()`, `this.someObj.method()`, an unresolved
-     * dynamic call) is left alone.
-     *
-     * Used to decide whether a *deferred* (not immediately awaited) call has to be
-     * started on its own goroutine — see `printConcurrentStartCall`.
-     */
-    isAsyncCallToStart(node: any): boolean;
-    isAsyncThisCall(node: any): boolean;
-    /**
-     * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
-     * channel, instead of running to completion at the point of evaluation.
-     *
-     * Async cores are flat: the body runs on the caller's goroutine and the returned
-     * capacity-1 channel is already filled by the time the call expression yields. That
-     * is exactly right for `await`ed calls, but it silently serializes the fan-out
-     * idiom, where a call is stored first and only awaited later:
-     *
-     *     const a = this.fetchSpotMarkets (params);   // JS: starts, does not block
-     *     const b = this.fetchSwapMarkets (params);   // JS: starts, does not block
-     *     await Promise.all ([ a, b ]);               // both already in flight
-     *
-     * `this.Spawn(this.Method, args...)` is the runtime's own fire-and-forget helper: it
-     * calls the method on a fresh goroutine and returns a *Future. `.Await()` turns that
-     * Future back into a `<- chan any`, so the value keeps the exact static type the
-     * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
-     *
-     * A module-scope `async function` has no receiver to hang Spawn off, so it uses the
-     * package-level twin `Spawn(Helper, args...)` instead. Same Future, same contract.
-     *
-     * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
-     * body panic into its channel, Spawn resolves the Future with that panic string, and
-     * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
-     */
-    printConcurrentStartCall(node: any, identation: any): string | undefined;
     printArrayLiteralExpression(node: any): string;
     printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;

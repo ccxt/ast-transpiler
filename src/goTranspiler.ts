@@ -72,12 +72,8 @@ export class GoTranspiler extends BaseTranspiler {
     wrapCallMethods: string[] = [];
     classNameMap: { [key: string]: string };
     DEFAULT_RETURN_TYPE = 'any';
-    ASYNC_RESULT_NAME = 'out';
-    ASYNC_SPAWN_TOKEN = 'this.Spawn';
-    // module-scope `async function` has no receiver: the generated package exposes a
-    // package-level Spawn with the same (method any, args ...any) *Future signature
-    ASYNC_SPAWN_FREE_TOKEN = 'Spawn';
-    ASYNC_SPAWN_AWAIT_TOKEN = 'Await';
+    // suffix of the sibling body method an async trampoline hands its work to
+    ASYNC_BODY_SUFFIX = 'Body';
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -299,9 +295,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
         const funcBody = this.printFunctionBody(node, identation, isAsync);
 
-        methodDef += funcBody;
+        if (!isAsync) {
+            methodDef += funcBody;
+            return methodDef;
+        }
 
-        return methodDef;
+        // Trampoline + body pair, see printAsyncTrampolineBlock.
+        const goName = this.transformMethodNameIfNeeded(node.name.escapedText);
+        const bodyName = this.getAsyncBodyName(node, goName);
+        const trampoline = methodDef + this.printAsyncTrampolineBlock(node, identation, `${this.THIS_TOKEN}.${bodyName}`);
+        const bodyDef = `${this.getIden(identation)}func (${this.THIS_TOKEN} *${this.className}) ${bodyName}(${this.printAsyncBodyParameters(node)}) ${this.DEFAULT_RETURN_TYPE} `;
+
+        return trampoline + "\n" + bodyDef + funcBody;
     }
 
     printFunctionDeclaration(node, identation) {
@@ -313,9 +318,133 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const isAsync = this.isAsyncFunction(node);
         let functionDef = this.printFunctionDefinition(node, identation);
         const funcBody = this.printFunctionBody(node, identation, isAsync);
-        functionDef += funcBody;
 
-        return this.printNodeCommentsIfAny(node, identation, functionDef);
+        if (!isAsync) {
+            functionDef += funcBody;
+            return this.printNodeCommentsIfAny(node, identation, functionDef);
+        }
+
+        // module-scope `async function` has no receiver: the body is a package-level
+        // sibling function with the same trampoline contract
+        const goName = this.transformMethodNameIfNeeded(node.name.escapedText);
+        const bodyName = this.getAsyncBodyName(node, goName);
+        const trampoline = functionDef + this.printAsyncTrampolineBlock(node, identation, bodyName);
+        const bodyDef = `${this.getIden(identation)}func ${bodyName}(${this.printAsyncBodyParameters(node)}) ${this.DEFAULT_RETURN_TYPE} `;
+
+        return this.printNodeCommentsIfAny(node, identation, trampoline) + "\n" + bodyDef + funcBody;
+    }
+
+    /**
+     * Name of the sibling *body* method/function an async core hands its work to.
+     *
+     * `FetchTicker` -> `fetchTickerBody`. Deliberately UNEXPORTED: the body is an
+     * implementation detail of the trampoline, so it must not show up on the generated
+     * interfaces (ICoreExchange) nor on the typed `*_wrapper.go` facades, and it stays
+     * invisible to the reflection based `callInternal`/`callDynamically` dispatch.
+     *
+     * If that name is already taken by a real declaration (a hand written
+     * `fetchTickerBody`), a numeric suffix is appended instead of silently clobbering it.
+     */
+    getAsyncBodyName(node, goName: string): string {
+        const taken = new Set<string>();
+        const remember = (raw) => {
+            if (!raw) {
+                return;
+            }
+            const name = String(raw);
+            taken.add(name);
+            try {
+                taken.add(this.transformMethodNameIfNeeded(name));
+            } catch {
+                // a malformed name must never break emission
+            }
+        };
+        try {
+            const parent = node?.parent;
+            if (parent && ts.isClassDeclaration(parent)) {
+                parent.members.forEach((member: any) => remember(member?.name?.escapedText));
+            } else if (parent && ts.isSourceFile(parent)) {
+                parent.statements.forEach((statement: any) => {
+                    if (ts.isFunctionDeclaration(statement)) {
+                        remember(statement?.name?.escapedText);
+                    }
+                });
+            }
+        } catch {
+            // a malformed/synthesised node must never break emission
+        }
+        const base = goName.charAt(0).toLowerCase() + goName.slice(1) + this.ASYNC_BODY_SUFFIX;
+        let name = base;
+        let suffix = 0;
+        while (taken.has(name)) {
+            suffix++;
+            name = `${base}${suffix}`;
+        }
+        return name;
+    }
+
+    /**
+     * Parameter list of the body: the channel it must fill, then the original parameters
+     * verbatim (including the `optionalArgs ...any` tail), so the trampoline can forward
+     * its own arguments unchanged.
+     */
+    printAsyncBodyParameters(node): string {
+        const params = this.printMethodParameters(node);
+        const channelParam = `ch chan ${this.DEFAULT_RETURN_TYPE}`;
+        return params ? `${channelParam}, ${params}` : channelParam;
+    }
+
+    /**
+     * Arguments the trampoline forwards to its body, matching printMethodParameters:
+     * the declared parameters in order, plus the variadic `optionalArgs...` tail when
+     * the function has any defaulted parameter.
+     */
+    printAsyncTrampolineArgs(node): string {
+        const args = [];
+        let hasOptionalParameter = false;
+        (node?.parameters ?? []).forEach((param) => {
+            if (param.initializer) {
+                hasOptionalParameter = true;
+                return;
+            }
+            args.push(this.printNode(param.name, 0));
+        });
+        if (hasOptionalParameter) {
+            args.push('optionalArgs...');
+        }
+        return args.join(", ");
+    }
+
+    /**
+     * The trampoline: an async core hands back a *hot handle*.
+     *
+     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *         ch := make(chan any, 1)
+     *         go this.fetchTickerBody(ch, symbol)
+     *         return ch
+     *     }
+     *
+     *   - `ch` is buffered (cap 1): the body's single `ch <- value` never blocks, so a
+     *     result nobody ever receives still lets the goroutine finish and run
+     *     `defer close(ch)` (no leak for abandoned calls).
+     *   - the body runs on its own goroutine, so the call expression returns immediately
+     *     with work already in flight. That is what makes
+     *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
+     *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
+     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
+     *     lives on the body, not here.
+     */
+    printAsyncTrampolineBlock(node, identation, callee: string): string {
+        const args = this.printAsyncTrampolineArgs(node);
+        const argList = args ? `, ${args}` : "";
+        return [
+            "{",
+            `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
+            `${this.getIden(identation + 1)}go ${callee}(ch${argList})`,
+            `${this.getIden(identation + 1)}return ch`,
+            `${this.getIden(identation)}}`,
+        ].join("\n");
     }
 
     printMethodDefinition(node, identation) {
@@ -419,45 +548,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     }
 
-    /**
-     * Name of the named result used by async (channel-returning) functions.
-     *
-     * The async core recovers panics via `defer ReturnPanicError(ch)`, which means a
-     * panicking function returns *normally*. With an unnamed `<- chan any` result the
-     * zero value is a nil channel, and every caller doing `<-f()` would block forever.
-     * Declaring the result gives us a slot we can pre-assign to `ch` before the
-     * deferred recover can fire.
-     */
-    getAsyncResultName(node): string {
-        const base = this.ASYNC_RESULT_NAME;
-        // Collect every identifier used anywhere in the function so the named result
-        // cannot collide with a parameter or local: in Go `out := x` on an already
-        // declared result is a "no new variables on left side of :=" compile error.
-        const taken = new Set<string>();
-        const collect = (current) => {
-            if (!current) {
-                return;
-            }
-            if (ts.isIdentifier(current) && current.escapedText) {
-                taken.add(String(current.escapedText));
-            }
-            ts.forEachChild(current, collect);
-        };
-        try {
-            (node?.parameters ?? []).forEach((param) => collect(param.name));
-            collect(node?.body);
-        } catch {
-            // a malformed/synthesised node must never break emission
-        }
-        let name = base;
-        let suffix = 0;
-        while (taken.has(name)) {
-            suffix++;
-            name = `${base}${suffix}`;
-        }
-        return name;
-    }
-
     printFunctionType(node){
         const typeText = this.getFunctionType(node);
         if (typeText === 'void') {
@@ -473,7 +563,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // throw new FunctionReturnTypeError("Function return type is not supported");
             let res = "";
             if (this.isAsyncFunction(node)) {
-                res = `(${this.getAsyncResultName(node)} <- chan ${this.DEFAULT_RETURN_TYPE})`;
+                res = `<- chan ${this.DEFAULT_RETURN_TYPE}`;
             } else {
                 res = this.DEFAULT_RETURN_TYPE;
             }
@@ -481,9 +571,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return res;
         }
         if (typeText === this.PROMISE_TYPE_KEYWORD) {
-            if (this.isAsyncFunction(node)) {
-                return `(${this.getAsyncResultName(node)} <- chan any)`;
-            }
             return `<- chan any`;
         }
 
@@ -537,18 +624,6 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         }
 
         const isNew = declaration.initializer && (declaration.initializer.kind === ts.SyntaxKind.NewExpression);
-
-        // `const p = this.fetchX (params);` — an async call whose result is *stored*, not
-        // awaited. In JS that starts the work and yields a pending promise; a flat Go core
-        // would instead run to completion right here, serializing the fan-out that a later
-        // `await Promise.all ([ p, q ])` is written to parallelize. Start it on its own
-        // goroutine so the value is a channel of work already in flight.
-        const concurrentStart = declaration.initializer
-            ? this.printConcurrentStartCall(declaration.initializer, identation)
-            : undefined;
-        if (concurrentStart !== undefined) {
-            return this.getIden(identation) + "var " + this.printNode(declaration.name) + " any = " + concurrentStart;
-        }
 
         const parsedValue = (declaration.initializer) ? this.printNode(declaration.initializer, identation) : this.NULL_TOKEN;
 
@@ -1103,21 +1178,23 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 shouldAddLastReturn = false;
             }
 
-            const resultName = this.getAsyncResultName(node);
-            const lastReturn = shouldAddLastReturn ? this.getIden(identation+1) + "return ch" : "";
+            const lastReturn = shouldAddLastReturn ? this.getIden(identation+1) + "return nil" : "";
 
-            // The async core runs inline instead of inside a `go func() any {...}()`:
+            // This is the *body* half of the trampoline pair (see printAsyncTrampolineBlock):
             //
-            //   - `ch` is buffered (cap 1) so the single `ch <- value` never blocks even
-            //     though nobody is receiving yet, and `defer close(ch)` always runs.
-            //   - the result is *named* (`out`) and pre-assigned to `ch` right away:
-            //     `defer ReturnPanicError(ch)` recovers, so a panicking function returns
-            //     normally, and an unnamed result would hand callers a nil channel that
-            //     deadlocks every `<-` receiver.
+            //     func (this *Exchange) fetchTickerBody(ch chan any, symbol any) any {
+            //         defer close(ch)
+            //         defer ReturnPanicError(ch)
+            //         ch <- ...
+            //         return nil
+            //     }
+            //
+            // It is a plain flat function: the trampoline already `go`es it, so there is no
+            // `go func() any {...}()` envelope here, and no channel allocation either — the
+            // trampoline owns `ch` and hands it in. The recover lives HERE, on the goroutine
+            // that can actually panic, which is why the trampoline's result can stay unnamed.
             const lines = [
                 "{",
-                `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
-                `${this.getIden(identation + 1)}${resultName} = ch`,
                 `${this.getIden(identation + 1)}defer close(ch)`,
                 `${this.getIden(identation + 1)}defer ReturnPanicError(ch)`,
                 bodyWithIndentationExtraAndNoReturn,
@@ -1132,7 +1209,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // we can't pass nil to the channel when we just want to
             // return from the try catch, otherwise the channel will close with nil
             // instead of the proper result
-            functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\s(nil|ch)(\s*\})/gm, "$1return $2$3");
+            functionBody = functionBody.replaceAll(/(^\s*)ch\s<-\snil\s+return\snil(\s*\})/gm, "$1return nil$2");
 
         }
 
@@ -1205,43 +1282,15 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     }
 
     /**
-     * True when `node` sits inside a try/catch belonging to the *same* function.
+     * Statement that terminates an async (channel returning) function body.
      *
-     * try/catch is emulated in Go with synthetic closures (`func (ret_ any) {...}` for
-     * the try block, `func any {...}` for the catch block), so a `return` printed there
-     * leaves that closure, not the enclosing function. Such returns must keep the
-     * closure's `return nil` shape, while returns at the function's own level have to
-     * return the result channel instead.
-     */
-    isInsideTryBlockOfSameFunction(node): boolean {
-        let currentNode = node?.parent;
-
-        while (currentNode) {
-            if (ts.isFunctionDeclaration(currentNode) ||
-              ts.isFunctionExpression(currentNode) ||
-              ts.isArrowFunction(currentNode) ||
-              ts.isMethodDeclaration(currentNode)) {
-                return false;
-            }
-            if (ts.isTryStatement(currentNode)) {
-                return true;
-            }
-            currentNode = currentNode.parent;
-        }
-
-        return false;
-    }
-
-    /**
-     * Statement that terminates an async (channel returning) function.
-     *
-     * At the function's own level we must hand back the channel: the result is named
-     * (see `printFunctionType`) so that a recovered panic still yields a usable channel,
-     * and `return nil` would overwrite it with a nil channel that deadlocks every
-     * receiver. Inside the try/catch closures the plain `return nil` is still correct.
+     * The body is the trampoline's sibling method (`go this.fetchTickerBody(ch, ...)`),
+     * and the synthetic try/catch closures nest inside it: in both cases `return` leaves
+     * a function whose result is a plain `any`, never the channel. The trampoline itself
+     * owns the single `return ch`, emitted by printFunctionBody.
      */
     getAsyncReturnStatement(node): string {
-        return this.isInsideTryBlockOfSameFunction(node) ? "return nil" : "return ch";
+        return "return nil";
     }
 
     printReturnStatement(node, identation) {
@@ -1317,113 +1366,12 @@ ${this.getIden(identation)}${returnStatement}`;
         return this.printNode(node.expression, identation);
     }
 
-    /**
-     * True when `node` resolves to an async (channel-returning) function declaration,
-     * ie. something whose Go result is a `<- chan any`.
-     *
-     * Two callee shapes qualify:
-     *   - a method on `this`  -> `this.Method(a, b)`
-     *   - a module-scope function -> `helper(a, b)` (how the transpiled test harness
-     *     is written: `async function testWatchTickersHelper (...)` at file scope)
-     * Anything else (`exchange.fetchTicker()`, `this.someObj.method()`, an unresolved
-     * dynamic call) is left alone.
-     *
-     * Used to decide whether a *deferred* (not immediately awaited) call has to be
-     * started on its own goroutine — see `printConcurrentStartCall`.
-     */
-    isAsyncCallToStart(node): boolean {
-        if (!node || node.kind !== ts.SyntaxKind.CallExpression) {
-            return false;
-        }
-        const expression = node.expression;
-        const isThisMethod = expression?.kind === ts.SyntaxKind.PropertyAccessExpression
-                && expression.expression?.kind === ts.SyntaxKind.ThisKeyword;
-        // a bare identifier callee: only a module-scope `async function` qualifies, and
-        // the declaration check below is what actually proves it
-        const isBareIdentifier = expression?.kind === ts.SyntaxKind.Identifier;
-        if (!isThisMethod && !isBareIdentifier) {
-            return false;
-        }
-        try {
-            const signature = this.getChecker().getResolvedSignature(node);
-            const declaration = signature?.declaration;
-            if (declaration === undefined) {
-                // unresolved `this.X()` is emitted through callInternal/callDynamically,
-                // which already hands back a channel started elsewhere: leave it alone
-                return false;
-            }
-            if (isBareIdentifier) {
-                // only free FUNCTION declarations: a local `const f = async () => …`, a
-                // parameter, or an imported binding is not something we can name as a Go
-                // package-level symbol, and arrow/function expressions are emitted inline
-                if (declaration.kind !== ts.SyntaxKind.FunctionDeclaration) {
-                    return false;
-                }
-            }
-            return this.isAsyncFunction(declaration);
-        } catch {
-            // a malformed/synthesised node must never break emission
-            return false;
-        }
-    }
-
-    // kept as the historical name used by the `this.X()` gate
-    isAsyncThisCall(node): boolean {
-        return this.isAsyncCallToStart(node);
-    }
-
-    /**
-     * Emit an async `this.Method(args)` call so that it *starts now* and hands back a
-     * channel, instead of running to completion at the point of evaluation.
-     *
-     * Async cores are flat: the body runs on the caller's goroutine and the returned
-     * capacity-1 channel is already filled by the time the call expression yields. That
-     * is exactly right for `await`ed calls, but it silently serializes the fan-out
-     * idiom, where a call is stored first and only awaited later:
-     *
-     *     const a = this.fetchSpotMarkets (params);   // JS: starts, does not block
-     *     const b = this.fetchSwapMarkets (params);   // JS: starts, does not block
-     *     await Promise.all ([ a, b ]);               // both already in flight
-     *
-     * `this.Spawn(this.Method, args...)` is the runtime's own fire-and-forget helper: it
-     * calls the method on a fresh goroutine and returns a *Future. `.Await()` turns that
-     * Future back into a `<- chan any`, so the value keeps the exact static type the
-     * direct call had and every existing consumer (`<-x`, `promiseAll`, …) is unchanged.
-     *
-     * A module-scope `async function` has no receiver to hang Spawn off, so it uses the
-     * package-level twin `Spawn(Helper, args...)` instead. Same Future, same contract.
-     *
-     * Panics survive: the callee's own `defer ReturnPanicError(ch)` still recovers its
-     * body panic into its channel, Spawn resolves the Future with that panic string, and
-     * the awaiting site's `PanicOnError(...)` re-panics it on the awaiting goroutine.
-     */
-    printConcurrentStartCall(node, identation): string | undefined {
-        if (!this.isAsyncCallToStart(node)) {
-            return undefined;
-        }
-        const isThisMethod = node.expression.kind === ts.SyntaxKind.PropertyAccessExpression;
-        // `this.fetchX()` -> `this.Spawn(this.FetchX, …)`;
-        // `helper()`      -> `Spawn(Helper, …)` (package-level Spawn, no receiver)
-        const nameNode = isThisMethod ? node.expression.name : node.expression;
-        const calleeName = this.transformCallExpressionName(this.printNode(nameNode, 0));
-        const spawnToken = isThisMethod ? this.ASYNC_SPAWN_TOKEN : this.ASYNC_SPAWN_FREE_TOKEN;
-        const callee = isThisMethod ? `this.${calleeName}` : calleeName;
-        const parsedArgs = this.printArgsForCallExpression(node, identation);
-        const args = parsedArgs ? `, ${parsedArgs}` : "";
-        return `${spawnToken}(${callee}${args}).${this.ASYNC_SPAWN_AWAIT_TOKEN}()`;
-    }
-
     printArrayLiteralExpression(node) {
 
         let arrayOpen = this.ARRAY_OPENING_TOKEN;
         const elems = node.elements;
 
-        // `Promise.all ([ this.fetchA (), this.fetchB () ])` — every async element has to be
-        // started before the next one is evaluated, otherwise a flat core runs each call to
-        // completion in argument order and the fan-out is serial. See printConcurrentStartCall.
-        const elements = node.elements.map((e) => {
-            return this.printConcurrentStartCall(e, 0) ?? this.printNode(e);
-        }).join(", ");
+        const elements = node.elements.map((e) => this.printNode(e)).join(", ");
 
         // take into consideration list of promises
         if (elems.length > 0) {
@@ -1528,13 +1476,7 @@ ${this.getIden(identation)}${returnStatement}`;
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
             returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
         }
-        // `promises.push (this.fetchX (symbol))` collects a promise to await later, so the
-        // call has to start now rather than run to completion inside the argument. See
-        // printConcurrentStartCall.
-        const pushedArg = node.arguments?.length === 1
-            ? this.printConcurrentStartCall(node.arguments[0], 0)
-            : undefined;
-        return  `${returnValue}AppendToArray(&${returnRandName}, ${pushedArg ?? parsedArg})`;
+        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
         // works with:
         //  func AppendToArray(slicePtr *any, element any)
         //  func AppendToArrayValue(slice any, element any) any
@@ -1847,19 +1789,12 @@ ${this.getIden(identation)}${returnStatement}`;
         const isVoid   = this.isInsideVoidFunction(node);
 
         const nodeEndsWithReturn = tryBodyEndsWithReturn && catchBodyEndsWithReturn && !isVoid;
-        // A try/catch sitting directly in an async function (not nested inside another
-        // try) now runs inline in the function itself, so its trailing statement has to
-        // return the result channel. `ret__` is an `any` and can no longer be returned
-        // from a channel-typed function, and the value was discarded by the goroutine
-        // anyway -- so drop the capture entirely and just hand back `ch`.
-        const isAsyncFunctionLevel = this.isInsideAsyncFunction(node) && !this.isInsideTryBlockOfSameFunction(node);
-        const capturesResult = nodeEndsWithReturn && !isAsyncFunctionLevel;
         const errorName = node.catchClause.variableDeclaration.name.escapedText;
         const classPrefix = this.className !== 'undefined' ? `(this *${this.className})` : "()";
         const thisWord = this.className !== 'undefined' ? "this" : "";
         const catchBlock =`
     {
-        ${capturesResult ? 'ret__ :=' : ''} func${classPrefix} (ret_ any) {
+        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func${classPrefix} (ret_ any) {
 		    defer func() {
                 if ${errorName} := recover(); ${errorName} != nil {
                     if ${errorName} == "break" {
@@ -1877,14 +1812,11 @@ ${this.getIden(identation)}${returnStatement}`;
 		    ${tryBodyEndsWithReturn ? "" : returNil}
 	    }(${thisWord})
     ${nodeEndsWithReturn
-        ? (isAsyncFunctionLevel
-            ? `
-            return ch`
-            : `
+        ? `
             if ret__ != nil {
                 return ret__
             }
-            return nil`)
+            return nil`
         : ''}
         }`;
         // add identation
