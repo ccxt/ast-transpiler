@@ -217,11 +217,12 @@ describe('go transpiling tests', () => {
         expect(output).toContain("ch := make(chan any, 1)");
         expect(output).not.toContain("ch := make(chan any)");
     });
-    test('async method body is emitted flat, without a nested goroutine', () => {
-        // the async core used to run inside `go func() any { ... }()`. Since the
-        // channel is buffered (cap 1) the single send never blocks, so the extra
-        // goroutine bought nothing: it only added a scheduling hop, hid the body
-        // one indentation level deeper and made stack traces useless.
+    test('async method body runs on its own goroutine (trampoline)', () => {
+        // The core is a TRAMPOLINE: it allocates the cap-1 channel, launches the body
+        // on a goroutine and returns the channel IMMEDIATELY. That is what makes the
+        // call a *hot handle* — work already in flight — matching the C#/Java ports,
+        // so `const a = this.fetchA (); ... await Promise.all ([a, b])` overlaps with
+        // no call-site wrapper.
         const input =
         "class Exchange {\n" +
         "    async fetchTicker(symbol: string): Promise<any> {\n" +
@@ -229,31 +230,32 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        // no nested goroutine, and therefore no closure to close over
-        expect(output).not.toContain("go func()");
-        // the core is inline: channel, named result, defers, body, return
         expect(output).toContain("ch := make(chan any, 1)");
-        expect(output).toContain("out = ch");
+        expect(output).toContain("go func() any {");
         expect(output).toContain("defer close(ch)");
         expect(output).toContain("defer ReturnPanicError(ch)");
         expect(output).toContain("ch <- map[string]any");
+        expect(output).toContain("}()");
+        expect(output).toContain("return ch");
         // the statements appear in that exact order
         const order = [
             "ch := make(chan any, 1)",
-            "out = ch",
+            "go func() any {",
             "defer close(ch)",
             "defer ReturnPanicError(ch)",
             "ch <- map[string]any",
+            "}()",
+            "return ch",
         ].map((needle) => output.indexOf(needle));
         expect(order).toEqual([...order].sort((a, b) => a - b));
         expect(Math.min(...order)).toBeGreaterThan(-1);
     });
-    test('async method declares a named result channel', () => {
-        // `defer ReturnPanicError(ch)` recovers, so a panicking method returns
-        // *normally*. With an unnamed `<- chan any` result the zero value is a nil
-        // channel and every caller doing `<-exchange.FetchTicker(...)` would block
-        // forever. Naming the result and assigning it before the defers guarantees
-        // callers always get the real channel back.
+    test('async method result is an UNNAMED channel', () => {
+        // With the trampoline the recover (`defer ReturnPanicError(ch)`) lives on the
+        // BODY goroutine, not on the trampoline, so the trampoline's `return ch` always
+        // runs and can never hand back a zero-value nil channel. The named result
+        // (`out <- chan any` / `out = ch`) that the flat emitter needed is therefore
+        // gone, and the signature is the plain Go one again.
         const input =
         "class Exchange {\n" +
         "    async fetchTicker(symbol: string): Promise<any> {\n" +
@@ -261,16 +263,28 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(symbol any) (out <- chan any)");
-        // `out = ch` must precede the defers, otherwise a panic recovered by
-        // ReturnPanicError would still hand back a nil channel
-        expect(output.indexOf("out = ch")).toBeLessThan(output.indexOf("defer close(ch)"));
-        // non-async methods keep a plain (unnamed, non-channel) result
-        expect(output).not.toContain("(out <- chan any) {\n    return");
+        expect(output).toContain("FetchTicker(symbol any) <- chan any");
+        expect(output).not.toContain("(out <- chan any)");
+        expect(output).not.toContain("out = ch");
+        // the recover must sit on the body goroutine, i.e. AFTER `go func()`
+        expect(output.indexOf("go func() any {")).toBeLessThan(output.indexOf("defer ReturnPanicError(ch)"));
     });
-    test('async returns hand back the result channel, not nil', () => {
-        // at the function's own level `return nil` would overwrite the named result
-        // with a nil channel; only the try/catch closures may keep `return nil`.
+    test('a local or parameter named out no longer needs uniquifying', () => {
+        // there is no named result any more, so `out` is just an ordinary identifier
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker(out: string): Promise<any> {\n" +
+        "        return out;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("FetchTicker(out any) <- chan any");
+        expect(output).not.toContain("out1");
+        expect(output).toContain("ch <- out");
+    });
+    test('returns inside the body send and then leave the goroutine with nil', () => {
+        // the body is a `func() any` closure: its returns are the closure's returns,
+        // never the channel. `return ch` belongs to the trampoline alone.
         const input =
         "class Exchange {\n" +
         "    async doThing(symbol: string): Promise<any> {\n" +
@@ -281,17 +295,16 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).not.toContain("go func()");
+        expect(output).toContain("go func() any {");
         expect(output).toContain("ch <- 1");
         expect(output).toContain("ch <- 2");
-        expect(output).toContain("return ch");
-        // no bare `return nil` survives at the function level
-        expect(output).not.toMatch(/^\s*return nil\s*$/m);
+        expect(output).toContain("return nil");
+        // exactly one `return ch`: the trampoline's
+        expect(output.match(/return ch/g)).toHaveLength(1);
     });
-    test('async method with try/catch stays flat and returns the channel', () => {
-        // try/catch is emulated with synthetic closures. Returns *inside* them must
-        // stay `return nil` (they exit the closure), while the statement that ends
-        // the try/catch at function level has to return the channel.
+    test('async method with try/catch keeps the closure shape and captures ret__', () => {
+        // try/catch is emulated with synthetic closures nested inside the body
+        // goroutine, so their `return nil` / `ret__` capture is correct again.
         const input =
         "class Exchange {\n" +
         "    async fetchTicker(symbol: string): Promise<any> {\n" +
@@ -303,42 +316,26 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).not.toContain("go func()");
-        expect(output).toContain("(out <- chan any)");
-        expect(output).toContain("out = ch");
-        // the closures still recover and still use `return nil` internally
+        expect(output).toContain("go func() any {");
+        expect(output).not.toContain("(out <- chan any)");
         expect(output).toContain("recover()");
-        expect(output).toContain("return nil");
-        // the try/catch no longer captures `ret__`: an `any` cannot be returned
-        // from a channel-typed function, so the tail just hands back `ch`
-        expect(output).not.toContain("return ret__");
+        expect(output).toContain("return ret__");
         expect(output).toContain("return ch");
-    });
-    test('named result avoids collision with a same-named local or parameter', () => {
-        // a TS local called `out` would clash with the named result
-        // (`out := ...` on an already-declared result is a Go compile error)
-        const input =
-        "class Exchange {\n" +
-        "    async fetchTicker(out: string): Promise<any> {\n" +
-        "        return out;\n" +
-        "    }\n" +
-        "}"
-        const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(out any) (out1 <- chan any)");
-        expect(output).toContain("out1 = ch");
-        expect(output).not.toContain("out = ch");
     });
 });
 
-describe('go Promise.all concurrent start', () => {
-    // Async cores are emitted FLAT: the body runs on the caller's goroutine and the
-    // capacity-1 result channel is already filled by the time the call expression
-    // yields. That is right for an `await`ed call, but it silently serializes the
-    // fan-out idiom, where a call is *stored* (or collected into an array) first and
-    // only awaited later. Those deferred calls are emitted as
-    // `this.Spawn(this.Method, args...).Await()`: Spawn runs the method on a fresh
-    // goroutine and returns a *Future, `.Await()` turns it back into a `<- chan any`
-    // so `promiseAll` and `<-x` consumers keep working unchanged.
+describe('go Promise.all concurrent start (trampoline)', () => {
+    // Async cores are TRAMPOLINES: the call allocates a cap-1 channel, launches the
+    // body on a goroutine and returns the channel immediately. Every async call is
+    // therefore already a hot handle, exactly like a C# Task or a Java
+    // CompletableFuture, so a *deferred* call needs no call-site wrapper at all:
+    //
+    //     const a = this.fetchSpotMarkets (params);   // JS: starts, does not block
+    //     const b = this.fetchSwapMarkets (params);   // JS: starts, does not block
+    //     await Promise.all ([ a, b ]);               // both already in flight
+    //
+    // emits the two plain calls and a promiseAll over the two channels. The
+    // `this.Spawn(...).Await()` wrapper the flat emitter needed is gone.
 
     // split the transpiled class into one string per method body
     const methodBodies = (output: string): string[] =>
@@ -346,7 +343,7 @@ describe('go Promise.all concurrent start', () => {
     // retRes identifiers are line/column derived, so normalise them away
     const normalize = (s: string): string => s.replace(/retRes\d+/g, 'retRes');
 
-    test('hoisted promise variables are started concurrently before Promise.all', () => {
+    test('hoisted promise variables are plain calls, already in flight', () => {
         const input =
         "class Exchange {\n" +
         "    async fetchSpotMarkets (params = {}): Promise<any> {\n" +
@@ -366,23 +363,15 @@ describe('go Promise.all concurrent start', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var spotMarketPromise any = this.Spawn(this.FetchSpotMarkets, params).Await()");
-        expect(output).toContain("var swapMarketPromise any = this.Spawn(this.FetchSwapMarkets, params).Await()");
-        // the awaiting site is unchanged: both values are still plain channels
+        // the direct call IS the concurrent start now
+        expect(output).toContain("var spotMarketPromise any = this.FetchSpotMarkets(params)");
+        expect(output).toContain("var swapMarketPromise any = this.FetchSwapMarkets(params)");
         expect(output).toContain("spotMarketswapMarketVariable := (<-promiseAll([]any{spotMarketPromise, swapMarketPromise}));");
-        // a direct call would have run the whole body right here, serializing the fan-out
-        expect(output).not.toContain("var spotMarketPromise any = this.FetchSpotMarkets(params)");
-        expect(output).not.toContain("var swapMarketPromise any = this.FetchSwapMarkets(params)");
-        // both branches must be in flight *before* the join
-        const spawnSwap = output.indexOf("this.Spawn(this.FetchSwapMarkets, params).Await()");
-        const join = output.indexOf("promiseAll([]any{spotMarketPromise, swapMarketPromise})");
-        expect(spawnSwap).toBeGreaterThan(-1);
-        expect(spawnSwap).toBeLessThan(join);
+        // no call-site wrapper of any kind
+        expect(output).not.toContain("Spawn");
+        expect(output).not.toContain(".Await()");
     });
-    test('inline Promise.all array elements are each started concurrently', () => {
-        // `Promise.all ([ this.a (), this.b () ])` evaluates its elements in argument
-        // order, so without Spawn the first call would run to completion before the
-        // second one even starts.
+    test('inline Promise.all array elements are plain calls', () => {
         const input =
         "class Exchange {\n" +
         "    async fetchSpotMarkets (params = {}): Promise<any> {\n" +
@@ -397,11 +386,10 @@ describe('go Promise.all concurrent start', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("res:= (<-promiseAll([]any{this.Spawn(this.FetchSpotMarkets, params).Await(), this.Spawn(this.FetchSwapMarkets, params).Await()}))");
-        expect(output).not.toContain("promiseAll([]any{this.FetchSpotMarkets(params), this.FetchSwapMarkets(params)})");
+        expect(output).toContain("promiseAll([]any{this.FetchSpotMarkets(params), this.FetchSwapMarkets(params)})");
+        expect(output).not.toContain("Spawn");
     });
-    test('promises.push of an async call starts it concurrently', () => {
-        // the classic fan-out loop: collect N promises, await them all afterwards.
+    test('promises.push of an async call stays a direct call', () => {
         const input =
         "class Exchange {\n" +
         "    async fetchTicker (symbol: string): Promise<any> {\n" +
@@ -417,14 +405,11 @@ describe('go Promise.all concurrent start', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("AppendToArray(&promises, this.Spawn(this.FetchTicker, GetValue(symbols, i)).Await())");
-        // pushing the *result* of a completed call would make the loop sequential
-        expect(output).not.toContain("AppendToArray(&promises, this.FetchTicker(GetValue(symbols, i)))");
+        expect(output).toContain("AppendToArray(&promises, this.FetchTicker(GetValue(symbols, i)))");
         expect(output).toContain("results:= (<-promiseAll(promises))");
+        expect(output).not.toContain("Spawn");
     });
-    test('zero-argument async call is spawned without a stray comma', () => {
-        // `Spawn(this.LoadMarkets)` — the argument list is variadic, so an empty one
-        // must emit no separator at all (`Spawn(this.LoadMarkets, )` is a syntax error).
+    test('a zero-argument deferred call needs no wrapper', () => {
         const input =
         "class Exchange {\n" +
         "    async loadMarkets (): Promise<any> {\n" +
@@ -436,44 +421,12 @@ describe('go Promise.all concurrent start', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var p any = this.Spawn(this.LoadMarkets).Await()");
-        expect(output).not.toContain("this.Spawn(this.LoadMarkets, )");
-        expect(output).not.toMatch(/this\.Spawn\(this\.LoadMarkets\s*,/);
+        expect(output).toContain("var p any = this.LoadMarkets()");
+        expect(output).not.toContain("Spawn");
         // the deferred value is still awaited through a plain channel receive
         expect(normalize(output)).toContain("retRes :=  (<-p)");
     });
-    test('three-way Promise.all starts every branch concurrently', () => {
-        const input =
-        "class Exchange {\n" +
-        "    async fetchA (params = {}): Promise<any> {\n" +
-        "        return [];\n" +
-        "    }\n" +
-        "    async fetchB (params = {}): Promise<any> {\n" +
-        "        return [];\n" +
-        "    }\n" +
-        "    async fetchC (params = {}): Promise<any> {\n" +
-        "        return [];\n" +
-        "    }\n" +
-        "    async fetchAll (params = {}): Promise<any> {\n" +
-        "        const aPromise = this.fetchA (params);\n" +
-        "        const bPromise = this.fetchB (params);\n" +
-        "        const cPromise = this.fetchC (params);\n" +
-        "        const [ a, b, c ] = await Promise.all ([ aPromise, bPromise, cPromise ]);\n" +
-        "        return a;\n" +
-        "    }\n" +
-        "}"
-        const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var aPromise any = this.Spawn(this.FetchA, params).Await()");
-        expect(output).toContain("var bPromise any = this.Spawn(this.FetchB, params).Await()");
-        expect(output).toContain("var cPromise any = this.Spawn(this.FetchC, params).Await()");
-        expect(output).toContain("abcVariable := (<-promiseAll([]any{aPromise, bPromise, cPromise}));");
-        // exactly three spawns — no branch left running inline
-        expect(output.match(/this\.Spawn\(/g)).toHaveLength(3);
-        expect(output.match(/\.Await\(\)/g)).toHaveLength(3);
-    });
-    test('an immediately awaited async call is NOT spawned', () => {
-        // `await this.fetchX (params)` has nothing to parallelize: the caller blocks on
-        // it anyway, so the flat inline body is both correct and one goroutine cheaper.
+    test('an immediately awaited async call keeps its direct receive', () => {
         const input =
         "class Exchange {\n" +
         "    async fetchSpotMarkets (params = {}): Promise<any> {\n" +
@@ -489,11 +442,8 @@ describe('go Promise.all concurrent start', () => {
         expect(doAwait).toContain("a:= (<-this.FetchSpotMarkets(params))");
         expect(doAwait).toContain("PanicOnError(a)");
         expect(doAwait).not.toContain("Spawn");
-        expect(doAwait).not.toContain("Await()");
     });
-    test('a stored SYNC method call is NOT spawned', () => {
-        // Spawn is only for channel-returning (async) methods; a sync call has no
-        // promise semantics to preserve and must keep its direct shape.
+    test('a stored SYNC method call is unchanged', () => {
         const input =
         "class Exchange {\n" +
         "    parseTicker (t) {\n" +
@@ -508,62 +458,7 @@ describe('go Promise.all concurrent start', () => {
         expect(output).toContain("var parsed any = this.ParseTicker(t)");
         expect(output).not.toContain("Spawn");
     });
-    test('SYNC calls inside an array literal are NOT spawned', () => {
-        // only the elements of a genuinely async fan-out get wrapped; a plain array of
-        // sync results stays a plain array.
-        const input =
-        "class Exchange {\n" +
-        "    parseTicker (t) {\n" +
-        "        return t;\n" +
-        "    }\n" +
-        "    async doSyncArray (t): Promise<any> {\n" +
-        "        const parsed = [ this.parseTicker (t), this.parseTicker (t) ];\n" +
-        "        return parsed;\n" +
-        "    }\n" +
-        "}"
-        const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var parsed any = []any{this.ParseTicker(t), this.ParseTicker(t)}");
-        expect(output).not.toContain("Spawn");
-    });
-    test('a SYNC call pushed into an array is NOT spawned', () => {
-        const input =
-        "class Exchange {\n" +
-        "    parseTicker (t) {\n" +
-        "        return t;\n" +
-        "    }\n" +
-        "    async doPushSync (items): Promise<any> {\n" +
-        "        const parsed = [];\n" +
-        "        for (let i = 0; i < items.length; i++) {\n" +
-        "            parsed.push (this.parseTicker (items[i]));\n" +
-        "        }\n" +
-        "        return parsed;\n" +
-        "    }\n" +
-        "}"
-        const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("AppendToArray(&parsed, this.ParseTicker(GetValue(items, i)))");
-        expect(output).not.toContain("Spawn");
-    });
-    test('an implicit-async delegator keeps the direct receive, without Spawn', () => {
-        // `watchIt (x) { return this.fetchTicker (x); }` is compiled to
-        // `return await ...`, so the delegator awaits immediately — nothing to spawn.
-        const input =
-        "class Exchange {\n" +
-        "    async fetchTicker (symbol: string): Promise<any> {\n" +
-        "        return {};\n" +
-        "    }\n" +
-        "    watchIt (symbol: string): Promise<any> {\n" +
-        "        return this.fetchTicker (symbol);\n" +
-        "    }\n" +
-        "}"
-        const output = transpiler.transpileGo(input).content;
-        const [, watchIt] = methodBodies(output);
-        expect(normalize(watchIt)).toContain("retRes :=  (<-this.FetchTicker(symbol))");
-        expect(normalize(watchIt)).toContain("PanicOnError(retRes)");
-        expect(watchIt).not.toContain("Spawn");
-    });
-    test('an unresolvable this.X() call is NOT spawned', () => {
-        // no declaration to inspect: the call goes through callDynamically, which hands
-        // back a channel started elsewhere, so wrapping it would be wrong.
+    test('an unresolvable this.X() call keeps callDynamically', () => {
         const input =
         "class Exchange {\n" +
         "    async doThing (params = {}): Promise<any> {\n" +
@@ -575,11 +470,10 @@ describe('go Promise.all concurrent start', () => {
         expect(output).toContain("var p any = callDynamically(\"someUnknownMethod\", params)");
         expect(output).not.toContain("Spawn");
     });
-    test('a deferred module-scope async function call is started concurrently', () => {
-        // the transpiled test harness is written as module-scope `async function`s, not
-        // methods, so there is no `this` to hang Spawn off. Those calls use the
-        // package-level `Spawn(Helper, args...)` twin instead — without it, the flat core
-        // runs to completion inline and the Promise.all fan-out is serial.
+    test('module-scope async functions are trampolines too, so no free-func Spawn', () => {
+        // the transpiled test harness is written as module-scope `async function`s.
+        // They get the same trampoline, so a deferred call to one is already hot and
+        // the package-level `Spawn(Helper, ...)` twin is no longer emitted.
         const input =
         "async function testWatchTickersHelper (exchange, skippedProperties, argSymbols): Promise<any> {\n" +
         "    return [];\n" +
@@ -590,14 +484,12 @@ describe('go Promise.all concurrent start', () => {
         "    await Promise.all ([ withSymbol, withoutSymbol ]);\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var withoutSymbol any = Spawn(TestWatchTickersHelper, exchange, skippedProperties, nil).Await()");
-        expect(output).toContain("var withSymbol any = Spawn(TestWatchTickersHelper, exchange, skippedProperties, []any{symbol}).Await()");
-        // a free function has no receiver, so it must NOT be emitted as a method call
-        expect(output).not.toContain("this.Spawn(TestWatchTickersHelper");
-        // and the direct (serializing) call must be gone
-        expect(output).not.toContain("var withoutSymbol any = TestWatchTickersHelper(exchange");
+        expect(output).toContain("func TestWatchTickersHelper(exchange any, skippedProperties any, argSymbols any) <- chan any");
+        expect(output).toContain("var withoutSymbol any = TestWatchTickersHelper(exchange, skippedProperties, nil)");
+        expect(output).toContain("var withSymbol any = TestWatchTickersHelper(exchange, skippedProperties, []any{symbol})");
+        expect(output).not.toContain("Spawn");
     });
-    test('a deferred module-scope async function inside Promise.all is started concurrently', () => {
+    test('module-scope async calls inside Promise.all stay direct', () => {
         const input =
         "async function helperA (x): Promise<any> {\n" +
         "    return x;\n" +
@@ -610,10 +502,10 @@ describe('go Promise.all concurrent start', () => {
         "    return res;\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("promiseAll([]any{Spawn(HelperA, x).Await(), Spawn(HelperB, x).Await()})");
+        expect(output).toContain("promiseAll([]any{HelperA(x), HelperB(x)})");
+        expect(output).not.toContain("Spawn");
     });
-    test('a SYNC module-scope function call is NOT spawned', () => {
-        // the free-function gate must still require the declaration to be async
+    test('a SYNC module-scope function call is unchanged', () => {
         const input =
         "function syncHelper (x) {\n" +
         "    return x;\n" +
@@ -624,32 +516,6 @@ describe('go Promise.all concurrent start', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("var v any = SyncHelper(x)");
-        expect(output).not.toContain("Spawn");
-    });
-    test('an immediately awaited module-scope async call is NOT spawned', () => {
-        // awaiting right away is already correct on a flat core: nothing to overlap
-        const input =
-        "async function helperA (x): Promise<any> {\n" +
-        "    return x;\n" +
-        "}\n" +
-        "async function useIt (x): Promise<any> {\n" +
-        "    const v = await helperA (x);\n" +
-        "    return v;\n" +
-        "}\n"
-        const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("v:= (<-HelperA(x))");
-        expect(output).not.toContain("Spawn");
-    });
-    test('a call to a non-function binding is NOT spawned', () => {
-        // an async ARROW stored in a const is not a FunctionDeclaration: there is no
-        // package-level Go symbol to hand to Spawn, so it must keep its direct shape.
-        const input =
-        "const arrow = async (x) => x;\n" +
-        "async function useIt (x): Promise<any> {\n" +
-        "    const v = arrow (x);\n" +
-        "    return v;\n" +
-        "}\n"
-        const output = transpiler.transpileGo(input).content;
         expect(output).not.toContain("Spawn");
     });
 });
