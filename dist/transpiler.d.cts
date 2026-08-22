@@ -654,10 +654,10 @@ declare class GoTranspiler extends BaseTranspiler {
     /**
      * Statement that terminates an async (channel returning) function body.
      *
-     * The body runs inside the trampoline's `go func() any {...}()`, and so do the
-     * synthetic try/catch closures: in both cases `return` leaves a closure whose result
-     * is a plain `any`, never the channel. The trampoline itself owns the single
-     * `return ch`, emitted by printFunctionBody.
+     * The body is the trampoline's sibling method (`go this.fetchTickerBody(ch, ...)`),
+     * and the synthetic try/catch closures nest inside it: in both cases `return` leaves
+     * a function whose result is a plain `any`, never the channel. The trampoline itself
+     * owns the single `return ch`, emitted by printFunctionBody.
      */
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
