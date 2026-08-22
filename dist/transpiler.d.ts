@@ -630,6 +630,12 @@ declare class GoTranspiler extends BaseTranspiler {
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): any;
     printFunctionType(node: any): any;
+    isWholePrintedCall(value: string, open: number): boolean;
+    goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
+    goEnclosingFunction(node: any): any;
+    goTypeNameIsShadowed(scope: any, goType: string): boolean;
+    goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
+    getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
