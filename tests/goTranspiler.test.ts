@@ -182,24 +182,30 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        // extract each method body
+        // every async core is a trampoline + body PAIR, so three TS methods become six
+        // Go funcs, in declaration order: WatchTickerInner/watchTickerInnerBody,
+        // WatchTicker/watchTickerBody, WatchTickerClassic/watchTickerClassicBody
         const methods = output.split(/func\s+\(this \*Exchange\)/).slice(1);
-        expect(methods.length).toBe(3);
-        const [inner, delegator, classic] = methods;
-        // the delegator must be channel-wrapped and receive from the inner channel
+        expect(methods.length).toBe(6);
+        const [, , delegator, delegatorBody, classic, classicBody] = methods;
+        // the delegator trampoline hands the work to its body
         expect(delegator).toContain("ch := make(chan any, 1)");
-        expect(delegator).toContain("<-this.WatchTickerInner(symbol)");
-        expect(delegator).toContain("PanicOnError(retRes");
+        expect(delegator).toContain("go this.watchTickerBody(ch, symbol)");
+        expect(delegator).toContain("return ch");
+        // the body receives from the inner channel
+        expect(delegatorBody).toContain("<-this.WatchTickerInner(symbol)");
+        expect(delegatorBody).toContain("PanicOnError(retRes");
         // must NOT return the raw channel of the inner call
-        expect(delegator).not.toContain("ch <- this.WatchTickerInner");
-        // normalized (method name + line-based retRes suffix stripped), the
-        // delegator must be identical to the classic async/return await version
+        expect(delegatorBody).not.toContain("ch <- this.WatchTickerInner");
+        // normalized (method name + line-based retRes suffix stripped), the delegator
+        // pair must be identical to the classic async/return await pair
         const normalize = (s: string) => s
             .replace(/retRes\d+/g, 'retRes')
             .replace(/WatchTickerClassic|WatchTicker\b/g, 'METHOD')
+            .replace(/watchTickerClassicBody|watchTickerBody\b/g, 'methodBody')
             .trim();
         expect(normalize(delegator)).toBe(normalize(classic));
-        void inner;
+        expect(normalize(delegatorBody)).toBe(normalize(classicBody));
     });
     test('async method result channel is buffered with capacity 1', () => {
         // the generated async core deposits exactly one value and returns.
@@ -217,12 +223,12 @@ describe('go transpiling tests', () => {
         expect(output).toContain("ch := make(chan any, 1)");
         expect(output).not.toContain("ch := make(chan any)");
     });
-    test('async method body runs on its own goroutine (trampoline)', () => {
-        // The core is a TRAMPOLINE: it allocates the cap-1 channel, launches the body
-        // on a goroutine and returns the channel IMMEDIATELY. That is what makes the
-        // call a *hot handle* — work already in flight — matching the C#/Java ports,
-        // so `const a = this.fetchA (); ... await Promise.all ([a, b])` overlaps with
-        // no call-site wrapper.
+    test('async method body runs on its own goroutine via a sibling body method', () => {
+        // The core is a TRAMPOLINE: it allocates the cap-1 channel, `go`es a SIBLING body
+        // method that owns the work, and returns the channel IMMEDIATELY. That is what
+        // makes the call a *hot handle* — work already in flight — matching the C#/Java
+        // ports, so `const a = this.fetchA (); ... await Promise.all ([a, b])` overlaps
+        // with no call-site wrapper.
         const input =
         "class Exchange {\n" +
         "    async fetchTicker(symbol: string): Promise<any> {\n" +
@@ -230,29 +236,78 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
+        // the trampoline
+        expect(output).toContain("func  (this *Exchange) FetchTicker(symbol any) <- chan any {");
         expect(output).toContain("ch := make(chan any, 1)");
-        expect(output).toContain("go func() any {");
+        expect(output).toContain("go this.fetchTickerBody(ch, symbol)");
+        expect(output).toContain("return ch");
+        // the body, a plain non-channel-returning sibling that owns the defers
+        expect(output).toContain("func (this *Exchange) fetchTickerBody(ch chan any, symbol any) any {");
         expect(output).toContain("defer close(ch)");
         expect(output).toContain("defer ReturnPanicError(ch)");
         expect(output).toContain("ch <- map[string]any");
-        expect(output).toContain("}()");
-        expect(output).toContain("return ch");
+        // no anonymous goroutine envelope any more
+        expect(output).not.toContain("go func() any {");
+        expect(output).not.toContain("}()");
         // the statements appear in that exact order
         const order = [
             "ch := make(chan any, 1)",
-            "go func() any {",
+            "go this.fetchTickerBody(ch, symbol)",
+            "return ch",
+            "func (this *Exchange) fetchTickerBody(ch chan any, symbol any) any {",
             "defer close(ch)",
             "defer ReturnPanicError(ch)",
             "ch <- map[string]any",
-            "}()",
-            "return ch",
         ].map((needle) => output.indexOf(needle));
         expect(order).toEqual([...order].sort((a, b) => a - b));
         expect(Math.min(...order)).toBeGreaterThan(-1);
     });
+    test('the body method is unexported so it stays off interfaces and wrappers', () => {
+        // the body is an implementation detail of the trampoline: it must never leak into
+        // the generated ICoreExchange interface nor the typed *_wrapper.go facades, so it
+        // is emitted lowercase (package private in Go).
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker(symbol: string): Promise<any> {\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("fetchTickerBody");
+        expect(output).not.toContain("FetchTickerBody");
+    });
+    test('a defaulted parameter is forwarded to the body as the variadic tail', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker(symbol: string, params = {}): Promise<any> {\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("FetchTicker(symbol any, optionalArgs ...any) <- chan any");
+        expect(output).toContain("go this.fetchTickerBody(ch, symbol, optionalArgs...)");
+        expect(output).toContain("fetchTickerBody(ch chan any, symbol any, optionalArgs ...any) any");
+        // the defaults are unpacked in the BODY, not in the trampoline
+        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any {})");
+        expect(output.indexOf("params := GetArg")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
+    });
+    test('a colliding body name is uniquified instead of clobbered', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker(symbol: string): Promise<any> {\n" +
+        "        return symbol;\n" +
+        "    }\n" +
+        "    fetchTickerBody(x): any {\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("go this.fetchTickerBody1(ch, symbol)");
+        expect(output).toContain("func (this *Exchange) fetchTickerBody1(ch chan any, symbol any) any {");
+    });
     test('async method result is an UNNAMED channel', () => {
         // With the trampoline the recover (`defer ReturnPanicError(ch)`) lives on the
-        // BODY goroutine, not on the trampoline, so the trampoline's `return ch` always
+        // BODY method, not on the trampoline, so the trampoline's `return ch` always
         // runs and can never hand back a zero-value nil channel. The named result
         // (`out <- chan any` / `out = ch`) that the flat emitter needed is therefore
         // gone, and the signature is the plain Go one again.
@@ -266,8 +321,8 @@ describe('go transpiling tests', () => {
         expect(output).toContain("FetchTicker(symbol any) <- chan any");
         expect(output).not.toContain("(out <- chan any)");
         expect(output).not.toContain("out = ch");
-        // the recover must sit on the body goroutine, i.e. AFTER `go func()`
-        expect(output.indexOf("go func() any {")).toBeLessThan(output.indexOf("defer ReturnPanicError(ch)"));
+        // the recover must sit on the body, i.e. AFTER the `go this....Body(...)` handoff
+        expect(output.indexOf("go this.fetchTickerBody(")).toBeLessThan(output.indexOf("defer ReturnPanicError(ch)"));
     });
     test('a local or parameter named out no longer needs uniquifying', () => {
         // there is no named result any more, so `out` is just an ordinary identifier
@@ -282,8 +337,8 @@ describe('go transpiling tests', () => {
         expect(output).not.toContain("out1");
         expect(output).toContain("ch <- out");
     });
-    test('returns inside the body send and then leave the goroutine with nil', () => {
-        // the body is a `func() any` closure: its returns are the closure's returns,
+    test('returns inside the body send and then leave the body with nil', () => {
+        // the body is a plain `any`-returning sibling method: its returns are its own,
         // never the channel. `return ch` belongs to the trampoline alone.
         const input =
         "class Exchange {\n" +
@@ -295,7 +350,7 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("go func() any {");
+        expect(output).toContain("go this.doThingBody(ch, symbol)");
         expect(output).toContain("ch <- 1");
         expect(output).toContain("ch <- 2");
         expect(output).toContain("return nil");
@@ -303,8 +358,8 @@ describe('go transpiling tests', () => {
         expect(output.match(/return ch/g)).toHaveLength(1);
     });
     test('async method with try/catch keeps the closure shape and captures ret__', () => {
-        // try/catch is emulated with synthetic closures nested inside the body
-        // goroutine, so their `return nil` / `ret__` capture is correct again.
+        // try/catch is emulated with synthetic closures nested inside the body method,
+        // so their `return nil` / `ret__` capture is correct again.
         const input =
         "class Exchange {\n" +
         "    async fetchTicker(symbol: string): Promise<any> {\n" +
@@ -316,7 +371,8 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("go func() any {");
+        expect(output).toContain("go this.fetchTickerBody(ch, symbol)");
+        expect(output).toContain("func (this *Exchange) fetchTickerBody(ch chan any, symbol any) any {");
         expect(output).not.toContain("(out <- chan any)");
         expect(output).toContain("recover()");
         expect(output).toContain("return ret__");
@@ -438,10 +494,12 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        const [, doAwait] = methodBodies(output);
-        expect(doAwait).toContain("a:= (<-this.FetchSpotMarkets(params))");
-        expect(doAwait).toContain("PanicOnError(a)");
-        expect(doAwait).not.toContain("Spawn");
+        // trampoline/body pairs: FetchSpotMarkets, fetchSpotMarketsBody, DoAwait, doAwaitBody
+        const [, , doAwaitTrampoline, doAwaitBody] = methodBodies(output);
+        expect(doAwaitTrampoline).toContain("go this.doAwaitBody(ch, optionalArgs...)");
+        expect(doAwaitBody).toContain("a:= (<-this.FetchSpotMarkets(params))");
+        expect(doAwaitBody).toContain("PanicOnError(a)");
+        expect(doAwaitBody).not.toContain("Spawn");
     });
     test('a stored SYNC method call is unchanged', () => {
         const input =
