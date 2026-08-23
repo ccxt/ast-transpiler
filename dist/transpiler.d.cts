@@ -654,9 +654,6 @@ declare class GoTranspiler extends BaseTranspiler {
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
-    goScalarFamily(node: any): string | undefined;
-    goScalarFamilyOfType(type: any): string | undefined;
-    printTypedOperatorIfAny(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
