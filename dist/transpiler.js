@@ -2641,6 +2641,49 @@ var parserConfig3 = {
   "INFER_VAR_TYPE": false,
   "INFER_ARG_TYPE": false
 };
+var CSHARP_METHOD_RETURN_TYPES = {
+  "toUpperCase": "string",
+  "toLowerCase": "string",
+  "toString": "string",
+  "trim": "string",
+  "join": "string",
+  "replace": "string",
+  "replaceAll": "string",
+  "split": "List<object>",
+  "startsWith": "bool",
+  "endsWith": "bool",
+  "indexOf": "int",
+  "search": "int"
+};
+var CSHARP_STATIC_RETURN_TYPES = {
+  "Object.keys": "List<object>",
+  "Object.values": "List<object>",
+  "Object.entries": "List<object>",
+  "JSON.stringify": "string",
+  "Math.floor": "double",
+  "Math.ceil": "double",
+  "Math.round": "double",
+  "Array.isArray": "bool",
+  "Number.isInteger": "bool"
+};
+var CSHARP_THIS_RETURN_TYPES = {
+  "extend": "Dictionary<string, object>",
+  "deepExtend": "Dictionary<string, object>",
+  "indexBy": "Dictionary<string, object>",
+  "groupBy": "Dictionary<string, object>",
+  "milliseconds": "Int64",
+  "seconds": "Int64",
+  "microseconds": "Int64",
+  "uuid": "string",
+  "hmac": "string",
+  "capitalize": "string",
+  "ymdhms": "string",
+  "yyyymmdd": "string",
+  "json": "string",
+  "inArray": "bool",
+  "valueIsDefined": "bool"
+};
+var CSHARP_TYPE_NAMES = ["string", "bool", "int", "long", "Int64", "double", "object", "List", "Dictionary", "var"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -2976,6 +3019,180 @@ var CSharpTranspiler = class extends BaseTranspiler {
   //     }
   //     return undefined;
   // }
+  // the C# type of a whole-call / whole-property initializer, keyed on the AST so
+  // the printer's cast wrappers (`((string)x).ToUpper()`) do not hide the callee
+  csharpCallReturnType(initializer) {
+    if (initializer?.kind === ts4.SyntaxKind.PropertyAccessExpression) {
+      return initializer.name?.escapedText === "length" ? "int" : void 0;
+    }
+    if (initializer?.kind !== ts4.SyntaxKind.CallExpression) {
+      return void 0;
+    }
+    const expression = initializer.expression;
+    if (expression?.kind !== ts4.SyntaxKind.PropertyAccessExpression) {
+      return void 0;
+    }
+    const methodName = expression.name?.escapedText;
+    const target = expression.expression;
+    if (target?.kind === ts4.SyntaxKind.ThisKeyword) {
+      return CSHARP_THIS_RETURN_TYPES[methodName];
+    }
+    if (target?.kind === ts4.SyntaxKind.Identifier) {
+      const full = target.escapedText + "." + methodName;
+      if (CSHARP_STATIC_RETURN_TYPES[full] !== void 0) {
+        return CSHARP_STATIC_RETURN_TYPES[full];
+      }
+    }
+    return CSHARP_METHOD_RETURN_TYPES[methodName];
+  }
+  // the concrete C# type the initializer already produces, or undefined when the
+  // printer cannot name it (this.safeString, getValue, add, parseInt, ... return object)
+  csharpTypeOfInitializer(initializer) {
+    switch (initializer?.kind) {
+      case ts4.SyntaxKind.StringLiteral:
+      case ts4.SyntaxKind.NoSubstitutionTemplateLiteral:
+        return "string";
+      case ts4.SyntaxKind.TrueKeyword:
+      case ts4.SyntaxKind.FalseKeyword:
+        return "bool";
+      case ts4.SyntaxKind.PrefixUnaryExpression:
+        return initializer.operator === ts4.SyntaxKind.ExclamationToken ? "bool" : void 0;
+      case ts4.SyntaxKind.ParenthesizedExpression:
+        return this.csharpTypeOfInitializer(initializer.expression);
+      case ts4.SyntaxKind.BinaryExpression: {
+        const op = initializer.operatorToken.kind;
+        switch (op) {
+          case ts4.SyntaxKind.BarBarToken:
+          case ts4.SyntaxKind.AmpersandAmpersandToken:
+          case ts4.SyntaxKind.EqualsEqualsToken:
+          case ts4.SyntaxKind.EqualsEqualsEqualsToken:
+          case ts4.SyntaxKind.ExclamationEqualsToken:
+          case ts4.SyntaxKind.ExclamationEqualsEqualsToken:
+          case ts4.SyntaxKind.GreaterThanToken:
+          case ts4.SyntaxKind.GreaterThanEqualsToken:
+          case ts4.SyntaxKind.LessThanToken:
+          case ts4.SyntaxKind.LessThanEqualsToken:
+          case ts4.SyntaxKind.InKeyword:
+            return "bool";
+        }
+        return void 0;
+      }
+    }
+    return this.csharpCallReturnType(initializer);
+  }
+  csharpEnclosingFunction(node) {
+    let current = node?.parent;
+    while (current) {
+      switch (current.kind) {
+        case ts4.SyntaxKind.MethodDeclaration:
+        case ts4.SyntaxKind.FunctionDeclaration:
+        case ts4.SyntaxKind.FunctionExpression:
+        case ts4.SyntaxKind.ArrowFunction:
+        case ts4.SyntaxKind.Constructor:
+        case ts4.SyntaxKind.SourceFile:
+          return current;
+      }
+      current = current.parent;
+    }
+    return void 0;
+  }
+  csharpTypeNameIsShadowed(scope, csharpType) {
+    const names = csharpType.match(/[A-Za-z_]\w*/g) ?? [];
+    const relevant = names.filter((n) => CSHARP_TYPE_NAMES.indexOf(n) >= 0);
+    if (relevant.length === 0 || scope === void 0) {
+      return false;
+    }
+    let shadowed = false;
+    const visit = (n) => {
+      if (shadowed) {
+        return;
+      }
+      const isBinding = n.kind === ts4.SyntaxKind.Parameter || n.kind === ts4.SyntaxKind.VariableDeclaration;
+      if (isBinding && n.name?.kind === ts4.SyntaxKind.Identifier) {
+        const printed = this.printNode(n.name, 0);
+        if (relevant.indexOf(printed) >= 0) {
+          shadowed = true;
+          return;
+        }
+      }
+      ts4.forEachChild(n, visit);
+    };
+    ts4.forEachChild(scope, visit);
+    return shadowed;
+  }
+  // reject the refinement when something downstream needs the local to stay `object`:
+  // `x.push(v)` prints `((IList<object>)x).Add(v)` on a value that must be boxed, a
+  // later assignment of another concrete type would stop compiling, and `x++` prints
+  // `postFixIncrement(ref x)` whose parameter is `ref object`
+  csharpLocalIsSafeToType(scope, declaration, varName, csharpType) {
+    if (scope === void 0) {
+      return false;
+    }
+    let safe = true;
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (n.kind === ts4.SyntaxKind.Identifier && n.escapedText === varName && n !== declaration.name) {
+        const parent = n.parent;
+        if (parent?.kind === ts4.SyntaxKind.VariableDeclaration && parent.name === n) {
+          return;
+        }
+        if (parent?.kind === ts4.SyntaxKind.PostfixUnaryExpression || parent?.kind === ts4.SyntaxKind.PrefixUnaryExpression) {
+          const op = parent.operator;
+          if (op === ts4.SyntaxKind.PlusPlusToken || op === ts4.SyntaxKind.MinusMinusToken) {
+            safe = false;
+            return;
+          }
+        }
+        if (parent?.kind === ts4.SyntaxKind.SpreadElement) {
+          safe = false;
+          return;
+        }
+        if (parent?.kind === ts4.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts4.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts4.SyntaxKind.EqualsToken) {
+          safe = false;
+          return;
+        }
+        if (parent?.kind === ts4.SyntaxKind.PropertyAccessExpression && parent.expression === n) {
+          const method = parent.name?.escapedText;
+          if (method === "push" || method === "reverse" || method === "sort") {
+            safe = false;
+            return;
+          }
+        }
+        if (parent?.kind === ts4.SyntaxKind.BinaryExpression && parent.left === n) {
+          const op = parent.operatorToken.kind;
+          if (op === ts4.SyntaxKind.EqualsToken) {
+            if (this.csharpTypeOfInitializer(parent.right) !== csharpType) {
+              safe = false;
+              return;
+            }
+          } else if (op >= ts4.SyntaxKind.FirstCompoundAssignment && op <= ts4.SyntaxKind.LastCompoundAssignment) {
+            safe = false;
+            return;
+          }
+        }
+      }
+      ts4.forEachChild(n, visit);
+    };
+    ts4.forEachChild(scope, visit);
+    return safe;
+  }
+  getCSharpLocalType(declaration) {
+    const csharpType = this.csharpTypeOfInitializer(declaration.initializer);
+    if (csharpType === void 0) {
+      return this.VAR_TOKEN;
+    }
+    const sourceName = declaration.name?.escapedText;
+    if (sourceName === void 0) {
+      return this.VAR_TOKEN;
+    }
+    const scope = this.csharpEnclosingFunction(declaration);
+    if (this.csharpTypeNameIsShadowed(scope, csharpType) || !this.csharpLocalIsSafeToType(scope, declaration, sourceName, csharpType)) {
+      return this.VAR_TOKEN;
+    }
+    return csharpType;
+  }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
     if (this.removeVariableDeclarationForFunctionExpression && declaration?.initializer && ts4.isFunctionExpression(declaration.initializer)) {
@@ -3016,7 +3233,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
       return this.getIden(identation) + specificVarToken + " " + this.printNode(declaration.name) + " = " + parsedValue;
     }
-    return this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
+    const declaredType = isNew ? "var" : this.getCSharpLocalType(declaration);
+    return this.getIden(identation) + declaredType + " " + this.printNode(declaration.name) + " = " + parsedValue;
   }
   transformPropertyAcessExpressionIfNeeded(node) {
     const expression = node.expression;

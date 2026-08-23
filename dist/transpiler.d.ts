@@ -502,6 +502,12 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    csharpCallReturnType(initializer: any): string | undefined;
+    csharpTypeOfInitializer(initializer: any): string | undefined;
+    csharpEnclosingFunction(node: any): any;
+    csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
+    csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string): boolean;
+    getCSharpLocalType(declaration: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;

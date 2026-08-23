@@ -464,7 +464,7 @@ describe('csharp transpiling tests', () => {
     //     "const d = (a && b) || (c && !b);\n" 
     //     const csharp =
     //     "object a = true;\n" +
-    //     "object b = false;\n" +
+    //     "bool b = false;\n" +
     //     "object c = true;\n" +
     //     "object d = (a && b) || (c && !b);"
     //     const output = transpiler.transpileCSharp(ts).content;
@@ -481,11 +481,11 @@ describe('csharp transpiling tests', () => {
         "    const f = 1;\n" +
         "}"
         const csharp =
-        "object a = \"hi\";\n" +
-        "object b = false;\n" +
-        "object c = isTrue(a) && isTrue(b);\n" +
-        "object d = !isTrue(a) && !isTrue(b);\n" +
-        "object e = (isTrue(a) || !isTrue(b));\n" +
+        "string a = \"hi\";\n" +
+        "bool b = false;\n" +
+        "bool c = isTrue(a) && isTrue(b);\n" +
+        "bool d = !isTrue(a) && !isTrue(b);\n" +
+        "bool e = (isTrue(a) || !isTrue(b));\n" +
         "if (isTrue(a))\n" +
         "{\n" +
         "    object f = 1;\n" +
@@ -540,12 +540,12 @@ describe('csharp transpiling tests', () => {
         const csharp =
         "object a = 1;\n" +
         "object b = add(1, 1);\n" +
-        "object c = isEqual(a, b);\n" +
-        "object d = !isEqual(a, b);\n" +
-        "object e = isLessThan(a, b);\n" +
-        "object f = isGreaterThan(a, b);\n" +
-        "object g = isGreaterThanOrEqual(a, b);\n" +
-        "object h = isLessThanOrEqual(a, b);"
+        "bool c = isEqual(a, b);\n" +
+        "bool d = !isEqual(a, b);\n" +
+        "bool e = isLessThan(a, b);\n" +
+        "bool f = isGreaterThan(a, b);\n" +
+        "bool g = isGreaterThanOrEqual(a, b);\n" +
+        "bool h = isLessThanOrEqual(a, b);"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -595,8 +595,8 @@ describe('csharp transpiling tests', () => {
         "const myStr = \"test\";\n" +
         "const ff = myStr.length;"
         const csharp =
-        "object myStr = \"test\";\n" +
-        "object ff = ((string)myStr).Length;"
+        "string myStr = \"test\";\n" +
+        "int ff = ((string)myStr).Length;"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -606,7 +606,7 @@ describe('csharp transpiling tests', () => {
         "const aa = myArray.length;"
         const csharp =
         "object myArray = new List<object>() {1, 2, 3};\n" +
-        "object aa = getArrayLength(myArray);"
+        "int aa = getArrayLength(myArray);"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -731,7 +731,7 @@ describe('csharp transpiling tests', () => {
         "const myString = \'bar\'\n" +
         "const exists = myString.includes (\"b\");"
         const csharp =
-        "object myString = \"bar\";\n" +
+        "string myString = \"bar\";\n" +
         "object exists = myString.Contains(\"b\");"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
@@ -755,7 +755,7 @@ describe('csharp transpiling tests', () => {
         "const z = x as number;"
         const csharp =
         "object x = 1;\n" +
-        "object a = \"foo\";\n" +
+        "string a = \"foo\";\n" +
         "object y = ((object)x);\n" +
         "object t = ((string)a);\n" +
         "object z = x;" 
@@ -842,8 +842,8 @@ describe('csharp transpiling tests', () => {
         "const a = \"bar\" // I'm second trailing comment\n";
         const csharp =
         "// I'm a leading comment\n" +
-        "object z = \"my var\"; // I'm a trailing comment\n" +
-        "object a = \"bar\"; // I'm second trailing comment";
+        "string z = \"my var\"; // I'm a trailing comment\n" +
+        "string a = \"bar\"; // I'm second trailing comment";
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -968,7 +968,7 @@ describe('csharp transpiling tests', () => {
     });
     test('string literal', () => {
         const ts = "const x = \"foo, 'single', \\\"double\\\" \\t \\n \\r \\b \\f \";";
-        const csharp = "object x = \"foo, 'single', \\\"double\\\" \\t \\n \\r \\b \\f \";";
+        const csharp = "string x = \"foo, 'single', \\\"double\\\" \\t \\n \\r \\b \\f \";";
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     });
@@ -1042,5 +1042,113 @@ describe('as string[] assertion must not emit a hard IList<string> runtime cast'
         // so any hard cast breaks one of the two legitimate runtime list types
         expect(output).not.toContain('(IList<object>)');
         expect(output).not.toContain('(IList<string>)');
+    });
+});
+
+describe('csharp typed body locals', () => {
+    test('locals whose initializer has a concrete C# type are declared with it', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    milliseconds() { return 1; }\n" +
+        "    main(market) {\n" +
+        "        const upper = market.toUpperCase();\n" +
+        "        const parts = market.split('/');\n" +
+        "        const count = parts.length;\n" +
+        "        const same = (upper === market);\n" +
+        "        const merged = this.extend({}, market);\n" +
+        "        const now = this.milliseconds();\n" +
+        "        const keys = Object.keys(merged);\n" +
+        "        return [upper, parts, count, same, merged, now, keys];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("string upper = ((string)market).ToUpper()");
+        expect(output).toContain("List<object> parts = ((string)market).Split(");
+        expect(output).toContain("int count = getArrayLength(parts)");
+        expect(output).toContain("bool same = (isEqual(upper, market))");
+        expect(output).toContain("Dictionary<string, object> merged = this.extend(");
+        expect(output).toContain("Int64 now = this.milliseconds()");
+        expect(output).toContain("List<object> keys = new List<object>(");
+    });
+    test('helpers that return object keep the local untyped', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item, a, b) {\n" +
+        "        const income = this.safeString(item, 'income');\n" +
+        "        const first = item['first'];\n" +
+        "        const sum = a + b;\n" +
+        "        const picked = a ? b : item;\n" +
+        "        const sliced = item.slice(0, 2);\n" +
+        "        return [income, first, sum, picked, sliced];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object income = this.safeString(item, \"income\")");
+        expect(output).toContain("object first = getValue(item, \"first\")");
+        expect(output).toContain("object sum = add(a, b)");
+        expect(output).toContain("object picked = ");
+        expect(output).toContain("object sliced = slice(item, 0, 2)");
+    });
+    test('a local appended to, incremented or spread stays object', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(market, other) {\n" +
+        "        const appended = market.split('/');\n" +
+        "        appended.push('extra');\n" +
+        "        let reassigned = market.toUpperCase();\n" +
+        "        reassigned = this.safeString(other, 'x');\n" +
+        "        let counted = market.length;\n" +
+        "        counted++;\n" +
+        "        let grown = market.toUpperCase();\n" +
+        "        grown += 'x';\n" +
+        "        return [appended, reassigned, counted, grown];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object appended = ((string)market).Split(");
+        expect(output).toContain("object reassigned = ((string)market).ToUpper()");
+        expect(output).toContain("object counted = getArrayLength(market)");
+        expect(output).toContain("object grown = ((string)market).ToUpper()");
+    });
+    test('a local reassigned with the same concrete type keeps the type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market, other) {\n" +
+        "        let upper = market.toUpperCase();\n" +
+        "        upper = other.toUpperCase();\n" +
+        "        return upper;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("string upper = ((string)market).ToUpper()");
+    });
+    test('a renamed local is scanned under its source name', () => {
+        // `params` prints as `parameters`; the reject scan must still see the
+        // destructuring assignment that reassigns it
+        const input =
+        "class Exchange {\n" +
+        "    handleMarketTypeAndParams(a, b, c) { return [a, b]; }\n" +
+        "    main(params) {\n" +
+        "        let type = 'spot';\n" +
+        "        [ type, params ] = this.handleMarketTypeAndParams('fetchBalance', undefined, params);\n" +
+        "        return type;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object type = \"spot\"");
+    });
+    test('a parameter shadowing a C# type name blocks that refinement', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(bool, other) {\n" +
+        "        const flag = other.startsWith('x');\n" +
+        "        return [bool, flag];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object flag = ((string)other).StartsWith(");
     });
 });
