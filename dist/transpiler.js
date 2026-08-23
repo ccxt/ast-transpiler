@@ -3781,9 +3781,24 @@ var GO_HELPER_RETURN_TYPES = {
   "Precise.StringLt": "bool",
   "Precise.StringLe": "bool",
   "Precise.StringEq": "bool",
-  "Precise.StringEquals": "bool"
+  "Precise.StringEquals": "bool",
+  "IsEqualString": "bool",
+  "IsEqualInt": "bool",
+  "IsEqualFloat": "bool",
+  "IsEqualBool": "bool"
 };
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
+var GO_EQUALITY_HELPERS = {
+  "string": "IsEqualString",
+  "int": "IsEqualInt",
+  "float": "IsEqualFloat",
+  "bool": "IsEqualBool"
+};
+var GO_PLUS_HELPERS = {
+  "string": "ConcatString",
+  "int": "AddNumber",
+  "float": "AddNumber"
+};
 var GoTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig4, config["parser"] ?? {});
@@ -4676,15 +4691,126 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
       if (op === ts5.SyntaxKind.PlusEqualsToken) {
+        if (this.goScalarFamily(left) === "string" && this.goScalarFamily(right) === "string") {
+          return `${leftText} = ConcatString(${leftText}, ${rightText})`;
+        }
         return `${leftText} = Add(${leftText}, ${rightText})`;
       }
       if (op === ts5.SyntaxKind.MinusEqualsToken) {
         return `${leftText} = Subtract(${leftText}, ${rightText})`;
       }
+      const typedOperator = this.printTypedOperatorIfAny(op, left, right, leftText, rightText);
+      if (typedOperator !== void 0) {
+        return typedOperator;
+      }
       const wrapper = this.binaryExpressionsWrappers[op];
       const open = wrapper[0];
       const close = wrapper[1];
       return `${open}${leftText}, ${rightText}${close}`;
+    }
+    return void 0;
+  }
+  // the scalar family the TypeScript type of an operand belongs to: 'string',
+  // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
+  // when the type is any/unknown/a union of several families
+  goScalarFamily(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    return this.goScalarFamilyOfType(type);
+  }
+  goScalarFamilyOfType(type) {
+    if (type === void 0) {
+      return void 0;
+    }
+    const alias = type.aliasSymbol?.escapedName;
+    switch (alias) {
+      case "Str":
+      case "Strings":
+        return alias === "Str" ? "string" : void 0;
+      case "Int":
+        return "int";
+      case "Num":
+        return "float";
+      case "Bool":
+        return "bool";
+    }
+    const flags = type.flags;
+    if (flags & ts5.TypeFlags.Union) {
+      const families = /* @__PURE__ */ new Set();
+      for (const member of type.types) {
+        const family = this.goScalarFamilyOfType(member);
+        if (family === void 0) {
+          return void 0;
+        }
+        if (family !== "nil") {
+          families.add(family);
+        }
+      }
+      if (families.size !== 1) {
+        return void 0;
+      }
+      return families.values().next().value;
+    }
+    if (flags & (ts5.TypeFlags.String | ts5.TypeFlags.StringLiteral)) {
+      return "string";
+    }
+    if (flags & ts5.TypeFlags.NumberLiteral) {
+      return Number.isInteger(type.value) ? "intLiteral" : "float";
+    }
+    if (flags & ts5.TypeFlags.Number) {
+      return "float";
+    }
+    if (flags & (ts5.TypeFlags.Boolean | ts5.TypeFlags.BooleanLiteral)) {
+      return "bool";
+    }
+    if (flags & (ts5.TypeFlags.Undefined | ts5.TypeFlags.Null | ts5.TypeFlags.Void)) {
+      return "nil";
+    }
+    return void 0;
+  }
+  // === / !== / + on two operands of the same scalar family go through the typed
+  // helper; anything mixed or unknown keeps the `any` helper, because "1" + 1 and
+  // 1 + 1 are different operations and only the runtime helper can tell them apart
+  printTypedOperatorIfAny(op, left, right, leftText, rightText) {
+    let leftFamily = this.goScalarFamily(left);
+    if (leftFamily === void 0 || leftFamily === "nil") {
+      return void 0;
+    }
+    let rightFamily = this.goScalarFamily(right);
+    if (rightFamily === void 0 || rightFamily === "nil") {
+      return void 0;
+    }
+    if (leftFamily === "intLiteral") {
+      leftFamily = rightFamily === "float" ? "float" : "int";
+    }
+    if (rightFamily === "intLiteral") {
+      rightFamily = leftFamily === "float" ? "float" : "int";
+    }
+    const isEquality = op === ts5.SyntaxKind.EqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsEqualsToken;
+    const isDifference = op === ts5.SyntaxKind.ExclamationEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsEqualsToken;
+    if (isEquality || isDifference) {
+      if (leftFamily !== rightFamily) {
+        return void 0;
+      }
+      const helper = GO_EQUALITY_HELPERS[leftFamily];
+      if (helper === void 0) {
+        return void 0;
+      }
+      const negation = isDifference ? "!" : "";
+      return `${negation}${helper}(${leftText}, ${rightText})`;
+    }
+    if (op === ts5.SyntaxKind.PlusToken) {
+      const bothStrings = leftFamily === "string" && rightFamily === "string";
+      const bothNumbers = leftFamily !== "string" && leftFamily !== "bool" && rightFamily !== "string" && rightFamily !== "bool";
+      if (!bothStrings && !bothNumbers) {
+        return void 0;
+      }
+      const helper = GO_PLUS_HELPERS[bothStrings ? "string" : "int"];
+      return `${helper}(${leftText}, ${rightText})`;
     }
     return void 0;
   }
