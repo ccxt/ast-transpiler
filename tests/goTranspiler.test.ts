@@ -673,4 +673,109 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(output).toContain("var v any = SyncHelper(x)");
         expect(output).not.toContain("Spawn");
     });
+
+    test('typed operators: === on two strings emits IsEqualString', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "function f (x: string, s: Str, o: any) {\n" +
+        "    const a = x === 'delivery';\n" +
+        "    const b = s !== 'delivery';\n" +
+        "    const c = o === 'delivery';\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqualString(x, \"delivery\")");
+        expect(output).toContain("var b any = !IsEqualString(s, \"delivery\")");
+        expect(output).toContain("var c bool = IsEqual(o, \"delivery\")");
+    });
+    test('typed operators: === on two ints emits IsEqualInt', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "function f (n: Int, o: any) {\n" +
+        "    const a = n === 1;\n" +
+        "    const b = n !== 1;\n" +
+        "    const c = o === 1;\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqualInt(n, 1)");
+        expect(output).toContain("var b any = !IsEqualInt(n, 1)");
+        expect(output).toContain("var c bool = IsEqual(o, 1)");
+    });
+    test('typed operators: === on two numbers/booleans emits IsEqualFloat/IsEqualBool', () => {
+        const input =
+        "function f (n: number, b: boolean) {\n" +
+        "    const a = n === 1;\n" +
+        "    const c = b === true;\n" +
+        "    return [ a, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqualFloat(n, 1)");
+        expect(output).toContain("var c bool = IsEqualBool(b, true)");
+    });
+    test('typed operators: + on two strings emits ConcatString', () => {
+        const input =
+        "function f (a: string, b: string) {\n" +
+        "    const x = a + '/';\n" +
+        "    const y = a + b;\n" +
+        "    return [ x, y ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("ConcatString(a, \"/\")");
+        expect(output).toContain("ConcatString(a, b)");
+        expect(output).not.toContain("Add(");
+    });
+    test('typed operators: + on two numbers emits AddNumber', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "function f (p: number, i: Int) {\n" +
+        "    const x = p + 1;\n" +
+        "    const y = i + 1;\n" +
+        "    return [ x, y ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("AddNumber(p, 1)");
+        expect(output).toContain("AddNumber(i, 1)");
+    });
+    test('typed operators: mixed and unknown operands keep IsEqual/Add', () => {
+        const input =
+        "function f (s: string, n: number, o: any) {\n" +
+        "    const a = s === o;\n" +
+        "    const b = s + n;\n" +
+        "    const c = o + 1;\n" +
+        "    const d = o + o;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, o)");
+        expect(output).toContain("Add(s, n)");
+        expect(output).toContain("Add(o, 1)");
+        expect(output).toContain("Add(o, o)");
+        expect(output).not.toContain("ConcatString");
+        expect(output).not.toContain("AddNumber");
+    });
+    test('typed operators: comparison against undefined keeps IsEqual', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "function f (s: Str) {\n" +
+        "    const a = s === undefined;\n" +
+        "    return a;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, nil)");
+        expect(output).not.toContain("IsEqualString");
+    });
+    test('typed operators: += on two strings emits ConcatString', () => {
+        const input =
+        "function f (a: string, o: any) {\n" +
+        "    let s: string = 'x';\n" +
+        "    s += a;\n" +
+        "    let u: any = o;\n" +
+        "    u += 1;\n" +
+        "    return [ s, u ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("s = ConcatString(s, a)");
+        expect(output).toContain("u = Add(u, 1)");
+    });
 });

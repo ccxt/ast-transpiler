@@ -125,6 +125,10 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'Precise.StringLe': 'bool',
     'Precise.StringEq': 'bool',
     'Precise.StringEquals': 'bool',
+    'IsEqualString': 'bool',
+    'IsEqualInt': 'bool',
+    'IsEqualFloat': 'bool',
+    'IsEqualBool': 'bool',
 };
 
 // helpers whose Go signature is `any` (SafeString, GetValue, Ternary, Add,
@@ -132,6 +136,20 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
 // the printer cannot name, so those locals stay `any`.
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
+
+// operands of the same scalar family are compared/added with the typed helper
+const GO_EQUALITY_HELPERS: { [family: string]: string } = {
+    'string': 'IsEqualString',
+    'int': 'IsEqualInt',
+    'float': 'IsEqualFloat',
+    'bool': 'IsEqualBool',
+};
+
+const GO_PLUS_HELPERS: { [family: string]: string } = {
+    'string': 'ConcatString',
+    'int': 'AddNumber',
+    'float': 'AddNumber',
+};
 
 export class GoTranspiler extends BaseTranspiler {
 
@@ -1274,11 +1292,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const rightText = this.printNode(right, 0);
 
             if (op === ts.SyntaxKind.PlusEqualsToken) {
+                if ((this.goScalarFamily(left) === 'string') && (this.goScalarFamily(right) === 'string')) {
+                    return `${leftText} = ConcatString(${leftText}, ${rightText})`;
+                }
                 return `${leftText} = Add(${leftText}, ${rightText})`;
             }
 
             if (op === ts.SyntaxKind.MinusEqualsToken) {
                 return `${leftText} = Subtract(${leftText}, ${rightText})`;
+            }
+
+            const typedOperator = this.printTypedOperatorIfAny(op, left, right, leftText, rightText);
+            if (typedOperator !== undefined) {
+                return typedOperator;
             }
 
             const wrapper = this.binaryExpressionsWrappers[op];
@@ -1298,6 +1324,122 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         //         return `${leftText} = ${rightText}`;
         //     }
         // }
+
+        return undefined;
+    }
+
+    // the scalar family the TypeScript type of an operand belongs to: 'string',
+    // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
+    // when the type is any/unknown/a union of several families
+    goScalarFamily(node): string | undefined {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return this.goScalarFamilyOfType(type);
+    }
+
+    goScalarFamilyOfType(type): string | undefined {
+        if (type === undefined) {
+            return undefined;
+        }
+        // Str/Int/Num/Bool are nullable aliases of number|undefined & friends, so the
+        // alias name is the only place the int/float distinction survives
+        const alias = type.aliasSymbol?.escapedName;
+        switch (alias) {
+        case 'Str':
+        case 'Strings':
+            return (alias === 'Str') ? 'string' : undefined;
+        case 'Int':
+            return 'int';
+        case 'Num':
+            return 'float';
+        case 'Bool':
+            return 'bool';
+        }
+        const flags = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const families = new Set<string>();
+            for (const member of type.types) {
+                const family = this.goScalarFamilyOfType(member);
+                if (family === undefined) {
+                    return undefined;
+                }
+                if (family !== 'nil') {
+                    families.add(family);
+                }
+            }
+            if (families.size !== 1) {
+                return undefined; // boolean is `true | false`, handled by size === 1
+            }
+            return families.values().next().value;
+        }
+        if (flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) {
+            return 'string';
+        }
+        if (flags & ts.TypeFlags.NumberLiteral) {
+            // an integer literal fits both int64 and float64: let the other operand decide
+            return Number.isInteger(type.value) ? 'intLiteral' : 'float';
+        }
+        if (flags & ts.TypeFlags.Number) {
+            return 'float'; // a bare `number` may hold either, so never claim 'int'
+        }
+        if (flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
+            return 'bool';
+        }
+        if (flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) {
+            return 'nil';
+        }
+        return undefined;
+    }
+
+    // === / !== / + on two operands of the same scalar family go through the typed
+    // helper; anything mixed or unknown keeps the `any` helper, because "1" + 1 and
+    // 1 + 1 are different operations and only the runtime helper can tell them apart
+    printTypedOperatorIfAny(op, left, right, leftText: string, rightText: string): string | undefined {
+        let leftFamily = this.goScalarFamily(left);
+        if (leftFamily === undefined || leftFamily === 'nil') {
+            return undefined;
+        }
+        let rightFamily = this.goScalarFamily(right);
+        if (rightFamily === undefined || rightFamily === 'nil') {
+            // `x === undefined` stays IsEqual: the Go operand is an `any` box and a
+            // typed nil boxed into `any` is not `== nil`
+            return undefined;
+        }
+        if (leftFamily === 'intLiteral') {
+            leftFamily = (rightFamily === 'float') ? 'float' : 'int';
+        }
+        if (rightFamily === 'intLiteral') {
+            rightFamily = (leftFamily === 'float') ? 'float' : 'int';
+        }
+
+        const isEquality = (op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken);
+        const isDifference = (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+        if (isEquality || isDifference) {
+            if (leftFamily !== rightFamily) {
+                return undefined;
+            }
+            const helper = GO_EQUALITY_HELPERS[leftFamily];
+            if (helper === undefined) {
+                return undefined;
+            }
+            const negation = isDifference ? '!' : '';
+            return `${negation}${helper}(${leftText}, ${rightText})`;
+        }
+
+        if (op === ts.SyntaxKind.PlusToken) {
+            const bothStrings = (leftFamily === 'string') && (rightFamily === 'string');
+            const bothNumbers = (leftFamily !== 'string') && (leftFamily !== 'bool')
+                && (rightFamily !== 'string') && (rightFamily !== 'bool');
+            if (!bothStrings && !bothNumbers) {
+                return undefined; // "1" + 1 must keep the runtime dispatch
+            }
+            const helper = GO_PLUS_HELPERS[bothStrings ? 'string' : 'int'];
+            return `${helper}(${leftText}, ${rightText})`;
+        }
 
         return undefined;
     }
