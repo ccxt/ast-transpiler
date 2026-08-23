@@ -501,8 +501,8 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
         expect(output).toContain("var timestamp *int64 = this.SafeInteger(item, \"time\")");
         expect(output).toContain("var rate *float64 = this.SafeFloat(item, \"rate\")");
-        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
-        expect(output).toContain("var info *map[string]any = this.SafeDict(item, \"info\")");
+        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
     });
     test('the 2/N and lower/upper/product/timestamp variants carry the same pointer type', () => {
         const input =
@@ -529,7 +529,7 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var code *string = this.SafeStringUpper(item, \"code\")");
         expect(output).toContain("var expiry *int64 = this.SafeIntegerProduct(item, \"expiry\", 1000)");
         expect(output).toContain("var created *int64 = this.SafeTimestamp2(item, \"created\", \"ts\")");
-        expect(output).toContain("var post *bool = this.SafeBoolN(");
+        expect(output).toContain("var post any = this.SafeBoolN(");
     });
     test('a Safe* local reassigned to a differently typed value falls back to any', () => {
         const input =

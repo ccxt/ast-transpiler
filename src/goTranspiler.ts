@@ -148,12 +148,6 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'this.SafeFloat': '*float64',
     'this.SafeFloat2': '*float64',
     'this.SafeFloatN': '*float64',
-    'this.SafeBool': '*bool',
-    'this.SafeBool2': '*bool',
-    'this.SafeBoolN': '*bool',
-    'this.SafeDict': '*map[string]any',
-    'this.SafeDict2': '*map[string]any',
-    'this.SafeDictN': '*map[string]any',
 };
 
 // helpers whose Go signature is `any` (GetValue, Ternary, Add,
