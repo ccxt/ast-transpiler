@@ -406,9 +406,9 @@ describe('go typed body locals', () => {
     test('helpers that return any keep the local untyped', () => {
         const input =
         "class Exchange {\n" +
-        "    safeString(a, b) { return a; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
         "    main(item, a, b) {\n" +
-        "        const income = this.safeString(item, 'income');\n" +
+        "        const income = this.safeValue(item, 'income');\n" +
         "        const first = item['first'];\n" +
         "        const sum = a + b;\n" +
         "        const picked = a ? b : item;\n" +
@@ -416,7 +416,7 @@ describe('go typed body locals', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var income any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var income any = this.SafeValue(item, \"income\")");
         expect(output).toContain("var first any = GetValue(item, \"first\")");
         expect(output).toContain("var sum any = Add(a, b)");
         expect(output).toContain("var picked any = Ternary(");
@@ -474,6 +474,119 @@ describe('go typed body locals', () => {
         "}";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var upper any = ToUpper(other)");
+    });
+});
+
+describe('go pointer-typed Safe* body locals', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/ +/g, ' ');
+    test('a local initialized from a Safe* accessor is declared with its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    safeFloat(a, b) { return a; }\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const amount = this.safeString (item, 'income');\n" +
+        "        const timestamp = this.safeInteger (item, 'time');\n" +
+        "        const rate = this.safeFloat (item, 'rate');\n" +
+        "        const flag = this.safeBool (item, 'flag');\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        return [amount, timestamp, rate, flag, info];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+        expect(output).toContain("var timestamp *int64 = this.SafeInteger(item, \"time\")");
+        expect(output).toContain("var rate *float64 = this.SafeFloat(item, \"rate\")");
+        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('the 2/N and lower/upper/product/timestamp variants carry the same pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString2(a, b, c) { return a; }\n" +
+        "    safeStringLowerN(a, b) { return a; }\n" +
+        "    safeStringUpper(a, b) { return a; }\n" +
+        "    safeIntegerProduct(a, b, c) { return a; }\n" +
+        "    safeTimestamp2(a, b, c) { return a; }\n" +
+        "    safeBoolN(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const id = this.safeString2 (item, 'id', 'orderId');\n" +
+        "        const side = this.safeStringLowerN (item, ['side']);\n" +
+        "        const code = this.safeStringUpper (item, 'code');\n" +
+        "        const expiry = this.safeIntegerProduct (item, 'expiry', 1000);\n" +
+        "        const created = this.safeTimestamp2 (item, 'created', 'ts');\n" +
+        "        const post = this.safeBoolN (item, ['postOnly']);\n" +
+        "        return [id, side, code, expiry, created, post];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var id *string = this.SafeString2(item, \"id\", \"orderId\")");
+        expect(output).toContain("var side *string = this.SafeStringLowerN(");
+        expect(output).toContain("var code *string = this.SafeStringUpper(item, \"code\")");
+        expect(output).toContain("var expiry *int64 = this.SafeIntegerProduct(item, \"expiry\", 1000)");
+        expect(output).toContain("var created *int64 = this.SafeTimestamp2(item, \"created\", \"ts\")");
+        expect(output).toContain("var post any = this.SafeBoolN(");
+    });
+    test('a Safe* local reassigned to a differently typed value falls back to any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    main(item, other) {\n" +
+        "        let amount = this.safeString (item, 'income');\n" +
+        "        amount = other.toUpperCase();\n" +
+        "        let stamp = this.safeInteger (item, 'time');\n" +
+        "        stamp = this.safeString (item, 'time');\n" +
+        "        return [amount, stamp];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var stamp any = this.SafeInteger(item, \"time\")");
+    });
+    test('a Safe* local reassigned from the same Safe* family keeps its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeString2(a, b, c) { return a; }\n" +
+        "    main(item, other) {\n" +
+        "        let amount = this.safeString (item, 'income');\n" +
+        "        amount = this.safeString2 (other, 'income', 'amount');\n" +
+        "        return amount;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+    });
+    test('a Safe* local that is appended to or spread stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        info.push('x');\n" +
+        "        return info;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a parameter shadowing a Go type name blocks the pointer refinement too', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(string, item) {\n" +
+        "        const amount = this.safeString (item, 'income');\n" +
+        "        return [string, amount];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount any = this.SafeString(item, \"income\")");
     });
 });
 
