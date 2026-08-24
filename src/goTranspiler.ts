@@ -125,9 +125,32 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'Precise.StringLe': 'bool',
     'Precise.StringEq': 'bool',
     'Precise.StringEquals': 'bool',
+    // the base Safe* accessors return a typed pointer so that an absent value is a
+    // nil pointer, distinct from a present zero value ("" / 0 / false)
+    'this.SafeString': '*string',
+    'this.SafeString2': '*string',
+    'this.SafeStringN': '*string',
+    'this.SafeStringLower': '*string',
+    'this.SafeStringLower2': '*string',
+    'this.SafeStringLowerN': '*string',
+    'this.SafeStringUpper': '*string',
+    'this.SafeStringUpper2': '*string',
+    'this.SafeStringUpperN': '*string',
+    'this.SafeInteger': '*int64',
+    'this.SafeInteger2': '*int64',
+    'this.SafeIntegerN': '*int64',
+    'this.SafeIntegerProduct': '*int64',
+    'this.SafeIntegerProduct2': '*int64',
+    'this.SafeIntegerProductN': '*int64',
+    'this.SafeTimestamp': '*int64',
+    'this.SafeTimestamp2': '*int64',
+    'this.SafeTimestampN': '*int64',
+    'this.SafeFloat': '*float64',
+    'this.SafeFloat2': '*float64',
+    'this.SafeFloatN': '*float64',
 };
 
-// helpers whose Go signature is `any` (SafeString, GetValue, Ternary, Add,
+// helpers whose Go signature is `any` (GetValue, Ternary, Add,
 // Precise.StringMul, ...) are deliberately absent above: their box holds a value
 // the printer cannot name, so those locals stay `any`.
 
@@ -679,7 +702,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     // the concrete Go type the initializer already produces, or undefined when the
-    // printer cannot name it (this.SafeString, GetValue, Ternary, Add, ... return any)
+    // printer cannot name it (GetValue, Ternary, Add, ... return any)
     goTypeOfInitializer(initializer, printedValue: string): string | undefined {
         switch (initializer?.kind) {
         case ts.SyntaxKind.StringLiteral:
