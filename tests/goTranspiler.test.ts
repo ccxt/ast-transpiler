@@ -85,10 +85,10 @@ describe('go transpiling tests', () => {
         const go =
         "var a string = \"hi\"\n" +
         "var b bool = false\n" +
-        "var c bool = IsTrue(a) && IsTrue(b)\n" +
-        "var d bool = !IsTrue(a) && !IsTrue(b)\n" +
-        "var e bool = (IsTrue(a) || !IsTrue(b))\n" +
-        "if IsTrue(a) {\n" +
+        "var c bool = (a != \"\") && b\n" +
+        "var d bool = !(a != \"\") && !b\n" +
+        "var e bool = ((a != \"\") || !b)\n" +
+        "if (a != \"\") {\n" +
         "    var f any = 1\n" +
         "}"
         const output = transpiler.transpileGo(ts).content;
@@ -785,5 +785,179 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("var v any = SyncHelper(x)");
         expect(output).not.toContain("Spawn");
+    });
+});
+describe('go inline equality', () => {
+    test('=== / !== on present scalars inline to Go == / !=', () => {
+        const input =
+        "function f (x: string, n: number, b: boolean, o: any) {\n" +
+        "    const a = x === 'delivery';\n" +
+        "    const c = x !== 'delivery';\n" +
+        "    const d = n === 1;\n" +
+        "    const e = b === true;\n" +
+        "    const g = o === 'delivery';\n" +
+        "    return [ a, c, d, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (x == \"delivery\")");
+        expect(output).toContain("var c bool = (x != \"delivery\")");
+        expect(output).toContain("var d bool = (n == 1)");
+        expect(output).toContain("var e bool = (b == true)");
+        expect(output).toContain("var g bool = IsEqual(o, \"delivery\")");
+        expect(output).not.toContain("*x");
+        expect(output).not.toContain("IsEqualString");
+        expect(output).not.toContain("IsEqualInt");
+        expect(output).not.toContain("IsEqualFloat");
+        expect(output).not.toContain("IsEqualBool");
+    });
+    test('nullable aliases stay on the any helper IsEqual', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "type Int = number | undefined;\n" +
+        "function f (s: Str, i: Int) {\n" +
+        "    const a = s === 'delivery';\n" +
+        "    const b = s !== 'delivery';\n" +
+        "    const c = i === 1;\n" +
+        "    const d = s === undefined;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, \"delivery\")");
+        expect(output).toContain("var b bool = !IsEqual(s, \"delivery\")");
+        expect(output).toContain("var c bool = IsEqual(i, 1)");
+        expect(output).toContain("var d bool = IsEqual(s, nil)");
+        expect(output).not.toContain("IsEqualString");
+        expect(output).not.toContain("*s");
+    });
+    test('mixed families and any operands keep IsEqual', () => {
+        const input =
+        "function f (s: string, n: number, o: any) {\n" +
+        "    const a = s === o;\n" +
+        "    const b = o === o;\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, o)");
+        expect(output).toContain("var b bool = IsEqual(o, o)");
+    });
+    test('+ and += keep the runtime Add helper', () => {
+        const input =
+        "function f (a: string, b: string, p: number, o: any) {\n" +
+        "    const x = a + '/';\n" +
+        "    const y = a + b;\n" +
+        "    const z = p + 1;\n" +
+        "    let s: string = 'x';\n" +
+        "    s += a;\n" +
+        "    let u: any = o;\n" +
+        "    u += 1;\n" +
+        "    return [ x, y, z, s, u ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(a, \"/\")");
+        expect(output).toContain("Add(a, b)");
+        expect(output).toContain("Add(p, 1)");
+        expect(output).toContain("s = Add(s, a)");
+        expect(output).toContain("u = Add(u, 1)");
+        expect(output).not.toContain("ConcatString");
+        expect(output).not.toContain("AddNumber");
+    });
+    test('truthiness is inlined for locals whose Go type the printer declared', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    safeInteger (a, b) { return a; }\n" +
+        "    inArray (a, b) { return true; }\n" +
+        "    f (response: any) {\n" +
+        "        const s = this.safeString (response, 'id');\n" +
+        "        const n = this.safeInteger (response, 'ts');\n" +
+        "        const flag = this.inArray ('a', [ 'a' ]);\n" +
+        "        const parts = this.safeString (response, 'x').split ('-');\n" +
+        "        if (s) { return 1; }\n" +
+        "        if (n) { return 2; }\n" +
+        "        if (flag) { return 3; }\n" +
+        "        if (parts) { return 4; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if (s != nil && *s != \"\") {");
+        expect(output).toContain("if (n != nil && *n != 0) {");
+        expect(output).toContain("if flag {");
+        expect(output).toContain("if (len(parts) > 0) {");
+    });
+    test('EvalTruthy stays for any locals, params and non-identifiers', () => {
+        const input =
+        "class T {\n" +
+        "    safeValue (a, b) { return a; }\n" +
+        "    f (response: any, opt: any) {\n" +
+        "        const v = this.safeValue (response, 'a');\n" +
+        "        if (v) { return 1; }\n" +
+        "        if (opt) { return 2; }\n" +
+        "        if (response['k']) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if EvalTruthy(v) {");
+        expect(output).toContain("if EvalTruthy(opt) {");
+        expect(output).toContain("if EvalTruthy(GetValue(response, \"k\")) {");
+    });
+    test('negated truthiness inlines too', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (response: any) {\n" +
+        "        const s = this.safeString (response, 'id');\n" +
+        "        if (!s) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if !(s != nil && *s != \"\") {");
+        expect(output).not.toContain("EvalTruthy(s)");
+    });
+    test('a direct Safe* call compared to a literal collapses to a nil-safe deref', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b, c?) { return a; }\n" +
+        "    safeInteger (a, b, c?) { return a; }\n" +
+        "    f (raw: any) {\n" +
+        "        const a = this.safeString (raw, 'status', '') === 'normal';\n" +
+        "        const b = this.safeInteger (raw, 'success', 0) === 1;\n" +
+        "        return [ a, b ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the call must not be repeated, and `*string == \"normal\"` must not be emitted
+        expect(output).toContain("var a bool = IsEqual(this.SafeString(raw, \"status\", \"\"), \"normal\")");
+        expect(output).toContain("var b bool = IsEqual(this.SafeInteger(raw, \"success\", 0), 1)");
+    });
+    test('a direct Safe* call compared to undefined tests the pointer for nil', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (raw: any) {\n" +
+        "        const a = this.safeString (raw, 'id') === undefined;\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (this.SafeString(raw, \"id\") == nil)");
+    });
+    test('mismatched Go widths keep IsEqual: *int64 vs int does not compile in Go', () => {
+        const input =
+        "class T {\n" +
+        "    safeInteger (a, b) { return a; }\n" +
+        "    f (raw: any, stored: any) {\n" +
+        "        const limit = this.safeInteger (raw, 'limit');\n" +   // *int64
+        "        const length = stored.length;\n" +                     // int
+        "        const same = length === limit;\n" +
+        "        return same;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var length int =");
+        expect(output).toContain("IsEqual(length, limit)");
+        expect(output).not.toContain("*limit == length");
     });
 });

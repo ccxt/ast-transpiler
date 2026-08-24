@@ -35,10 +35,10 @@ func  (this *Test) FunctionWithOptionals(a any, optionalArgs ...any)  {
     d := GetArg(optionalArgs, 1, 1)
     _ = d
     fmt.Println(a)
-    if IsTrue(!IsEqual(c, nil)) {
+    if EvalTruthy(!IsEqual(c, nil)) {
         fmt.Println(c)
     }
-    if IsTrue(!IsEqual(d, nil)) {
+    if EvalTruthy(!IsEqual(d, nil)) {
         fmt.Println(d)
     }
 }
@@ -66,7 +66,7 @@ func  (this *Test) Test()  {
     fmt.Println(stringVar) // should print "hello"
     fmt.Println(s3) // should print "ab"
     var x any = false
-    if IsTrue(x) {
+    if EvalTruthy(x) {
         fmt.Println("x is true")
     } else {
         fmt.Println("x is false") // should print "x is false"
@@ -74,7 +74,7 @@ func  (this *Test) Test()  {
     instance := NewSecond()
     fmt.Println(instance.StringifyNumber(4)) // should print 4
     fmt.Println(instance.MyClassProperty) // should print "classProp"
-    if IsTrue(IsEqual(instance.MyBoolProp, false)) {
+    if EvalTruthy(IsEqual(instance.MyBoolProp, false)) {
         fmt.Println("myBoolProp is false") // should print "myBoolProp is false"
     }
     var arr any = []any{1, 2, 3, 4}
