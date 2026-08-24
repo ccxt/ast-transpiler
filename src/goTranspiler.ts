@@ -15,7 +15,7 @@ const parserConfig = {
     'PROPERTY_ASSIGNMENT_CLOSE': '',
     'SUPER_TOKEN': 'base',
     'SUPER_CALL_TOKEN': 'base',
-    'FALSY_WRAPPER_OPEN': 'IsTrue(',
+    'FALSY_WRAPPER_OPEN': 'EvalTruthy(',
     'FALSY_WRAPPER_CLOSE': ')',
     'COMPARISON_WRAPPER_OPEN' : "IsEqual(",
     'COMPARISON_WRAPPER_CLOSE' : ")",
@@ -99,7 +99,7 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'MathAbs': 'float64',
     'MathPow': 'float64',
     'ToFloat64': 'float64',
-    'IsTrue': 'bool',
+    'EvalTruthy': 'bool',
     'IsEqual': 'bool',
     'IsGreaterThan': 'bool',
     'IsLessThan': 'bool',
@@ -716,12 +716,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case ts.SyntaxKind.ArrayLiteralExpression:
             return '[]any';
         case ts.SyntaxKind.PrefixUnaryExpression:
-            // `!x` prints `!IsTrue(x)`
+            // `!x` prints `!EvalTruthy(x)`
             return (initializer.operator === ts.SyntaxKind.ExclamationToken) ? 'bool' : undefined;
         case ts.SyntaxKind.ParenthesizedExpression:
             return this.goTypeOfInitializer(initializer.expression, printedValue);
         case ts.SyntaxKind.BinaryExpression: {
-            // `a || b` prints `IsTrue(a) || IsTrue(b)`, a Go bool
+            // `a || b` prints `EvalTruthy(a) || EvalTruthy(b)`, a Go bool
             const op = initializer.operatorToken.kind;
             if ((op === ts.SyntaxKind.BarBarToken) || (op === ts.SyntaxKind.AmpersandAmpersandToken)) {
                 return 'bool';
@@ -1402,36 +1402,173 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
-    // Parameters stay `any` today — `*x` would not compile, so they are never pointers here.
-    goIsPointerIdentifier(node): boolean {
+    // the Go type this identifier is actually *declared* with, or undefined when it
+    // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
+    // declaration the reject filters demoted back to `any` is reported as `any` here
+    // too — otherwise we would emit `*x` against an `any` box.
+    // Parameters stay `any` today, so they never resolve to a concrete type.
+    //
+    // getGoLocalType re-prints every reassignment's right-hand side, and printing a
+    // ternary re-enters printCondition, which lands back here: `x = (x === 'a') ? …`
+    // would recurse forever. The in-progress set breaks that cycle by answering
+    // `any` for the declaration currently being classified, and the cache keeps the
+    // per-occurrence cost at one scope scan per declaration.
+    goDeclaredTypeCache = new Map<any, string | undefined>();
+    goDeclaredTypeInProgress = new Set<any>();
+
+    goDeclaredTypeOfIdentifier(node): string | undefined {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
-            return false;
+            return undefined;
         }
         let symbol;
         try {
             symbol = this.getChecker().getSymbolAtLocation(node);
         } catch (e) {
-            return false;
+            return undefined;
         }
         const decl = symbol?.valueDeclaration;
         if (decl === undefined || decl.kind !== ts.SyntaxKind.VariableDeclaration) {
-            return false;
+            return undefined;
         }
-        if (decl.initializer === undefined) {
-            return false;
+        if (decl.initializer === undefined || decl.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
         }
-        const goType = this.goTypeOfInitializer(decl.initializer, this.printNode(decl.initializer, 0));
+        if (this.goDeclaredTypeCache.has(decl)) {
+            return this.goDeclaredTypeCache.get(decl);
+        }
+        if (this.goDeclaredTypeInProgress.has(decl)) {
+            return undefined;
+        }
+        this.goDeclaredTypeInProgress.add(decl);
+        let goType;
+        try {
+            goType = this.getGoLocalType(decl, this.printNode(decl.initializer, 0));
+        } finally {
+            this.goDeclaredTypeInProgress.delete(decl);
+        }
+        const result = (goType === 'any') ? undefined : goType;
+        this.goDeclaredTypeCache.set(decl, result);
+        return result;
+    }
+
+    // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
+    goIsPointerIdentifier(node): boolean {
+        const goType = this.goDeclaredTypeOfIdentifier(node);
         return (typeof goType === 'string') && goType.startsWith('*');
+    }
+
+    // the Go pointer type an *expression* evaluates to, or undefined. Covers both a
+    // local declared `var x *string = …` and a direct `this.SafeString(...)` call,
+    // whose Go signature returns a pointer even though TypeScript says `string`.
+    goPointerTypeOfExpression(node, printedText: string): string | undefined {
+        const declared = this.goDeclaredTypeOfIdentifier(node);
+        if ((typeof declared === 'string') && declared.startsWith('*')) {
+            return declared;
+        }
+        if (node?.kind === ts.SyntaxKind.CallExpression) {
+            const goType = this.goTypeOfInitializer(node, printedText);
+            if ((typeof goType === 'string') && goType.startsWith('*')) {
+                return goType;
+            }
+        }
+        return undefined;
+    }
+
+    // JS truthiness of an operand whose Go type the printer knows, expressed with
+    // plain Go instead of boxing the value into `EvalTruthy(any)`. Each arm mirrors the
+    // matching `EvalTruthy` case exactly, including nil (a nil *T and a nil map are
+    // both falsy) — so this is the same predicate, minus the interface round-trip.
+    printInlineTruthy(node): string | undefined {
+        // every pointer/slice arm below repeats the operand, so only an identifier
+        // qualifies; inlining a call would evaluate it twice
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const goType = this.goDeclaredTypeOfIdentifier(node);
+        if (goType === undefined) {
+            return undefined;
+        }
+        const text = this.printNode(node, 0);
+        switch (goType) {
+        case 'bool':
+            return text;
+        case 'string':
+            return `(${text} != "")`;
+        case 'int':
+        case 'int64':
+        case 'float64':
+            return `(${text} != 0)`;
+        case '*bool':
+            return `(${text} != nil && *${text})`;
+        case '*string':
+            return `(${text} != nil && *${text} != "")`;
+        case '*int':
+        case '*int64':
+        case '*float64':
+            return `(${text} != nil && *${text} != 0)`;
+        case '[]string':
+        case '[]any':
+        case 'map[string]any':
+            return `(len(${text}) > 0)`;
+        }
+        return undefined;
+    }
+
+    printCondition(node, identation) {
+        // `!x` is handled by printPrefixUnaryExpression, which calls back into this
+        // method with the operand; let the base class keep that recursion intact
+        if (node?.kind === ts.SyntaxKind.Identifier) {
+            const inlined = this.printInlineTruthy(node);
+            if (inlined !== undefined) {
+                return `${this.getIden(identation)}${inlined}`;
+            }
+            return super.printCondition(node, identation);
+        }
+        // an expression that already prints a Go `bool` needs no EvalTruthy round-trip:
+        // `a || b`, `!x`, `a === b` and the Is*/Precise.String* predicates are all
+        // bool-typed, so `EvalTruthy(<bool>)` is the identity function on them
+        const printed = this.printNode(node, 0);
+        if (this.goTypeOfInitializer(node, printed) === 'bool') {
+            return `${this.getIden(identation)}${printed}`;
+        }
+        return super.printCondition(node, identation);
     }
 
     // === / !== inlined to plain Go operators when both sides are concrete Go
     // values or real pointers. Everything else — in particular anything that is
     // still `any` in Go — falls through to the existing IsEqual helper.
     // `(a == b || *a == *b)` is rejected: a nil *T panics on the second clause.
+    // Go has no implicit numeric conversion: `*limit == length` does not compile
+    // when limit is *int64 and length is int, even though TypeScript calls both
+    // `number`. Dereferencing is therefore only safe against an untyped constant
+    // (a literal, which adapts to the pointee) or an operand of the very same Go
+    // type. Anything else — including any `any` operand — keeps IsEqual.
+    goDerefComparableWith(ptrNode, ptrText: string, otherNode): boolean {
+        const pointee = this.goPointerTypeOfExpression(ptrNode, ptrText)?.substring(1);
+        if (pointee === undefined) {
+            return false;
+        }
+        switch (otherNode?.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return pointee === 'string';
+        case ts.SyntaxKind.NumericLiteral:
+            return (pointee === 'int') || (pointee === 'int64') || (pointee === 'float64');
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return pointee === 'bool';
+        }
+        const otherType = this.goDeclaredTypeOfIdentifier(otherNode);
+        return otherType === pointee;
+    }
+
     printInlineEquality(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined {
-        const lPtr = this.goIsPointerIdentifier(left);
-        const rPtr = this.goIsPointerIdentifier(right);
+        const lPtr = this.goPointerTypeOfExpression(left, leftText) !== undefined;
+        const rPtr = this.goPointerTypeOfExpression(right, rightText) !== undefined;
+        // the branches below that deref repeat the operand, so they may only be used
+        // on an identifier; a `this.SafeString(...)` call would be evaluated twice
+        const lRepeatable = (left?.kind === ts.SyntaxKind.Identifier);
+        const rRepeatable = (right?.kind === ts.SyntaxKind.Identifier);
         const lFam = this.goScalarFamily(left);
         const rFam = this.goScalarFamily(right);
         if (lFam === 'nil' && rPtr) {
@@ -1441,17 +1578,28 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
         }
         if (lPtr && rPtr) {
+            const lPointee = this.goPointerTypeOfExpression(left, leftText);
+            if (!lRepeatable || !rRepeatable
+                || lPointee !== this.goPointerTypeOfExpression(right, rightText)) {
+                return undefined; // IsEqual + derefScalar evaluates each side once
+            }
             if (isEq) {
                 return `(${leftText} == ${rightText} || (${leftText} != nil && ${rightText} != nil && *${leftText} == *${rightText}))`;
             }
             return `(${leftText} != ${rightText} && (${leftText} == nil || ${rightText} == nil || *${leftText} != *${rightText}))`;
         }
         if (lPtr && rFam !== undefined && rFam !== 'nil') {
+            if (!lRepeatable || !this.goDerefComparableWith(left, leftText, right)) {
+                return undefined;
+            }
             return isEq
                 ? `(${leftText} != nil && *${leftText} == ${rightText})`
                 : `(${leftText} == nil || *${leftText} != ${rightText})`;
         }
         if (rPtr && lFam !== undefined && lFam !== 'nil') {
+            if (!rRepeatable || !this.goDerefComparableWith(right, rightText, left)) {
+                return undefined;
+            }
             return isEq
                 ? `(${rightText} != nil && *${rightText} == ${leftText})`
                 : `(${rightText} == nil || *${rightText} != ${leftText})`;
@@ -2162,6 +2310,16 @@ ${this.getIden(identation)}${returnStatement}`;
         if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
             leftVar = this.printCondition(left, 0);
             rightVar = this.printCondition(right, identation);
+            if (operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+                // `x !== undefined && x === 'v'` inlines to `(x != nil) && (x != nil && *x == "v")`.
+                // The right operand already guards nil, so the left test is provably
+                // implied — `go vet` reports it as a redundant and. Dropping it keeps
+                // the exact same value (Go && is short-circuiting, both sides pure).
+                const collapsed = this.goDropRedundantNilGuard(leftVar.trim(), rightVar.trim());
+                if (collapsed !== undefined) {
+                    return collapsed;
+                }
+            }
         }  else {
             leftVar = this.printNode(left, 0);
             rightVar = this.printNode(right, identation);
@@ -2172,6 +2330,20 @@ ${this.getIden(identation)}${returnStatement}`;
         operator = customOperator ? customOperator : operator;
 
         return leftVar +" "+ operator + " " + rightVar.trim();
+    }
+
+    // `(x != nil) && (x != nil && …)` -> `(x != nil && …)`. Only fires when the
+    // right operand opens with the very same nil guard the left operand *is*, so
+    // the left is implied and dropping it cannot change the result.
+    goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined {
+        const guard = /^\(([A-Za-z_]\w*) != nil\)$/.exec(leftVar);
+        if (guard === null) {
+            return undefined;
+        }
+        if (rightVar.startsWith(`(${guard[1]} != nil && `)) {
+            return rightVar;
+        }
+        return undefined;
     }
 
     printTryStatement(node, identation: number) {

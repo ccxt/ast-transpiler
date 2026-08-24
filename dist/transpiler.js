@@ -3677,7 +3677,7 @@ var parserConfig4 = {
   "PROPERTY_ASSIGNMENT_CLOSE": "",
   "SUPER_TOKEN": "base",
   "SUPER_CALL_TOKEN": "base",
-  "FALSY_WRAPPER_OPEN": "IsTrue(",
+  "FALSY_WRAPPER_OPEN": "EvalTruthy(",
   "FALSY_WRAPPER_CLOSE": ")",
   "COMPARISON_WRAPPER_OPEN": "IsEqual(",
   "COMPARISON_WRAPPER_CLOSE": ")",
@@ -3756,7 +3756,7 @@ var GO_HELPER_RETURN_TYPES = {
   "MathAbs": "float64",
   "MathPow": "float64",
   "ToFloat64": "float64",
-  "IsTrue": "bool",
+  "EvalTruthy": "bool",
   "IsEqual": "bool",
   "IsGreaterThan": "bool",
   "IsLessThan": "bool",
@@ -3815,6 +3815,19 @@ var GoTranspiler = class extends BaseTranspiler {
     this.DEFAULT_RETURN_TYPE = "any";
     // suffix of the sibling body method an async trampoline hands its work to
     this.ASYNC_BODY_SUFFIX = "Body";
+    // the Go type this identifier is actually *declared* with, or undefined when it
+    // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
+    // declaration the reject filters demoted back to `any` is reported as `any` here
+    // too — otherwise we would emit `*x` against an `any` box.
+    // Parameters stay `any` today, so they never resolve to a concrete type.
+    //
+    // getGoLocalType re-prints every reassignment's right-hand side, and printing a
+    // ternary re-enters printCondition, which lands back here: `x = (x === 'a') ? …`
+    // would recurse forever. The in-progress set breaks that cycle by answering
+    // `any` for the declaration currently being classified, and the cache keeps the
+    // per-occurrence cost at one scope scan per declaration.
+    this.goDeclaredTypeCache = /* @__PURE__ */ new Map();
+    this.goDeclaredTypeInProgress = /* @__PURE__ */ new Set();
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = false;
@@ -4778,35 +4791,144 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
-  // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
-  // Parameters stay `any` today — `*x` would not compile, so they are never pointers here.
-  goIsPointerIdentifier(node) {
+  goDeclaredTypeOfIdentifier(node) {
     if (node?.kind !== ts5.SyntaxKind.Identifier) {
-      return false;
+      return void 0;
     }
     let symbol;
     try {
       symbol = this.getChecker().getSymbolAtLocation(node);
     } catch (e) {
-      return false;
+      return void 0;
     }
     const decl = symbol?.valueDeclaration;
     if (decl === void 0 || decl.kind !== ts5.SyntaxKind.VariableDeclaration) {
-      return false;
+      return void 0;
     }
-    if (decl.initializer === void 0) {
-      return false;
+    if (decl.initializer === void 0 || decl.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
     }
-    const goType = this.goTypeOfInitializer(decl.initializer, this.printNode(decl.initializer, 0));
+    if (this.goDeclaredTypeCache.has(decl)) {
+      return this.goDeclaredTypeCache.get(decl);
+    }
+    if (this.goDeclaredTypeInProgress.has(decl)) {
+      return void 0;
+    }
+    this.goDeclaredTypeInProgress.add(decl);
+    let goType;
+    try {
+      goType = this.getGoLocalType(decl, this.printNode(decl.initializer, 0));
+    } finally {
+      this.goDeclaredTypeInProgress.delete(decl);
+    }
+    const result = goType === "any" ? void 0 : goType;
+    this.goDeclaredTypeCache.set(decl, result);
+    return result;
+  }
+  // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
+  goIsPointerIdentifier(node) {
+    const goType = this.goDeclaredTypeOfIdentifier(node);
     return typeof goType === "string" && goType.startsWith("*");
+  }
+  // the Go pointer type an *expression* evaluates to, or undefined. Covers both a
+  // local declared `var x *string = …` and a direct `this.SafeString(...)` call,
+  // whose Go signature returns a pointer even though TypeScript says `string`.
+  goPointerTypeOfExpression(node, printedText) {
+    const declared = this.goDeclaredTypeOfIdentifier(node);
+    if (typeof declared === "string" && declared.startsWith("*")) {
+      return declared;
+    }
+    if (node?.kind === ts5.SyntaxKind.CallExpression) {
+      const goType = this.goTypeOfInitializer(node, printedText);
+      if (typeof goType === "string" && goType.startsWith("*")) {
+        return goType;
+      }
+    }
+    return void 0;
+  }
+  // JS truthiness of an operand whose Go type the printer knows, expressed with
+  // plain Go instead of boxing the value into `EvalTruthy(any)`. Each arm mirrors the
+  // matching `EvalTruthy` case exactly, including nil (a nil *T and a nil map are
+  // both falsy) — so this is the same predicate, minus the interface round-trip.
+  printInlineTruthy(node) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const goType = this.goDeclaredTypeOfIdentifier(node);
+    if (goType === void 0) {
+      return void 0;
+    }
+    const text = this.printNode(node, 0);
+    switch (goType) {
+      case "bool":
+        return text;
+      case "string":
+        return `(${text} != "")`;
+      case "int":
+      case "int64":
+      case "float64":
+        return `(${text} != 0)`;
+      case "*bool":
+        return `(${text} != nil && *${text})`;
+      case "*string":
+        return `(${text} != nil && *${text} != "")`;
+      case "*int":
+      case "*int64":
+      case "*float64":
+        return `(${text} != nil && *${text} != 0)`;
+      case "[]string":
+      case "[]any":
+      case "map[string]any":
+        return `(len(${text}) > 0)`;
+    }
+    return void 0;
+  }
+  printCondition(node, identation) {
+    if (node?.kind === ts5.SyntaxKind.Identifier) {
+      const inlined = this.printInlineTruthy(node);
+      if (inlined !== void 0) {
+        return `${this.getIden(identation)}${inlined}`;
+      }
+      return super.printCondition(node, identation);
+    }
+    const printed = this.printNode(node, 0);
+    if (this.goTypeOfInitializer(node, printed) === "bool") {
+      return `${this.getIden(identation)}${printed}`;
+    }
+    return super.printCondition(node, identation);
   }
   // === / !== inlined to plain Go operators when both sides are concrete Go
   // values or real pointers. Everything else — in particular anything that is
   // still `any` in Go — falls through to the existing IsEqual helper.
   // `(a == b || *a == *b)` is rejected: a nil *T panics on the second clause.
+  // Go has no implicit numeric conversion: `*limit == length` does not compile
+  // when limit is *int64 and length is int, even though TypeScript calls both
+  // `number`. Dereferencing is therefore only safe against an untyped constant
+  // (a literal, which adapts to the pointee) or an operand of the very same Go
+  // type. Anything else — including any `any` operand — keeps IsEqual.
+  goDerefComparableWith(ptrNode, ptrText, otherNode) {
+    const pointee = this.goPointerTypeOfExpression(ptrNode, ptrText)?.substring(1);
+    if (pointee === void 0) {
+      return false;
+    }
+    switch (otherNode?.kind) {
+      case ts5.SyntaxKind.StringLiteral:
+      case ts5.SyntaxKind.NoSubstitutionTemplateLiteral:
+        return pointee === "string";
+      case ts5.SyntaxKind.NumericLiteral:
+        return pointee === "int" || pointee === "int64" || pointee === "float64";
+      case ts5.SyntaxKind.TrueKeyword:
+      case ts5.SyntaxKind.FalseKeyword:
+        return pointee === "bool";
+    }
+    const otherType = this.goDeclaredTypeOfIdentifier(otherNode);
+    return otherType === pointee;
+  }
   printInlineEquality(left, right, leftText, rightText, isEq) {
-    const lPtr = this.goIsPointerIdentifier(left);
-    const rPtr = this.goIsPointerIdentifier(right);
+    const lPtr = this.goPointerTypeOfExpression(left, leftText) !== void 0;
+    const rPtr = this.goPointerTypeOfExpression(right, rightText) !== void 0;
+    const lRepeatable = left?.kind === ts5.SyntaxKind.Identifier;
+    const rRepeatable = right?.kind === ts5.SyntaxKind.Identifier;
     const lFam = this.goScalarFamily(left);
     const rFam = this.goScalarFamily(right);
     if (lFam === "nil" && rPtr) {
@@ -4816,15 +4938,25 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
     }
     if (lPtr && rPtr) {
+      const lPointee = this.goPointerTypeOfExpression(left, leftText);
+      if (!lRepeatable || !rRepeatable || lPointee !== this.goPointerTypeOfExpression(right, rightText)) {
+        return void 0;
+      }
       if (isEq) {
         return `(${leftText} == ${rightText} || (${leftText} != nil && ${rightText} != nil && *${leftText} == *${rightText}))`;
       }
       return `(${leftText} != ${rightText} && (${leftText} == nil || ${rightText} == nil || *${leftText} != *${rightText}))`;
     }
     if (lPtr && rFam !== void 0 && rFam !== "nil") {
+      if (!lRepeatable || !this.goDerefComparableWith(left, leftText, right)) {
+        return void 0;
+      }
       return isEq ? `(${leftText} != nil && *${leftText} == ${rightText})` : `(${leftText} == nil || *${leftText} != ${rightText})`;
     }
     if (rPtr && lFam !== void 0 && lFam !== "nil") {
+      if (!rRepeatable || !this.goDerefComparableWith(right, rightText, left)) {
+        return void 0;
+      }
       return isEq ? `(${rightText} != nil && *${rightText} == ${leftText})` : `(${rightText} == nil || *${rightText} != ${leftText})`;
     }
     if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
@@ -5314,6 +5446,12 @@ ${this.getIden(identation)}`;
     if (operatorToken.kind === ts5.SyntaxKind.BarBarToken || operatorToken.kind === ts5.SyntaxKind.AmpersandAmpersandToken) {
       leftVar = this.printCondition(left, 0);
       rightVar = this.printCondition(right, identation);
+      if (operatorToken.kind === ts5.SyntaxKind.AmpersandAmpersandToken) {
+        const collapsed = this.goDropRedundantNilGuard(leftVar.trim(), rightVar.trim());
+        if (collapsed !== void 0) {
+          return collapsed;
+        }
+      }
     } else {
       leftVar = this.printNode(left, 0);
       rightVar = this.printNode(right, identation);
@@ -5321,6 +5459,19 @@ ${this.getIden(identation)}`;
     const customOperator = this.getCustomOperatorIfAny(left, right, operatorToken);
     operator = customOperator ? customOperator : operator;
     return leftVar + " " + operator + " " + rightVar.trim();
+  }
+  // `(x != nil) && (x != nil && …)` -> `(x != nil && …)`. Only fires when the
+  // right operand opens with the very same nil guard the left operand *is*, so
+  // the left is implied and dropping it cannot change the result.
+  goDropRedundantNilGuard(leftVar, rightVar) {
+    const guard = /^\(([A-Za-z_]\w*) != nil\)$/.exec(leftVar);
+    if (guard === null) {
+      return void 0;
+    }
+    if (rightVar.startsWith(`(${guard[1]} != nil && `)) {
+      return rightVar;
+    }
+    return void 0;
   }
   printTryStatement(node, identation) {
     let tryBody = node.tryBlock.statements.map((s) => {

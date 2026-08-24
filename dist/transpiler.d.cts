@@ -656,7 +656,14 @@ declare class GoTranspiler extends BaseTranspiler {
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     goScalarFamily(node: any): string | undefined;
     goScalarFamilyOfType(type: any): string | undefined;
+    goDeclaredTypeCache: Map<any, string>;
+    goDeclaredTypeInProgress: Set<any>;
+    goDeclaredTypeOfIdentifier(node: any): string | undefined;
     goIsPointerIdentifier(node: any): boolean;
+    goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
+    printInlineTruthy(node: any): string | undefined;
+    printCondition(node: any, identation: any): any;
+    goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
@@ -718,6 +725,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): string;
+    goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;
     printTryStatement(node: any, identation: number): string;
     printPrefixUnaryExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
