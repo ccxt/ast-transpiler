@@ -4924,6 +4924,31 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const otherType = this.goDeclaredTypeOfIdentifier(otherNode);
     return otherType === pointee;
   }
+  // A TypeScript scalar family is not a Go static type: `number`/`string` values reach
+  // Go as `any` (GetValue, SafeNumber, …) and `any == literal` also compares the boxed
+  // dynamic type, so int64(1) != 1. Inline plain Go `==` only when both operands are
+  // literals or have a known, matching, non-pointer concrete Go type.
+  goInlineScalarSafe(left, leftText, right, rightText) {
+    const goT = (node, text) => {
+      switch (node?.kind) {
+        case ts5.SyntaxKind.NumericLiteral:
+        case ts5.SyntaxKind.StringLiteral:
+        case ts5.SyntaxKind.NoSubstitutionTemplateLiteral:
+        case ts5.SyntaxKind.TrueKeyword:
+        case ts5.SyntaxKind.FalseKeyword:
+        case ts5.SyntaxKind.PrefixUnaryExpression:
+          return "literal";
+      }
+      const t = this.goDeclaredTypeOfIdentifier(node) ?? this.goTypeOfInitializer(node, text);
+      return t === void 0 || t === "any" || t.startsWith("*") ? void 0 : t;
+    };
+    const l = goT(left, leftText);
+    const r = goT(right, rightText);
+    if (l === void 0 || r === void 0) {
+      return false;
+    }
+    return l === r || l === "literal" || r === "literal";
+  }
   printInlineEquality(left, right, leftText, rightText, isEq) {
     const lPtr = this.goPointerTypeOfExpression(left, leftText) !== void 0;
     const rPtr = this.goPointerTypeOfExpression(right, rightText) !== void 0;
@@ -4960,6 +4985,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return isEq ? `(${rightText} != nil && *${rightText} == ${leftText})` : `(${rightText} == nil || *${rightText} != ${leftText})`;
     }
     if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
+      if (!this.goInlineScalarSafe(left, leftText, right, rightText)) {
+        return void 0;
+      }
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     return void 0;
