@@ -674,3 +674,78 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(output).not.toContain("Spawn");
     });
 });
+describe('go inline equality', () => {
+    test('=== / !== on present scalars inline to Go == / !=', () => {
+        const input =
+        "function f (x: string, n: number, b: boolean, o: any) {\n" +
+        "    const a = x === 'delivery';\n" +
+        "    const c = x !== 'delivery';\n" +
+        "    const d = n === 1;\n" +
+        "    const e = b === true;\n" +
+        "    const g = o === 'delivery';\n" +
+        "    return [ a, c, d, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (x == \"delivery\")");
+        expect(output).toContain("var c bool = (x != \"delivery\")");
+        expect(output).toContain("var d bool = (n == 1)");
+        expect(output).toContain("var e bool = (b == true)");
+        expect(output).toContain("var g bool = IsEqual(o, \"delivery\")");
+        expect(output).not.toContain("*x");
+        expect(output).not.toContain("IsEqualString");
+        expect(output).not.toContain("IsEqualInt");
+        expect(output).not.toContain("IsEqualFloat");
+        expect(output).not.toContain("IsEqualBool");
+    });
+    test('nullable aliases stay on the any helper IsEqual', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "type Int = number | undefined;\n" +
+        "function f (s: Str, i: Int) {\n" +
+        "    const a = s === 'delivery';\n" +
+        "    const b = s !== 'delivery';\n" +
+        "    const c = i === 1;\n" +
+        "    const d = s === undefined;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, \"delivery\")");
+        expect(output).toContain("var b bool = !IsEqual(s, \"delivery\")");
+        expect(output).toContain("var c bool = IsEqual(i, 1)");
+        expect(output).toContain("var d bool = IsEqual(s, nil)");
+        expect(output).not.toContain("IsEqualString");
+        expect(output).not.toContain("*s");
+    });
+    test('mixed families and any operands keep IsEqual', () => {
+        const input =
+        "function f (s: string, n: number, o: any) {\n" +
+        "    const a = s === o;\n" +
+        "    const b = o === o;\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, o)");
+        expect(output).toContain("var b bool = IsEqual(o, o)");
+    });
+    test('+ and += keep the runtime Add helper', () => {
+        const input =
+        "function f (a: string, b: string, p: number, o: any) {\n" +
+        "    const x = a + '/';\n" +
+        "    const y = a + b;\n" +
+        "    const z = p + 1;\n" +
+        "    let s: string = 'x';\n" +
+        "    s += a;\n" +
+        "    let u: any = o;\n" +
+        "    u += 1;\n" +
+        "    return [ x, y, z, s, u ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(a, \"/\")");
+        expect(output).toContain("Add(a, b)");
+        expect(output).toContain("Add(p, 1)");
+        expect(output).toContain("s = Add(s, a)");
+        expect(output).toContain("u = Add(u, 1)");
+        expect(output).not.toContain("ConcatString");
+        expect(output).not.toContain("AddNumber");
+    });
+});

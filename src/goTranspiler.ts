@@ -703,6 +703,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((op === ts.SyntaxKind.BarBarToken) || (op === ts.SyntaxKind.AmpersandAmpersandToken)) {
                 return 'bool';
             }
+            // `a === b` prints either `IsEqual(a, b)` or an inlined `(a == b)`;
+            // both are Go bools
+            if ((op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken)
+                || (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+                return 'bool';
+            }
             break;
         }
         }
@@ -1281,6 +1287,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return `${leftText} = Subtract(${leftText}, ${rightText})`;
             }
 
+            const isEquality = (op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken);
+            const isDifference = (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+            if (isEquality || isDifference) {
+                const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
+                if (inlined !== undefined) {
+                    return inlined;
+                }
+            }
+
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
@@ -1299,6 +1314,132 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         //     }
         // }
 
+        return undefined;
+    }
+
+    // the scalar family the TypeScript type of an operand belongs to: 'string',
+    // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
+    // when the type is any/unknown/a union of several families
+    goScalarFamily(node): string | undefined {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return this.goScalarFamilyOfType(type);
+    }
+
+    goScalarFamilyOfType(type): string | undefined {
+        if (type === undefined) {
+            return undefined;
+        }
+        // Str/Int/Num/Bool are nullable aliases of `string | undefined` & friends;
+        // their Go representation is still `any`, so they never inline
+        const alias = type.aliasSymbol?.escapedName;
+        switch (alias) {
+        case 'Str':
+        case 'Int':
+        case 'Num':
+        case 'Bool':
+            return undefined;
+        }
+        const flags = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const families = new Set<string>();
+            for (const member of type.types) {
+                const family = this.goScalarFamilyOfType(member);
+                if (family === undefined) {
+                    return undefined;
+                }
+                // `string | undefined` is `any` in Go, never a bare Go string:
+                // one nullable member disqualifies the whole union
+                if (family === 'nil') {
+                    return undefined;
+                }
+                families.add(family);
+            }
+            if (families.size !== 1) {
+                return undefined; // `boolean` is `true | false`, so size === 1
+            }
+            return families.values().next().value;
+        }
+        if (flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) {
+            return 'string';
+        }
+        if (flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral)) {
+            return 'number';
+        }
+        if (flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
+            return 'bool';
+        }
+        if (flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) {
+            return 'nil';
+        }
+        return undefined;
+    }
+
+    // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
+    // Parameters stay `any` today — `*x` would not compile, so they are never pointers here.
+    goIsPointerIdentifier(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const decl = symbol?.valueDeclaration;
+        if (decl === undefined || decl.kind !== ts.SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        if (decl.initializer === undefined) {
+            return false;
+        }
+        const goType = this.goTypeOfInitializer(decl.initializer, this.printNode(decl.initializer, 0));
+        return (typeof goType === 'string') && goType.startsWith('*');
+    }
+
+    // === / !== inlined to plain Go operators when both sides are concrete Go
+    // values or real pointers. Everything else — in particular anything that is
+    // still `any` in Go — falls through to the existing IsEqual helper.
+    // `(a == b || *a == *b)` is rejected: a nil *T panics on the second clause.
+    printInlineEquality(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined {
+        const lPtr = this.goIsPointerIdentifier(left);
+        const rPtr = this.goIsPointerIdentifier(right);
+        const lFam = this.goScalarFamily(left);
+        const rFam = this.goScalarFamily(right);
+        if (lFam === 'nil' && rPtr) {
+            return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+        }
+        if (rFam === 'nil' && lPtr) {
+            return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        if (lPtr && rPtr) {
+            if (isEq) {
+                return `(${leftText} == ${rightText} || (${leftText} != nil && ${rightText} != nil && *${leftText} == *${rightText}))`;
+            }
+            return `(${leftText} != ${rightText} && (${leftText} == nil || ${rightText} == nil || *${leftText} != *${rightText}))`;
+        }
+        if (lPtr && rFam !== undefined && rFam !== 'nil') {
+            return isEq
+                ? `(${leftText} != nil && *${leftText} == ${rightText})`
+                : `(${leftText} == nil || *${leftText} != ${rightText})`;
+        }
+        if (rPtr && lFam !== undefined && lFam !== 'nil') {
+            return isEq
+                ? `(${rightText} != nil && *${rightText} == ${leftText})`
+                : `(${rightText} == nil || *${rightText} != ${leftText})`;
+        }
+        // two definitely-present scalars of the same family: `==` is valid Go and
+        // needs no helper. Nullable aliases (Str/Int/Num/Bool) are `any` in Go and
+        // returned undefined by goScalarFamily, so they keep IsEqual.
+        if (!lPtr && !rPtr && lFam !== undefined && rFam !== undefined
+            && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
         return undefined;
     }
 

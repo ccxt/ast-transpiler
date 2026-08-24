@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../ast-transpiler-typed-ops/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../ast-transpiler-typed-ops/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4242,6 +4242,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (op === ts5.SyntaxKind.BarBarToken || op === ts5.SyntaxKind.AmpersandAmpersandToken) {
           return "bool";
         }
+        if (op === ts5.SyntaxKind.EqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsEqualsToken) {
+          return "bool";
+        }
         break;
       }
     }
@@ -4681,10 +4684,128 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       if (op === ts5.SyntaxKind.MinusEqualsToken) {
         return `${leftText} = Subtract(${leftText}, ${rightText})`;
       }
+      const isEquality = op === ts5.SyntaxKind.EqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsEqualsToken;
+      const isDifference = op === ts5.SyntaxKind.ExclamationEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsEqualsToken;
+      if (isEquality || isDifference) {
+        const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
+        if (inlined !== void 0) {
+          return inlined;
+        }
+      }
       const wrapper = this.binaryExpressionsWrappers[op];
       const open = wrapper[0];
       const close = wrapper[1];
       return `${open}${leftText}, ${rightText}${close}`;
+    }
+    return void 0;
+  }
+  // the scalar family the TypeScript type of an operand belongs to: 'string',
+  // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
+  // when the type is any/unknown/a union of several families
+  goScalarFamily(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    return this.goScalarFamilyOfType(type);
+  }
+  goScalarFamilyOfType(type) {
+    if (type === void 0) {
+      return void 0;
+    }
+    const alias = type.aliasSymbol?.escapedName;
+    switch (alias) {
+      case "Str":
+      case "Int":
+      case "Num":
+      case "Bool":
+        return void 0;
+    }
+    const flags = type.flags;
+    if (flags & ts5.TypeFlags.Union) {
+      const families = /* @__PURE__ */ new Set();
+      for (const member of type.types) {
+        const family = this.goScalarFamilyOfType(member);
+        if (family === void 0) {
+          return void 0;
+        }
+        if (family === "nil") {
+          return void 0;
+        }
+        families.add(family);
+      }
+      if (families.size !== 1) {
+        return void 0;
+      }
+      return families.values().next().value;
+    }
+    if (flags & (ts5.TypeFlags.String | ts5.TypeFlags.StringLiteral)) {
+      return "string";
+    }
+    if (flags & (ts5.TypeFlags.Number | ts5.TypeFlags.NumberLiteral)) {
+      return "number";
+    }
+    if (flags & (ts5.TypeFlags.Boolean | ts5.TypeFlags.BooleanLiteral)) {
+      return "bool";
+    }
+    if (flags & (ts5.TypeFlags.Undefined | ts5.TypeFlags.Null | ts5.TypeFlags.Void)) {
+      return "nil";
+    }
+    return void 0;
+  }
+  // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
+  // Parameters stay `any` today — `*x` would not compile, so they are never pointers here.
+  goIsPointerIdentifier(node) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    const decl = symbol?.valueDeclaration;
+    if (decl === void 0 || decl.kind !== ts5.SyntaxKind.VariableDeclaration) {
+      return false;
+    }
+    if (decl.initializer === void 0) {
+      return false;
+    }
+    const goType = this.goTypeOfInitializer(decl.initializer, this.printNode(decl.initializer, 0));
+    return typeof goType === "string" && goType.startsWith("*");
+  }
+  // === / !== inlined to plain Go operators when both sides are concrete Go
+  // values or real pointers. Everything else — in particular anything that is
+  // still `any` in Go — falls through to the existing IsEqual helper.
+  // `(a == b || *a == *b)` is rejected: a nil *T panics on the second clause.
+  printInlineEquality(left, right, leftText, rightText, isEq) {
+    const lPtr = this.goIsPointerIdentifier(left);
+    const rPtr = this.goIsPointerIdentifier(right);
+    const lFam = this.goScalarFamily(left);
+    const rFam = this.goScalarFamily(right);
+    if (lFam === "nil" && rPtr) {
+      return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+    }
+    if (rFam === "nil" && lPtr) {
+      return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+    }
+    if (lPtr && rPtr) {
+      if (isEq) {
+        return `(${leftText} == ${rightText} || (${leftText} != nil && ${rightText} != nil && *${leftText} == *${rightText}))`;
+      }
+      return `(${leftText} != ${rightText} && (${leftText} == nil || ${rightText} == nil || *${leftText} != *${rightText}))`;
+    }
+    if (lPtr && rFam !== void 0 && rFam !== "nil") {
+      return isEq ? `(${leftText} != nil && *${leftText} == ${rightText})` : `(${leftText} == nil || *${leftText} != ${rightText})`;
+    }
+    if (rPtr && lFam !== void 0 && lFam !== "nil") {
+      return isEq ? `(${rightText} != nil && *${rightText} == ${leftText})` : `(${rightText} == nil || *${rightText} != ${leftText})`;
+    }
+    if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
+      return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     return void 0;
   }
