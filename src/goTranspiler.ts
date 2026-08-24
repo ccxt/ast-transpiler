@@ -1562,6 +1562,32 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return otherType === pointee;
     }
 
+    // A TypeScript scalar family is not a Go static type: `number`/`string` values reach
+    // Go as `any` (GetValue, SafeNumber, …) and `any == literal` also compares the boxed
+    // dynamic type, so int64(1) != 1. Inline plain Go `==` only when both operands are
+    // literals or have a known, matching, non-pointer concrete Go type.
+    goInlineScalarSafe (left: any, leftText: string, right: any, rightText: string): boolean {
+        const goT = (node: any, text: string): string | undefined => {
+            switch (node?.kind) {
+            case ts.SyntaxKind.NumericLiteral:
+            case ts.SyntaxKind.StringLiteral:
+            case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            case ts.SyntaxKind.TrueKeyword:
+            case ts.SyntaxKind.FalseKeyword:
+            case ts.SyntaxKind.PrefixUnaryExpression:
+                return 'literal';
+            }
+            const t = this.goDeclaredTypeOfIdentifier (node) ?? this.goTypeOfInitializer (node, text);
+            return (t === undefined || t === 'any' || t.startsWith ('*')) ? undefined : t;
+        };
+        const l = goT (left, leftText);
+        const r = goT (right, rightText);
+        if (l === undefined || r === undefined) {
+            return false;
+        }
+        return l === r || l === 'literal' || r === 'literal';
+    }
+
     printInlineEquality(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined {
         const lPtr = this.goPointerTypeOfExpression(left, leftText) !== undefined;
         const rPtr = this.goPointerTypeOfExpression(right, rightText) !== undefined;
@@ -1609,6 +1635,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // returned undefined by goScalarFamily, so they keep IsEqual.
         if (!lPtr && !rPtr && lFam !== undefined && rFam !== undefined
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
+            if (!this.goInlineScalarSafe (left, leftText, right, rightText)) {
+                return undefined;
+            }
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         return undefined;

@@ -664,6 +664,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printInlineTruthy(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
+    goInlineScalarSafe(left: any, leftText: string, right: any, rightText: string): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
