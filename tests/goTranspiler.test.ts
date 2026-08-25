@@ -576,6 +576,40 @@ describe('go pointer-typed Safe* body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
     });
+    test('a local initialized from Precise arithmetic is declared as *string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(item) {\n" +
+        "        const product = Precise.stringMul ('-1', '2');\n" +
+        "        const quotient = Precise.stringDiv ('1', '2');\n" +
+        "        const total = Precise.stringAdd ('1', '2');\n" +
+        "        const rest = Precise.stringSub ('1', '2');\n" +
+        "        const biggest = Precise.stringMax ('1', '2');\n" +
+        "        const bigger = Precise.stringGt ('1', '2');\n" +
+        "        return [product, quotient, total, rest, biggest, bigger];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var product *string = Precise.StringMul(\"-1\", \"2\")");
+        expect(output).toContain("var quotient *string = Precise.StringDiv(\"1\", \"2\")");
+        expect(output).toContain("var total *string = Precise.StringAdd(\"1\", \"2\")");
+        expect(output).toContain("var rest *string = Precise.StringSub(\"1\", \"2\")");
+        expect(output).toContain("var biggest *string = Precise.StringMax(\"1\", \"2\")");
+        expect(output).toContain("var bigger bool = Precise.StringGt(\"1\", \"2\")");
+    });
+    test('a Safe* string local reassigned from Precise arithmetic keeps its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        let amount = this.safeString (item, 'income');\n" +
+        "        amount = Precise.stringMul ('-1', amount);\n" +
+        "        return amount;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+    });
     test('a parameter shadowing a Go type name blocks the pointer refinement too', () => {
         const input =
         "class Exchange {\n" +
