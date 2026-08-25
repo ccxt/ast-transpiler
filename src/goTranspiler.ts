@@ -148,11 +148,23 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'this.SafeFloat': '*float64',
     'this.SafeFloat2': '*float64',
     'this.SafeFloatN': '*float64',
+    // Precise arithmetic returns a numeric string, or nil when an operand is
+    // absent, so it carries the same *string shape as the Safe* string accessors
+    'Precise.StringMul': '*string',
+    'Precise.StringDiv': '*string',
+    'Precise.StringSub': '*string',
+    'Precise.StringAdd': '*string',
+    'Precise.StringOr': '*string',
+    'Precise.StringMax': '*string',
+    'Precise.StringMin': '*string',
+    'Precise.StringAbs': '*string',
+    'Precise.StringNeg': '*string',
+    'Precise.StringMod': '*string',
 };
 
-// helpers whose Go signature is `any` (GetValue, Ternary, Add,
-// Precise.StringMul, ...) are deliberately absent above: their box holds a value
-// the printer cannot name, so those locals stay `any`.
+// helpers whose Go signature is `any` (GetValue, Ternary, Add, ...) are
+// deliberately absent above: their box holds a value the printer cannot name, so
+// those locals stay `any`.
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 

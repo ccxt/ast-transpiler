@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../ast-transpiler-typed-ops/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../ast-transpiler-typed-ops/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -3804,7 +3804,19 @@ var GO_HELPER_RETURN_TYPES = {
   "this.SafeTimestampN": "*int64",
   "this.SafeFloat": "*float64",
   "this.SafeFloat2": "*float64",
-  "this.SafeFloatN": "*float64"
+  "this.SafeFloatN": "*float64",
+  // Precise arithmetic returns a numeric string, or nil when an operand is
+  // absent, so it carries the same *string shape as the Safe* string accessors
+  "Precise.StringMul": "*string",
+  "Precise.StringDiv": "*string",
+  "Precise.StringSub": "*string",
+  "Precise.StringAdd": "*string",
+  "Precise.StringOr": "*string",
+  "Precise.StringMax": "*string",
+  "Precise.StringMin": "*string",
+  "Precise.StringAbs": "*string",
+  "Precise.StringNeg": "*string",
+  "Precise.StringMod": "*string"
 };
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
 var GoTranspiler = class extends BaseTranspiler {
