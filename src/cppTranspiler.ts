@@ -222,9 +222,50 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printAwaitExpression(node, identation) {
-        // no async transpilation yet: await is stripped and the expression is
-        // evaluated synchronously
-        return this.printNode(node.expression, identation);
+        const expression = this.printNode(node.expression, identation);
+        if (this.asyncTranspiling) {
+            // awaitValue resolves a std::shared_future<std::any> (or passes a
+            // plain value through, like awaiting a non-promise in JS)
+            return `awaitValue(${expression})`;
+        }
+        return expression;
+    }
+
+    printReturnStatement(node, identation) {
+        // a bare `return;` inside an async body must yield a value: the body
+        // runs in a lambda returning std::any
+        if (this.asyncTranspiling && !node.expression) {
+            let fn = node.parent;
+            while (fn !== undefined && !ts.isFunctionLike(fn)) {
+                fn = fn.parent;
+            }
+            if (fn !== undefined && this.isAsyncFunction(fn)) {
+                return this.getIden(identation) + "return std::any{}" + this.LINE_TERMINATOR;
+            }
+        }
+        return super.printReturnStatement(node, identation);
+    }
+
+    printFunctionBody(node, identation) {
+        if (this.asyncTranspiling && this.isAsyncFunction(node)) {
+            // run the body on a std::async task so independent calls overlap;
+            // sharing the future makes it copyable and thus storable in std::any
+            const innerIdentation = identation + 2;
+            const bodyStatements = node.body.statements;
+            const statements = bodyStatements.map((s) => this.printNode(s, innerIdentation)).join("\n");
+            // the lambda returns std::any, so a body that can flow off the end
+            // needs a fallback return
+            const lastStatement = bodyStatements.length > 0 ? bodyStatements[bodyStatements.length - 1] : undefined;
+            const endsWithReturn = lastStatement !== undefined && lastStatement.kind === ts.SyntaxKind.ReturnStatement;
+            const fallbackReturn = endsWithReturn ? "" : this.getIden(innerIdentation) + "return std::any{};\n";
+            return this.getBlockOpen(identation) +
+                this.getIden(identation + 1) + "return std::async(std::launch::async, [=]() -> std::any {\n" +
+                (statements ? statements + "\n" : "") +
+                fallbackReturn +
+                this.getIden(identation + 1) + "}).share();" +
+                this.getBlockClose(identation);
+        }
+        return super.printFunctionBody(node, identation);
     }
 
     printWrappedUnknownThisProperty(node) {
@@ -434,6 +475,10 @@ export class CppTranspiler extends BaseTranspiler {
     printFunctionType(node){
         if (!this.requiresReturnType) {
             return "";
+        }
+
+        if (this.asyncTranspiling && this.isAsyncFunction(node)) {
+            return `std::shared_future<${this.DEFAULT_RETURN_TYPE}>`;
         }
 
         const typeText = this.getFunctionType(node);

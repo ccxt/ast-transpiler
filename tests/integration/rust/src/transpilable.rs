@@ -31,6 +31,14 @@ impl Test {
     }
 }
 impl Test {
+    pub fn boolToString(&self, x: Value) -> Value {
+        if is_true(&x) {
+            return Value::Str("true".to_string());
+        }  else {
+            return Value::Str("false".to_string());
+        }
+}
+
     pub fn functionWithOptionals(&self, a: Value, optional_args: &[Value]) {
         let c = get_arg(optional_args, 0, Value::Null);
         let d = get_arg(optional_args, 1, Value::Int(1));
@@ -95,9 +103,9 @@ impl Test {
         let mut i: Value = Value::Int(0);
         {
                         let mut w: Value = Value::Int(0);
-            while is_less_than(&w, &Value::Int(10)) {
+            let mut __for_first_0: bool = true;
+            while { if !__for_first_0 { w = add(&w, &Value::Int(1)); } __for_first_0 = false; is_less_than(&w, &Value::Int(10)) } {
             i = add(&i, &Value::Int(1));
-            w = add(&w, &Value::Int(1));
         }
         }
         println_val(&to_string_val(&i)); // should print 10
@@ -136,5 +144,77 @@ impl Test {
         add_element_to_object(&mut dict3, &Value::Str("key".to_string()), Value::Str("value".to_string()));
         println_val(&get_value(&dict3, &Value::Str("key".to_string()))); // should print "value"
         self.testJavaScope();
+        let mut first1second1Variable = self.handleOptionAndParamsTest();
+        let mut first1: Value = get_value(&first1second1Variable, &Value::Int(0));
+        let mut second1: Value = get_value(&first1second1Variable, &Value::Int(1));
+        println_val(&first1); // should print 1
+        println_val(&second1); // should print "a"
+        let mut first2: Value = Value::Null;
+        let mut second2: Value = Value::Null;
+        { let __destr_tmp = self.handleOptionAndParamsTest(); first2 = get_value(&__destr_tmp, &Value::Int(0)); second2 = get_value(&__destr_tmp, &Value::Int(1)); };
+        println_val(&first2); // should print 1
+        println_val(&second2); // should print "a"
+        self.funcWithParams(&[Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]), Value::Map({
+    let mut m = std::collections::HashMap::new();
+        m.insert("a".to_string(), Value::Str("value of a".to_string()));
+    m
+})]);
+        self.testStringMethods();
+        let mut threwError: Value = Value::Bool(false);
+        let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.functionThatThrows();
+        }));
+        if let Err(_e) = _try_result {
+            threwError = Value::Bool(true);
+        }
+        println_val(&self.boolToString(threwError)); // should print true
+}
+
+    pub fn handleOptionAndParamsTest(&self) -> Value {
+        return Value::List(vec![Value::Int(1), Value::Str("a".to_string())]);
+}
+
+    pub fn funcWithParams(&self, optional_args: &[Value]) {
+        let a = get_arg(optional_args, 0, Value::Null);
+        let params = get_arg(optional_args, 1, Value::Map({
+    let mut m = std::collections::HashMap::new();
+    m
+}));
+        if is_true(&Value::Bool(is_array(&a))) {
+            println_val(&get_array_length(&a));
+        }
+        if is_true(&Value::Bool(in_op(&params, &Value::Str("a".to_string())))) {
+            println_val(&get_value(&params, &Value::Str("a".to_string())));
+        }
+}
+
+    pub fn testStringMethods(&self) {
+        let mut str_val: Value = Value::Str("hello world".to_string());
+        // isEqual test
+        if is_equal(&str_val, &Value::Str("hello world".to_string())) {
+            println_val(&Value::Str("str is hello world".to_string())); // should print "str is hello world"
+        }
+        println_val(&to_upper(&str_val));
+        let mut startsWithHello: Value = Value::Bool(starts_with(&str_val, &Value::Str("hello".to_string())));
+        println_val(&self.boolToString(startsWithHello)); // should print true
+        let mut endsWithWorld: Value = Value::Bool(ends_with(&str_val, &Value::Str("world".to_string())));
+        println_val(&self.boolToString(endsWithWorld)); // should print true
+        let mut stringParts: Value = split(&str_val, &Value::Str(" ".to_string()));
+        println_val(&get_array_length(&stringParts)); // should print 2
+        println_val(&get_value(&stringParts, &Value::Int(0))); // should print "hello"
+        println_val(&get_value(&stringParts, &Value::Int(1))); // should print "world"
+        let mut indexOfResult: Value = get_index_of(&str_val, &Value::Str("o".to_string()));
+        println_val(&indexOfResult); // should print 4
+        let mut strReplaced: Value = replace_all_str(&str_val, &Value::Str("l".to_string()), &Value::Str("x".to_string()));
+        println_val(&strReplaced); // should print "hexxo worxd"
+        // concatenation test
+        let mut a: Value = Value::Str("a".to_string());
+        let mut b: Value = Value::Str("b".to_string());
+        let mut c: Value = add(&a, &b);
+        println_val(&c); // should print "ab"
+}
+
+    pub fn functionThatThrows(&self) {
+        panic!("{}", Value::Str("This is an error".to_string()));
 }
 }

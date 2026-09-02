@@ -2,6 +2,7 @@
 #define AST_TRANSPILER_CPP_HELPERS_H
 
 #include <any>
+#include <future>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -93,6 +94,11 @@ std::any mathPow(const std::any& a, const std::any& b);
 std::any mathLog(const std::any& a);
 std::any parseIntHelper(const std::any& a);
 std::any parseFloatHelper(const std::any& a);
+
+// async: transpiled async functions return std::shared_future<std::any>
+// (shared so the future is copyable and can be stored inside a std::any)
+std::any awaitValue(const std::shared_future<std::any>& future);
+std::any awaitValue(const std::any& value);
 
 // misc
 long long getCurrentTimestamp();

@@ -108,12 +108,14 @@ describe('cpp transpiling tests', () => {
         "public:\n" +
         "    std::any myProp = std::string(\"hi\");\n" +
         "\n" +
-        "    virtual std::any run(std::any x, std::any y = 1)\n" +
+        "    virtual std::shared_future<std::any> run(std::any x, std::any y = 1)\n" +
         "    {\n" +
-        "        std::any qwVariable = this->pair();\n" +
-        "        std::any q = ::getValue(qwVariable, 0);\n" +
-        "        std::any w = ::getValue(qwVariable, 1);\n" +
-        "        return q;\n" +
+        "        return std::async(std::launch::async, [=]() -> std::any {\n" +
+        "            std::any qwVariable = this->pair();\n" +
+        "            std::any q = ::getValue(qwVariable, 0);\n" +
+        "            std::any w = ::getValue(qwVariable, 1);\n" +
+        "            return q;\n" +
+        "        }).share();\n" +
         "    }\n" +
         "\n" +
         "    virtual std::any pair()\n" +
@@ -414,6 +416,102 @@ describe('cpp transpiling tests', () => {
         "{\n" +
         "    consoleLog(std::string(\"yes\"));\n" +
         "}";
+        const output = transpiler.transpileCpp(ts).content;
+        expect(output).toBe(cpp);
+    });
+    test('async method returns shared_future and await lowers to awaitValue', () => {
+        const ts =
+        "class A {\n" +
+        "    async fetchX() {\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "    async main() {\n" +
+        "        const x = await this.fetchX();\n" +
+        "        console.log(x);\n" +
+        "    }\n" +
+        "}"
+        const cpp =
+        "class A\n" +
+        "{\n" +
+        "public:\n" +
+        "    virtual std::shared_future<std::any> fetchX()\n" +
+        "    {\n" +
+        "        return std::async(std::launch::async, [=]() -> std::any {\n" +
+        "            return 1;\n" +
+        "        }).share();\n" +
+        "    }\n" +
+        "\n" +
+        "    virtual std::shared_future<std::any> main()\n" +
+        "    {\n" +
+        "        return std::async(std::launch::async, [=]() -> std::any {\n" +
+        "            std::any x = awaitValue(this->fetchX());\n" +
+        "            consoleLog(x);\n" +
+        "            return std::any{};\n" +
+        "        }).share();\n" +
+        "    }\n" +
+        "};";
+        const output = transpiler.transpileCpp(ts).content;
+        expect(output).toBe(cpp);
+    });
+    test('bare return inside async body yields empty std::any', () => {
+        const ts =
+        "class A {\n" +
+        "    async early(x) {\n" +
+        "        if (x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "        console.log('no');\n" +
+        "    }\n" +
+        "}"
+        const cpp =
+        "class A\n" +
+        "{\n" +
+        "public:\n" +
+        "    virtual std::shared_future<std::any> early(std::any x)\n" +
+        "    {\n" +
+        "        return std::async(std::launch::async, [=]() -> std::any {\n" +
+        "            if (isTrue(x))\n" +
+        "            {\n" +
+        "                return std::any{};\n" +
+        "            }\n" +
+        "            consoleLog(std::string(\"no\"));\n" +
+        "            return std::any{};\n" +
+        "        }).share();\n" +
+        "    }\n" +
+        "};";
+        const output = transpiler.transpileCpp(ts).content;
+        expect(output).toBe(cpp);
+    });
+    test('Promise.all lowers to promiseAll over concurrent futures', () => {
+        const ts =
+        "class A {\n" +
+        "    async one() {\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "    async all() {\n" +
+        "        const r = await Promise.all([this.one(), this.one()]);\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}"
+        const cpp =
+        "class A\n" +
+        "{\n" +
+        "public:\n" +
+        "    virtual std::shared_future<std::any> one()\n" +
+        "    {\n" +
+        "        return std::async(std::launch::async, [=]() -> std::any {\n" +
+        "            return 1;\n" +
+        "        }).share();\n" +
+        "    }\n" +
+        "\n" +
+        "    virtual std::shared_future<std::any> all()\n" +
+        "    {\n" +
+        "        return std::async(std::launch::async, [=]() -> std::any {\n" +
+        "            std::any r = awaitValue(promiseAll(std::vector<std::any>{this->one(), this->one()}));\n" +
+        "            return r;\n" +
+        "        }).share();\n" +
+        "    }\n" +
+        "};";
         const output = transpiler.transpileCpp(ts).content;
         expect(output).toBe(cpp);
     });

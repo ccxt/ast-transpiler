@@ -5,6 +5,12 @@ class Second:
     def stringify_number(self, arg):
         return str(arg)
 class Test:
+    def bool_to_string(self, x):
+        if x:
+            return 'true'
+        else:
+            return 'false'
+
     def function_with_optionals(self, a, c=None, d=1):
         print(a)
         if c is not None:
@@ -87,3 +93,57 @@ class Test:
         dict3['key'] = 'value'
         print(dict3['key'])  # should print "value"
         self.test_java_scope()
+        [first1, second1] = self.handle_option_and_params_test()
+        print(first1)  # should print 1
+        print(second1)  # should print "a"
+        first2 = None
+        second2 = None
+        [first2, second2] = self.handle_option_and_params_test()
+        print(first2)  # should print 1
+        print(second2)  # should print "a"
+        self.func_with_params([1, 2, 3], {
+            'a': 'value of a',
+        })
+        self.test_string_methods()
+        threw_error = False
+        try:
+            self.function_that_throws()
+        except Exception as e:
+            threw_error = True
+        print(self.bool_to_string(threw_error))  # should print true
+
+    def handle_option_and_params_test(self):
+        return [1, 'a']
+
+    def func_with_params(self, a=None, params={}):
+        if isinstance(a, list):
+            print(len(a))
+        if 'a' in params:
+            print(params['a'])
+
+    def test_string_methods(self):
+        str = 'hello world'
+        # isEqual test
+        if str == 'hello world':
+            print('str is hello world')  # should print "str is hello world"
+        print(str.upper())
+        starts_with_hello = str.startswith('hello')
+        print(self.bool_to_string(starts_with_hello))  # should print true
+        ends_with_world = str.endswith('world')
+        print(self.bool_to_string(ends_with_world))  # should print true
+        string_parts = str.split(' ')
+        print(len(string_parts))  # should print 2
+        print(string_parts[0])  # should print "hello"
+        print(string_parts[1])  # should print "world"
+        index_of_result = str.find('o')
+        print(index_of_result)  # should print 4
+        str_replaced = str.replace('l', 'x')
+        print(str_replaced)  # should print "hexxo worxd"
+        # concatenation test
+        a = 'a'
+        b = 'b'
+        c = a + b
+        print(c)  # should print "ab"
+
+    def function_that_throws(self):
+        raise Error('This is an error')

@@ -717,9 +717,33 @@ void throwDynamicException(const std::any& exception, const std::any& message) {
     throw Error(toString(message));
 }
 
+// `await future` — block until the task finishes and return its value
+std::any awaitValue(const std::shared_future<std::any>& future) {
+    return future.get();
+}
+
+// `await value` on anything else: unwrap a future stored inside a std::any,
+// pass every other value through untouched (JS allows awaiting non-promises)
+std::any awaitValue(const std::any& value) {
+    if (value.type() == typeid(std::shared_future<std::any>)) {
+        return std::any_cast<const std::shared_future<std::any>&>(value).get();
+    }
+    return value;
+}
+
 std::any promiseAll(const std::any& tasks) {
-    // no async runtime yet: the "promises" are already resolved values
-    return tasks;
+    // the tasks already run concurrently (std::async(std::launch::async) starts
+    // them at call time); this only collects their results in order
+    if (tasks.type() != typeid(AnyVector)) {
+        return awaitValue(tasks);
+    }
+    const auto& vec = std::any_cast<const AnyVector&>(tasks);
+    AnyVector results;
+    results.reserve(vec.size());
+    for (const auto& task : vec) {
+        results.push_back(awaitValue(task));
+    }
+    return results;
 }
 
 std::any parseJson(const std::any& json) {
