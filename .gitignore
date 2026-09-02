@@ -4,3 +4,5 @@ dist/
 out/
 *.o
 target/
+tests/integration/cpp/test
+tests/integration/cpp/test.dSYM/
