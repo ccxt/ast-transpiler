@@ -19,10 +19,6 @@ var __copyProps = (to, from, except, desc) => {
   return to;
 };
 var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
@@ -82,11 +78,6 @@ function unCamelCase(s) {
 init_cjs_shims();
 var _colorette = require('colorette');
 var Logger = class {
-  // static createInstanceIfNeeded(): void {
-  //     if (!this._instance) {
-  //         this._instance = new Logger();
-  //       }
-  // }
   static setVerboseMode(verbose) {
     this.verbose = verbose;
   }
@@ -291,7 +282,6 @@ var BaseTranspiler = class {
     this.SupportedKindNames = {
       [_typescript2.default.SyntaxKind.StringLiteral]: this.STRING_LITERAL_KEYWORD,
       [_typescript2.default.SyntaxKind.StringKeyword]: this.STRING_KEYWORD,
-      // [ts.SyntaxKind.NumberKeyword]: this.NUMBER_KEYWORD,
       [_typescript2.default.SyntaxKind.NumberKeyword]: this.DEFAULT_TYPE,
       [_typescript2.default.SyntaxKind.MinusMinusToken]: this.MINUS_MINUS_TOKEN,
       [_typescript2.default.SyntaxKind.MinusToken]: this.MINUS_TOKEN,
@@ -542,10 +532,7 @@ var BaseTranspiler = class {
       return this.FullPropertyAccessReplacements[rawExpression];
     }
     leftSide = this.LeftPropertyAccessReplacements.hasOwnProperty(leftSide) ? this.LeftPropertyAccessReplacements[leftSide] : this.printNode(expression, 0);
-    rightSide = this.RightPropertyAccessReplacements.hasOwnProperty(rightSide) ? (
-      // eslint-disable-line
-      this.RightPropertyAccessReplacements[rightSide]
-    ) : _nullishCoalesce(this.transformPropertyAcessRightIdentifierIfNeeded(rightSide), () => ( rightSide));
+    rightSide = this.RightPropertyAccessReplacements.hasOwnProperty(rightSide) ? this.RightPropertyAccessReplacements[rightSide] : _nullishCoalesce(this.transformPropertyAcessRightIdentifierIfNeeded(rightSide), () => ( rightSide));
     const accessToken = _nullishCoalesce(this.getExceptionalAccessTokenIfAny(node), () => ( this.PROPERTY_ACCESS_TOKEN));
     rawExpression = leftSide + accessToken + this.transformPropertyAccessExpressionName(rightSide);
     return rawExpression;
@@ -917,7 +904,6 @@ var BaseTranspiler = class {
     }).join(", ");
     return parsedArgs;
   }
-  // builtin functions override
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
     return void 0;
   }
@@ -1833,7 +1819,6 @@ var BaseTranspiler = class {
 var SyntaxKind = _typescript2.default.SyntaxKind;
 var parserConfig = {
   "STATIC_TOKEN": "",
-  // to do static decorator
   "PUBLIC_KEYWORD": "",
   "UNDEFINED_TOKEN": "None",
   "IF_TOKEN": "if",
@@ -1889,8 +1874,6 @@ var PythonTranspiler = class extends BaseTranspiler {
       "push": "append",
       "toUpperCase": "upper",
       "toLowerCase": "lower",
-      // 'parseFloat': 'float',
-      // 'parseInt': 'int',
       "indexOf": "find",
       "padEnd": "ljust",
       "padStart": "rjust"
@@ -1914,10 +1897,7 @@ var PythonTranspiler = class extends BaseTranspiler {
       "parseInt": "int",
       "parseFloat": "float"
     };
-    this.PropertyAccessRequiresParenthesisRemoval = [
-      // 'length',
-      // 'toString',
-    ];
+    this.PropertyAccessRequiresParenthesisRemoval = [];
   }
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
     return `isinstance(${parsedArg}, list)`;
@@ -2033,33 +2013,19 @@ var PythonTranspiler = class extends BaseTranspiler {
   transformLeadingComment(comment) {
     const commentRegex = [
       [/(^|\s)\/\//g, "$1#"],
-      // regular comments
       [/\/\*\*/, '"""'],
-      // eslint-disable-line
       [/ \*\//, '"""'],
-      // eslint-disable-line
       [/\[([^\[\]]*)\]\{@link (.*)\}/g, "`$1 <$2>`"],
-      // eslint-disable-line
       [/\s+\* @method/g, ""],
-      // docstring @method
       [/(\s+) \* @description (.*)/g, "$1$2"],
-      // docstring description
       [/\s+\* @name .*/g, ""],
-      // docstring @name
       [/(\s+) \* @see( .*)/g, "$1see$2"],
-      // docstring @see
       [/(\s+ \* @(param|returns) {[^}]*)string([^}]*}.*)/g, "$1str$3"],
-      // docstring type conversion
       [/(\s+ \* @(param|returns) {[^}]*)object([^}]*}.*)/g, "$1dict$3"],
-      // doctstrubg type conversion
       [/(\s+) \* @returns ([^\{])/g, "$1:returns: $2"],
-      // eslint-disable-line
       [/(\s+) \* @returns \{(.+)\}/g, "$1:returns $2:"],
-      // docstring return
       [/(\s+ \* @param \{[\]\[\|a-zA-Z]+\} )([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+) (.*)/g, "$1$2['$3'] $4"],
-      // eslint-disable-line
       [/(\s+) \* @([a-z]+) \{([\]\[a-zA-Z\|]+)\} ([a-zA-Z0-9_\-\.\[\]\']+)/g, "$1:$2 $3 $4:"]
-      // eslint-disable-line
     ];
     const transformed = regexAll(comment, commentRegex);
     return transformed;
@@ -2067,7 +2033,6 @@ var PythonTranspiler = class extends BaseTranspiler {
   transformTrailingComment(comment) {
     const commentRegex = [
       [/(^|\s)\/\//g, "$1#"]
-      // regular comments
     ];
     const transformed = regexAll(comment, commentRegex);
     return " " + transformed;
@@ -2525,21 +2490,13 @@ var PhpTranspiler = class extends BaseTranspiler {
   transformLeadingComment(comment) {
     const commentRegex = [
       [/\{([\]\[\|a-zA-Z0-9_-]+?)\}/g, "~$1~"],
-      // eslint-disable-line -- resolve the "arrays vs url params" conflict (both are in {}-brackets)
       [/\[([^\]\[]*)\]\{(@link .*)\}/g, "~$2 $1~"],
-      // eslint-disable-line -- docstring item with link
       [/\s+\* @method/g, ""],
-      // docstring @method
       [/(\s+)\* @description (.*)/g, "$1* $2"],
-      // eslint-disable-line
       [/\s+\* @name .*/g, ""],
-      // docstring @name
       [/(\s+)\* @returns/g, "$1* @return"],
-      // eslint-disable-line
       [/\~([\]\[\|@\.\s+\:\/#\-a-zA-Z0-9_-]+?)\~/g, "{$1}"],
-      // eslint-disable-line -- resolve the "arrays vs url params" conflict (both are in {}-brackets)
       [/(\s+ \* @(param|return) {[^}]*)object([^}]*}.*)/g, "$1array$3"]
-      // docstring type conversion
     ];
     const transformed = regexAll(comment, commentRegex);
     return transformed;
@@ -2562,21 +2519,12 @@ var PhpTranspiler = class extends BaseTranspiler {
       "Math.pow": "pow",
       "Math.min": "min",
       "Math.max": "max"
-      // 'Promise.all': '\\React\\Promise\\all',
     };
     this.CallExpressionReplacements = {
       "parseFloat": "floatval",
       "parseInt": "intval"
     };
-    this.PropertyAccessRequiresParenthesisRemoval = [
-      // 'length',
-      // 'toString',
-      // 'toUpperCase',
-      // 'toLowerCase',
-      // 'pop',
-      // 'reverse',
-      // 'shift',
-    ];
+    this.PropertyAccessRequiresParenthesisRemoval = [];
   }
 };
 
@@ -2590,7 +2538,6 @@ var parserConfig3 = {
   "ARRAY_CLOSING_TOKEN": "}",
   "PROPERTY_ASSIGNMENT_TOKEN": ",",
   "VAR_TOKEN": "object",
-  // object
   "METHOD_TOKEN": "",
   "PROPERTY_ASSIGNMENT_OPEN": "{",
   "PROPERTY_ASSIGNMENT_CLOSE": "}",
@@ -2694,37 +2641,26 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.applyUserOverrides(config);
   }
   initConfig() {
-    this.LeftPropertyAccessReplacements = {
-      // 'this': '$this',
-    };
+    this.LeftPropertyAccessReplacements = {};
     this.RightPropertyAccessReplacements = {
       "push": "Add",
-      // list method
       "indexOf": "IndexOf",
-      // list method
       "toUpperCase": "ToUpper",
       "toLowerCase": "ToLower",
       "toString": "ToString"
     };
     this.FullPropertyAccessReplacements = {
       "JSON.parse": "parseJson",
-      // custom helper method
       "console.log": "Console.WriteLine",
       "Number.MAX_SAFE_INTEGER": "Int32.MaxValue",
       "Math.min": "Math.Min",
       "Math.max": "Math.Max",
       "Math.log": "Math.Log",
       "Math.abs": "Math.Abs",
-      // 'Math.ceil':  'Math.Ceiling', // need cast
-      // 'Math.round': 'Math.Round', // need to cast
       "Math.floor": "Math.Floor",
       "Math.pow": "Math.Pow"
-      // 'Promise.all': 'Task.WhenAll',
     };
-    this.CallExpressionReplacements = {
-      // "parseInt": "parseINt",
-      // "parseFloat": "float.Parse",
-    };
+    this.CallExpressionReplacements = {};
     this.ReservedKeywordsReplacements = {
       "string": "str",
       "object": "obj",
@@ -3002,19 +2938,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // castVariableAssignmentIfNeeded(left, right, identation) {
-  //     const leftType = this.getChecker().getTypeAtLocation(left);
-  //     const rightType = this.getChecker().getTypeAtLocation(right);
-  //     const leftText = this.printNode(left, 0);
-  //     const rightText = this.printNode(right, 0);
-  //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
-  //         const parsedType = this.getTypeFromRawType(leftType);
-  //         return `${this.getIden(identation)}${leftText} = (${parsedType})${rightText}`;
-  //     }
-  //     return undefined;
-  // }
-  // the C# type of a whole-call / whole-property initializer, keyed on the AST so
-  // the printer's cast wrappers (`((string)x).ToUpper()`) do not hide the callee
   csharpCallReturnType(initializer) {
     if (_optionalChain([initializer, 'optionalAccess', _98 => _98.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression) {
       return _optionalChain([initializer, 'access', _99 => _99.name, 'optionalAccess', _100 => _100.escapedText]) === "length" ? "int" : void 0;
@@ -3039,8 +2962,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return CSHARP_METHOD_RETURN_TYPES[methodName];
   }
-  // the concrete C# type the initializer already produces, or undefined when the
-  // printer cannot name it (this.safeString, getValue, add, parseInt, ... return object)
   csharpTypeOfInitializer(initializer) {
     switch (_optionalChain([initializer, 'optionalAccess', _107 => _107.kind])) {
       case _typescript2.default.SyntaxKind.StringLiteral:
@@ -3114,10 +3035,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     _typescript2.default.forEachChild(scope, visit);
     return shadowed;
   }
-  // reject the refinement when something downstream needs the local to stay `object`:
-  // `x.push(v)` prints `((IList<object>)x).Add(v)` on a value that must be boxed, a
-  // later assignment of another concrete type would stop compiling, and `x++` prints
-  // `postFixIncrement(ref x)` whose parameter is `ref object`
   csharpLocalIsSafeToType(scope, declaration, varName, csharpType) {
     if (scope === void 0) {
       return false;
@@ -3424,7 +3341,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return super.printArgsForCallExpression(node, identation);
   }
-  // check this out later
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
     return `((${parsedArg} is IList<object>) || (${parsedArg}.GetType().IsGenericType && ${parsedArg}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))`;
   }
@@ -3629,25 +3545,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return modifiers + " " + typeText + " ";
   }
-  // printLeadingComments(node, identation) {
-  //     const fullText = this.getSrc().getFullText();
-  //     const commentsRangeList = ts.getLeadingCommentRanges(fullText, node.pos);
-  //     const commentsRange = commentsRangeList ? commentsRangeList : undefined;
-  //     let res = "";
-  //     if (commentsRange) {
-  //         for (const commentRange of commentsRange) {
-  //             const commentText = fullText.slice(commentRange.pos, commentRange.end);
-  //             if (commentText !== undefined) {
-  //                 const formatted = commentText
-  //                     .split("\n")
-  //                     .map(line=>line.trim())
-  //                     .map(line => !(line.trim().startsWith("*")) ? this.getIden(identation) + line : this.getIden(identation) + " " + line) .join("\n");
-  //                 // res+= this.transformLeadingComment(formatted) + "\n";
-  //             }
-  //         }
-  //     }
-  //     return res;
-  // }
 };
 
 // src/transpiler.ts
@@ -3665,7 +3562,6 @@ var parserConfig4 = {
   "ARRAY_CLOSING_TOKEN": "}",
   "PROPERTY_ASSIGNMENT_TOKEN": ":",
   "VAR_TOKEN": "object",
-  // object
   "METHOD_TOKEN": "func",
   "PROPERTY_ASSIGNMENT_OPEN": "",
   "PROPERTY_ASSIGNMENT_CLOSE": "",
@@ -3776,8 +3672,6 @@ var GO_HELPER_RETURN_TYPES = {
   "Precise.StringLe": "bool",
   "Precise.StringEq": "bool",
   "Precise.StringEquals": "bool",
-  // the base Safe* accessors return a typed pointer so that an absent value is a
-  // nil pointer, distinct from a present zero value ("" / 0 / false)
   "this.SafeString": "*string",
   "this.SafeString2": "*string",
   "this.SafeStringN": "*string",
@@ -3799,8 +3693,6 @@ var GO_HELPER_RETURN_TYPES = {
   "this.SafeFloat": "*float64",
   "this.SafeFloat2": "*float64",
   "this.SafeFloatN": "*float64",
-  // Precise arithmetic returns a numeric string, or nil when an operand is
-  // absent, so it carries the same *string shape as the Safe* string accessors
   "Precise.StringMul": "*string",
   "Precise.StringDiv": "*string",
   "Precise.StringSub": "*string",
@@ -3819,19 +3711,7 @@ var GoTranspiler = class extends BaseTranspiler {
     super(config);
     this.wrapCallMethods = [];
     this.DEFAULT_RETURN_TYPE = "any";
-    // suffix of the sibling body method an async trampoline hands its work to
     this.ASYNC_BODY_SUFFIX = "Body";
-    // the Go type this identifier is actually *declared* with, or undefined when it
-    // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
-    // declaration the reject filters demoted back to `any` is reported as `any` here
-    // too — otherwise we would emit `*x` against an `any` box.
-    // Parameters stay `any` today, so they never resolve to a concrete type.
-    //
-    // getGoLocalType re-prints every reassignment's right-hand side, and printing a
-    // ternary re-enters printCondition, which lands back here: `x = (x === 'a') ? …`
-    // would recurse forever. The in-progress set breaks that cycle by answering
-    // `any` for the declaration currently being classified, and the cache keeps the
-    // per-occurrence cost at one scope scan per declaration.
     this.goDeclaredTypeCache = /* @__PURE__ */ new Map();
     this.goDeclaredTypeInProgress = /* @__PURE__ */ new Set();
     this.requiresParameterType = true;
@@ -3850,44 +3730,28 @@ var GoTranspiler = class extends BaseTranspiler {
     this.wrapCallMethods = _nullishCoalesce(config["wrapCallMethods"], () => ( []));
   }
   initConfig() {
-    this.LeftPropertyAccessReplacements = {
-      // 'this': '$this',
-    };
+    this.LeftPropertyAccessReplacements = {};
     this.RightPropertyAccessReplacements = {
       "push": "Add",
-      // list method
       "indexOf": "IndexOf",
-      // list method
       "toUpperCase": "ToUpper",
       "toLowerCase": "ToLower",
       "toString": "ToString"
     };
     this.FullPropertyAccessReplacements = {
       "JSON.parse": "parseJson",
-      // custom helper method
       "console.log": "fmt.Println",
       "Number.MAX_SAFE_INTEGER": "Int32.MaxValue",
       "Math.min": "Math.Min",
       "Math.max": "Math.Max",
       "Math.log": "Math.Log",
       "Math.abs": "Math.Abs",
-      // 'Math.ceil':  'Math.Ceiling', // need cast
-      // 'Math.round': 'Math.Round', // need to cast
       "Math.floor": "Math.Floor",
       "Math.pow": "Math.Pow"
-      // 'Promise.all': 'Task.WhenAll',
     };
-    this.CallExpressionReplacements = {
-      // "parseInt": "parseINt",
-      // "parseFloat": "float.Parse",
-    };
+    this.CallExpressionReplacements = {};
     this.ReservedKeywordsReplacements = {
-      // 'string': 'str',
-      // 'params': 'parameters',
       "type": "typeVar"
-      // 'internal': 'intern',
-      // 'event': 'eventVar',
-      // 'fixed': 'fixedVar',
     };
     this.binaryExpressionsWrappers = {
       [_typescript2.default.SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
@@ -3905,9 +3769,6 @@ var GoTranspiler = class extends BaseTranspiler {
       [_typescript2.default.SyntaxKind.SlashToken]: [this.DIVIDE_WRAPPER_OPEN, this.DIVIDE_WRAPPER_CLOSE]
     };
   }
-  // getBlockOpen(identation){
-  //     return this.getIden(identation)  + this.BLOCK_OPENING_TOKEN;
-  // }
   printSuperCallInsideConstructor(node, identation) {
     return "";
   }
@@ -4030,17 +3891,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const bodyDef = `${this.getIden(identation)}func ${bodyName}(${this.printAsyncBodyParameters(node)}) ${this.DEFAULT_RETURN_TYPE} `;
     return this.printNodeCommentsIfAny(node, identation, trampoline) + "\n" + bodyDef + funcBody;
   }
-  /**
-   * Name of the sibling *body* method/function an async core hands its work to.
-   *
-   * `FetchTicker` -> `fetchTickerBody`. Deliberately UNEXPORTED: the body is an
-   * implementation detail of the trampoline, so it must not show up on the generated
-   * interfaces (ICoreExchange) nor on the typed `*_wrapper.go` facades, and it stays
-   * invisible to the reflection based `callInternal`/`callDynamically` dispatch.
-   *
-   * If that name is already taken by a real declaration (a hand written
-   * `fetchTickerBody`), a numeric suffix is appended instead of silently clobbering it.
-   */
   getAsyncBodyName(node, goName) {
     const taken = /* @__PURE__ */ new Set();
     const remember = (raw) => {
@@ -4076,21 +3926,11 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return name;
   }
-  /**
-   * Parameter list of the body: the channel it must fill, then the original parameters
-   * verbatim (including the `optionalArgs ...any` tail), so the trampoline can forward
-   * its own arguments unchanged.
-   */
   printAsyncBodyParameters(node) {
     const params = this.printMethodParameters(node);
     const channelParam = `ch chan ${this.DEFAULT_RETURN_TYPE}`;
     return params ? `${channelParam}, ${params}` : channelParam;
   }
-  /**
-   * Arguments the trampoline forwards to its body, matching printMethodParameters:
-   * the declared parameters in order, plus the variadic `optionalArgs...` tail when
-   * the function has any defaulted parameter.
-   */
   printAsyncTrampolineArgs(node) {
     const args = [];
     let hasOptionalParameter = false;
@@ -4106,26 +3946,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return args.join(", ");
   }
-  /**
-   * The trampoline: an async core hands back a *hot handle*.
-   *
-   *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
-   *         ch := make(chan any, 1)
-   *         go this.fetchTickerBody(ch, symbol)
-   *         return ch
-   *     }
-   *
-   *   - `ch` is buffered (cap 1): the body's single `ch <- value` never blocks, so a
-   *     result nobody ever receives still lets the goroutine finish and run
-   *     `defer close(ch)` (no leak for abandoned calls).
-   *   - the body runs on its own goroutine, so the call expression returns immediately
-   *     with work already in flight. That is what makes
-   *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
-   *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-   *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
-   *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
-   *     lives on the body, not here.
-   */
   printAsyncTrampolineBlock(node, identation, callee) {
     const args = this.printAsyncTrampolineArgs(node);
     const argList = args ? `, ${args}` : "";
@@ -4226,8 +4046,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return typeText;
   }
-  // true when the printed expression is a single call `Callee(...)` covering the
-  // whole string, so its Go type is the callee's return type and nothing else
   isWholePrintedCall(value, open) {
     let depth = 0;
     let inString = false;
@@ -4261,8 +4079,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return false;
   }
-  // the concrete Go type the initializer already produces, or undefined when the
-  // printer cannot name it (GetValue, Ternary, Add, ... return any)
   goTypeOfInitializer(initializer, printedValue) {
     switch (_optionalChain([initializer, 'optionalAccess', _153 => _153.kind])) {
       case _typescript2.default.SyntaxKind.StringLiteral:
@@ -4320,8 +4136,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return void 0;
   }
-  // a transpiled parameter or local can literally be named `string`, which would
-  // turn `var x string = ...` into a reference to that value instead of the type
   goTypeNameIsShadowed(scope, goType) {
     const names = _nullishCoalesce(goType.match(/[A-Za-z_]\w*/g), () => ( []));
     const relevant = names.filter((n) => GO_TYPE_NAMES.indexOf(n) >= 0);
@@ -4345,9 +4159,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     _typescript2.default.forEachChild(scope, visit);
     return shadowed;
   }
-  // reject the refinement when something downstream needs the local to stay `any`:
-  // `x.push(v)` prints `AppendToArray(&x, v)` (a *T is not a *any) and a later
-  // assignment of a value with another concrete type would stop compiling
   goLocalIsSafeToType(scope, declaration, varName, goType) {
     if (scope === void 0) {
       return false;
@@ -4461,24 +4272,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue.trim();
   }
-  // printObjectLiteralExpression(node, identation) {
-  //     const objectCreation = 'make(map[string]any) {';
-  //     let formattedObjectBody = '{}';
-  //     if (node.properties?.length > 0) {
-  //         const objectBody = this.printObjectLiteralBody(node, identation);
-  //         formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(identation) : objectBody;
-  //     }
-  //     // return  this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
-  //     return objectCreation + formattedObjectBody;
-  // }
-  // printObjectLiteralBody(node, identation) {
-  //     let objectName = node.parent?.name?.escapedText;
-  //     if (objectName === undefined) {
-  //         objectName = "object";
-  //     }
-  //     const body =  node.properties.map((p) => `${this.getIden(identation)}${objectName}["${node.properties[0].name.text}"] = ${p.initializer.text}` ).join("\n");
-  //     return body;
-  // }
   printConstructorDeclaration(node, identation) {
     const classNode = node.parent;
     const className = this.printNode(classNode.name, 0);
@@ -4741,9 +4534,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
-  // the scalar family the TypeScript type of an operand belongs to: 'string',
-  // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
-  // when the type is any/unknown/a union of several families
   goScalarFamily(node) {
     let type;
     try {
@@ -4831,14 +4621,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     this.goDeclaredTypeCache.set(decl, result);
     return result;
   }
-  // true when this identifier's Go type is a pointer we can deref (*string / *int64 / …)
   goIsPointerIdentifier(node) {
     const goType = this.goDeclaredTypeOfIdentifier(node);
     return typeof goType === "string" && goType.startsWith("*");
   }
-  // the Go pointer type an *expression* evaluates to, or undefined. Covers both a
-  // local declared `var x *string = …` and a direct `this.SafeString(...)` call,
-  // whose Go signature returns a pointer even though TypeScript says `string`.
   goPointerTypeOfExpression(node, printedText) {
     const declared = this.goDeclaredTypeOfIdentifier(node);
     if (typeof declared === "string" && declared.startsWith("*")) {
@@ -4852,10 +4638,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
-  // JS truthiness of an operand whose Go type the printer knows, expressed with
-  // plain Go instead of boxing the value into `EvalTruthy(any)`. Each arm mirrors the
-  // matching `EvalTruthy` case exactly, including nil (a nil *T and a nil map are
-  // both falsy) — so this is the same predicate, minus the interface round-trip.
   printInlineTruthy(node) {
     if (_optionalChain([node, 'optionalAccess', _206 => _206.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
       return void 0;
@@ -4903,15 +4685,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return super.printCondition(node, identation);
   }
-  // === / !== inlined to plain Go operators when both sides are concrete Go
-  // values or real pointers. Everything else — in particular anything that is
-  // still `any` in Go — falls through to the existing IsEqual helper.
-  // `(a == b || *a == *b)` is rejected: a nil *T panics on the second clause.
-  // Go has no implicit numeric conversion: `*limit == length` does not compile
-  // when limit is *int64 and length is int, even though TypeScript calls both
-  // `number`. Dereferencing is therefore only safe against an untyped constant
-  // (a literal, which adapts to the pointee) or an operand of the very same Go
-  // type. Anything else — including any `any` operand — keeps IsEqual.
   goDerefComparableWith(ptrNode, ptrText, otherNode) {
     const pointee = _optionalChain([this, 'access', _208 => _208.goPointerTypeOfExpression, 'call', _209 => _209(ptrNode, ptrText), 'optionalAccess', _210 => _210.substring, 'call', _211 => _211(1)]);
     if (pointee === void 0) {
@@ -4970,17 +4743,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
-  // castVariableAssignmentIfNeeded(left, right, identation) {
-  //     const leftType = this.getChecker().getTypeAtLocation(left);
-  //     const rightType = this.getChecker().getTypeAtLocation(right);
-  //     const leftText = this.printNode(left, 0);
-  //     const rightText = this.printNode(right, 0);
-  //     if (this.isAnyType(rightType.flags) && !this.isAnyType(leftType.flags)) {
-  //         const parsedType = this.getTypeFromRawType(leftType);
-  //         return `${this.getIden(identation)}${leftText} = (${parsedType})${rightText}`;
-  //     }
-  //     return undefined;
-  // }
   transformPropertyAcessExpressionIfNeeded(node) {
     const expression = node.expression;
     const leftSide = this.printNode(expression, 0);
@@ -5125,14 +4887,6 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     }
     return false;
   }
-  /**
-   * Statement that terminates an async (channel returning) function body.
-   *
-   * The body is the trampoline's sibling method (`go this.fetchTickerBody(ch, ...)`),
-   * and the synthetic try/catch closures nest inside it: in both cases `return` leaves
-   * a function whose result is a plain `any`, never the channel. The trampoline itself
-   * owns the single `return ch`, emitted by printFunctionBody.
-   */
   getAsyncReturnStatement(node) {
     return "return nil";
   }
@@ -5214,7 +4968,6 @@ ${this.getIden(identation)}${returnStatement}`;
     }
     return super.printArgsForCallExpression(node, identation);
   }
-  // check this out later
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
     return `IsArray(${parsedArg})`;
   }
@@ -5328,34 +5081,6 @@ ${this.getIden(identation)}`;
     const leftSide = this.printNode(node.expression, 0);
     return `GetLength(${leftSide})`;
   }
-  // printPostFixUnaryExpression(node, identation) {
-  //     const {operand, operator} = node;
-  //     if (operand.kind === ts.SyntaxKind.NumericLiteral) {
-  //         return super.printPostFixUnaryExpression(node, identation);
-  //     }
-  //     const leftSide = this.printNode(operand, 0);
-  //     const op = this.PostFixOperators[operator]; // todo: handle --
-  //     if (op === '--') {
-  //         return `postFixDecrement(ref ${leftSide})`;
-  //     }
-  //     return `postFixIncrement(ref ${leftSide})`;
-  // }
-  // printPrefixUnaryExpression(node, identation) {
-  //     const {operand, operator} = node;
-  //     if (operand.kind === ts.SyntaxKind.NumericLiteral) {
-  //         return super.printPrefixUnaryExpression(node, identation);
-  //     }
-  //     if (operator === ts.SyntaxKind.ExclamationToken) {
-  //         // not branch check falsy/turthy values if needed;
-  //         return  this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
-  //     }
-  //     const leftSide = this.printNode(operand, 0);
-  //     if (operator === ts.SyntaxKind.PlusToken) {
-  //         return `prefixUnaryPlus(ref ${leftSide})`;
-  //     } else {
-  //         return `prefixUnaryNeg(ref ${leftSide})`;
-  //     }
-  // }
   printConditionalExpression(node, identation) {
     const condition = this.printCondition(node.condition, 0);
     const whenTrue = this.printNode(node.whenTrue, 0);
@@ -5466,9 +5191,6 @@ ${this.getIden(identation)}`;
     operator = customOperator ? customOperator : operator;
     return leftVar + " " + operator + " " + rightVar.trim();
   }
-  // `(x != nil) && (x != nil && …)` -> `(x != nil && …)`. Only fires when the
-  // right operand opens with the very same nil guard the left operand *is*, so
-  // the left is implied and dropping it cannot change the result.
   goDropRedundantNilGuard(leftVar, rightVar) {
     const guard = /^\(([A-Za-z_]\w*) != nil\)$/.exec(leftVar);
     if (guard === null) {
@@ -5547,12 +5269,6 @@ ${this.getIden(identation)}`;
     }
     return "New" + this.capitalize(expression) + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
   }
-  /**
-   * Override the default element-access printer with a version that walks the
-   * entire `x[y][z]` chain and builds a properly nested sequence of helper
-   * calls.  This removes the root cause of the unbalanced-parenthesis bug
-   * without any post-processing or regex hacks.
-   */
   printElementAccessExpression(node, identation) {
     const special = this.printElementAccessExpressionExceptionIfAny(node);
     if (special) {
@@ -5586,9 +5302,6 @@ ${this.getIden(identation)}`;
     }
     return true;
   }
-  /**
-   * Check if a block or statement contains a return statement or throws an error
-   */
   hasReturnInBlock(statement) {
     if (_typescript2.default.isBlock(statement)) {
       if (statement.statements.length === 0) {
@@ -5613,9 +5326,6 @@ ${this.getIden(identation)}`;
     }
     return false;
   }
-  /**
-   * Check if the last statement in a block is a conditional with returns in all branches
-   */
   blockEndsWithConditionalReturn(statements) {
     if (statements.length === 0) {
       return false;
@@ -5651,16 +5361,12 @@ var parserConfig5 = {
   DEFAULT_RETURN_TYPE: "Object",
   DEFAULT_TYPE: "Object",
   ELSEIF_TOKEN: "else if",
-  // Objects in Java: we'll use double-brace initialization so property puts work
   OBJECT_OPENING: "new java.util.HashMap<String, Object>() {{",
   OBJECT_CLOSING: "}}",
-  // Arrays in Java: emit Arrays.asList(...) wrapped by ArrayList
   ARRAY_OPENING_TOKEN: "new java.util.ArrayList<Object>(java.util.Arrays.asList(",
   ARRAY_CLOSING_TOKEN: "))",
-  // For object literal properties we'll emit: put(key, value);
   PROPERTY_ASSIGNMENT_TOKEN: ",",
   VAR_TOKEN: "Object",
-  // Java 10+ local var
   METHOD_TOKEN: "",
   PROPERTY_ASSIGNMENT_OPEN: "put(",
   PROPERTY_ASSIGNMENT_CLOSE: ");",
@@ -5712,19 +5418,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig5, _nullishCoalesce(config["parser"], () => ( {})));
     super(config);
     this.varListFromObjectLiterals = {};
-    // Per-function analysis results. Populated by analyzeFinalVars at the start of
-    // printFunctionBody and consumed during printing of the same function body.
     this.usageToFinalName = /* @__PURE__ */ new WeakMap();
-    // Stack of emitted-finalName sets, one entry per enclosing block. Pushed on block
-    // entry, popped on exit. Used by buildFinalVarDeclarations to dedup: skip if the
-    // finalName is already in scope via any ancestor.
     this.finalVarScopeStack = [];
-    // Identifiers rewritten in place to their finalXxx name during the current emit.
-    // The parsed ts.SourceFile is cached and reused across transpile calls, so the
-    // rewrite has to be undone when the emit ends — otherwise a second emit of the
-    // same file reads `finalX` where the first read `x`, the symbol no longer
-    // resolves, and the hoisted `final Object finalX = x;` declaration is dropped
-    // while its usages remain.
     this.finalVarMutations = [];
     this.csModifiers = {};
     this.requiresParameterType = true;
@@ -5769,11 +5464,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     return args.map((a) => this.printNode(a, identation).trim()).join(", ");
   }
   initConfig() {
-    this.LeftPropertyAccessReplacements = {
-      // 'this': '$this',
-    };
+    this.LeftPropertyAccessReplacements = {};
     this.RightPropertyAccessReplacements = {
-      // Java list/string methods (lowerCamelCase)
       push: "add",
       indexOf: "indexOf",
       toUpperCase: "toUpperCase",
@@ -5790,24 +5482,20 @@ var JavaTranspiler = class extends BaseTranspiler {
       "Math.abs": "Math.abs",
       "Math.floor": "Math.floor",
       "Math.pow": "Math.pow"
-      // 'Promise.all' handled via promiseAll wrapper
     };
     this.CallExpressionReplacements = {
       "parseInt": "Helpers.parseInt",
       "parseFloat": "Helpers.parseFloat"
-      // Add ad-hoc function call rewrites here if you need them
     };
     this.ReservedKeywordsReplacements = {
       string: "str",
       object: "obj",
       params: "parameters",
-      // base: "bs",
       internal: "intern",
       event: "eventVar",
       fixed: "fixedVar",
       final: "finalVar",
       native: "nativeVar"
-      // add Java keywords if you need to avoid collisions (e.g., enum, assert)
     };
     this.VariableTypeReplacements = {
       string: "String",
@@ -6019,24 +5707,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // printElementAccessExpressionExceptionIfAny(node) {
-  //     const tsKind = ts.SyntaxKind;
-  //     if (node.expression.kind === tsKind.CallExpression) {
-  //         const callExp = node.expression;
-  //         const calleeText = callExp.expression.getText();
-  //         if (calleeText.endsWith('.split') || calleeText.toLowerCase().includes('split')) {
-  //             // print Split call normally (should already close with ))
-  //             let splitCall = this.printNode(callExp, 0).trim();
-  //             if (!splitCall.endsWith(')')) {
-  //                 splitCall += ')';
-  //             }
-  //             const idxArg = this.printNode(node.argumentExpression, 0);
-  //             return `GetValue(${splitCall}, ${idxArg})`;
-  //         }
-  //     }
-  //     // default: no exception
-  //     return undefined;
-  // }
   printWrappedUnknownThisProperty(node) {
     const type = this.getChecker().getResolvedSignature(node);
     if (_optionalChain([type, 'optionalAccess', _264 => _264.declaration]) === void 0) {
@@ -6231,17 +5901,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return res;
   }
-  // Finds every ObjectLiteralExpression nested anywhere inside an RHS/initializer
-  // expression that would produce an anonymous-inner-class capture in Java
-  // (HashMap double-brace init). Stops descending at each ObjectLiteralExpression
-  // because nested literals are walked recursively inside
-  // getVarListFromObjectLiteralAndUpdateInPlace. Skips function/arrow bodies so
-  // we don't capture literals that evaluate in a different scope.
-  //
-  // Unifies the previously-narrow matching in printVariableDeclarationList and
-  // getBinaryExpressionPrefixes which only handled ObjectLiteralExpression or
-  // CallExpression directly — missing wrappers like AwaitExpression,
-  // ParenthesizedExpression, NewExpression, and ConditionalExpression.
   collectCapturingObjectLiterals(node) {
     const found = [];
     const walk = (n) => {
@@ -6309,11 +5968,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return name;
   }
-  // Resolves the trio of names used to wrap a reassigned async-method param
-  // so the lambda body sees an effectively-final local. We base every name on
-  // the keyword-remapped Java identifier — using the raw TS name when remapped
-  // (e.g. params -> parameters) makes the wrapper text and the body diverge,
-  // because identifier emission already routes through ReservedKeywordsReplacements.
   getAsyncParamWrapperNames(paramName) {
     const javaName = this.getOriginalVarName(paramName);
     return {
@@ -6328,16 +5982,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   isIncDecOperator(op) {
     return op === _typescript2.default.SyntaxKind.PlusPlusToken || op === _typescript2.default.SyntaxKind.MinusMinusToken;
   }
-  // Walk the function body in source order and assign a version-aware finalName to
-  // every identifier that appears inside an object literal property and refers to a
-  // variable that's reassigned anywhere in this function. Each reassignment bumps the
-  // per-variable version counter; usages of the same (var, version) share one finalName.
-  //
-  // Naming:
-  //   - If only one version of a var is ever used in object literals, use `final<Var>`
-  //     (matches prior behavior).
-  //   - If multiple versions are used, name them `final<Var>`, `final<Var>_2`,
-  //     `final<Var>_3` in source-order of the version they correspond to.
   analyzeFinalVars(fnBody) {
     this.usageToFinalName = /* @__PURE__ */ new WeakMap();
     if (!fnBody)
@@ -6569,8 +6213,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     const fileName = _nullishCoalesce(_optionalChain([node, 'access', _323 => _323.getSourceFile, 'optionalCall', _324 => _324(), 'optionalAccess', _325 => _325.fileName]), () => ( ""));
     return `${fileName}:${start}-${end}`;
   }
-  // Remember an identifier's pre-rewrite state so restoreFinalVarMutations can put
-  // the shared AST back exactly as it was parsed.
   recordFinalVarMutation(node) {
     this.finalVarMutations.push({
       node,
@@ -6579,8 +6221,6 @@ var JavaTranspiler = class extends BaseTranspiler {
       getFullText: node.getFullText
     });
   }
-  // Undo every in-place identifier rewrite made during the current emit, newest
-  // first so repeated rewrites of one node unwind to the original value.
   restoreFinalVarMutations() {
     for (let i = this.finalVarMutations.length - 1; i >= 0; i--) {
       const mutation = this.finalVarMutations[i];
@@ -6974,14 +6614,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     const signature = this.getIden(identation) + modifiers + returnType + methodToken + name + "(" + parsedArgs + ")";
     return this.printNodeCommentsIfAny(node, identation, signature);
   }
-  // Route through Helpers so consumers control semantics (thread-safety,
-  // null-handling, type coercion) in one place — same pattern as
-  // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
-  // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
-  // forced any downstream that needed different semantics (e.g. synchronized
-  // map access in concurrent code) to post-process the generated Java with
-  // regex — which only catches the bare-identifier argument shape and misses
-  // property-access (`this.x`) and element-access (`obj[k]`) arguments.
   printArrayIsArrayCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.isArray(${parsedArg})`;
   }
@@ -7093,7 +6725,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.warnIfAnyType(node, type.flags, leftSide, "length");
     return this.isStringType(type.flags) ? `((String)${leftSide}).length()` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
   }
-  // For ++/--, prefer native Java operators rather than the C# ref-helpers
   printPostFixUnaryExpression(node, identation) {
     const { operand, operator } = node;
     const leftSide = this.printNode(operand, 0);
@@ -7322,7 +6953,7 @@ var parserConfig6 = {
   "TRUE_KEYWORD": "Value::Bool(true)",
   "FALSE_KEYWORD": "Value::Bool(false)"
 };
-var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
+var _RustTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig6, _nullishCoalesce(config["parser"], () => ( {})));
     super(config);
@@ -7426,7 +7057,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   printNullKeyword(node, identation) {
     return "Value::Null";
   }
-  // Ensure a & ref prefix — skip only if already a reference
   ensureRef(expr) {
     if (expr.startsWith("&")) {
       return expr;
@@ -7519,12 +7149,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return super.printBinaryExpression(node, identation);
   }
-  // `Date.now()` → runtime helper returning current epoch millis.
   printDateNowCall(node, identation) {
     return "date_now()";
   }
-  // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers
-  // (`pad_start` / `pad_end` take `(&Value, &Value, &Value)`).
   printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
     return `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
   }
@@ -7564,7 +7191,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `${this.getIden(identation)}${name}: Value,`;
   }
-  // Collect property declarations with their initializers for use in new()
   getStructFields(node) {
     const propDecls = node.members.filter((m) => m.kind === SyntaxKind4.PropertyDeclaration);
     return propDecls.map((p) => {
@@ -7917,7 +7543,6 @@ ${this.getIden(identation)}})`;
     const whenFalse = this.printNode(node.whenFalse, 0);
     return `ternary(${condition}, ${whenTrue}, ${whenFalse})`;
   }
-  // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
     return `Value::Bool(is_array(&${parsedArg}))`;
   }
@@ -7939,7 +7564,6 @@ ${this.getIden(identation)}})`;
   printPromiseAllCall(node, identation, parsedArg = void 0) {
     return `promise_all(&${parsedArg})`;
   }
-  // Rust uses postfix `.await`; the base transpiler defaults to prefix.
   printAwaitExpression(node, identation) {
     const expr = this.printNode(node.expression, identation);
     return `${expr}.await`;
@@ -8051,7 +7675,8 @@ ${iden}}`;
     return `${this.getIden(identation)}${expression}`;
   }
 };
-_RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
+var RustTranspiler = _RustTranspiler;
+RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.EqualsEqualsToken,
   SyntaxKind4.EqualsEqualsEqualsToken,
   SyntaxKind4.ExclamationEqualsToken,
@@ -8061,7 +7686,605 @@ _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.GreaterThanToken,
   SyntaxKind4.GreaterThanEqualsToken
 ]);
-var RustTranspiler = _RustTranspiler;
+
+// src/cppTranspiler.ts
+init_cjs_shims();
+
+var parserConfig7 = {
+  "ELSEIF_TOKEN": "else if",
+  "OBJECT_OPENING": "std::unordered_map<std::string, std::any> {",
+  "OBJECT_CLOSING": "}",
+  "ARRAY_OPENING_TOKEN": "std::vector<std::any>{",
+  "ARRAY_CLOSING_TOKEN": "}",
+  "PROPERTY_ASSIGNMENT_TOKEN": ",",
+  "VAR_TOKEN": "std::any",
+  "METHOD_TOKEN": "",
+  "PROPERTY_ASSIGNMENT_OPEN": "{",
+  "PROPERTY_ASSIGNMENT_CLOSE": "}",
+  "SUPER_TOKEN": "base",
+  "SUPER_CALL_TOKEN": "base",
+  "FALSY_WRAPPER_OPEN": "isTrue(",
+  "FALSY_WRAPPER_CLOSE": ")",
+  "COMPARISON_WRAPPER_OPEN": "isEqual(",
+  "COMPARISON_WRAPPER_CLOSE": ")",
+  "UKNOWN_PROP_WRAPPER_OPEN": "this.call(",
+  "UNKOWN_PROP_WRAPPER_CLOSE": ")",
+  "UKNOWN_PROP_ASYNC_WRAPPER_OPEN": "this.callAsync(",
+  "UNKOWN_PROP_ASYNC_WRAPPER_CLOSE": ")",
+  "DYNAMIC_CALL_OPEN": "callDynamically(",
+  "EQUALS_EQUALS_WRAPPER_OPEN": "isEqual(",
+  "EQUALS_EQUALS_WRAPPER_CLOSE": ")",
+  "DIFFERENT_WRAPPER_OPEN": "!isEqual(",
+  "DIFFERENT_WRAPPER_CLOSE": ")",
+  "GREATER_THAN_WRAPPER_OPEN": "isGreaterThan(",
+  "GREATER_THAN_WRAPPER_CLOSE": ")",
+  "GREATER_THAN_EQUALS_WRAPPER_OPEN": "isGreaterThanOrEqual(",
+  "GREATER_THAN_EQUALS_WRAPPER_CLOSE": ")",
+  "LESS_THAN_WRAPPER_OPEN": "isLessThan(",
+  "LESS_THAN_WRAPPER_CLOSE": ")",
+  "LESS_THAN_EQUALS_WRAPPER_OPEN": "isLessThanOrEqual(",
+  "LESS_THAN_EQUALS_WRAPPER_CLOSE": ")",
+  "PLUS_WRAPPER_OPEN": "add(",
+  "PLUS_WRAPPER_CLOSE": ")",
+  "MINUS_WRAPPER_OPEN": "subtract(",
+  "MINUS_WRAPPER_CLOSE": ")",
+  "ARRAY_LENGTH_WRAPPER_OPEN": "getArrayLength(",
+  "ARRAY_LENGTH_WRAPPER_CLOSE": ")",
+  "DIVIDE_WRAPPER_OPEN": "divide(",
+  "DIVIDE_WRAPPER_CLOSE": ")",
+  "MULTIPLY_WRAPPER_OPEN": "multiply(",
+  "MULTIPLY_WRAPPER_CLOSE": ")",
+  "INDEXOF_WRAPPER_OPEN": "getIndexOf(",
+  "INDEXOF_WRAPPER_CLOSE": ")",
+  "MOD_WRAPPER_OPEN": "mod(",
+  "MOD_WRAPPER_CLOSE": ")",
+  "FUNCTION_TOKEN": "",
+  "DEFAULT_PARAMETER_TYPE": "std::any",
+  "INFER_VAR_TYPE": false,
+  "INFER_ARG_TYPE": false,
+  "UNDEFINED_TOKEN": "std::any{}",
+  "ELEMENT_ACCESS_WRAPPER_OPEN": "::getValue(",
+  "ELEMENT_ACCESS_WRAPPER_CLOSE": ")",
+  "DEFAULT_RETURN_TYPE": "std::any",
+  "THIS_TOKEN": "this",
+  "NEW_TOKEN": "",
+  "CATCH_DECLARATION": "const std::exception&"
+};
+var CppTranspiler = class extends BaseTranspiler {
+  constructor(config = {}) {
+    config["parser"] = Object.assign({}, parserConfig7, _nullishCoalesce(config["parser"], () => ( {})));
+    super(config);
+    this.requiresParameterType = true;
+    this.requiresReturnType = true;
+    this.asyncTranspiling = true;
+    this.supportsFalsyOrTruthyValues = false;
+    this.requiresCallExpressionCast = false;
+    this.id = "c++";
+    this.initConfig();
+    this.applyUserOverrides(config);
+  }
+  initConfig() {
+    this.LeftPropertyAccessReplacements = {};
+    this.RightPropertyAccessReplacements = {};
+    this.FullPropertyAccessReplacements = {
+      "JSON.parse": "parseJson",
+      "JSON.stringify": "jsonStringify",
+      "console.log": "consoleLog",
+      "Number.MAX_SAFE_INTEGER": "INT_MAX",
+      "Math.min": "mathMin",
+      "Math.max": "mathMax",
+      "Math.log": "mathLog",
+      "Math.abs": "mathAbs",
+      "Math.floor": "mathFloor",
+      "Math.pow": "mathPow"
+    };
+    this.CallExpressionReplacements = {};
+    this.ReservedKeywordsReplacements = {
+      "union": "unionVar",
+      "char": "charVar",
+      "default": "defaultVar",
+      "operator": "operatorVar",
+      "new": "newVar",
+      "delete": "deleteVar",
+      "template": "templateVar"
+    };
+    this.VariableTypeReplacements = {};
+    this.ArgTypeReplacements = {};
+    this.binaryExpressionsWrappers = {
+      [_typescript2.default.SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.EqualsEqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.ExclamationEqualsToken]: [this.DIFFERENT_WRAPPER_OPEN, this.DIFFERENT_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.ExclamationEqualsEqualsToken]: [this.DIFFERENT_WRAPPER_OPEN, this.DIFFERENT_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.GreaterThanToken]: [this.GREATER_THAN_WRAPPER_OPEN, this.GREATER_THAN_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.GreaterThanEqualsToken]: [this.GREATER_THAN_EQUALS_WRAPPER_OPEN, this.GREATER_THAN_EQUALS_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.LessThanToken]: [this.LESS_THAN_WRAPPER_OPEN, this.LESS_THAN_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.LessThanEqualsToken]: [this.LESS_THAN_EQUALS_WRAPPER_OPEN, this.LESS_THAN_EQUALS_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.PlusToken]: [this.PLUS_WRAPPER_OPEN, this.PLUS_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.MinusToken]: [this.MINUS_WRAPPER_OPEN, this.MINUS_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.AsteriskToken]: [this.MULTIPLY_WRAPPER_OPEN, this.MULTIPLY_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.PercentToken]: [this.MOD_WRAPPER_OPEN, this.MOD_WRAPPER_CLOSE],
+      [_typescript2.default.SyntaxKind.SlashToken]: [this.DIVIDE_WRAPPER_OPEN, this.DIVIDE_WRAPPER_CLOSE]
+    };
+  }
+  getBlockOpen(identation) {
+    return "\n" + this.getIden(identation) + this.BLOCK_OPENING_TOKEN + "\n";
+  }
+  printSuperCallInsideConstructor(node, identation) {
+    return "";
+  }
+  printStringLiteral(node) {
+    return `std::string(${super.printStringLiteral(node)})`;
+  }
+  printClass(node, identation) {
+    const classDefinition = this.printClassDefinition(node, identation);
+    const classBody = this.printClassBody(node, identation);
+    const classClosing = this.getBlockClose(identation);
+    return classDefinition + classBody + classClosing + ";";
+  }
+  printClassDefinition(node, identation) {
+    const className = node.name.escapedText;
+    const heritageClauses = node.heritageClauses;
+    let classInit = "";
+    if (heritageClauses !== void 0) {
+      const classExtends = heritageClauses[0].types[0].expression.escapedText;
+      classInit = this.getIden(identation) + "class " + className + " : public " + classExtends;
+    } else {
+      classInit = this.getIden(identation) + "class " + className;
+    }
+    return classInit + "\n" + this.getIden(identation) + this.BLOCK_OPENING_TOKEN + "\n" + this.getIden(identation) + "public:\n";
+  }
+  printConstructorDeclaration(node, identation) {
+    const classNode = node.parent;
+    const className = this.printNode(classNode.name, 0);
+    const args = this.printMethodParameters(node);
+    const constructorBody = this.printFunctionBody(node, identation);
+    let superCallParams = "";
+    let hasSuperCall = false;
+    _optionalChain([node, 'access', _362 => _362.body, 'optionalAccess', _363 => _363.statements, 'access', _364 => _364.forEach, 'call', _365 => _365((statement) => {
+      if (_typescript2.default.isExpressionStatement(statement)) {
+        const expression = statement.expression;
+        if (_typescript2.default.isCallExpression(expression)) {
+          const expressionText = expression.expression.getText().trim();
+          if (expressionText === "super") {
+            hasSuperCall = true;
+            superCallParams = expression.arguments.map((a) => {
+              return this.printNode(a, identation).trim();
+            }).join(", ");
+          }
+        }
+      }
+    })]);
+    if (hasSuperCall) {
+      const parentClassName = classNode.heritageClauses[0].types[0].expression.escapedText;
+      return this.getIden(identation) + className + `(${args}) : ${parentClassName}(${superCallParams})` + constructorBody;
+    }
+    return this.getIden(identation) + className + "(" + args + ")" + constructorBody;
+  }
+  printThisElementAccesssIfNeeded(node, identation) {
+    return void 0;
+  }
+  printDynamicCall(node, identation) {
+    return void 0;
+  }
+  printAwaitExpression(node, identation) {
+    const expression = this.printNode(node.expression, identation);
+    if (this.asyncTranspiling) {
+      return `awaitValue(${expression})`;
+    }
+    return expression;
+  }
+  printReturnStatement(node, identation) {
+    if (this.asyncTranspiling && !node.expression) {
+      let fn = node.parent;
+      while (fn !== void 0 && !_typescript2.default.isFunctionLike(fn)) {
+        fn = fn.parent;
+      }
+      if (fn !== void 0 && this.isAsyncFunction(fn)) {
+        return this.getIden(identation) + "return std::any{}" + this.LINE_TERMINATOR;
+      }
+    }
+    return super.printReturnStatement(node, identation);
+  }
+  printFunctionBody(node, identation) {
+    if (this.asyncTranspiling && this.isAsyncFunction(node)) {
+      const innerIdentation = identation + 2;
+      const bodyStatements = node.body.statements;
+      const statements = bodyStatements.map((s) => this.printNode(s, innerIdentation)).join("\n");
+      const lastStatement = bodyStatements.length > 0 ? bodyStatements[bodyStatements.length - 1] : void 0;
+      const endsWithReturn = lastStatement !== void 0 && lastStatement.kind === _typescript2.default.SyntaxKind.ReturnStatement;
+      const fallbackReturn = endsWithReturn ? "" : this.getIden(innerIdentation) + "return std::any{};\n";
+      return this.getBlockOpen(identation) + this.getIden(identation + 1) + "return std::async(std::launch::async, [=]() -> std::any {\n" + (statements ? statements + "\n" : "") + fallbackReturn + this.getIden(identation + 1) + "}).share();" + this.getBlockClose(identation);
+    }
+    return super.printFunctionBody(node, identation);
+  }
+  printWrappedUnknownThisProperty(node) {
+    return void 0;
+  }
+  printOutOfOrderCallExpressionIfAny(node, identation) {
+    if (node.expression.kind === _typescript2.default.SyntaxKind.PropertyAccessExpression) {
+      const expressionText = node.expression.getText().trim();
+      const args = node.arguments;
+      if (args.length === 1) {
+        const parsedArg = this.printNode(args[0], 0);
+        switch (expressionText) {
+          case "Math.abs":
+            return `mathAbs(${parsedArg})`;
+        }
+      } else if (args.length === 2) {
+        const parsedArg1 = this.printNode(args[0], 0);
+        const parsedArg2 = this.printNode(args[1], 0);
+        switch (expressionText) {
+          case "Math.min":
+            return `mathMin(${parsedArg1}, ${parsedArg2})`;
+          case "Math.max":
+            return `mathMax(${parsedArg1}, ${parsedArg2})`;
+          case "Math.pow":
+            return `mathPow(${parsedArg1}, ${parsedArg2})`;
+        }
+      }
+    }
+    return void 0;
+  }
+  handleTypeOfInsideBinaryExpression(node, identation) {
+    const right = node.right.text;
+    const op = node.operatorToken.kind;
+    const expression = node.left.expression;
+    const isDifferentOperator = op === _typescript2.default.SyntaxKind.ExclamationEqualsEqualsToken || op === _typescript2.default.SyntaxKind.ExclamationEqualsToken;
+    const notOperator = isDifferentOperator ? this.NOT_TOKEN : "";
+    const target = this.printNode(expression, 0);
+    switch (right) {
+      case "string":
+        return notOperator + `isString(${target})`;
+      case "number":
+        return notOperator + `isNumber(${target})`;
+      case "boolean":
+        return notOperator + `isBool(${target})`;
+      case "object":
+        return notOperator + `isDictionary(${target})`;
+      case "function":
+        return notOperator + `isFunction(${target})`;
+    }
+    return void 0;
+  }
+  printCustomBinaryExpressionIfAny(node, identation) {
+    const left = node.left;
+    const right = node.right;
+    const op = node.operatorToken.kind;
+    if (left.kind === _typescript2.default.SyntaxKind.TypeOfExpression) {
+      const typeOfExpression = this.handleTypeOfInsideBinaryExpression(node, identation);
+      if (typeOfExpression) {
+        return typeOfExpression;
+      }
+    }
+    if (op === _typescript2.default.SyntaxKind.EqualsToken && left.kind === _typescript2.default.SyntaxKind.ArrayLiteralExpression) {
+      const arrayBindingPatternElements = left.elements;
+      const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
+      const syntheticName = parsedArrayBindingElements.join("") + "Variable";
+      let arrayBindingStatement = `std::any ${syntheticName} = ${this.printNode(right, 0)};
+`;
+      parsedArrayBindingElements.forEach((e, index) => {
+        const statement = this.getIden(identation) + `${e} = ::getValue(${syntheticName}, ${index})`;
+        if (index < parsedArrayBindingElements.length - 1) {
+          arrayBindingStatement += statement + ";\n";
+        } else {
+          arrayBindingStatement += statement;
+        }
+      });
+      return arrayBindingStatement;
+    }
+    if (op === _typescript2.default.SyntaxKind.InKeyword) {
+      return `inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+    }
+    const leftText = this.printNode(left, 0);
+    const rightText = this.printNode(right, 0);
+    if (op === _typescript2.default.SyntaxKind.PlusEqualsToken) {
+      return `${leftText} = add(${leftText}, ${rightText})`;
+    }
+    if (op === _typescript2.default.SyntaxKind.MinusEqualsToken) {
+      return `${leftText} = subtract(${leftText}, ${rightText})`;
+    }
+    if (op === _typescript2.default.SyntaxKind.EqualsToken) {
+      if (left.kind === _typescript2.default.SyntaxKind.ElementAccessExpression) {
+        const elementAccess = left;
+        const target = this.printNode(elementAccess.expression, 0);
+        const propName = this.printNode(elementAccess.argumentExpression, 0);
+        return `::setValue(${target}, ${propName}, ${rightText})`;
+      }
+    }
+    if (op in this.binaryExpressionsWrappers) {
+      const wrapper = this.binaryExpressionsWrappers[op];
+      const open = wrapper[0];
+      const close = wrapper[1];
+      return `${open}${leftText}, ${rightText}${close}`;
+    }
+    return void 0;
+  }
+  printVariableDeclarationList(node, identation) {
+    const declaration = node.declarations[0];
+    if (_optionalChain([declaration, 'optionalAccess', _366 => _366.name, 'access', _367 => _367.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+      const arrayBindingPattern = declaration.name;
+      const arrayBindingPatternElements = arrayBindingPattern.elements;
+      const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
+      const syntheticName = parsedArrayBindingElements.join("") + "Variable";
+      let arrayBindingStatement = `${this.getIden(identation)}std::any ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
+`;
+      parsedArrayBindingElements.forEach((e, index) => {
+        const statement = this.getIden(identation) + `std::any ${e} = ::getValue(${syntheticName}, ${index})`;
+        if (index < parsedArrayBindingElements.length - 1) {
+          arrayBindingStatement += statement + ";\n";
+        } else {
+          arrayBindingStatement += statement;
+        }
+      });
+      return arrayBindingStatement;
+    }
+    const isNew = declaration.initializer && declaration.initializer.kind === _typescript2.default.SyntaxKind.NewExpression;
+    let className = void 0;
+    if (isNew) {
+      className = declaration.initializer.expression.escapedText;
+    }
+    const varToken = isNew ? className + " " : this.VAR_TOKEN + " ";
+    if (declaration.initializer === void 0) {
+      return this.getIden(identation) + this.VAR_TOKEN + " " + this.printNode(declaration.name) + " = " + this.UNDEFINED_TOKEN;
+    }
+    const parsedValue = this.printNode(declaration.initializer, identation).trimStart();
+    return this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
+  }
+  printFunctionDefinition(node, identation) {
+    let name = node.name.escapedText;
+    name = this.transformFunctionNameIfNeeded(name);
+    const parsedArgs = node.parameters.map((param) => this.printParameter(param)).join(", ");
+    let returnType = this.printFunctionType(node);
+    returnType = returnType ? returnType + " " : returnType;
+    const functionDef = this.getIden(identation) + returnType + name + "(" + parsedArgs + ")";
+    return functionDef;
+  }
+  printInstanceOfExpression(node, identation) {
+    const left = this.printNode(node.left, 0);
+    const right = node.right.escapedText;
+    return this.getIden(identation) + `(dynamic_cast<const ${right}*>(&(${left})) != nullptr)`;
+  }
+  printAsExpression(node, identation) {
+    return this.printNode(node.expression, identation);
+  }
+  printParameter(node, defaultValue = true) {
+    const name = this.printNode(node.name, 0);
+    const initializer = node.initializer;
+    if (defaultValue) {
+      if (initializer) {
+        return this.DEFAULT_PARAMETER_TYPE + " " + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + this.printNode(initializer, 0);
+      }
+      return this.DEFAULT_PARAMETER_TYPE + " " + name;
+    }
+    return name;
+  }
+  printFunctionType(node) {
+    if (!this.requiresReturnType) {
+      return "";
+    }
+    if (this.asyncTranspiling && this.isAsyncFunction(node)) {
+      return `std::shared_future<${this.DEFAULT_RETURN_TYPE}>`;
+    }
+    const typeText = this.getFunctionType(node);
+    if (typeText === this.VOID_KEYWORD) {
+      return this.VOID_KEYWORD;
+    }
+    return this.DEFAULT_RETURN_TYPE;
+  }
+  printMethodDefinition(node, identation) {
+    let name = node.name.escapedText;
+    name = this.transformMethodNameIfNeeded(name);
+    let returnType = this.printFunctionType(node);
+    const methodOverride = this.getMethodOverride(node);
+    const isOverride = methodOverride !== void 0;
+    const virtualPrefix = isOverride ? "" : "virtual ";
+    const overrideSuffix = isOverride ? " override" : "";
+    if (isOverride) {
+      returnType = this.printFunctionType(methodOverride);
+    }
+    const parsedArgs = this.printMethodParameters(node);
+    returnType = returnType ? returnType + " " : returnType;
+    const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
+    const methodDef = this.getIden(identation) + virtualPrefix + returnType + methodToken + name + "(" + parsedArgs + ")" + overrideSuffix;
+    return this.printNodeCommentsIfAny(node, identation, methodDef);
+  }
+  printPropertyDeclaration(node, identation) {
+    const name = this.printNode(node.name, 0);
+    if (node.initializer) {
+      const initializer = this.printNode(node.initializer, 0);
+      return this.getIden(identation) + "std::any " + name + " = " + initializer + this.LINE_TERMINATOR;
+    }
+    return this.getIden(identation) + "std::any " + name + this.LINE_TERMINATOR;
+  }
+  printArrayLiteralExpression(node) {
+    const elements = node.elements.map((e) => {
+      return this.printNode(e);
+    }).join(", ");
+    return this.ARRAY_OPENING_TOKEN + elements + this.ARRAY_CLOSING_TOKEN;
+  }
+  printArrayIsArrayCall(node, identation, parsedArg = void 0) {
+    return `isArray(${parsedArg})`;
+  }
+  printObjectKeysCall(node, identation, parsedArg = void 0) {
+    return `getObjectKeys(${parsedArg})`;
+  }
+  printObjectValuesCall(node, identation, parsedArg = void 0) {
+    return `getObjectValues(${parsedArg})`;
+  }
+  printJsonParseCall(node, identation, parsedArg = void 0) {
+    return `parseJson(${parsedArg})`;
+  }
+  printJsonStringifyCall(node, identation, parsedArg = void 0) {
+    return `jsonStringify(${parsedArg})`;
+  }
+  printPromiseAllCall(node, identation, parsedArg = void 0) {
+    return `promiseAll(${parsedArg})`;
+  }
+  printMathFloorCall(node, identation, parsedArg = void 0) {
+    return `mathFloor(${parsedArg})`;
+  }
+  printMathRoundCall(node, identation, parsedArg = void 0) {
+    return `mathRound(${parsedArg})`;
+  }
+  printMathCeilCall(node, identation, parsedArg = void 0) {
+    return `mathCeil(${parsedArg})`;
+  }
+  printNumberIsIntegerCall(node, identation, parsedArg) {
+    return `isInteger(${parsedArg})`;
+  }
+  printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `arrayPush(${name}, ${parsedArg})`;
+  }
+  printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `includes(${name}, ${parsedArg})`;
+  }
+  printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
+  }
+  printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `startsWith(${name}, ${parsedArg})`;
+  }
+  printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `endsWith(${name}, ${parsedArg})`;
+  }
+  printTrimCall(node, identation, name = void 0) {
+    return `trim(${name})`;
+  }
+  printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `join(${name}, ${parsedArg})`;
+  }
+  printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `split(${name}, ${parsedArg})`;
+  }
+  printConcatCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `concat(${name}, ${parsedArg})`;
+  }
+  printToFixedCall(node, identation, name = void 0, parsedArg = void 0) {
+    return `toFixed(${name}, ${parsedArg})`;
+  }
+  printToStringCall(node, identation, name = void 0) {
+    return `toString(${name})`;
+  }
+  printToUpperCaseCall(node, identation, name = void 0) {
+    return `toUpperCase(${name})`;
+  }
+  printToLowerCaseCall(node, identation, name = void 0) {
+    return `toLowerCase(${name})`;
+  }
+  printShiftCall(node, identation, name = void 0) {
+    return `shift(${name})`;
+  }
+  printReverseCall(node, identation, name = void 0) {
+    return `reverse(${name})`;
+  }
+  printPopCall(node, identation, name = void 0) {
+    return `pop(${name})`;
+  }
+  printAssertCall(node, identation, parsedArgs) {
+    return `assertTrue(${parsedArgs})`;
+  }
+  printSliceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    if (parsedArg2 === void 0) {
+      parsedArg2 = this.UNDEFINED_TOKEN;
+    }
+    return `slice(${name}, ${parsedArg}, ${parsedArg2})`;
+  }
+  printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    return `replace(${name}, ${parsedArg}, ${parsedArg2})`;
+  }
+  printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    return `replaceAll(${name}, ${parsedArg}, ${parsedArg2})`;
+  }
+  printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
+    return `padEnd(${name}, ${parsedArg}, ${parsedArg2})`;
+  }
+  printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
+    return `padStart(${name}, ${parsedArg}, ${parsedArg2})`;
+  }
+  printDateNowCall(node, identation) {
+    return "getCurrentTimestamp()";
+  }
+  printLengthProperty(node, identation, name = void 0) {
+    const leftSide = this.printNode(node.expression, 0);
+    const type = this.getChecker().getTypeAtLocation(node.expression);
+    this.warnIfAnyType(node, type.flags, leftSide, "length");
+    return this.isStringType(type.flags) ? `getStringLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+  }
+  printPostFixUnaryExpression(node, identation) {
+    const { operand, operator } = node;
+    if (operand.kind === _typescript2.default.SyntaxKind.NumericLiteral) {
+      return super.printPostFixUnaryExpression(node, identation);
+    }
+    const leftSide = this.printNode(operand, 0);
+    const op = this.PostFixOperators[operator];
+    if (op === "--") {
+      return `postFixDecrement(${leftSide})`;
+    }
+    return `postFixIncrement(${leftSide})`;
+  }
+  printPrefixUnaryExpression(node, identation) {
+    const { operand, operator } = node;
+    if (operand.kind === _typescript2.default.SyntaxKind.NumericLiteral) {
+      return super.printPrefixUnaryExpression(node, identation);
+    }
+    if (operator === _typescript2.default.SyntaxKind.ExclamationToken) {
+      return this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
+    }
+    const leftSide = this.printNode(operand, 0);
+    if (operator === _typescript2.default.SyntaxKind.PlusToken) {
+      return `prefixUnaryPlus(${leftSide})`;
+    } else {
+      return `prefixUnaryNeg(${leftSide})`;
+    }
+  }
+  printConditionalExpression(node, identation) {
+    const condition = this.printCondition(node.condition, 0);
+    const whenTrue = this.printNode(node.whenTrue, 0);
+    const whenFalse = this.printNode(node.whenFalse, 0);
+    return `(${condition} ? std::any(${whenTrue}) : std::any(${whenFalse}))`;
+  }
+  printDeleteExpression(node, identation) {
+    const object = this.printNode(node.expression.expression, 0);
+    const key = this.printNode(node.expression.argumentExpression, 0);
+    return `deleteKey(${object}, ${key})`;
+  }
+  printThrowStatement(node, identation) {
+    if (node.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
+      return this.getIden(identation) + this.THROW_TOKEN + " " + this.printNode(node.expression, 0) + this.LINE_TERMINATOR;
+    }
+    if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
+      const expression = node.expression;
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _368 => _368.arguments]), () => ( []));
+      const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
+      const newExpression = this.printNode(expression.expression, 0);
+      if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
+        const id = expression.expression;
+        const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
+        if (symbol) {
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _369 => _369.getChecker, 'call', _370 => _370(), 'access', _371 => _371.getDeclaredTypeOfSymbol, 'call', _372 => _372(symbol), 'access', _373 => _373.symbol, 'optionalAccess', _374 => _374.declarations]), () => ( []));
+          const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
+          if (isClassDeclaration) {
+            return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
+          }
+          return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg})${this.LINE_TERMINATOR}`;
+        }
+        return this.getIden(identation) + `${this.THROW_TOKEN} ${newExpression}(${parsedArg})${this.LINE_TERMINATOR}`;
+      } else if (expression.expression.kind === _typescript2.default.SyntaxKind.ElementAccessExpression) {
+        return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg})${this.LINE_TERMINATOR}`;
+      }
+      return super.printThrowStatement(node, identation);
+    }
+    return super.printThrowStatement(node, identation);
+  }
+  getExceptionalAccessTokenIfAny(node) {
+    const leftSide = node.expression;
+    const leftSideText = this.printNode(leftSide, 0);
+    if (leftSideText === this.THIS_TOKEN) {
+      return "->";
+    }
+    return void 0;
+  }
+};
 
 // src/transpiler.ts
 var __dirname_mock = import_dirname.default;
@@ -8173,7 +8396,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
     options,
     rootNames: [inMemoryFilePath, globalsShimPath],
     host,
-    oldProgram: _optionalChain([cache, 'optionalAccess', _362 => _362.memoryOldProgram])
+    oldProgram: _optionalChain([cache, 'optionalAccess', _375 => _375.memoryOldProgram])
   });
   if (cache !== void 0) {
     cache.memoryOldProgram = program;
@@ -8183,26 +8406,20 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
   const sourceFile = program.getSourceFile(inMemoryFilePath);
   return [program, typeChecker, sourceFile];
 }
-var Transpiler = class _Transpiler {
-  // A program cache holds parsed typescript SourceFiles and the last program built
-  // from them. Hand the same cache to several Transpiler instances to reuse one
-  // parse/typecheck of the es lib chain and of every shared import across all of
-  // them. Callers that need isolation simply omit it and get a private cache.
-  //
-  // Same-thread only: these are live V8 objects, so a cache cannot be posted to a
-  // worker_threads isolate — give each worker its own long-lived cache instead.
+var Transpiler = class {
   static createProgramCache() {
     return { sourceFiles: /* @__PURE__ */ new Map() };
   }
   constructor(config = {}, programCache) {
     this.config = config;
-    this.programCache = _nullishCoalesce(programCache, () => ( _Transpiler.createProgramCache()));
+    this.programCache = _nullishCoalesce(programCache, () => ( Transpiler.createProgramCache()));
     const phpConfig = config["php"] || {};
     const pythonConfig = config["python"] || {};
     const csharpConfig = config["csharp"] || {};
     const goConfig = config["go"] || {};
     const javaConfig = config["java"] || {};
     const rustConfig = config["rust"] || {};
+    const cppConfig = config["cpp"] || {};
     if ("verbose" in config) {
       Logger.setVerboseMode(Boolean(config["verbose"]));
     }
@@ -8212,20 +8429,16 @@ var Transpiler = class _Transpiler {
     this.goTranspiler = new GoTranspiler(goConfig);
     this.javaTranspiler = new JavaTranspiler(javaConfig);
     this.rustTranspiler = new RustTranspiler(rustConfig);
+    this.cppTranspiler = new CppTranspiler(cppConfig);
   }
   setVerboseMode(verbose) {
     Logger.setVerboseMode(verbose);
   }
-  // the cache this instance parses into, to hand to further Transpiler instances
-  // that should reuse this one's parsed SourceFiles
   getProgramCache() {
     return this.programCache;
   }
-  // a second Transpiler over the same parsed typescript state, with its own
-  // printers and its own transpile context, so both can be driven independently
-  // on this thread without either clobbering the other's program
   cloneSharingProgramCache(config = this.config) {
-    return new _Transpiler(config, this.programCache);
+    return new Transpiler(config, this.programCache);
   }
   createProgramInMemoryAndSetContext(content) {
     const [memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions, this.programCache);
@@ -8276,21 +8489,6 @@ var Transpiler = class _Transpiler {
       program
     });
   }
-  // One program over N root files, instead of one program per file. Every
-  // transpile*ByPath call pays for a full program: even with the SourceFile cache
-  // making the ~340-file import closure parse-free, the binder/checker work behind
-  // getPreEmitDiagnostics is redone per file. Batching N files into one program
-  // pays it once for the whole set.
-  //
-  // Files that import each other (a derived exchange and its parent) are fine in
-  // one batch — they are separate root files of the same program, exactly as
-  // typescript would compile a project.
-  //
-  // The batch deliberately does not become the cache's byPathOldProgram: an N-file
-  // program never structurally reuses a program built from a different root set, so
-  // there is nothing to gain, and keeping the previous chunk's checker alive while
-  // the next one is built would double peak memory — the opposite of why callers
-  // chunk. The cross-batch saving comes from the shared host + SourceFile cache.
   createProgramBatch(paths) {
     const options = fastCompilerOptions;
     const host = this.getByPathCompilerHost(options);
@@ -8299,9 +8497,6 @@ var Transpiler = class _Transpiler {
     memoizeCheckerCalls(checker);
     return new TranspileProgramBatch(this, program, checker);
   }
-  // the language printers read the typescript state (source file, checker, program)
-  // off the context handed to them here, so two Transpiler instances never share
-  // state and a nested transpile can restore whatever its caller was working on
   setContext(context) {
     this.context = context;
     this.pythonTranspiler.setContext(context);
@@ -8310,13 +8505,12 @@ var Transpiler = class _Transpiler {
     this.goTranspiler.setContext(context);
     this.javaTranspiler.setContext(context);
     this.rustTranspiler.setContext(context);
+    this.cppTranspiler.setContext(context);
     return context;
   }
-  /** @deprecated renamed to createProgramInMemoryAndSetContext */
   createProgramInMemoryAndSetGlobals(content) {
     return this.createProgramInMemoryAndSetContext(content);
   }
-  /** @deprecated renamed to createProgramByPathAndSetContext */
   createProgramByPathAndSetGlobals(path2) {
     return this.createProgramByPathAndSetContext(path2);
   }
@@ -8363,6 +8557,9 @@ var Transpiler = class _Transpiler {
         break;
       case 5 /* Rust */:
         transpiledContent = this.rustTranspiler.printNode(src, -1);
+        break;
+      case 6 /* Cpp */:
+        transpiledContent = this.cppTranspiler.printNode(src, -1);
         break;
     }
     let imports = [];
@@ -8462,6 +8659,12 @@ var Transpiler = class _Transpiler {
   transpileRustByPath(path2) {
     return this.transpile(5 /* Rust */, 0 /* ByPath */, path2);
   }
+  transpileCpp(content) {
+    return this.transpile(6 /* Cpp */, 1 /* ByContent */, content);
+  }
+  transpileCppByPath(path2) {
+    return this.transpile(6 /* Cpp */, 0 /* ByPath */, path2);
+  }
   getFileImports(content) {
     const context = this.createProgramInMemoryAndSetContext(content);
     return this.phpTranspiler.getFileImports(context.src);
@@ -8502,6 +8705,8 @@ var Transpiler = class _Transpiler {
         return 4 /* Java */;
       case "rust":
         return 5 /* Rust */;
+      case "cpp":
+        return 6 /* Cpp */;
     }
   }
 };
@@ -8514,9 +8719,6 @@ var TranspileProgramBatch = class {
   getProgram() {
     return this.program;
   }
-  // point the owning Transpiler at one file of this batch, then run the same
-  // diagnostics pass the single-file path runs — the printers read checker state
-  // back from it, so it is not optional
   setContextForPath(filePath) {
     const src = _nullishCoalesce(this.program.getSourceFile(filePath), () => ( this.program.getSourceFile(path.resolve(filePath))));
     if (src === void 0) {
@@ -8547,6 +8749,9 @@ var TranspileProgramBatch = class {
   }
   transpileRustByPath(filePath) {
     return this.transpileByPath(5 /* Rust */, filePath);
+  }
+  transpileCppByPath(filePath) {
+    return this.transpileByPath(6 /* Cpp */, filePath);
   }
 };
 
