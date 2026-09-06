@@ -2688,6 +2688,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
     super(config);
+    // method node -> 'bool' | 'bool?' | undefined (see csharpBooleanReturnType)
+    this.csharpBooleanReturnTypes = /* @__PURE__ */ new WeakMap();
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -3372,6 +3374,67 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
     }
     return arrayOpen + elements + this.ARRAY_CLOSING_TOKEN;
+  }
+  // A method declared `: boolean` / `: boolean | undefined` (or an alias of either) returns a
+  // C# `bool` / `bool?` instead of `object`. Only non-async methods with an explicit annotation
+  // qualify: `undefined`/`null` union members make the result nullable, any other member (or an
+  // inferred type) keeps the upstream `object`. The nullable spelling is what keeps a missing
+  // key a missing key — plain `bool` would turn it into `false`.
+  csharpBooleanReturnType(node) {
+    if (node?.kind !== ts4.SyntaxKind.MethodDeclaration || this.isAsyncFunction(node)) {
+      return void 0;
+    }
+    if (this.csharpBooleanReturnTypes.has(node)) {
+      return this.csharpBooleanReturnTypes.get(node);
+    }
+    let result = void 0;
+    if (node.type) {
+      const type = this.getChecker().getTypeFromTypeNode(node.type);
+      const members = type.isUnion() ? type.types : [type];
+      let nullable = false;
+      let sawBoolean = false;
+      let sawOther = false;
+      for (const member of members) {
+        if (member.flags & (ts4.TypeFlags.Undefined | ts4.TypeFlags.Null)) {
+          nullable = true;
+        } else if (member.flags & ts4.TypeFlags.BooleanLike) {
+          sawBoolean = true;
+        } else {
+          sawOther = true;
+        }
+      }
+      if (sawBoolean && !sawOther) {
+        result = nullable ? this.BOOLEAN_KEYWORD + "?" : this.BOOLEAN_KEYWORD;
+      }
+    } else {
+      result = this.csharpBooleanReturnType(this.getMethodOverride(node));
+    }
+    this.csharpBooleanReturnTypes.set(node, result);
+    return result;
+  }
+  printFunctionType(node) {
+    const booleanType = this.csharpBooleanReturnType(node);
+    if (booleanType !== void 0) {
+      return booleanType;
+    }
+    return super.printFunctionType(node);
+  }
+  // `return x;` inside a bool/bool? method: the printed expression is still the `object`
+  // box the rest of the printer produces, so unbox it through `object`. The nullable
+  // spelling `(bool?)((object)(x))` accepts null; the non-nullable one needs the
+  // null-forgiving `!` on the box (CS8605 under TreatWarningsAsErrors otherwise) — which is
+  // exactly the runtime NullReferenceException a `: boolean` method returning null deserves
+  printReturnStatement(node, identation) {
+    const booleanType = this.csharpBooleanReturnType(ts4.findAncestor(node.parent, ts4.isFunctionLike));
+    if (booleanType === void 0 || !node.expression) {
+      return super.printReturnStatement(node, identation);
+    }
+    const leadingComment = this.printLeadingComments(node, identation);
+    let trailingComment = this.printTraillingComment(node, identation);
+    trailingComment = trailingComment ? " " + trailingComment : trailingComment;
+    const value = this.printNode(node.expression, identation).trim();
+    const forgiving = booleanType.endsWith("?") ? "" : "!";
+    return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + ` ((${booleanType})((object)(${value}))${forgiving})` + this.LINE_TERMINATOR + trailingComment;
   }
   printMethodDefinition(node, identation) {
     let name = node.name.escapedText;

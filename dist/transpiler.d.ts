@@ -489,6 +489,7 @@ declare class PhpTranspiler extends BaseTranspiler {
 
 declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
+    csharpBooleanReturnTypes: WeakMap<ts.Node, string>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -516,6 +517,9 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printAsExpression(node: any, identation: any): string;
     printParameter(node: any, defaultValue?: boolean): string;
     printArrayLiteralExpression(node: any): string;
+    csharpBooleanReturnType(node: any): string | undefined;
+    printFunctionType(node: any): any;
+    printReturnStatement(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
     printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
