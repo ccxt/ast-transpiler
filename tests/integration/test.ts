@@ -11,6 +11,7 @@ const CS_TRANSPILABLE_FILE = "./tests/integration/cs/transpilable.cs";
 const GO_TRANSPILABLE_FILE = "./tests/integration/go/transpilable.go";
 const JAVA_TRANSPILABLE_FILE = "./tests/integration/java/app/src/main/java/org/example/Transpilable.java";
 const RUST_TRANSPILABLE_FILE = "./tests/integration/rust/src/transpilable.rs";
+const CPP_TRANSPILABLE_FILE = "./tests/integration/cpp/transpilable.cpp";
 
 
 const TS_FILE = "./tests/integration/source/init.ts";
@@ -20,6 +21,8 @@ const CS_FILE = "./tests/integration/cs";
 const GO_FILE = "./tests/integration/go";
 const JAVA_FILE = "./tests/integration/java/"
 const RUST_FILE = "./tests/integration/rust";
+const CPP_DIR = "./tests/integration/cpp";
+const CPP_HELPERS_DIR = "./helpers/cpp";
 
 
 const langConfig = [
@@ -44,6 +47,9 @@ const langConfig = [
     },
     {
         language: "rust",
+    },
+    {
+        language: "cpp",
     },
 ]
 
@@ -89,9 +95,27 @@ function transpileTests() {
     ].join('\n');
     const rust = rustPreamble + result[5].content;
 
+    const cppPreamble = [
+        '#include "helpers.h"',
+        '',
+        '',
+    ].join('\n');
+    const cppMain = [
+        '',
+        'int main()',
+        '{',
+        '    Test instance;',
+        '    instance.test();',
+        '    return 0;',
+        '}',
+        '',
+    ].join('\n');
+    const cpp = cppPreamble + result[6].content + cppMain;
+
     writeFileSync(GO_TRANSPILABLE_FILE, go);
     writeFileSync(JAVA_TRANSPILABLE_FILE, java);
     writeFileSync(RUST_TRANSPILABLE_FILE, rust);
+    writeFileSync(CPP_TRANSPILABLE_FILE, cpp);
 }
 
 function runCommand(command) {
@@ -182,6 +206,14 @@ async function runRust() {
     return result;
 }
 
+async function runCPP() {
+    const buildCommand = `g++ -std=c++17 -o ${CPP_DIR}/test ${CPP_TRANSPILABLE_FILE} ${CPP_HELPERS_DIR}/helpers.cpp -I ${CPP_HELPERS_DIR}`;
+    await runCommand(buildCommand);
+    const result = await runCommand(`${CPP_DIR}/test`);
+    console.log(blue("Executed CPP"))
+    return result;
+}
+
 async function runJava() {
     try {
         // ./tests/integration/java/gradlew -p ./tests/integration/java/ run
@@ -209,9 +241,10 @@ async function main() {
         runGO(),
         runJava(),
         runRust(),
+        runCPP(),
     ];
     const results = await Promise.all(promises);
-    const [ts, php, py, cs, go, java, rust]: any = results;
+    const [ts, php, py, cs, go, java, rust, cpp]: any = results;
 
     let success = true;
     if (php !== ts) {
@@ -240,6 +273,11 @@ async function main() {
     if (rust !== ts) {
         success = false;
         compareOutputs("RUST", ts, rust);
+    }
+
+    if (cpp !== ts) {
+        success = false;
+        compareOutputs("CPP", ts, cpp);
     }
 
     if (success) {

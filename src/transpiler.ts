@@ -10,6 +10,7 @@ import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile
 import { GoTranspiler } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler } from './rustTranspiler.js';
+import { CppTranspiler } from './cppTranspiler.js';
 
 const __dirname_mock = currentPath;
 
@@ -169,6 +170,7 @@ export default class Transpiler {
     goTranspiler: GoTranspiler;
     javaTranspiler: JavaTranspiler;
     rustTranspiler: RustTranspiler;
+    cppTranspiler: CppTranspiler;
     // ByPath transpilation cache: parsed SourceFiles (libs + the whole import graph)
     // are reused across createProgram calls — without this every transpile*ByPath call
     // re-parses the full import closure of the target file (~1s+ per file on big repos).
@@ -198,6 +200,7 @@ export default class Transpiler {
         const goConfig = config["go"] || {};
         const javaConfig = config["java"] || {};
         const rustConfig = config["rust"] || {};
+        const cppConfig = config["cpp"] || {};
 
         if ("verbose" in config) {
             Logger.setVerboseMode(Boolean(config['verbose']));
@@ -209,6 +212,7 @@ export default class Transpiler {
         this.goTranspiler = new GoTranspiler(goConfig);
         this.javaTranspiler = new JavaTranspiler(javaConfig);
         this.rustTranspiler = new RustTranspiler(rustConfig);
+        this.cppTranspiler = new CppTranspiler(cppConfig);
     }
 
     setVerboseMode(verbose: boolean) {
@@ -319,6 +323,7 @@ export default class Transpiler {
         this.goTranspiler.setContext(context);
         this.javaTranspiler.setContext(context);
         this.rustTranspiler.setContext(context);
+        this.cppTranspiler.setContext(context);
         return context;
     }
 
@@ -381,6 +386,9 @@ export default class Transpiler {
             break;
         case Languages.Rust:
             transpiledContent = this.rustTranspiler.printNode(src, -1);
+            break;
+        case Languages.Cpp:
+            transpiledContent = this.cppTranspiler.printNode(src, -1);
             break;
         }
         let imports = [];
@@ -507,6 +515,14 @@ export default class Transpiler {
         return this.transpile(Languages.Rust, TranspilationMode.ByPath, path);
     }
 
+    transpileCpp(content): ITranspiledFile {
+        return this.transpile(Languages.Cpp, TranspilationMode.ByContent, content);
+    }
+
+    transpileCppByPath(path): ITranspiledFile {
+        return this.transpile(Languages.Cpp, TranspilationMode.ByPath, path);
+    }
+
 
     getFileImports(content: string): IFileImport[] {
         const context = this.createProgramInMemoryAndSetContext(content);
@@ -556,6 +572,8 @@ export default class Transpiler {
             return Languages.Java;
         case "rust":
             return Languages.Rust;
+        case "cpp":
+            return Languages.Cpp;
         }
     }
 }
@@ -628,6 +646,10 @@ class TranspileProgramBatch {
 
     transpileRustByPath(filePath: string): ITranspiledFile {
         return this.transpileByPath(Languages.Rust, filePath);
+    }
+
+    transpileCppByPath(filePath: string): ITranspiledFile {
+        return this.transpileByPath(Languages.Cpp, filePath);
     }
 }
 

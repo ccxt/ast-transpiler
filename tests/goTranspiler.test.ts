@@ -85,10 +85,10 @@ describe('go transpiling tests', () => {
         const go =
         "var a string = \"hi\"\n" +
         "var b bool = false\n" +
-        "var c bool = IsTrue(a) && IsTrue(b)\n" +
-        "var d bool = !IsTrue(a) && !IsTrue(b)\n" +
-        "var e bool = (IsTrue(a) || !IsTrue(b))\n" +
-        "if IsTrue(a) {\n" +
+        "var c bool = (a != \"\") && b\n" +
+        "var d bool = !(a != \"\") && !b\n" +
+        "var e bool = ((a != \"\") || !b)\n" +
+        "if (a != \"\") {\n" +
         "    var f any = 1\n" +
         "}"
         const output = transpiler.transpileGo(ts).content;
@@ -406,9 +406,9 @@ describe('go typed body locals', () => {
     test('helpers that return any keep the local untyped', () => {
         const input =
         "class Exchange {\n" +
-        "    safeString(a, b) { return a; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
         "    main(item, a, b) {\n" +
-        "        const income = this.safeString(item, 'income');\n" +
+        "        const income = this.safeValue(item, 'income');\n" +
         "        const first = item['first'];\n" +
         "        const sum = a + b;\n" +
         "        const picked = a ? b : item;\n" +
@@ -416,7 +416,7 @@ describe('go typed body locals', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var income any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var income any = this.SafeValue(item, \"income\")");
         expect(output).toContain("var first any = GetValue(item, \"first\")");
         expect(output).toContain("var sum any = Add(a, b)");
         expect(output).toContain("var picked any = Ternary(");
@@ -474,6 +474,153 @@ describe('go typed body locals', () => {
         "}";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var upper any = ToUpper(other)");
+    });
+});
+
+describe('go pointer-typed Safe* body locals', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/ +/g, ' ');
+    test('a local initialized from a Safe* accessor is declared with its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    safeFloat(a, b) { return a; }\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const amount = this.safeString (item, 'income');\n" +
+        "        const timestamp = this.safeInteger (item, 'time');\n" +
+        "        const rate = this.safeFloat (item, 'rate');\n" +
+        "        const flag = this.safeBool (item, 'flag');\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        return [amount, timestamp, rate, flag, info];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+        expect(output).toContain("var timestamp *int64 = this.SafeInteger(item, \"time\")");
+        expect(output).toContain("var rate *float64 = this.SafeFloat(item, \"rate\")");
+        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('the 2/N and lower/upper/product/timestamp variants carry the same pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString2(a, b, c) { return a; }\n" +
+        "    safeStringLowerN(a, b) { return a; }\n" +
+        "    safeStringUpper(a, b) { return a; }\n" +
+        "    safeIntegerProduct(a, b, c) { return a; }\n" +
+        "    safeTimestamp2(a, b, c) { return a; }\n" +
+        "    safeBoolN(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const id = this.safeString2 (item, 'id', 'orderId');\n" +
+        "        const side = this.safeStringLowerN (item, ['side']);\n" +
+        "        const code = this.safeStringUpper (item, 'code');\n" +
+        "        const expiry = this.safeIntegerProduct (item, 'expiry', 1000);\n" +
+        "        const created = this.safeTimestamp2 (item, 'created', 'ts');\n" +
+        "        const post = this.safeBoolN (item, ['postOnly']);\n" +
+        "        return [id, side, code, expiry, created, post];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var id *string = this.SafeString2(item, \"id\", \"orderId\")");
+        expect(output).toContain("var side *string = this.SafeStringLowerN(");
+        expect(output).toContain("var code *string = this.SafeStringUpper(item, \"code\")");
+        expect(output).toContain("var expiry *int64 = this.SafeIntegerProduct(item, \"expiry\", 1000)");
+        expect(output).toContain("var created *int64 = this.SafeTimestamp2(item, \"created\", \"ts\")");
+        expect(output).toContain("var post any = this.SafeBoolN(");
+    });
+    test('a Safe* local reassigned to a differently typed value falls back to any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    main(item, other) {\n" +
+        "        let amount = this.safeString (item, 'income');\n" +
+        "        amount = other.toUpperCase();\n" +
+        "        let stamp = this.safeInteger (item, 'time');\n" +
+        "        stamp = this.safeString (item, 'time');\n" +
+        "        return [amount, stamp];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var stamp any = this.SafeInteger(item, \"time\")");
+    });
+    test('a Safe* local reassigned from the same Safe* family keeps its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeString2(a, b, c) { return a; }\n" +
+        "    main(item, other) {\n" +
+        "        let amount = this.safeString (item, 'income');\n" +
+        "        amount = this.safeString2 (other, 'income', 'amount');\n" +
+        "        return amount;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+    });
+    test('a Safe* local that is appended to or spread stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        info.push('x');\n" +
+        "        return info;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a local initialized from Precise arithmetic is declared as *string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(item) {\n" +
+        "        const product = Precise.stringMul ('-1', '2');\n" +
+        "        const quotient = Precise.stringDiv ('1', '2');\n" +
+        "        const total = Precise.stringAdd ('1', '2');\n" +
+        "        const rest = Precise.stringSub ('1', '2');\n" +
+        "        const biggest = Precise.stringMax ('1', '2');\n" +
+        "        const bigger = Precise.stringGt ('1', '2');\n" +
+        "        return [product, quotient, total, rest, biggest, bigger];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var product *string = Precise.StringMul(\"-1\", \"2\")");
+        expect(output).toContain("var quotient *string = Precise.StringDiv(\"1\", \"2\")");
+        expect(output).toContain("var total *string = Precise.StringAdd(\"1\", \"2\")");
+        expect(output).toContain("var rest *string = Precise.StringSub(\"1\", \"2\")");
+        expect(output).toContain("var biggest *string = Precise.StringMax(\"1\", \"2\")");
+        expect(output).toContain("var bigger bool = Precise.StringGt(\"1\", \"2\")");
+    });
+    test('a Safe* string local reassigned from Precise arithmetic keeps its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        let amount = this.safeString (item, 'income');\n" +
+        "        amount = Precise.stringMul ('-1', amount);\n" +
+        "        return amount;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+    });
+    test('a parameter shadowing a Go type name blocks the pointer refinement too', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(string, item) {\n" +
+        "        const amount = this.safeString (item, 'income');\n" +
+        "        return [string, amount];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var amount any = this.SafeString(item, \"income\")");
     });
 });
 
@@ -672,5 +819,179 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("var v any = SyncHelper(x)");
         expect(output).not.toContain("Spawn");
+    });
+});
+describe('go inline equality', () => {
+    test('=== / !== on present scalars inline to Go == / !=', () => {
+        const input =
+        "function f (x: string, n: number, b: boolean, o: any) {\n" +
+        "    const a = x === 'delivery';\n" +
+        "    const c = x !== 'delivery';\n" +
+        "    const d = n === 1;\n" +
+        "    const e = b === true;\n" +
+        "    const g = o === 'delivery';\n" +
+        "    return [ a, c, d, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (x == \"delivery\")");
+        expect(output).toContain("var c bool = (x != \"delivery\")");
+        expect(output).toContain("var d bool = (n == 1)");
+        expect(output).toContain("var e bool = (b == true)");
+        expect(output).toContain("var g bool = IsEqual(o, \"delivery\")");
+        expect(output).not.toContain("*x");
+        expect(output).not.toContain("IsEqualString");
+        expect(output).not.toContain("IsEqualInt");
+        expect(output).not.toContain("IsEqualFloat");
+        expect(output).not.toContain("IsEqualBool");
+    });
+    test('nullable aliases stay on the any helper IsEqual', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "type Int = number | undefined;\n" +
+        "function f (s: Str, i: Int) {\n" +
+        "    const a = s === 'delivery';\n" +
+        "    const b = s !== 'delivery';\n" +
+        "    const c = i === 1;\n" +
+        "    const d = s === undefined;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, \"delivery\")");
+        expect(output).toContain("var b bool = !IsEqual(s, \"delivery\")");
+        expect(output).toContain("var c bool = IsEqual(i, 1)");
+        expect(output).toContain("var d bool = IsEqual(s, nil)");
+        expect(output).not.toContain("IsEqualString");
+        expect(output).not.toContain("*s");
+    });
+    test('mixed families and any operands keep IsEqual', () => {
+        const input =
+        "function f (s: string, n: number, o: any) {\n" +
+        "    const a = s === o;\n" +
+        "    const b = o === o;\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(s, o)");
+        expect(output).toContain("var b bool = IsEqual(o, o)");
+    });
+    test('+ and += keep the runtime Add helper', () => {
+        const input =
+        "function f (a: string, b: string, p: number, o: any) {\n" +
+        "    const x = a + '/';\n" +
+        "    const y = a + b;\n" +
+        "    const z = p + 1;\n" +
+        "    let s: string = 'x';\n" +
+        "    s += a;\n" +
+        "    let u: any = o;\n" +
+        "    u += 1;\n" +
+        "    return [ x, y, z, s, u ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(a, \"/\")");
+        expect(output).toContain("Add(a, b)");
+        expect(output).toContain("Add(p, 1)");
+        expect(output).toContain("s = Add(s, a)");
+        expect(output).toContain("u = Add(u, 1)");
+        expect(output).not.toContain("ConcatString");
+        expect(output).not.toContain("AddNumber");
+    });
+    test('truthiness is inlined for locals whose Go type the printer declared', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    safeInteger (a, b) { return a; }\n" +
+        "    inArray (a, b) { return true; }\n" +
+        "    f (response: any) {\n" +
+        "        const s = this.safeString (response, 'id');\n" +
+        "        const n = this.safeInteger (response, 'ts');\n" +
+        "        const flag = this.inArray ('a', [ 'a' ]);\n" +
+        "        const parts = this.safeString (response, 'x').split ('-');\n" +
+        "        if (s) { return 1; }\n" +
+        "        if (n) { return 2; }\n" +
+        "        if (flag) { return 3; }\n" +
+        "        if (parts) { return 4; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if (s != nil && *s != \"\") {");
+        expect(output).toContain("if (n != nil && *n != 0) {");
+        expect(output).toContain("if flag {");
+        expect(output).toContain("if (len(parts) > 0) {");
+    });
+    test('EvalTruthy stays for any locals, params and non-identifiers', () => {
+        const input =
+        "class T {\n" +
+        "    safeValue (a, b) { return a; }\n" +
+        "    f (response: any, opt: any) {\n" +
+        "        const v = this.safeValue (response, 'a');\n" +
+        "        if (v) { return 1; }\n" +
+        "        if (opt) { return 2; }\n" +
+        "        if (response['k']) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if EvalTruthy(v) {");
+        expect(output).toContain("if EvalTruthy(opt) {");
+        expect(output).toContain("if EvalTruthy(GetValue(response, \"k\")) {");
+    });
+    test('negated truthiness inlines too', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (response: any) {\n" +
+        "        const s = this.safeString (response, 'id');\n" +
+        "        if (!s) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if !(s != nil && *s != \"\") {");
+        expect(output).not.toContain("EvalTruthy(s)");
+    });
+    test('a direct Safe* call compared to a literal collapses to a nil-safe deref', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b, c?) { return a; }\n" +
+        "    safeInteger (a, b, c?) { return a; }\n" +
+        "    f (raw: any) {\n" +
+        "        const a = this.safeString (raw, 'status', '') === 'normal';\n" +
+        "        const b = this.safeInteger (raw, 'success', 0) === 1;\n" +
+        "        return [ a, b ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the call must not be repeated, and `*string == \"normal\"` must not be emitted
+        expect(output).toContain("var a bool = IsEqual(this.SafeString(raw, \"status\", \"\"), \"normal\")");
+        expect(output).toContain("var b bool = IsEqual(this.SafeInteger(raw, \"success\", 0), 1)");
+    });
+    test('a direct Safe* call compared to undefined tests the pointer for nil', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (raw: any) {\n" +
+        "        const a = this.safeString (raw, 'id') === undefined;\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (this.SafeString(raw, \"id\") == nil)");
+    });
+    test('mismatched Go widths keep IsEqual: *int64 vs int does not compile in Go', () => {
+        const input =
+        "class T {\n" +
+        "    safeInteger (a, b) { return a; }\n" +
+        "    f (raw: any, stored: any) {\n" +
+        "        const limit = this.safeInteger (raw, 'limit');\n" +   // *int64
+        "        const length = stored.length;\n" +                     // int
+        "        const same = length === limit;\n" +
+        "        return same;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var length int =");
+        expect(output).toContain("IsEqual(length, limit)");
+        expect(output).not.toContain("*limit == length");
     });
 });
