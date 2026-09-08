@@ -1151,4 +1151,69 @@ describe('csharp typed body locals', () => {
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("object flag = ((string)other).StartsWith(");
     });
+    test('a method declared `: boolean` returns bool and unboxes through object', () => {
+        const input =
+        "class Exchange {\n" +
+        "    isDictionary (value: any): boolean {\n" +
+        "        return (value !== undefined) && (typeof value === 'object');\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public virtual bool isDictionary(object value)");
+        expect(output).toContain("return ((bool)((object)(isTrue((!isEqual(value, null))) && isTrue(((value is IDictionary<string, object>)))))!);");
+    });
+    test('a method declared `: boolean | undefined` (or an alias) returns bool? and keeps null', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "class Exchange {\n" +
+        "    safeValue (a, b, c = undefined) { return a; }\n" +
+        "    safeBool (dictionaryOrList: any, key: any, defaultValue: Bool = undefined): boolean | undefined {\n" +
+        "        const value = this.safeValue (dictionaryOrList, key, defaultValue);\n" +
+        "        if (typeof value === 'boolean') {\n" +
+        "            return value;\n" +
+        "        }\n" +
+        "        return defaultValue;\n" +
+        "    }\n" +
+        "    aliased (x: any): Bool {\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public virtual bool? safeBool(object dictionaryOrList, object key, object defaultValue = null)");
+        expect(output).toContain("return ((bool?)((object)(value)));");
+        expect(output).toContain("return ((bool?)((object)(defaultValue)));");
+        expect(output).toContain("public virtual bool? aliased(object x)");
+        expect(output).toContain("return ((bool?)((object)(null)));");
+    });
+    test('boolean return typing skips async, inferred and mixed-union methods and callback returns', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async later (x: any): Promise<boolean> { return true; }\n" +
+        "    inferred (x: any) { return true; }\n" +
+        "    mixed (x: any): boolean | string { return x; }\n" +
+        "    filtered (items: any[]): boolean {\n" +
+        "        const found = items.filter ((i) => { return i > 1; });\n" +
+        "        return found.length > 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public async virtual Task<object> later(object x)");
+        expect(output).toContain("public virtual object inferred(object x)");
+        expect(output).toContain("public virtual object mixed(object x)");
+        expect(output).toContain("public virtual bool filtered(object items)");
+        expect(output).toContain("return isGreaterThan(i, 1);");
+        expect(output).toContain("return ((bool)((object)(isGreaterThan(getArrayLength(found), 0)))!);");
+    });
+    test('an un-annotated override of a bool? method inherits the parent type and unboxes', () => {
+        const input =
+        "class Base {\n" +
+        "    flag (x: any): boolean | undefined { return undefined; }\n" +
+        "}\n" +
+        "class Child extends Base {\n" +
+        "    flag (x: any) { return true; }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public override bool? flag(object x)");
+        expect(output).toContain("return ((bool?)((object)(true)));");
+    });
 });
