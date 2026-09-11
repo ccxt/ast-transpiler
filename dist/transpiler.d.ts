@@ -243,8 +243,8 @@ declare class BaseTranspiler {
     startsWithUpperCase(str: any): boolean;
     unCamelCaseIfNeeded(name: string): string;
     transformIdentifier(node: any, identifier: any): string;
-    transformCallExpressionName(name: string): string;
-    transformPropertyAccessExpressionName(name: string): string;
+    transformCallExpressionName(name: string, nameNode?: any): string;
+    transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
     printIdentifier(node: any): string;
     shouldRemoveParenthesisFromCallExpression(node: any): boolean;
     printInstanceOfExpression(node: any, identation: any): string;
@@ -572,6 +572,7 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    asyncMethodSuffix: string;
     classNameMap: {
         [key: string]: string;
     };
@@ -635,6 +636,18 @@ declare class GoTranspiler extends BaseTranspiler {
      *     lives on the body, not here.
      */
     printAsyncTrampolineBlock(node: any, identation: any, callee: string): string;
+    /**
+     * Go name of an async (channel returning) declaration: `fetchTicker` -> `FetchTickerAsync`.
+     * Empty `asyncMethodSuffix` (the default) keeps the plain name, so the suffix is opt-in.
+     */
+    printAsyncDeclarationName(node: any, goName: string): string;
+    /**
+     * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
+     * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
+     * bare `x()` all agree with the declaration site. Unresolvable or non-function symbols
+     * (properties, `any` receivers, JS builtins) keep the plain name.
+     */
+    applyAsyncSuffixToCallee(nameNode: any, goName: string): string;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printMethodParameters(node: any): any;
@@ -654,8 +667,8 @@ declare class GoTranspiler extends BaseTranspiler {
     printElementAccessExpressionExceptionIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any): string;
     transformMethodNameIfNeeded(name: string): string;
-    transformCallExpressionName(name: string): string;
-    transformPropertyAccessExpressionName(name: string): string;
+    transformCallExpressionName(name: string, nameNode?: any): string;
+    transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;

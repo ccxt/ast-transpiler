@@ -451,10 +451,10 @@ var BaseTranspiler = class {
   transformIdentifier(node, identifier) {
     return this.unCamelCaseIfNeeded(identifier);
   }
-  transformCallExpressionName(name) {
+  transformCallExpressionName(name, nameNode = void 0) {
     return name;
   }
-  transformPropertyAccessExpressionName(name) {
+  transformPropertyAccessExpressionName(name, nameNode = void 0) {
     return name;
   }
   printIdentifier(node) {
@@ -553,7 +553,7 @@ var BaseTranspiler = class {
       this.RightPropertyAccessReplacements[rightSide]
     ) : this.transformPropertyAcessRightIdentifierIfNeeded(rightSide) ?? rightSide;
     const accessToken = this.getExceptionalAccessTokenIfAny(node) ?? this.PROPERTY_ACCESS_TOKEN;
-    rawExpression = leftSide + accessToken + this.transformPropertyAccessExpressionName(rightSide);
+    rawExpression = leftSide + accessToken + this.transformPropertyAccessExpressionName(rightSide, node.name);
     return rawExpression;
   }
   printCustomDefaultValueIfNeeded(node) {
@@ -1151,7 +1151,7 @@ var BaseTranspiler = class {
     } else {
       if (expression.kind === ts.SyntaxKind.Identifier) {
         const idValue = expression.text ?? expression.escapedText;
-        parsedExpression = this.transformCallExpressionName(this.unCamelCaseIfNeeded(idValue));
+        parsedExpression = this.transformCallExpressionName(this.unCamelCaseIfNeeded(idValue), expression);
       } else {
         parsedExpression = this.printNode(expression, 0);
       }
@@ -3887,6 +3887,9 @@ var GoTranspiler = class extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig4, config["parser"] ?? {});
     super(config);
     this.wrapCallMethods = [];
+    // appended to every async (channel returning) Go method/function name and to each
+    // checker-resolved call site of one; '' disables the rename
+    this.asyncMethodSuffix = "";
     this.DEFAULT_RETURN_TYPE = "any";
     // suffix of the sibling body method an async trampoline hands its work to
     this.ASYNC_BODY_SUFFIX = "Body";
@@ -3917,6 +3920,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.applyUserOverrides(config);
     this.wrapThisCalls = config["wrapThisCalls"] ?? false;
     this.wrapCallMethods = config["wrapCallMethods"] ?? [];
+    this.asyncMethodSuffix = config["asyncMethodSuffix"] ?? "";
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {
@@ -4206,9 +4210,45 @@ func New${this.capitalize(this.className)}() *${this.className} {
       `${this.getIden(identation)}}`
     ].join("\n");
   }
+  /**
+   * Go name of an async (channel returning) declaration: `fetchTicker` -> `FetchTickerAsync`.
+   * Empty `asyncMethodSuffix` (the default) keeps the plain name, so the suffix is opt-in.
+   */
+  printAsyncDeclarationName(node, goName) {
+    if (!this.asyncMethodSuffix || !this.isAsyncFunction(node)) {
+      return goName;
+    }
+    return goName + this.asyncMethodSuffix;
+  }
+  /**
+   * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
+   * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
+   * bare `x()` all agree with the declaration site. Unresolvable or non-function symbols
+   * (properties, `any` receivers, JS builtins) keep the plain name.
+   */
+  applyAsyncSuffixToCallee(nameNode, goName) {
+    if (!this.asyncMethodSuffix || !nameNode) {
+      return goName;
+    }
+    let decls;
+    try {
+      let symbol = this.getChecker().getSymbolAtLocation(nameNode);
+      if (symbol && symbol.flags & ts5.SymbolFlags.Alias) {
+        symbol = this.getChecker().getAliasedSymbol(symbol);
+      }
+      decls = symbol?.declarations;
+    } catch {
+      return goName;
+    }
+    if (!decls || decls.length === 0) {
+      return goName;
+    }
+    const isAsyncDecl = decls.some((d) => (ts5.isMethodDeclaration(d) || ts5.isFunctionDeclaration(d)) && d.body !== void 0 && this.isAsyncFunction(d));
+    return isAsyncDecl ? goName + this.asyncMethodSuffix : goName;
+  }
   printMethodDefinition(node, identation) {
     let name = node.name.escapedText;
-    name = this.transformMethodNameIfNeeded(name);
+    name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
     let returnType = this.printFunctionType(node);
     const parsedArgs = this.printMethodParameters(node);
     returnType = returnType ? returnType + " " : returnType;
@@ -4219,7 +4259,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   }
   printFunctionDefinition(node, identation) {
     let name = node.name.escapedText;
-    name = this.transformMethodNameIfNeeded(name);
+    name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
     let returnType = this.printFunctionType(node);
     const parsedArgs = this.printMethodParameters(node);
     returnType = returnType ? returnType + " " : returnType;
@@ -4634,11 +4674,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const res = this.unCamelCaseIfNeeded(name);
     return this.capitalize(res);
   }
-  transformCallExpressionName(name) {
-    return this.capitalize(name);
+  transformCallExpressionName(name, nameNode = void 0) {
+    return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
   }
-  transformPropertyAccessExpressionName(name) {
-    return this.capitalize(name);
+  transformPropertyAccessExpressionName(name, nameNode = void 0) {
+    return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
   }
   printOutOfOrderCallExpressionIfAny(node, identation) {
     if (node.expression.kind === ts5.SyntaxKind.PropertyAccessExpression) {

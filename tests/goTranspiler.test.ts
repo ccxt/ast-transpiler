@@ -820,6 +820,49 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(output).toContain("var v any = SyncHelper(x)");
         expect(output).not.toContain("Spawn");
     });
+    test('asyncMethodSuffix renames async declarations and their checker-resolved call sites', () => {
+        const suffixed = new Transpiler({ 'verbose': false, 'go': { 'asyncMethodSuffix': 'Async', 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const input =
+        "async function helper(x: any): Promise<any> {\n" +
+        "    return x;\n" +
+        "}\n" +
+        "class Base {\n" +
+        "    async fetchTicker(symbol: string): Promise<any> {\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "    parseTicker(t: any): any {\n" +
+        "        return t;\n" +
+        "    }\n" +
+        "}\n" +
+        "class Exchange extends Base {\n" +
+        "    async fetchTicker(symbol: string): Promise<any> {\n" +
+        "        const raw = await super.fetchTicker(symbol);\n" +
+        "        const h = await helper(raw);\n" +
+        "        return this.parseTicker(h);\n" +
+        "    }\n" +
+        "    watchTicker(symbol: string): Promise<any> {\n" +
+        "        return this.fetchTicker(symbol);\n" +
+        "    }\n" +
+        "}";
+        const output = suffixed.transpileGo(input).content;
+        // declarations: async (explicit and implicit) get the suffix, sync does not
+        expect(output).toMatch(/func\s+HelperAsync\(x any\) <- chan any/);
+        expect(output).toMatch(/func\s+\(this \*Base\) FetchTickerAsync\(symbol any\) <- chan any/);
+        expect(output).toMatch(/func\s+\(this \*Exchange\) FetchTickerAsync\(symbol any\) <- chan any/);
+        expect(output).toMatch(/func\s+\(this \*Exchange\) WatchTickerAsync\(symbol any\) <- chan any/);
+        expect(output).toMatch(/func\s+\(this \*Base\) ParseTicker\(t any\) any/);
+        // call sites follow the callee's declaration through this/super/bare-identifier
+        expect(output).toContain("<-base.FetchTickerAsync(symbol)");
+        expect(output).toContain("<-HelperAsync(raw)");
+        expect(output).toContain("<-this.FetchTickerAsync(symbol)");
+        expect(output).toContain("this.ParseTicker(h)");
+        expect(output).not.toContain("ParseTickerAsync");
+        // the body sibling stays unexported and unsuffixed
+        expect(output).toContain("fetchTickerBody(ch");
+        // default config leaves every name untouched
+        const plain = transpiler.transpileGo(input).content;
+        expect(plain).not.toContain("Async");
+    });
 });
 describe('go inline equality', () => {
     test('=== / !== on present scalars inline to Go == / !=', () => {
