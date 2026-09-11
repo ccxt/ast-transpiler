@@ -448,11 +448,11 @@ class BaseTranspiler {
         return this.unCamelCaseIfNeeded(identifier);
     }
 
-    transformCallExpressionName(name: string) {
+    transformCallExpressionName(name: string, nameNode = undefined) {
         return name;
     }
 
-    transformPropertyAccessExpressionName(name: string) {
+    transformPropertyAccessExpressionName(name: string, nameNode = undefined) {
         return name;
     }
 
@@ -595,7 +595,7 @@ class BaseTranspiler {
         // join together the left and right side again
         const accessToken = this.getExceptionalAccessTokenIfAny(node) ?? this.PROPERTY_ACCESS_TOKEN;
 
-        rawExpression = leftSide + accessToken + this.transformPropertyAccessExpressionName(rightSide);
+        rawExpression = leftSide + accessToken + this.transformPropertyAccessExpressionName(rightSide, node.name);
 
         return rawExpression;
     }
@@ -1366,7 +1366,7 @@ class BaseTranspiler {
         } else {
             if (expression.kind === ts.SyntaxKind.Identifier) {
                 const idValue = expression.text ?? expression.escapedText;
-                parsedExpression = this.transformCallExpressionName(this.unCamelCaseIfNeeded(idValue));
+                parsedExpression = this.transformCallExpressionName(this.unCamelCaseIfNeeded(idValue), expression);
             } else {
                 parsedExpression = this.printNode(expression, 0);
             }

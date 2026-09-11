@@ -173,6 +173,9 @@ export class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
+    // appended to every async (channel returning) Go method/function name and to each
+    // checker-resolved call site of one; '' disables the rename
+    asyncMethodSuffix = '';
     classNameMap: { [key: string]: string };
     DEFAULT_RETURN_TYPE = 'any';
     // suffix of the sibling body method an async trampoline hands its work to
@@ -199,6 +202,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.applyUserOverrides(config);
         this.wrapThisCalls = config['wrapThisCalls'] ?? false;
         this.wrapCallMethods = config['wrapCallMethods'] ?? [];
+        this.asyncMethodSuffix = config['asyncMethodSuffix'] ?? '';
     }
 
     initConfig() {
@@ -550,9 +554,50 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         ].join("\n");
     }
 
+    /**
+     * Go name of an async (channel returning) declaration: `fetchTicker` -> `FetchTickerAsync`.
+     * Empty `asyncMethodSuffix` (the default) keeps the plain name, so the suffix is opt-in.
+     */
+    printAsyncDeclarationName(node, goName: string): string {
+        if (!this.asyncMethodSuffix || !this.isAsyncFunction(node)) {
+            return goName;
+        }
+        return goName + this.asyncMethodSuffix;
+    }
+
+    /**
+     * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
+     * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
+     * bare `x()` all agree with the declaration site. Unresolvable or non-function symbols
+     * (properties, `any` receivers, JS builtins) keep the plain name.
+     */
+    applyAsyncSuffixToCallee(nameNode, goName: string): string {
+        if (!this.asyncMethodSuffix || !nameNode) {
+            return goName;
+        }
+        let decls;
+        try {
+            let symbol = this.getChecker().getSymbolAtLocation(nameNode);
+            if (symbol && (symbol.flags & ts.SymbolFlags.Alias)) {
+                symbol = this.getChecker().getAliasedSymbol(symbol);
+            }
+            decls = symbol?.declarations;
+        } catch {
+            return goName;
+        }
+        if (!decls || decls.length === 0) {
+            return goName;
+        }
+        // only declarations with a body count: interface/abstract signatures (e.g. implicit API
+        // endpoints declared as `foo(params?: {}): Promise<T>;`) are emitted elsewhere, unsuffixed
+        const isAsyncDecl = decls.some((d) => (ts.isMethodDeclaration(d) || ts.isFunctionDeclaration(d))
+            && d.body !== undefined && this.isAsyncFunction(d));
+        return isAsyncDecl ? goName + this.asyncMethodSuffix : goName;
+    }
+
     printMethodDefinition(node, identation) {
         let name = node.name.escapedText;
-        name = this.transformMethodNameIfNeeded(name);
+        name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
 
         let returnType = this.printFunctionType(node);
 
@@ -572,7 +617,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     printFunctionDefinition(node, identation) {
         let name = node.name.escapedText;
-        name = this.transformMethodNameIfNeeded(name);
+        name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
 
         let returnType = this.printFunctionType(node);
 
@@ -1078,12 +1123,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.capitalize(res);
     }
 
-    transformCallExpressionName(name: string) {
-        return this.capitalize(name);
+    transformCallExpressionName(name: string, nameNode = undefined) {
+        return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
     }
 
-    transformPropertyAccessExpressionName(name: string) {
-        return this.capitalize(name);
+    transformPropertyAccessExpressionName(name: string, nameNode = undefined) {
+        return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {
