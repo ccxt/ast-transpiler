@@ -65,7 +65,8 @@ enum Languages {
     CSharp,
     Go,
     Java,
-    Rust
+    Rust,
+    Cpp
 }
 
 enum TranspilationMode {

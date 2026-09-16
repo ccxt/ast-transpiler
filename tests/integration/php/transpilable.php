@@ -10,6 +10,14 @@ class Second {
     }
 }
 class Test {
+    public function boolToString($x) {
+        if ($x) {
+            return 'true';
+        } else {
+            return 'false';
+        }
+    }
+
     public function functionWithOptionals($a, $c = null, $d = 1) {
         custom_echo($a);
         if ($c !== null) {
@@ -100,6 +108,68 @@ class Test {
         $dict3['key'] = 'value';
         custom_echo($dict3['key']); // should print "value"
         $this->testJavaScope();
+        [$first1, $second1] = $this->handleOptionAndParamsTest();
+        custom_echo($first1); // should print 1
+        custom_echo($second1); // should print "a"
+        $first2 = null;
+        $second2 = null;
+        [$first2, $second2] = $this->handleOptionAndParamsTest();
+        custom_echo($first2); // should print 1
+        custom_echo($second2); // should print "a"
+        $this->funcWithParams([1, 2, 3], array(
+            'a' => 'value of a',
+        ));
+        $this->testStringMethods();
+        $threwError = false;
+        try {
+            $this->functionThatThrows();
+        } catch(Exception $e) {
+            $threwError = true;
+        }
+        custom_echo($this->boolToString($threwError)); // should print true
+    }
+
+    public function handleOptionAndParamsTest() {
+        return [1, 'a'];
+    }
+
+    public function funcWithParams($a = null, $params = array()) {
+        if (gettype($a) === 'array' && array_is_list($a)) {
+            custom_echo(count($a));
+        }
+        if (is_array($params) && array_key_exists('a', $params)) {
+            custom_echo($params['a']);
+        }
+    }
+
+    public function testStringMethods() {
+        $str = 'hello world';
+        // isEqual test
+        if ($str === 'hello world') {
+            custom_echo('str is hello world'); // should print "str is hello world"
+        }
+        custom_echo(strtoupper($str));
+        $startsWithHello = str_starts_with($str, 'hello');
+        custom_echo($this->boolToString($startsWithHello)); // should print true
+        $endsWithWorld = str_ends_with($str, 'world');
+        custom_echo($this->boolToString($endsWithWorld)); // should print true
+        $stringParts = explode(' ', $str);
+        custom_echo(count($stringParts)); // should print 2
+        custom_echo($stringParts[0]); // should print "hello"
+        custom_echo($stringParts[1]); // should print "world"
+        $indexOfResult = mb_strpos($str, 'o');
+        custom_echo($indexOfResult); // should print 4
+        $strReplaced = str_replace('l', 'x', $str);
+        custom_echo($strReplaced); // should print "hexxo worxd"
+        // concatenation test
+        $a = 'a';
+        $b = 'b';
+        $c = $a . $b;
+        custom_echo($c); // should print "ab"
+    }
+
+    public function functionThatThrows() {
+        throw new Exception('This is an error');
     }
 }
 

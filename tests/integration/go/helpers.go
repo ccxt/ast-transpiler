@@ -31,10 +31,6 @@ func Add(a any, b any) any {
 	return nil
 }
 
-func IsTrue(a any) bool {
-	return EvalTruthy(a)
-}
-
 // EvalTruthy determines if a single interface value is truthy.
 func EvalTruthy(val any) bool {
 	if val == nil {

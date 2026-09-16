@@ -11,6 +11,17 @@ class Second
 }
 class Test
 {
+    public Object boolToString(Object x)
+    {
+        if (Helpers.isTrue(x))
+        {
+            return "true";
+        } else
+        {
+            return "false";
+        }
+    }
+
     public void functionWithOptionals(Object a, Object... optionalArgs)
     {
         Object c = Helpers.getArg(optionalArgs, 0, null);
@@ -113,5 +124,82 @@ class Test
         Helpers.addElementToObject(dict3, "key", "value");
         System.out.println(Helpers.GetValue(dict3, "key")); // should print "value"
         this.testJavaScope();
+        var first1second1Variable = this.handleOptionAndParamsTest();
+        var first1 = ((java.util.List<Object>) first1second1Variable).get(0);
+        var second1 = ((java.util.List<Object>) first1second1Variable).get(1);
+        System.out.println(first1); // should print 1
+        System.out.println(second1); // should print "a"
+        Object first2 = null;
+        Object second2 = null;
+        var first2second2Variable = this.handleOptionAndParamsTest();
+        first2 = ((java.util.List<Object>) first2second2Variable).get(0);
+        second2 = ((java.util.List<Object>) first2second2Variable).get(1);
+        System.out.println(first2); // should print 1
+        System.out.println(second2); // should print "a"
+        this.funcWithParams(new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 2, 3)), new java.util.HashMap<String, Object>() {{
+            put( "a", "value of a" );
+        }});
+        this.testStringMethods();
+        Object threwError = false;
+        try
+        {
+            this.functionThatThrows();
+        } catch(Exception e)
+        {
+            threwError = true;
+        }
+        System.out.println(this.boolToString(threwError)); // should print true
+    }
+
+    public Object handleOptionAndParamsTest()
+    {
+        return new java.util.ArrayList<Object>(java.util.Arrays.asList(1, "a"));
+    }
+
+    public void funcWithParams(Object... optionalArgs)
+    {
+        Object a = Helpers.getArg(optionalArgs, 0, null);
+        Object parameters = Helpers.getArg(optionalArgs, 1, new java.util.HashMap<String, Object>() {{}});
+        if (Helpers.isTrue(Helpers.isArray(a)))
+        {
+            System.out.println(Helpers.getArrayLength(a));
+        }
+        if (Helpers.isTrue(Helpers.inOp(parameters, "a")))
+        {
+            System.out.println(Helpers.GetValue(parameters, "a"));
+        }
+    }
+
+    public void testStringMethods()
+    {
+        Object str = "hello world";
+        // isEqual test
+        if (Helpers.isTrue(Helpers.isEqual(str, "hello world")))
+        {
+            System.out.println("str is hello world"); // should print "str is hello world"
+        }
+        System.out.println(((String)str).toUpperCase());
+        Object startsWithHello = ((String)str).startsWith(((String)"hello"));
+        System.out.println(this.boolToString(startsWithHello)); // should print true
+        Object endsWithWorld = ((String)str).endsWith(((String)"world"));
+        System.out.println(this.boolToString(endsWithWorld)); // should print true
+        Object stringParts = Helpers.split(str, " ");
+        System.out.println(Helpers.getArrayLength(stringParts)); // should print 2
+        System.out.println(Helpers.GetValue(stringParts, 0)); // should print "hello"
+        System.out.println(Helpers.GetValue(stringParts, 1)); // should print "world"
+        Object indexOfResult = Helpers.getIndexOf(str, "o");
+        System.out.println(indexOfResult); // should print 4
+        Object strReplaced = Helpers.replaceAll((String)str, (String)"l", (String)"x");
+        System.out.println(strReplaced); // should print "hexxo worxd"
+        // concatenation test
+        Object a = "a";
+        Object b = "b";
+        Object c = Helpers.add(a, b);
+        System.out.println(c); // should print "ab"
+    }
+
+    public void functionThatThrows()
+    {
+        throw new RuntimeException((String)"This is an error") ;
     }
 }
