@@ -134,6 +134,9 @@ export class JavaTranspiler extends BaseTranspiler {
     // resolves, and the hoisted `final Object finalX = x;` declaration is dropped
     // while its usages remain.
     finalVarMutations: Array<{ node: any; escapedText: any; ownGetFullText: boolean; getFullText: any }> = [];
+    // Java expression passed as the second supplyAsync argument for async methods.
+    // Empty (the default) emits the single-argument, common-pool supplyAsync form.
+    asyncExecutor = '';
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -149,6 +152,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
         this.initConfig();
         this.applyUserOverrides(config);
+        this.asyncExecutor = config['asyncExecutor'] ?? '';
     }
 
     initConfig() {
@@ -1559,11 +1563,12 @@ export class JavaTranspiler extends BaseTranspiler {
             const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : (bodyStatements.length > 0 ? bodyStatements[0] : undefined);
             const lastStmtIsReturn = lastStatement && (ts.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
+            const executorArg = this.asyncExecutor ? `, ${this.asyncExecutor}` : "";
             const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
                     insideWrappers +
                     body + "\n" +
                     returnNull +
-                    this.getIden(identation + 1) + "});\n";
+                    this.getIden(identation + 1) + `}${executorArg});\n`;
             return blockOpen + finalWrapperVars + asyncBody + blockClose;
 
         }

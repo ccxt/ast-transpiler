@@ -5829,6 +5829,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     // resolves, and the hoisted `final Object finalX = x;` declaration is dropped
     // while its usages remain.
     this.finalVarMutations = [];
+    // Java expression passed as the second supplyAsync argument for async methods.
+    // Empty (the default) emits the single-argument, common-pool supplyAsync form.
+    this.asyncExecutor = "";
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -5839,6 +5842,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.id = "Java";
     this.initConfig();
     this.applyUserOverrides(config);
+    this.asyncExecutor = _nullishCoalesce(config["asyncExecutor"], () => ( ""));
   }
   countRequiredParameters(declaration) {
     const params = _nullishCoalesce(_optionalChain([declaration, 'optionalAccess', _235 => _235.parameters]), () => ( []));
@@ -6926,7 +6930,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : bodyStatements.length > 0 ? bodyStatements[0] : void 0;
       const lastStmtIsReturn = lastStatement && (_typescript2.default.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
       const returnNull = lastStmtIsReturn ? "" : this.getIden(identation + 2) + "return null;\n";
-      const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" + insideWrappers + body + "\n" + returnNull + this.getIden(identation + 1) + "});\n";
+      const executorArg = this.asyncExecutor ? `, ${this.asyncExecutor}` : "";
+      const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" + insideWrappers + body + "\n" + returnNull + this.getIden(identation + 1) + `}${executorArg});
+`;
       return blockOpen + finalWrapperVars + asyncBody + blockClose;
     }
     return blockOpen + firstStatement + remainingString + blockClose;

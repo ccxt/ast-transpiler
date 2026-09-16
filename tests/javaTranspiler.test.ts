@@ -2372,3 +2372,45 @@ describe('trailing undefined into a REQUIRED positional parameter is kept', () =
         expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
     });
 });
+
+describe('java asyncExecutor option', () => {
+    test('asyncExecutor: default emits the single-argument supplyAsync form', () => {
+        const input =
+        "class T {\n" +
+        "    async fetchData(x: any): Promise<any> {\n" +
+        "        const y = await this.other(x);\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("supplyAsync(() -> {");
+        expect(output).toContain("        });\n");
+        expect(output).not.toMatch(/\}, [^)]+\);/);
+    });
+
+    test('asyncExecutor: option appends the executor as second supplyAsync argument', () => {
+        const withExecutor = new Transpiler({
+            'verbose': false,
+            'java': {
+                'parser': { 'NUM_LINES_END_FILE': 0 },
+                'asyncExecutor': 'io.github.ccxt.BaseExchange.VIRTUAL_EXECUTOR',
+            }
+        });
+        const input =
+        "class T {\n" +
+        "    async fetchData(x: any): Promise<any> {\n" +
+        "        const y = await this.other(x);\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "    async noReturn(): Promise<void> {\n" +
+        "        const x = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = withExecutor.transpileJava(input).content;
+        const plain = transpiler.transpileJava(input).content;
+        expect((output.match(/\}, io\.github\.ccxt\.BaseExchange\.VIRTUAL_EXECUTOR\);/g) || []).length).toBe(2);
+        expect(output).toContain("            return null;\n        }, io.github.ccxt.BaseExchange.VIRTUAL_EXECUTOR);");
+        // the option only appends the executor argument; everything else is identical
+        expect(output.replace(/, io\.github\.ccxt\.BaseExchange\.VIRTUAL_EXECUTOR\);/g, ');')).toBe(plain);
+    });
+});
