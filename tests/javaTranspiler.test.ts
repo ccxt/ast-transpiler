@@ -2414,3 +2414,32 @@ describe('java asyncExecutor option', () => {
         expect(output.replace(/, io\.github\.ccxt\.BaseExchange\.VIRTUAL_EXECUTOR\);/g, ');')).toBe(plain);
     });
 });
+
+describe('java asyncSupplier option', () => {
+    test('asyncSupplier: replaces CompletableFuture.supplyAsync and emits no executor argument', () => {
+        const withSupplier = new Transpiler({
+            'verbose': false,
+            'java': {
+                'parser': { 'NUM_LINES_END_FILE': 0 },
+                'asyncSupplier': 'io.github.ccxt.BaseExchange.supplyAsync',
+                'asyncExecutor': 'io.github.ccxt.BaseExchange.VIRTUAL_EXECUTOR',
+            }
+        });
+        const input =
+        "class T {\n" +
+        "    async fetchData(x: any): Promise<any> {\n" +
+        "        const y = await this.other(x);\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "    async noReturn(): Promise<void> {\n" +
+        "        const x = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = withSupplier.transpileJava(input).content;
+        expect(output).toContain("return io.github.ccxt.BaseExchange.supplyAsync(() -> {");
+        expect(output).not.toContain("CompletableFuture.supplyAsync");
+        expect(output).not.toContain("VIRTUAL_EXECUTOR");
+        expect(output).toContain("return null;");
+        expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
+    });
+});

@@ -5832,6 +5832,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     // Java expression passed as the second supplyAsync argument for async methods.
     // Empty (the default) emits the single-argument, common-pool supplyAsync form.
     this.asyncExecutor = "";
+    // Static method emitted in place of java.util.concurrent.CompletableFuture.supplyAsync
+    // for async methods. The callee owns the executor choice, so no second argument is emitted.
+    this.asyncSupplier = "";
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -5843,6 +5846,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.initConfig();
     this.applyUserOverrides(config);
     this.asyncExecutor = _nullishCoalesce(config["asyncExecutor"], () => ( ""));
+    this.asyncSupplier = _nullishCoalesce(config["asyncSupplier"], () => ( ""));
   }
   countRequiredParameters(declaration) {
     const params = _nullishCoalesce(_optionalChain([declaration, 'optionalAccess', _235 => _235.parameters]), () => ( []));
@@ -6930,8 +6934,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : bodyStatements.length > 0 ? bodyStatements[0] : void 0;
       const lastStmtIsReturn = lastStatement && (_typescript2.default.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
       const returnNull = lastStmtIsReturn ? "" : this.getIden(identation + 2) + "return null;\n";
-      const executorArg = this.asyncExecutor ? `, ${this.asyncExecutor}` : "";
-      const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" + insideWrappers + body + "\n" + returnNull + this.getIden(identation + 1) + `}${executorArg});
+      const supplier = this.asyncSupplier || "java.util.concurrent.CompletableFuture.supplyAsync";
+      const executorArg = !this.asyncSupplier && this.asyncExecutor ? `, ${this.asyncExecutor}` : "";
+      const asyncBody = this.getIden(identation + 1) + `return ${supplier}(() -> {
+` + insideWrappers + body + "\n" + returnNull + this.getIden(identation + 1) + `}${executorArg});
 `;
       return blockOpen + finalWrapperVars + asyncBody + blockClose;
     }
