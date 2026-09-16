@@ -137,6 +137,9 @@ export class JavaTranspiler extends BaseTranspiler {
     // Java expression passed as the second supplyAsync argument for async methods.
     // Empty (the default) emits the single-argument, common-pool supplyAsync form.
     asyncExecutor = '';
+    // Static method emitted in place of java.util.concurrent.CompletableFuture.supplyAsync
+    // for async methods. The callee owns the executor choice, so no second argument is emitted.
+    asyncSupplier = '';
 
     constructor(config = {}) {
         config["parser"] = Object.assign({}, parserConfig, config["parser"] ?? {});
@@ -153,6 +156,7 @@ export class JavaTranspiler extends BaseTranspiler {
         this.initConfig();
         this.applyUserOverrides(config);
         this.asyncExecutor = config['asyncExecutor'] ?? '';
+        this.asyncSupplier = config['asyncSupplier'] ?? '';
     }
 
     initConfig() {
@@ -1563,8 +1567,9 @@ export class JavaTranspiler extends BaseTranspiler {
             const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : (bodyStatements.length > 0 ? bodyStatements[0] : undefined);
             const lastStmtIsReturn = lastStatement && (ts.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
-            const executorArg = this.asyncExecutor ? `, ${this.asyncExecutor}` : "";
-            const asyncBody = this.getIden(identation + 1) + "return java.util.concurrent.CompletableFuture.supplyAsync(() -> {\n" +
+            const supplier = this.asyncSupplier || "java.util.concurrent.CompletableFuture.supplyAsync";
+            const executorArg = (!this.asyncSupplier && this.asyncExecutor) ? `, ${this.asyncExecutor}` : "";
+            const asyncBody = this.getIden(identation + 1) + `return ${supplier}(() -> {\n` +
                     insideWrappers +
                     body + "\n" +
                     returnNull +

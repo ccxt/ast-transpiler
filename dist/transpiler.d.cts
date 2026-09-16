@@ -779,6 +779,7 @@ declare class JavaTranspiler extends BaseTranspiler {
         getFullText: any;
     }>;
     asyncExecutor: string;
+    asyncSupplier: string;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
