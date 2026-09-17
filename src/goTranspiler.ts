@@ -525,7 +525,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     /**
      * The trampoline: an async core hands back a *hot handle*.
      *
-     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
      *         ch := make(chan any, 1)
      *         go this.fetchTickerBody(ch, symbol)
      *         return ch
@@ -538,7 +538,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
      *     with work already in flight. That is what makes
      *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
      *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
      *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
      *     lives on the body, not here.
      */
@@ -546,7 +546,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const args = this.printAsyncTrampolineArgs(node);
         const argList = args ? `, ${args}` : "";
         return [
-            "{",
+            // F04: the signature above ends WITHOUT a trailing space, so the block opener
+            // carries the one space before `{` (same contract as getBlockOpen)
+            " {",
             `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
             `${this.getIden(identation + 1)}go ${callee}(ch${argList})`,
             `${this.getIden(identation + 1)}return ch`,
@@ -599,17 +601,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let name = node.name.escapedText;
         name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
 
-        let returnType = this.printFunctionType(node);
+        const returnType = this.printFunctionType(node).trim();
 
         const parsedArgs = this.printMethodParameters(node);
 
-        returnType = returnType ? returnType + " " : returnType;
-
-        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-        // const methodDef = this.getIden(identation) + returnType + methodToken + name
-        //     + "(" + parsedArgs + ")";
+        // F04: `func`, the receiver, the name and the return type are separated by exactly one
+        // space, and the signature carries NO trailing space — the block opener (`getBlockOpen`,
+        // or `printAsyncTrampolineBlock` below) contributes the single space before `{`.
+        // gofmt rejects both `func  (this *X)` and `) any  {`.
+        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
         const structReceiver = `(${this.THIS_TOKEN} *${this.className})`;
-        const methodDef = this.getIden(identation) + methodToken + " " + structReceiver + " " + name + "(" + parsedArgs + ") " + returnType;
+        const returnSignature = returnType ? " " + returnType : "";
+        const methodDef = this.getIden(identation) + methodToken + structReceiver + " " + name + "(" + parsedArgs + ")" + returnSignature;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
     }
@@ -619,16 +622,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let name = node.name.escapedText;
         name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
 
-        let returnType = this.printFunctionType(node);
+        const returnType = this.printFunctionType(node).trim();
 
         const parsedArgs = this.printMethodParameters(node);
 
-        returnType = returnType ? returnType + " " : returnType;
-
-        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-        // const methodDef = this.getIden(identation) + returnType + methodToken + name
-        //     + "(" + parsedArgs + ")";
-        const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ") " + returnType;
+        // F04: single spaces only, no trailing space before the block (see printMethodDefinition)
+        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
+        const returnSignature = returnType ? " " + returnType : "";
+        const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ")" + returnSignature;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
     }
@@ -701,9 +702,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (typeText === 'void') {
             // // If the function is async (returns a Promise in TS) but declared void, emit a typed channel
             // if (this.isAsyncFunction(node)) {
-            //     // Ensure element type is present; some edge cases yield '<- chan' only
+            //     // Ensure element type is present; some edge cases yield '<-chan' only
             //     const elementType = this.DEFAULT_RETURN_TYPE || 'any';
-            //     return `<- chan ${elementType}`;
+            //     return `<-chan ${elementType}`;
             // }
             return "";
         }
@@ -711,7 +712,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // throw new FunctionReturnTypeError("Function return type is not supported");
             let res = "";
             if (this.isAsyncFunction(node)) {
-                res = `<- chan ${this.DEFAULT_RETURN_TYPE}`;
+                res = `<-chan ${this.DEFAULT_RETURN_TYPE}`;
             } else {
                 res = this.DEFAULT_RETURN_TYPE;
             }
@@ -719,7 +720,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return res;
         }
         if (typeText === this.PROMISE_TYPE_KEYWORD) {
-            return `<- chan any`;
+            return `<-chan any`;
         }
 
         // move any trailing array brackets "[]" to directly precede the element type

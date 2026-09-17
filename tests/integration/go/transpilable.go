@@ -16,7 +16,7 @@ func NewSecond() *Second {
     return p
 }
 
-func  (this *Second) StringifyNumber(arg any) any  {
+func (this *Second) StringifyNumber(arg any) any {
     return ToString(arg)
 }
 type Test struct {
@@ -29,14 +29,14 @@ func NewTest() *Test {
     return p
 }
 
-func  (this *Test) BoolToString(x any) any  {
+func (this *Test) BoolToString(x any) any {
     if EvalTruthy(x) {
         return "true"
     } else {
         return "false"
     }
 }
-func  (this *Test) FunctionWithOptionals(a any, optionalArgs ...any)  {
+func (this *Test) FunctionWithOptionals(a any, optionalArgs ...any) {
     c := GetArg(optionalArgs, 0, nil)
     _ = c
     d := GetArg(optionalArgs, 1, 1)
@@ -49,10 +49,10 @@ func  (this *Test) FunctionWithOptionals(a any, optionalArgs ...any)  {
         fmt.Println(d)
     }
 }
-func  (this *Test) GetValue(x any) any  {
+func (this *Test) GetValue(x any) any {
     return x
 }
-func  (this *Test) TestJavaScope()  {
+func (this *Test) TestJavaScope() {
     var newObject map[string]any = map[string]any {
         "a": this.GetValue(5),
         "b": this.GetValue(this.GetValue(this.GetValue(2))),
@@ -60,7 +60,7 @@ func  (this *Test) TestJavaScope()  {
     fmt.Println(GetValue(newObject, "a")) // should print 5
     fmt.Println(GetValue(newObject, "b")) // should print 2
 }
-func  (this *Test) Test()  {
+func (this *Test) Test() {
     var a any = 1
     var b any = 2
     var c any = Add(a, b)
@@ -167,10 +167,10 @@ func  (this *Test) Test()  {
             }
     fmt.Println(this.BoolToString(threwError)) // should print true
 }
-func  (this *Test) HandleOptionAndParamsTest() any  {
+func (this *Test) HandleOptionAndParamsTest() any {
     return []any{1, "a"}
 }
-func  (this *Test) FuncWithParams(optionalArgs ...any)  {
+func (this *Test) FuncWithParams(optionalArgs ...any) {
     a := GetArg(optionalArgs, 0, nil)
     _ = a
     params := GetArg(optionalArgs, 1, map[string]any {})
@@ -182,7 +182,7 @@ func  (this *Test) FuncWithParams(optionalArgs ...any)  {
         fmt.Println(GetValue(params, "a"))
     }
 }
-func  (this *Test) TestStringMethods()  {
+func (this *Test) TestStringMethods() {
     var str string = "hello world"
     // isEqual test
     if (str == "hello world") {
@@ -207,6 +207,6 @@ func  (this *Test) TestStringMethods()  {
     var c any = Add(a, b)
     fmt.Println(c) // should print "ab"
 }
-func  (this *Test) FunctionThatThrows()  {
+func (this *Test) FunctionThatThrows() {
     panic(Error("This is an error"))
 }
