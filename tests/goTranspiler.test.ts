@@ -1121,7 +1121,11 @@ describe('go inline equality', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Ternary((isWsProxyDefined), 1, 2)");
+        // a parenthesized operand the printer types inlines too: the ternary becomes a
+        // func literal with the bare Go bool condition (parentheses kept, as the
+        // operator still parses the same way) instead of the Ternary helper
+        expect(output).toContain("var picked any = func() any { if (isWsProxyDefined) { return 1 }; return 2 }()");
+        expect(output).not.toContain("Ternary(");
         expect(output).toContain("if (s != nil && *s != \"\") {");
         // an `any` operand still needs the helper, parentheses or not
         expect(output).toContain("if EvalTruthy((opt)) {");
@@ -1469,14 +1473,19 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain('GetValue(a, 0)');
     });
-    test('a typed map assignment target keeps AddElementToObject', () => {
+    test('a typed map assignment target assigns through the same native index', () => {
         const input =
         "function f() {\n" +
         "    const x = {};\n" +
         "    x['a'] = 1;\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain('AddElementToObject(x, "a", 1)');
+        // the printer typed the `{}` literal as a Go map, so the receiver is proven
+        // indexable: the write goes through the native index exactly like the read
+        // does, and no boxed receiver keeps the helper alive
+        expect(output).toContain("var x map[string]any = map[string]any {}");
+        expect(output).toContain('x["a"] = 1');
+        expect(output).not.toContain('AddElementToObject');
     });
     test('a local the reject filters demoted to any keeps GetValue', () => {
         const input =
@@ -1633,7 +1642,7 @@ describe('go native element assignment', () => {
         expect(output).toContain("var x bool = (a == b)");
         expect(output).toContain("var y bool = (c == d)");
     });
-    test('a boxed helper result compares against nil, a string and a bool', () => {
+    test('a boxed helper result and the typed accessors compare against nil, a string and a bool', () => {
         const input =
         "class T {\n" +
         "    safeValue (a, b) { return a; }\n" +
@@ -1651,8 +1660,13 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var a bool = (this.SafeBool(response, key) == true)");
-        expect(output).toContain("var b bool = !IsEqual(this.SafeDict(response, key), nil)");
+        // this.SafeBool(...) is a *bool accessor: `== true` would not compile against
+        // the pointer, and the operand is a call the deref branches must not repeat,
+        // so the deref-aware IsEqual is the only emission with the same predicate
+        expect(output).toContain("var a bool = IsEqual(this.SafeBool(response, key), true)");
+        // this.SafeDict(...) is a *map[string]any, where absent is exactly a nil
+        // pointer: the nil test needs no deref and no helper
+        expect(output).toContain("var b bool = (this.SafeDict(response, key) != nil)");
         expect(output).toContain("var c bool = (GetValue(response, key) == \"spot\")");
         // an any-typed operand is not a proven nullable scalar: nil stays on the helper
         expect(output).toContain("var d bool = IsEqual(GetValue(response, key), nil)");
