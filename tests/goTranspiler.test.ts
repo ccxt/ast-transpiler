@@ -1037,4 +1037,82 @@ describe('go inline equality', () => {
         expect(output).toContain("IsEqual(length, limit)");
         expect(output).not.toContain("*limit == length");
     });
+    test('element access on an object literal reads the Go map natively', () => {
+        const input =
+        "function f() {\n" +
+        "    return ({ 'a': 1 })['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('})["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('element access on a local the printer typed map[string]any reads natively', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    return m['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var m map[string]any =");
+        expect(output).toContain('return m["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('the native index accepts a Go string key, not just a literal', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    const k = 'a';\n" +
+        "    return m[k];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var k string =");
+        expect(output).toContain('return m[k]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('only the first step of a chain is native, the rest stay GetValue', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    return m['a']['b'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(m["a"], "b")');
+    });
+    test('GetValue stays when the container is boxed in any', () => {
+        const input =
+        "function f(m) {\n" +
+        "    return m['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(m, "a")');
+    });
+    test('GetValue stays for an array index: nil slice and out-of-range read as nil', () => {
+        const input =
+        "function f() {\n" +
+        "    const a = [1, 2, 3];\n" +
+        "    return a[0];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(a, 0)');
+    });
+    test('a typed map assignment target keeps AddElementToObject', () => {
+        const input =
+        "function f() {\n" +
+        "    const x = {};\n" +
+        "    x['a'] = 1;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('AddElementToObject(x, "a", 1)');
+    });
+    test('a local the reject filters demoted to any keeps GetValue', () => {
+        const input =
+        "function f() {\n" +
+        "    let m = {};\n" +
+        "    m = g();\n" +
+        "    return m['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('var m any =');
+        expect(output).toContain('GetValue(m, "a")');
+    });
 });
