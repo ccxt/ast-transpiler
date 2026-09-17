@@ -1301,6 +1301,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const lastKey = keyStrs[keyStrs.length - 1];
             const rhs     = this.printNode(right, 0);
 
+            // a single key over a receiver the printer typed itself is plain Go
+            // indexing; a nested chain goes through GetValue, which is `any`
+            const native = (keyStrs.length === 1)
+                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, rhs)
+                : undefined;
+            if (native !== undefined) {
+                return native;
+            }
+
             return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
 
@@ -1337,6 +1346,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             // For +=, we need to get the current value, add to it, then set it back
             const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            const native = (keyStrs.length === 1)
+                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs})`)
+                : undefined;
+            if (native !== undefined) {
+                return native;
+            }
             const result = `AddElementToObject(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
             return result;
         }
@@ -1527,6 +1542,129 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((typeof goType === 'string') && goType.startsWith('*')) {
                 return goType;
             }
+        }
+        return undefined;
+    }
+
+    // the concrete Go type a `x[k] = v` receiver is declared with, when the printer
+    // can name it: a local it typed itself, or a whole call whose Go return type it
+    // knows. Everything else is an `any` box, and indexing an `any` in Go needs a
+    // type assertion, so those keep the runtime helper.
+    goElementAssignmentContainerType(node, printedText: string): string | undefined {
+        const declared = this.goDeclaredTypeOfIdentifier(node);
+        if ((declared === 'map[string]any') || (declared === '[]any')) {
+            return declared;
+        }
+        if (node?.kind === ts.SyntaxKind.CallExpression) {
+            const known = this.goTypeOfInitializer(node, printedText);
+            if ((known === 'map[string]any') || (known === '[]any')) {
+                return known;
+            }
+        }
+        return undefined;
+    }
+
+    // the printed key is a Go string when the printer knows it: a string literal, or
+    // an identifier declared `string`. Params, GetValue(...) and string concatenation
+    // all print as `any`, which Go refuses as a map key.
+    goIsStringKeyExpression(node): boolean {
+        if ((node.kind === ts.SyntaxKind.StringLiteral) || (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return true;
+        }
+        return this.goDeclaredTypeOfIdentifier(node) === 'string';
+    }
+
+    // `[]any` receivers only inline when the index is a literal the slice's own
+    // literal initializer covers and nothing rebinds the local: the helper silently
+    // ignores an out-of-range index, while Go panics on the assignment.
+    goSliceIndexProvablyInRange(node, indexNode): boolean {
+        if ((node?.kind !== ts.SyntaxKind.Identifier) || (indexNode?.kind !== ts.SyntaxKind.NumericLiteral)) {
+            return false;
+        }
+        const index = Number(indexNode.text);
+        if (!Number.isInteger(index) || (index < 0)) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const decl = symbol?.valueDeclaration;
+        if (decl === undefined || decl.kind !== ts.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const initializer = decl.initializer;
+        if (initializer?.kind !== ts.SyntaxKind.ArrayLiteralExpression) {
+            return false;
+        }
+        if (initializer.elements.length <= index) {
+            return false;
+        }
+        return !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+    }
+
+    // true when the local is rebound anywhere in its function; an element write
+    // (`x[k] = v`) leaves the local itself bound, so only the slice header is at stake
+    goLocalIsRebound(scope, nameNode): boolean {
+        if (scope === undefined) {
+            return true;
+        }
+        const name = nameNode.escapedText;
+        let rebound = false;
+        const visit = (n) => {
+            if (rebound) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name) && (n !== nameNode)) {
+                if (this.goRebindingTargetOf(n) !== undefined) {
+                    rebound = true;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        visit(scope);
+        return rebound;
+    }
+
+    // walks up from the identifier to the assignment it targets: `x = …` / `x += …` /
+    // `[x, y] = …` / `for (x of …)` rebind the local, `x[k] = v` does not
+    goRebindingTargetOf(identifier) {
+        let node: any = identifier;
+        let parent = node.parent;
+        while (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            node = parent;
+            parent = parent.parent;
+        }
+        if ((parent?.kind === ts.SyntaxKind.ForOfStatement) && (parent.initializer === node)) {
+            return parent;
+        }
+        if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === node)) {
+            const op = parent.operatorToken.kind;
+            if ((op === ts.SyntaxKind.EqualsToken) || ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment))) {
+                return parent;
+            }
+        }
+        return undefined;
+    }
+
+    // native `container[key] = value` when the receiver's Go type is proved by the
+    // printer, otherwise undefined and the caller keeps the runtime helper
+    printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string): string | undefined {
+        const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
+        if (containerType === 'map[string]any') {
+            if (!this.goIsStringKeyExpression(keyNode)) {
+                return undefined;
+            }
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
+        }
+        if (containerType === '[]any') {
+            if (!this.goSliceIndexProvablyInRange(containerNode, keyNode)) {
+                return undefined;
+            }
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
         }
         return undefined;
     }
@@ -2306,6 +2444,10 @@ ${this.getIden(identation)}${returnStatement}`;
             if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
+                const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, rightSide);
+                if (native !== undefined) {
+                    return native;
+                }
                 return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
             }
 

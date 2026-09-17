@@ -1038,3 +1038,180 @@ describe('go inline equality', () => {
         expect(output).not.toContain("*limit == length");
     });
 });
+
+describe('go native element assignment', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/ +/g, ' ');
+    test('a map local with a string literal key assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['symbol'] = 'BTC/USDT';\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request map[string]any = map[string]any {}");
+        expect(output).toContain("request[\"symbol\"] = \"BTC/USDT\"");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a map local with a string-typed local key assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        const key = 'symbol';\n" +
+        "        request[key] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var key string = \"symbol\"");
+        expect(output).toContain("request[key] = 1");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a map local with a non-string key stays on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params, key) {\n" +
+        "        const request = {};\n" +
+        "        request[key] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(request, key, 1)");
+    });
+    test('a nested element chain stays on the helper: GetValue is any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['a']['b'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(GetValue(request, \"a\"), \"b\", 1)");
+    });
+    test('an any receiver stays on the helper: Go cannot index an interface', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params) {\n" +
+        "        const request = params;\n" +
+        "        request['symbol'] = 'x';\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request any = params");
+        expect(output).toContain("AddElementToObject(request, \"symbol\", \"x\")");
+    });
+    test('a map local reassigned to another type stays on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params) {\n" +
+        "        const request = {};\n" +
+        "        request['symbol'] = 1;\n" +
+        "        request = params;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request any = map[string]any {}");
+        expect(output).toContain("AddElementToObject(request, \"symbol\", 1)");
+    });
+    test('a map local from a map-returning helper assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(params) {\n" +
+        "        const request = this.extend({}, params);\n" +
+        "        request['symbol'] = 'BTC/USDT';\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request map[string]any = this.Extend(map[string]any {}, params)");
+        expect(output).toContain("request[\"symbol\"] = \"BTC/USDT\"");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('+= on a map local adds through the same native index', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['count'] += 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("request[\"count\"] = Add(request[\"count\"], 1)");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a slice literal local with an in-range literal index assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[0] = 5;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var copy []any = []any{1, 2, 3}");
+        expect(output).toContain("copy[0] = 5");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a literal index past the slice literal stays on the helper (Go would panic)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[7] = 5;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(copy, 7, 5)");
+    });
+    test('a runtime index stays on the helper (the helper ignores out-of-range)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(i) {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[i] = 5;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(copy, i, 5)");
+    });
+    test('a rebound slice stays on the helper: its length is no longer literal', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(other) {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[0] = 5;\n" +
+        "        copy = other;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(copy, 0, 5)");
+    });
+    test('a []string local stays on the helper: only []any inlines', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market) {\n" +
+        "        const parts = market.split('/');\n" +
+        "        parts[0] = 'x';\n" +
+        "        return parts;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var parts []string = Split(market, \"/\")");
+        expect(output).toContain("AddElementToObject(parts, 0, \"x\")");
+    });
+});
