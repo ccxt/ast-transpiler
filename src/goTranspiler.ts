@@ -166,6 +166,17 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
 // deliberately absent above: their box holds a value the printer cannot name, so
 // those locals stay `any`.
 
+// Hand-written CCXT fields whose Go type is a plain `bool` (go/v4/exchange.go,
+// struct BaseExchange, embedded by every derived exchange). Reading one already
+// yields a Go bool, so a condition on it needs no truthiness helper at all.
+const GO_BOOL_FIELDS = new Set([
+    'this.Verbose',
+    'this.EnableRateLimit',
+    'this.ReduceFees',
+    'this.SubstituteCommonCurrencyCodes',
+    'this.IsSandboxModeEnabled',
+]);
+
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
 export class GoTranspiler extends BaseTranspiler {
@@ -1571,22 +1582,37 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    printCondition(node, identation) {
-        // `!x` is handled by printPrefixUnaryExpression, which calls back into this
-        // method with the operand; let the base class keep that recursion intact
+    // the native Go text for a condition operand the printer can type, or undefined
+    // when the operand has to go through the truthiness helper. `(x)` is decided on
+    // its operand and keeps the source parentheses, so the surrounding operator still
+    // parses exactly the same way.
+    goNativeCondition(node): string | undefined {
         if (node?.kind === ts.SyntaxKind.Identifier) {
-            const inlined = this.printInlineTruthy(node);
-            if (inlined !== undefined) {
-                return `${this.getIden(identation)}${inlined}`;
+            return this.printInlineTruthy(node);
+        }
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            const inner = this.goNativeCondition(node.expression);
+            if (inner === undefined) {
+                return undefined;
             }
-            return super.printCondition(node, identation);
+            return (inner.startsWith('(') && this.isWholePrintedCall(inner, 0)) ? inner : `(${inner})`;
         }
         // an expression that already prints a Go `bool` needs no EvalTruthy round-trip:
         // `a || b`, `!x`, `a === b` and the Is*/Precise.String* predicates are all
         // bool-typed, so `EvalTruthy(<bool>)` is the identity function on them
         const printed = this.printNode(node, 0);
         if (this.goTypeOfInitializer(node, printed) === 'bool') {
-            return `${this.getIden(identation)}${printed}`;
+            return printed;
+        }
+        return GO_BOOL_FIELDS.has(printed) ? printed : undefined;
+    }
+
+    printCondition(node, identation) {
+        // `!x` is handled by printPrefixUnaryExpression, which calls back into this
+        // method with the operand; let the base class keep that recursion intact
+        const native = this.goNativeCondition(node);
+        if (native !== undefined) {
+            return `${this.getIden(identation)}${native}`;
         }
         return super.printCondition(node, identation);
     }

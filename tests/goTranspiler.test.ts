@@ -1037,4 +1037,40 @@ describe('go inline equality', () => {
         expect(output).toContain("IsEqual(length, limit)");
         expect(output).not.toContain("*limit == length");
     });
+    test('a parenthesized operand is decided on the operand itself', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    valueIsDefined (a) { return true; }\n" +
+        "    f (response: any, opt: any) {\n" +
+        "        const isWsProxyDefined = this.valueIsDefined (response);\n" +
+        "        const s = this.safeString (response, 'id');\n" +
+        "        const picked = (isWsProxyDefined) ? 1 : 2;\n" +
+        "        if ((s)) { return 1; }\n" +
+        "        if ((opt)) { return 2; }\n" +
+        "        return picked;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Ternary((isWsProxyDefined), 1, 2)");
+        expect(output).toContain("if (s != nil && *s != \"\") {");
+        // an `any` operand still needs the helper, parentheses or not
+        expect(output).toContain("if EvalTruthy((opt)) {");
+    });
+    test('hand-written bool fields need no truthiness helper', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        if (this.enableRateLimit) { return 1; }\n" +
+        "        if (!this.verbose) { return 2; }\n" +
+        "        if (this.options) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if this.EnableRateLimit {");
+        expect(output).toContain("if !this.Verbose {");
+        // a field the printer cannot name keeps the helper
+        expect(output).toContain("if EvalTruthy(this.Options) {");
+    });
 });
