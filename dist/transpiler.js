@@ -4051,6 +4051,24 @@ var GoTranspiler = class extends BaseTranspiler {
     // per-occurrence cost at one scope scan per declaration.
     this.goDeclaredTypeCache = /* @__PURE__ */ new Map();
     this.goDeclaredTypeInProgress = /* @__PURE__ */ new Set();
+    // -----------------------------------------------------------------------
+    // gofmt-compatible spacing of the binary expressions this printer emits
+    // -----------------------------------------------------------------------
+    // go/printer (nodes.go) prints a binary expression with blanks around the
+    // operator unless the expression sits deeper than the top level of a
+    // statement: binaryExpr() asks cutoff() - which inspects the operator tree
+    // through walkBinary() - and drops *both* blanks when the operator
+    // precedence is below that cutoff. Level 4/5 operators (`+ - * / % & | ^
+    // << >>`) therefore print as `a + b` at the top level but as `a+b`, `a[i+1]`
+    // one level down; comparisons and `&&`/`||` (level 3 and below) always keep
+    // their blanks.
+    //
+    // goExprDepth mirrors the depth go/printer tracks over the Go AST it is
+    // about to emit: 1 at the start of every statement, +1 for an argument list
+    // with more than one argument, +1 for an index expression, +1 for the right
+    // operand of a binary expression, -1 inside parentheses (never below 1), and
+    // back to 1 for composite literal elements.
+    this.goExprDepth = 1;
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = false;
@@ -5016,8 +5034,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   printDynamicCall(node, identation) {
     const elementAccess = node.expression;
     if (elementAccess?.kind === ts5.SyntaxKind.ElementAccessExpression) {
-      const parsedArg = node.arguments?.length > 0 ? node.arguments.map((n) => this.printNode(n, identation).trimStart()).join(", ") : "";
-      const propName = this.printNode(elementAccess.argumentExpression, 0);
+      const argumentDepth = this.goExprDepth + (node.arguments?.length > 0 ? 1 : 0);
+      const parsedArg = node.arguments?.length > 0 ? node.arguments.map((n) => this.goWithExprDepth(argumentDepth, () => this.printNode(n, identation).trimStart())).join(", ") : "";
+      const propName = this.goWithExprDepth(argumentDepth, () => this.printNode(elementAccess.argumentExpression, 0));
       const argsArray = `${parsedArg}`;
       const open = this.DYNAMIC_CALL_OPEN;
       const statement = `${open}${propName}, ${argsArray})`;
@@ -5044,7 +5063,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   printWrappedUnknownThisProperty(node) {
     const type = this.getChecker().getResolvedSignature(node);
     if (type?.declaration === void 0) {
-      let parsedArguments = node.arguments?.map((a) => this.printNode(a, 0)).join(", ");
+      const argumentDepth = this.goExprDepth + (node.arguments?.length > 0 ? 1 : 0);
+      let parsedArguments = node.arguments?.map((a) => this.goWithExprDepth(argumentDepth, () => this.printNode(a, 0))).join(", ");
       parsedArguments = parsedArguments ? parsedArguments : "";
       const propName = node.expression?.name.escapedText;
       const argsArray = `${parsedArguments}`;
@@ -5211,8 +5231,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return `InOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
     }
     if (op === ts5.SyntaxKind.PlusEqualsToken || op === ts5.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
-      const leftText = this.printNode(left, 0);
-      const rightText = this.printNode(right, 0);
+      const operandDepth = this.goExprDepth + 1;
+      const leftText = this.goWithExprDepth(operandDepth, () => this.printNode(left, 0));
+      const rightText = this.goWithExprDepth(operandDepth, () => this.printNode(right, 0));
       if (op === ts5.SyntaxKind.PlusEqualsToken) {
         return `${leftText} = Add(${leftText}, ${rightText})`;
       }
@@ -5922,7 +5943,20 @@ ${this.getIden(identation)}${returnStatement}`;
       parsedArgs = tmpArgs.join(",");
       return parsedArgs;
     }
+    if (node.arguments && node.arguments.length > 1) {
+      return this.goWithExprDepth(this.goExprDepth + 1, () => super.printArgsForCallExpression(node, identation));
+    }
     return super.printArgsForCallExpression(node, identation);
+  }
+  // parentheses undo one level of depth (go/printer reduceDepth()) - and the
+  // expression inside them keeps their own level for everything nested below
+  printParenthesizedExpression(node, identation) {
+    return this.goWithExprDepth(this.goExprDepth - 1, () => super.printParenthesizedExpression(node, identation));
+  }
+  // composite literal elements are printed at depth 1 again (go/printer prints
+  // the element list with exprList(..., 1, ...))
+  printObjectLiteralBody(node, identation) {
+    return this.goWithExprDepth(1, () => super.printObjectLiteralBody(node, identation));
   }
   // check this out later
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
@@ -6105,6 +6139,110 @@ ${this.getIden(identation)}return nil`;
       return super.printThrowStatement(node, identation);
     }
   }
+  goWithExprDepth(depth, callback) {
+    const previous = this.goExprDepth;
+    this.goExprDepth = depth < 1 ? 1 : depth;
+    try {
+      return callback();
+    } finally {
+      this.goExprDepth = previous;
+    }
+  }
+  // go/token precedence of the operators this printer can print natively
+  // (5 `* / % << >> & &^`, 4 `+ - | ^`, 3 comparisons, 2 `&&`, 1 `||`)
+  goOperatorPrecedence(operator) {
+    switch (operator) {
+      case "*":
+      case "/":
+      case "%":
+      case "<<":
+      case ">>":
+      case "&":
+      case "&^":
+        return 5;
+      case "+":
+      case "-":
+      case "|":
+      case "^":
+        return 4;
+      case "==":
+      case "!=":
+      case "<":
+      case "<=":
+      case ">":
+      case ">=":
+        return 3;
+      case "&&":
+        return 2;
+      case "||":
+        return 1;
+    }
+    return 0;
+  }
+  // the operator string a node is printed as when it stays a Go binary
+  // expression, or undefined when the node becomes a helper call or is not
+  // binary at all - a primary expression, which walkBinary() never looks into
+  goNativeBinaryOperator(node) {
+    if (!node || !ts5.isBinaryExpression(node)) {
+      return void 0;
+    }
+    const kind = node.operatorToken.kind;
+    if (kind === ts5.SyntaxKind.EqualsToken || kind === ts5.SyntaxKind.PlusEqualsToken || kind === ts5.SyntaxKind.MinusEqualsToken || kind === ts5.SyntaxKind.InKeyword || kind === ts5.SyntaxKind.InstanceOfKeyword || kind in this.binaryExpressionsWrappers) {
+      return void 0;
+    }
+    const operator = this.SupportedKindNames[kind];
+    return this.goOperatorPrecedence(operator) > 0 ? operator : void 0;
+  }
+  // walkBinary(): has4 / has5 / maxProblem of the operator tree that is about
+  // to be printed. Operands that stay binary expressions are walked, every
+  // other operand is a primary expression and stops the walk - the same
+  // boundary go/printer draws for parens and calls.
+  goWalkBinary(operator, left, right, rightText) {
+    const precedence = this.goOperatorPrecedence(operator);
+    let has4 = precedence === 4;
+    let has5 = precedence === 5;
+    let maxProblem = 0;
+    const leftOperator = this.goNativeBinaryOperator(left);
+    if (leftOperator !== void 0 && this.goOperatorPrecedence(leftOperator) >= precedence) {
+      const info = this.goWalkBinary(leftOperator, left.left, left.right, "");
+      has4 = has4 || info.has4;
+      has5 = has5 || info.has5;
+      maxProblem = Math.max(maxProblem, info.maxProblem);
+    }
+    const rightOperator = this.goNativeBinaryOperator(right);
+    if (rightOperator !== void 0 && this.goOperatorPrecedence(rightOperator) > precedence) {
+      const info = this.goWalkBinary(rightOperator, right.left, right.right, "");
+      has4 = has4 || info.has4;
+      has5 = has5 || info.has5;
+      maxProblem = Math.max(maxProblem, info.maxProblem);
+    } else if (rightOperator === void 0) {
+      const pair = operator + rightText.replace(/^[ \t]+/, "").slice(0, 1);
+      if (pair === "/*" || pair === "&&" || pair === "&^") {
+        maxProblem = 5;
+      } else if (pair === "++" || pair === "--") {
+        maxProblem = Math.max(maxProblem, 4);
+      }
+    }
+    return { has4, has5, maxProblem };
+  }
+  // the separator gofmt puts around a natively printed operator: `' '` keeps
+  // the blanks, `''` drops them (go/printer cutoff())
+  goBinarySeparator(operator, rightText, left, right) {
+    const precedence = this.goOperatorPrecedence(operator);
+    if (precedence < 4) {
+      return " ";
+    }
+    const { has4, has5, maxProblem } = this.goWalkBinary(operator, left, right, rightText);
+    let cutoff;
+    if (maxProblem > 0) {
+      cutoff = maxProblem + 1;
+    } else if (has4 && has5) {
+      cutoff = this.goExprDepth === 1 ? 5 : 4;
+    } else {
+      cutoff = this.goExprDepth === 1 ? 6 : 4;
+    }
+    return precedence < cutoff ? " " : "";
+  }
   printBinaryExpression(node, identation) {
     const { left, right, operatorToken } = node;
     const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
@@ -6116,7 +6254,7 @@ ${this.getIden(identation)}return nil`;
     }
     if (operatorToken.kind === ts5.SyntaxKind.EqualsToken) {
       const elementAccess = left;
-      const rightSide = this.printNode(right, 0);
+      const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
       if (left.kind === ts5.SyntaxKind.ElementAccessExpression) {
         const leftSide = this.printNode(elementAccess.expression, 0);
         const propName = this.printNode(elementAccess.argumentExpression, 0);
@@ -6170,12 +6308,22 @@ ${this.getIden(identation)}return nil`;
         }
       }
     } else {
-      leftVar = this.printNode(left, 0);
-      rightVar = this.printNode(right, identation);
+      const precedence = this.goOperatorPrecedence(operator);
+      if (precedence > 0) {
+        const leftOperator = this.goNativeBinaryOperator(left);
+        const samePrecedence = leftOperator !== void 0 && this.goOperatorPrecedence(leftOperator) === precedence;
+        const leftDepth = samePrecedence ? this.goExprDepth : this.goExprDepth + 1;
+        leftVar = this.goWithExprDepth(leftDepth, () => this.printNode(left, 0));
+        rightVar = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation));
+      } else {
+        leftVar = this.printNode(left, 0);
+        rightVar = this.printNode(right, identation);
+      }
     }
     const customOperator = this.getCustomOperatorIfAny(left, right, operatorToken);
     operator = customOperator ? customOperator : operator;
-    return leftVar + " " + operator + " " + rightVar.trim();
+    const separator = this.goBinarySeparator(operator, rightVar.trim(), left, right);
+    return leftVar + separator + operator + separator + rightVar.trim();
   }
   // `(x != nil) && (x != nil && …)` -> `(x != nil && …)`. Only fires when the
   // right operand opens with the very same nil guard the left operand *is*, so
@@ -6281,8 +6429,9 @@ ${this.getIden(identation)}return nil`;
       }
       current = expr;
     }
-    const containerStr = this.printNode(baseExpr, 0);
-    const keyStrs = keys.map((k) => this.printNode(k, 0));
+    const indexDepth = this.goExprDepth + 1;
+    const containerStr = this.goWithExprDepth(indexDepth, () => this.printNode(baseExpr, 0));
+    const keyStrs = keys.map((k) => this.goWithExprDepth(indexDepth, () => this.printNode(k, 0)));
     let acc = containerStr;
     keyStrs.forEach((k) => {
       acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;

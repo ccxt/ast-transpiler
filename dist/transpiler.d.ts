@@ -757,6 +757,8 @@ declare class GoTranspiler extends BaseTranspiler {
     printAsExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
+    printParenthesizedExpression(node: any, identation: any): string;
+    printObjectLiteralBody(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
@@ -794,6 +796,16 @@ declare class GoTranspiler extends BaseTranspiler {
     printConditionalExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
+    goExprDepth: number;
+    goWithExprDepth<T>(depth: number, callback: () => T): T;
+    goOperatorPrecedence(operator: string): number;
+    goNativeBinaryOperator(node: any): string | undefined;
+    goWalkBinary(operator: string, left: any, right: any, rightText: string): {
+        has4: boolean;
+        has5: boolean;
+        maxProblem: number;
+    };
+    goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
     printBinaryExpression(node: any, identation: any): string;
     goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;
     printTryStatement(node: any, identation: number): string;
