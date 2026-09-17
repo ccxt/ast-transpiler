@@ -572,6 +572,7 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
     classNameMap: {
         [key: string]: string;
@@ -656,6 +657,19 @@ declare class GoTranspiler extends BaseTranspiler {
     printFunctionType(node: any): any;
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
+    goUnwrapPrintedParens(printedText: string): string;
+    goLocalStaticType(node: any): string | undefined;
+    goStringFieldStaticType(node: any, printedText: string): string | undefined;
+    goOperandStaticType(node: any, printedText: string): string | undefined;
+    goStringCallStaticType(node: any, printedText: string): string | undefined;
+    isNonZeroIntegerLiteral(node: any): boolean;
+    goNativeIntResultType(op: any, leftType: string, rightType: string, rightNode: any): string | undefined;
+    goNativeOperandText(node: any, printedText: string): string;
+    goNativeArithmetic(node: any, leftText?: any, rightText?: any): {
+        goType: string;
+        text: string;
+    } | undefined;
+    goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
@@ -673,16 +687,39 @@ declare class GoTranspiler extends BaseTranspiler {
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     goScalarFamily(node: any): string | undefined;
-    goScalarFamilyOfType(type: any): string | undefined;
+    goScalarFamilyWithNil(node: any): string | undefined;
+    goPrintedCallee(printedValue: string): string | undefined;
+    goIsAnyBoxExpression(node: any, printedText: string): boolean;
+    goScalarFamilyOfType(type: any, allowNil?: boolean): string | undefined;
     goDeclaredTypeCache: Map<any, string>;
     goDeclaredTypeInProgress: Set<any>;
     goDeclaredTypeOfIdentifier(node: any): string | undefined;
     goIsPointerIdentifier(node: any): boolean;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
+    goElementAssignmentContainerType(node: any, printedText: string): string | undefined;
+    goIsStringKeyExpression(node: any): boolean;
+    goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
+    goLocalIsRebound(scope: any, nameNode: any): boolean;
+    goRebindingTargetOf(identifier: any): any;
+    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string): string | undefined;
+    goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
+    sliceLengthTypes: string[];
+    printInlineArrayLength(expression: any, printedText: string): string | undefined;
+    printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined;
+    printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
+    comparisonHelpers: string[];
+    printInlineOpNeg(node: any, printedText: string): string | undefined;
     printInlineTruthy(node: any): string | undefined;
+    goNativeCondition(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goOperandNumericKind(node: any, printedText: string): string | undefined;
+    goLiteralTypedLocalKind(node: any): string | undefined;
+    goNumericLiteralKind(node: any): string | undefined;
+    goLiteralFitsKind(node: any, kind: string): boolean;
+    goComparisonKind(left: any, leftKind: string, right: any, rightKind: string): string | undefined;
+    printInlineOrderedComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
@@ -753,6 +790,11 @@ declare class GoTranspiler extends BaseTranspiler {
      * calls.  This removes the root cause of the unbalanced-parenthesis bug
      * without any post-processing or regex hacks.
      */
+    goIndexableTypeOf(node: any, printed: string): string | undefined;
+    goElementAccessChain(containerStr: string, keyStrs: string[]): string;
+    goKeyIsString(node: any, printed: string): boolean;
+    isGoThisPropertyAccessExpression(node: any): boolean;
+    isGoElementAccessAssignmentTarget(node: any): boolean;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: ts.Node): boolean;
     /**
