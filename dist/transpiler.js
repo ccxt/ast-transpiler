@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6317,6 +6317,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const inlined = this.printInlineHelperArithmetic(left, right, leftText, rightText, op);
+      if (inlined !== void 0) {
+        return inlined;
+      }
       if (op === ts6.SyntaxKind.PlusEqualsToken) {
         return `${leftText} = Helpers.add(${leftText}, ${rightText})`;
       }
@@ -6329,6 +6333,162 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `${open}${leftText}, ${rightText}${close}`;
     }
     return void 0;
+  }
+  // ---- helper-family inlining: `+ - * / += -=` ---------------------------
+  // `x + y` normally prints Helpers.add, `- * /` print Helpers.subtract/multiply/
+  // divide, and `+=`/`-=` print `x = Helpers.add/subtract(...)`. They print native
+  // Java when BOTH operands are checker-typed in the same non-nullable scalar family
+  // and the printed operands carry the matching Java kind, so the native expression
+  // has the helper's boxed result kind and value on every path.
+  // the TypeScript scalar family of a binary operand: plain `string`/`number` and
+  // their literals only. The nullable aliases (Str/Int/Num/Bool), unions and `any`
+  // can hold undefined at runtime, which the helpers absorb.
+  javaScalarFamily(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    if (type === void 0 || type.aliasSymbol !== void 0) {
+      return void 0;
+    }
+    const flags = type.flags;
+    if (flags === ts6.TypeFlags.String || flags === ts6.TypeFlags.StringLiteral) {
+      return "string";
+    }
+    if (flags === ts6.TypeFlags.Number || flags === ts6.TypeFlags.NumberLiteral) {
+      return "number";
+    }
+    return void 0;
+  }
+  // true when the printed Java for this operand is statically a String: a string
+  // literal, or a nested `+` this rule prints as a native concat (so every native
+  // concat is anchored by a literal and Java concatenates the other side).
+  javaProvableString(node) {
+    if (node === void 0) {
+      return false;
+    }
+    switch (node.kind) {
+      case ts6.SyntaxKind.StringLiteral:
+      case ts6.SyntaxKind.NoSubstitutionTemplateLiteral:
+        return true;
+      case ts6.SyntaxKind.ParenthesizedExpression:
+        return this.javaProvableString(node.expression);
+      case ts6.SyntaxKind.BinaryExpression:
+        return this.javaNativeConcat(node);
+    }
+    return false;
+  }
+  // does this `+` node print as a native concat (both sides plain string, one side a
+  // provable String)? Mirrors printInlineHelperArithmetic so callers can reason about
+  // the printed text of a nested concat.
+  javaNativeConcat(node) {
+    if (node?.operatorToken?.kind !== ts6.SyntaxKind.PlusToken) {
+      return false;
+    }
+    if (this.javaScalarFamily(node.left) !== "string" || this.javaScalarFamily(node.right) !== "string") {
+      return false;
+    }
+    return this.javaProvableString(node.left) || this.javaProvableString(node.right);
+  }
+  // the Java kind a numeric operand provably prints with: decimal integer literal ->
+  // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
+  // natively -> that node's kind. Anything else (hex/binary literals, negative
+  // literals printed as Helpers.opNeg, calls, identifiers) stays undefined.
+  javaProvableNumericKind(node) {
+    if (node === void 0) {
+      return void 0;
+    }
+    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      return this.javaProvableNumericKind(node.expression);
+    }
+    if (ts6.isNumericLiteral(node)) {
+      const text = node.text;
+      if (/^0[xXbBoO]/.test(text)) {
+        return void 0;
+      }
+      return /[.eE]/.test(text) ? "double" : "long";
+    }
+    if (node.kind === ts6.SyntaxKind.BinaryExpression) {
+      return this.javaNativeArithmeticKind(node);
+    }
+    return void 0;
+  }
+  // the kind of the native arithmetic this rule prints for `+ - * /`, or undefined when
+  // the node keeps the helper. Mirrors printInlineHelperArithmetic operand-for-operand
+  // so callers can reason about the printed text of a nested arithmetic operand.
+  javaNativeArithmeticKind(node) {
+    const op = node?.operatorToken?.kind;
+    const isPlus = op === ts6.SyntaxKind.PlusToken;
+    const isMinus = op === ts6.SyntaxKind.MinusToken;
+    const isMultiply = op === ts6.SyntaxKind.AsteriskToken;
+    const isDivide = op === ts6.SyntaxKind.SlashToken;
+    if (!isPlus && !isMinus && !isMultiply && !isDivide) {
+      return void 0;
+    }
+    if (this.javaScalarFamily(node.left) !== "number" || this.javaScalarFamily(node.right) !== "number") {
+      return void 0;
+    }
+    const leftKind = this.javaProvableNumericKind(node.left);
+    const rightKind = this.javaProvableNumericKind(node.right);
+    if (leftKind === void 0 || leftKind !== rightKind) {
+      return void 0;
+    }
+    if (isDivide) {
+      return "double";
+    }
+    if (isMultiply && leftKind === "double") {
+      return void 0;
+    }
+    return leftKind;
+  }
+  // integer literals print as Java `int`; the helpers normalize Integer to Long before
+  // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
+  // result identical
+  javaPrintOperandAsLong(node, text) {
+    if (!ts6.isNumericLiteral(node) || /[.eE]/.test(node.text)) {
+      return text;
+    }
+    return /L$/.test(text) ? text : text + "L";
+  }
+  // the native form of a helper-family binary operator, or undefined to keep the helper
+  printInlineHelperArithmetic(left, right, leftText, rightText, op) {
+    const isPlus = op === ts6.SyntaxKind.PlusToken || op === ts6.SyntaxKind.PlusEqualsToken;
+    const isMinus = op === ts6.SyntaxKind.MinusToken || op === ts6.SyntaxKind.MinusEqualsToken;
+    const isMultiply = op === ts6.SyntaxKind.AsteriskToken;
+    const isDivide = op === ts6.SyntaxKind.SlashToken;
+    if (!isPlus && !isMinus && !isMultiply && !isDivide) {
+      return void 0;
+    }
+    const leftFamily = this.javaScalarFamily(left);
+    const rightFamily = this.javaScalarFamily(right);
+    if (isPlus && leftFamily === "string" && rightFamily === "string") {
+      if (!(this.javaProvableString(left) || this.javaProvableString(right))) {
+        return void 0;
+      }
+      const concat = `(${leftText} + ${rightText})`;
+      return op === ts6.SyntaxKind.PlusEqualsToken ? `${leftText} = ${concat}` : concat;
+    }
+    if (op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken) {
+      return void 0;
+    }
+    if (leftFamily !== "number" || rightFamily !== "number") {
+      return void 0;
+    }
+    const leftKind = this.javaProvableNumericKind(left);
+    const rightKind = this.javaProvableNumericKind(right);
+    if (leftKind === void 0 || leftKind !== rightKind) {
+      return void 0;
+    }
+    if (isDivide) {
+      return `(((double) ${leftText}) / ((double) ${rightText}))`;
+    }
+    if (isMultiply && leftKind === "double") {
+      return void 0;
+    }
+    const operator = isPlus ? "+" : isMinus ? "-" : "*";
+    return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
   }
   getObjectLiteralFromCallExpressionArguments(node) {
     const res = [];

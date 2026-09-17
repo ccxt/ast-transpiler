@@ -1573,7 +1573,7 @@ describe('java transpiling tests', () => {
         expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
         // Snapshot must be in the same branch as the reassignment.
         const branchPattern =
-            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*return\b/g;
+            /rawHash = [^;]*;\s*final Object finalRawHash\w* = rawHash;\s*return\b/g;
         expect((output.match(branchPattern) || []).length).toBe(2);
         // No method-scope snapshot before the if/else (which would capture null).
         expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
@@ -2035,7 +2035,7 @@ describe('java transpiling tests', () => {
         expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
         // The snapshot must come AFTER the corresponding reassignment in each branch.
         const branchPattern =
-            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*request = new java\.util\.HashMap/g;
+            /rawHash = [^;]*;\s*final Object finalRawHash\w* = rawHash;\s*request = new java\.util\.HashMap/g;
         expect((output.match(branchPattern) || []).length).toBe(2);
         // Must NOT emit a method-scope snapshot before the if/else
         // (which the pre-fix output did, capturing the null seed value).
@@ -2441,5 +2441,103 @@ describe('java asyncSupplier option', () => {
         expect(output).not.toContain("VIRTUAL_EXECUTOR");
         expect(output).toContain("return null;");
         expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
+    });
+});
+
+describe('java helper-family inlining (+ - * / += -=)', () => {
+    test('string + string with one statically-String operand prints a native concat', () => {
+        const input =
+        "class T {\n" +
+        "    f(b: string): void {\n" +
+        "        const x = \"a\" + b;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = ("a" + b);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('nested concat chain inlines every link', () => {
+        const input =
+        "class T {\n" +
+        "    f(b: string): void {\n" +
+        "        const x = (\"a\" + b) + \"c\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = ((("a" + b)) + "c");');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('+= with a string literal prints a native concat assignment', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        let s = \"x\";\n" +
+        "        s += \"y\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('s = (s + "y");');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('integer literals print native long arithmetic, / prints double division', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const x = 2 * 3;\n" +
+        "        const w = 7 + 1;\n" +
+        "        const y = 10 / 4;\n" +
+        "        const q = (2 * 3) * 4;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (2L * 3L);');
+        expect(output).toContain('Object w = (7L + 1L);');
+        expect(output).toContain('Object y = (((double) 10) / ((double) 4));');
+        expect(output).toContain('Object q = (((2L * 3L)) * 4L);');
+        expect(output).not.toContain('Helpers.multiply(');
+        expect(output).not.toContain('Helpers.divide(');
+    });
+
+    test('mixed literal kinds and non-literal numbers keep the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: number, b: number): void {\n" +
+        "        const z = 1.5 * 2;\n" +
+        "        const x = a + b;\n" +
+        "        const y = a * 3;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object z = Helpers.multiply(1.5, 2);');
+        expect(output).toContain('Object x = Helpers.add(a, b);');
+        expect(output).toContain('Object y = Helpers.multiply(a, 3);');
+    });
+
+    test('string-typed call operands do not anchor a concat (Java declares them Object)', () => {
+        const input =
+        "class T {\n" +
+        "    host(path: string): string { return path; }\n" +
+        "    f(a: string): void {\n" +
+        "        const x = this.host(a) + this.host(a);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.add(this.host(a), this.host(a))');
+    });
+
+    test('nullable aliases keep the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: Str, b: Str, n: Num): void {\n" +
+        "        const x = a + b;\n" +
+        "        const y = n + 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.add(a, b);');
+        expect(output).toContain('Object y = Helpers.add(n, 1);');
     });
 });
