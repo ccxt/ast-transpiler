@@ -645,4 +645,106 @@ describe('rust transpiling tests', () => {
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('match_val');
     });
+
+    // native arithmetic: two checker-typed strings → format! concat
+    test('string + string emits native concat', () => {
+        const ts =
+        'const a: string = "x";\n' +
+        'const b: string = "y";\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b));');
+        expect(output).not.toContain('add(');
+    });
+
+    // native arithmetic: two checker-typed numbers → Int/Float match
+    test('number + number emits native arithmetic', () => {
+        const ts =
+        'const a: number = 1;\n' +
+        'const b: number = 2;\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(match (&(a), &(b)) {');
+        expect(output).toContain('(Value::Int(x), Value::Int(y)) => Value::Int(x + y)');
+        expect(output).toContain('(Value::Float(x), Value::Float(y)) => Value::Float(x + y)');
+        expect(output).not.toContain('add(');
+    });
+
+    test('number - number, number * number and number / number emit native arithmetic', () => {
+        const ts =
+        'const a: number = 1;\n' +
+        'const b: number = 2;\n' +
+        'const c = a - b;\n' +
+        'const d = a * b;\n' +
+        'const e = a / b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Int(x - y)');
+        expect(output).toContain('Value::Int(x * y)');
+        expect(output).toContain('(match ((a).as_f64(), (b).as_f64()) { (Some(x), Some(y)) if y != 0.0 => Value::Float(x / y), _ => Value::Null })');
+        expect(output).not.toContain('subtract(');
+        expect(output).not.toContain('multiply(');
+        expect(output).not.toContain('divide(');
+    });
+
+    // unproven operands keep the runtime helper
+    test('untyped operands keep the add helper', () => {
+        const ts = "const a: any = 1;\nconst b: any = 2;\nconst c = a + b;";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
+    });
+
+    test('number + string keeps the add helper', () => {
+        const ts =
+        'const a: number = 1;\n' +
+        'const s: string = "q";\n' +
+        'const c = a + s;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &s)');
+    });
+
+    test('string | undefined operand keeps the add helper', () => {
+        const ts =
+        'function f(x?: string) {\n' +
+        '    const s: string = "y";\n' +
+        '    return x + s;\n' +
+        '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&x, &s)');
+    });
+
+    test('x++ / x-- on a number emit native increment', () => {
+        const ts = 'let i: number = 0;\ni++;\ni--;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('i = (match (&(i), &(Value::Int(1))) {');
+        expect(output).toContain('Value::Int(x + y)');
+        expect(output).toContain('Value::Int(x - y)');
+        expect(output).not.toContain('add(&i');
+        expect(output).not.toContain('subtract(&i');
+    });
+
+    test('number += number and number -= number emit native arithmetic', () => {
+        const ts = 'let j: number = 5;\nj += 2;\nlet k: number = 5;\nk -= 2;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('j = (match (&(j), &(Value::Int(2))) {');
+        expect(output).toContain('k = (match (&(k), &(Value::Int(2))) {');
+        expect(output).not.toContain('add(&j');
+        expect(output).not.toContain('subtract(&k');
+    });
+
+    test('string += string emits native concat', () => {
+        const ts = 'let s: string = "a";\ns += "b";';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".to_string())));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string property + string literal emits native concat', () => {
+        const ts =
+        'class A {\n' +
+        '    id: string = "a";\n' +
+        '    run(): string { return this.id + "x"; }\n' +
+        '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str(format!("{}{}", self.id, Value::Str("x".to_string())))');
+    });
 });
