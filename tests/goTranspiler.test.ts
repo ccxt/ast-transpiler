@@ -1,5 +1,5 @@
 import { assert } from 'console';
-import { Transpiler } from '../src/transpiler';
+import { Transpiler, alignGoTrailingComments } from '../src/transpiler';
 import { readFileSync } from 'fs';
 
 jest.mock('module',()=>({
@@ -1036,5 +1036,90 @@ describe('go inline equality', () => {
         expect(output).toContain("var length int =");
         expect(output).toContain("IsEqual(length, limit)");
         expect(output).not.toContain("*limit == length");
+    });
+});
+
+describe('go trailing comment alignment', () => {
+    test('adjacent statements share one comment column', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const x = 1; // one\n" +
+        "        const yyyy = 2222; // two\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // gofmt pads both code cells to the widest one plus one space (tabwriter column)
+        expect(output).toContain("var x any = 1       // one");
+        expect(output).toContain("var yyyy any = 2222 // two");
+    });
+    test('a lone trailing comment is padded with exactly one space', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        return null; // fallback\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the return emitter separates the comment with two spaces; a one-line column gets one
+        expect(output).toContain("return nil // fallback");
+        expect(output).not.toContain("return nil  // fallback");
+    });
+    test('a nested block starts a new comment column', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const xxxxxxxxxx = 1; // one\n" +
+        "        if (a) {\n" +
+        "            return a; // inner\n" +
+        "        }\n" +
+        "        const y = 2; // two\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var xxxxxxxxxx any = 1 // one");
+        expect(output).toContain("return a // inner");
+        expect(output).toContain("var y any = 2 // two");
+    });
+    test('//nolint comments are aligned like any other comment', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const a1 = 1; //nolint:gosec\n" +
+        "        const bbbb = 2; //nolint\n" +
+        "        return a1;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a1 any = 1   //nolint:gosec");
+        expect(output).toContain("var bbbb any = 2 //nolint");
+    });
+    test('a // inside a string literal is not a trailing comment', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const url = 'https://example.com/x';\n" +
+        "        const yyyy = 2222; // two\n" +
+        "        return url;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the URL line carries no comment, so it neither joins nor shapes a column
+        expect(output).toContain("var url string = \"https://example.com/x\"\n");
+        expect(output).toContain("var yyyy any = 2222 // two");
+    });
+    test('the alignment pass is idempotent', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const x = 1; // one\n" +
+        "        const yyyy = 2222; // two\n" +
+        "        return null; // fallback\n" +
+        "    }\n" +
+        "}\n"
+        const once = transpiler.transpileGo(input).content;
+        expect(alignGoTrailingComments(once)).toBe(once);
     });
 });

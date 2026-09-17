@@ -168,6 +168,193 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
+// ---------------------------------------------------------------------------------------------
+// Trailing `//` comment alignment (gofmt's tabwriter cells).
+//
+// go/printer separates a trailing comment from the code with a hard tab (`writeCommentPrefix`),
+// so the code text is the last tab-terminated cell of the line. text/tabwriter pads that cell to
+// the widest cell of its column block plus `padding = 1` (gofmt runs with `minwidth = 0`,
+// `padding = 1`, `padchar = ' '`), which is why adjacent statements get their comments aligned
+// and a lone one gets exactly one space. A column block is the run of adjacent lines whose code
+// cell sits in the same column (same indentation); formfeeds terminate all columns, and
+// go/printer emits them between sections: blank and comment-only lines, a change of indentation,
+// each line of a multi-line expression (`binaryExpr` breaks with `newSection = true`) and every
+// statement that follows a multi-line one (`stmtList` breaks with `newSection = true`).
+//
+// The pass below reproduces that padding on the printed text. It is a no-op on text gofmt has
+// already aligned (verified over the whole go/v4 tree) and it never reflows or re-wraps a line.
+// ---------------------------------------------------------------------------------------------
+
+// a line whose code ends like this does not end its statement: the line below it belongs to the
+// same multi-line expression, and go/printer puts a formfeed before it (a new column block)
+const GO_COMMENT_BREAK_END = /(?:[({\[:]|[+\-*/%&|^<>=!])$/;
+
+// (opens - closes) of ()[]{} outside strings, so `foo(` (statement continues) and `}` (statement
+// ended before this line) are not mistaken for complete single-line statements
+function goBracketBalance (code: string): number {
+    let depth = 0;
+    let i = 0;
+    while (i < code.length) {
+        const ch = code[i];
+        if ((ch === '"') || (ch === '\'')) {
+            const quote = ch;
+            i += 1;
+            while (i < code.length) {
+                if (code[i] === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (code[i] === quote) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if (ch === '`') {
+            i += 1;
+            while ((i < code.length) && (code[i] !== '`')) {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if ((ch === '(') || (ch === '[') || (ch === '{')) {
+            depth += 1;
+        } else if ((ch === ')') || (ch === ']') || (ch === '}')) {
+            depth -= 1;
+        }
+        i += 1;
+    }
+    return depth;
+}
+
+// index of the first `//` outside strings and comments, or -1. The state is carried across lines
+// because `/* */` comments and `-quoted strings can span them (a `//` inside a string literal is
+// data, e.g. the `https://` of an endpoint, and must not be taken for a comment)
+function goTrailingCommentIndex (line: string, state: { block: boolean, raw: boolean }): number {
+    let i = 0;
+    while (i < line.length) {
+        const ch = line[i];
+        if (state.block) {
+            if ((ch === '*') && (line[i + 1] === '/')) {
+                state.block = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if (state.raw) {
+            if (ch === '`') {
+                state.raw = false;
+            }
+            i += 1;
+            continue;
+        }
+        if (ch === '`') {
+            state.raw = true;
+            i += 1;
+            continue;
+        }
+        if ((ch === '"') || (ch === '\'')) {
+            const quote = ch;
+            i += 1;
+            while (i < line.length) {
+                if (line[i] === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (line[i] === quote) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if ((ch === '/') && (line[i + 1] === '/')) {
+            return i;
+        }
+        if ((ch === '/') && (line[i + 1] === '*')) {
+            state.block = true;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+// tabwriter counts runes, not bytes (a multi-byte identifier is one column wide)
+function goRuneWidth (text: string): number {
+    let width = 0;
+    for (const _rune of text) { // eslint-disable-line @typescript-eslint/no-unused-vars
+        width += 1;
+    }
+    return width;
+}
+
+function alignGoTrailingComments (content: string): string {
+    const lines = content.split ('\n');
+    const entries: { index: number, indent: string, code: string, comment: string }[] = [];
+    const state = { 'block': false, 'raw': false };
+    for (let index = 0; index < lines.length; index++) {
+        const commentIndex = goTrailingCommentIndex (lines[index], state);
+        if (commentIndex < 0) {
+            continue;
+        }
+        // the code cell: everything before the comment, without the padding already inside it
+        const code = lines[index].slice (0, commentIndex).replace (/[ \t]+$/, '');
+        if (!code.trim ()) {
+            continue; // a comment-only line is a section break, it is never a cell
+        }
+        const indent = code.match (/^[ \t]*/)[0];
+        entries.push ({ 'index': index, indent, code, 'comment': lines[index].slice (commentIndex) });
+    }
+    // group the lines that share a code column: adjacent, same indentation, and no section break
+    // in between (the previous line must end its own statement, and that statement must be a
+    // single-line one, or the next statement starts a new section)
+    const groups: typeof entries[] = [];
+    let group: typeof entries = [];
+    for (const entry of entries) {
+        const previous = group[group.length - 1];
+        const continues = previous
+            && (entry.index === previous.index + 1)
+            && (entry.indent === previous.indent)
+            && (goBracketBalance (previous.code) === 0)
+            && !GO_COMMENT_BREAK_END.test (previous.code);
+        if (continues) {
+            group.push (entry);
+        } else {
+            if (group.length) {
+                groups.push (group);
+            }
+            group = [ entry ];
+        }
+    }
+    if (group.length) {
+        groups.push (group);
+    }
+    for (const members of groups) {
+        let width = 0;
+        for (const member of members) {
+            width = Math.max (width, goRuneWidth (member.code));
+        }
+        width += 1; // tabwriter padding
+        for (const member of members) {
+            const pad = width - goRuneWidth (member.code);
+            lines[member.index] = member.code + ' '.repeat (pad) + member.comment;
+        }
+    }
+    return lines.join ('\n');
+}
+
+export {
+    alignGoTrailingComments,
+};
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
