@@ -5572,7 +5572,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const detached = (gap.match(/\n/g) ?? []).length > 1;
     return detached ? printed + "\n" : printed;
   }
+  // gofmt separates a top-level declaration that carries a comment from the previous
+  // declaration by a blank line (go/printer declList: min = 2 when the decl has a doc
+  // comment); the file members are joined with a bare newline otherwise
+  printSourceFileStatements(node, identation) {
+    const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
+    return printed.map((st, index) => index > 0 && /^\s*(\/\/|\/\*)/.test(st) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
+  }
   printNode(node, identation = 0) {
+    if (node !== void 0 && ts5.isSourceFile(node)) {
+      this.className = "undefined";
+      return this.printSourceFileStatements(node, identation);
+    }
     const isStatement = node !== void 0 && ts5.isStatement(node) && node.kind !== ts5.SyntaxKind.Block;
     const previousLevel = this.goStatementLevel;
     if (isStatement) {

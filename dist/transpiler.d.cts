@@ -730,6 +730,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goSkipQuoted(text: string, start: number): number;
     printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
+    printSourceFileStatements(node: any, identation: any): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;

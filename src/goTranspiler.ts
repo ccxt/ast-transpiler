@@ -2225,7 +2225,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // relative to it (go/printer), whatever level the expression printers hand down
     goStatementLevel = 0;
 
+    // gofmt separates a top-level declaration that carries a comment from the previous
+    // declaration by a blank line (go/printer declList: min = 2 when the decl has a doc
+    // comment); the file members are joined with a bare newline otherwise
+    printSourceFileStatements(node, identation): string {
+        const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
+        return printed.map((st, index) => (index > 0 && /^\s*(\/\/|\/\*)/.test(st)) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
+    }
+
     printNode(node, identation = 0): string {
+        if (node !== undefined && ts.isSourceFile(node)) {
+            this.className = "undefined";
+            return this.printSourceFileStatements(node, identation);
+        }
         const isStatement = node !== undefined && ts.isStatement(node) && node.kind !== ts.SyntaxKind.Block;
         const previousLevel = this.goStatementLevel;
         if (isStatement) {
