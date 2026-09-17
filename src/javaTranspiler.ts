@@ -696,6 +696,55 @@ export class JavaTranspiler extends BaseTranspiler {
         return negated ? `!${equalCall}` : equalCall;
     }
 
+    // `x[k] = v` prints the runtime helper by default. Helpers.addElementToObject
+    // exists for receivers the printer cannot type (Lists, arbitrary objects via
+    // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
+    // printed only when the checker excludes all of those.
+    elementWriteTargetsMap(container, base, keys): boolean {
+        if (!ts.isStringLiteral(keys[keys.length - 1])) {
+            return false; // Map.put takes the String key; a non-literal key prints as Object
+        }
+        if (ts.isPropertyAccessExpression(base) && base.expression.kind === ts.SyntaxKind.ThisKeyword) {
+            return false; // field maps are ConcurrentHashMaps (a null value must remove, not put) and other threads read them
+        }
+        return this.isDictionaryType(container);
+    }
+
+    isDictionaryType(node): boolean {
+        try {
+            const checker: any = this.getChecker();
+            const type: any = checker.getTypeAtLocation(node);
+            return this.isDictionaryTsType(type, checker, 0);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // A TS dictionary (`{ [key: string]: any }`, i.e. ccxt's Dict) is a Map on every
+    // print and run path. Arrays, class instances and unknown types are not, so they
+    // keep the helper.
+    isDictionaryTsType(type: any, checker: any, depth: number): boolean {
+        if (!type || depth > 3) {
+            return false;
+        }
+        const flags: any = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const parts: any[] = type.types ?? [];
+            return parts.length > 0 && parts.every((t) => this.isDictionaryTsType(t, checker, depth + 1));
+        }
+        if (!(flags & ts.TypeFlags.Object)) {
+            return false;
+        }
+        try {
+            if (checker.isArrayType(type) || checker.isTupleType(type)) {
+                return false;
+            }
+            return checker.getIndexTypeOfType(type, ts.IndexKind.String) !== undefined;
+        } catch (e) {
+            return false;
+        }
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -777,7 +826,9 @@ export class JavaTranspiler extends BaseTranspiler {
             const lastKey = keyStrs[keyStrs.length - 1];
             const rhs     = this.printNode(right, 0);
 
-
+            if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
+                return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${lastKey}, ${rhs})`;
+            }
 
             return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
