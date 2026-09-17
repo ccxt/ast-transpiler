@@ -235,7 +235,10 @@ describe('rust transpiling tests', () => {
         "let b = 2;\n" +
         "const r = a >= b;";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut r: Value = Value::Bool(a.as_f64().unwrap_or(f64::NAN) >= b.as_f64().unwrap_or(f64::NAN));');
+        // d8 types the local natively when the checker proves boolean and every
+        // use is a condition sink (`r` is unused), so no `Value::Bool` box is
+        // emitted; the comparison itself stays the native f64 operator.
+        expect(output).toContain('let mut r: bool = a.as_f64().unwrap_or(f64::NAN) >= b.as_f64().unwrap_or(f64::NAN);');
     });
 
     test('native comparison as a ternary condition stays a bare bool', () => {
@@ -244,7 +247,10 @@ describe('rust transpiling tests', () => {
         "let b = 2;\n" +
         "const r = a > b ? 1 : 2;";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('ternary(a.as_f64().unwrap_or(f64::NAN) > b.as_f64().unwrap_or(f64::NAN), Value::Int(1), Value::Int(2))');
+        // d7 prints the ternary natively, so the condition must stay a bare
+        // bool inside the `if` (never `Value::Bool(<compare>)`).
+        expect(output).toContain('(if a.as_f64().unwrap_or(f64::NAN) > b.as_f64().unwrap_or(f64::NAN) { Value::Int(1) } else { Value::Int(2) })');
+        expect(output).not.toContain('Value::Bool(a.as_f64()');
     });
 
     test('native comparison as a logical operand stays a bare bool', () => {
@@ -569,7 +575,9 @@ describe('rust transpiling tests', () => {
     test('in operator native for typed object', () => {
         const ts = 'const o: { [key: string]: any } = {};\nconst r = "key" in o;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Bool(matches!(&o, Value::Dict(__d) if __d.contains_key("key")))');
+        // d8 declares the proven-bool local natively, so the `matches!` result
+        // is not wrapped in `Value::Bool(...)`.
+        expect(output).toContain('let mut r: bool = matches!(&o, Value::Dict(__d) if __d.contains_key("key"));');
         expect(output).not.toContain('in_op(');
     });
 
@@ -1095,7 +1103,9 @@ describe('rust checker-typed native container access', () => {
             "    return o['k'];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_value(&o, &Value::Str("k".to_string()))');
+        // A literal key on an unproven receiver keeps the helper — d6's
+        // `&str`-key form, which is the same lookup without the `Value::Str`.
+        expect(output).toContain('crate::value::get_value_k(&o, "k")');
     });
 
     test('class-typed receiver keeps the get_value helper', () => {
@@ -1114,7 +1124,7 @@ describe('rust checker-typed native container access', () => {
             "    return d['x'];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_value(&d, &Value::Str("x".to_string()))');
+        expect(output).toContain('crate::value::get_value_k(&d, "x")');
     });
 
     test('string receiver keeps the get_value helper', () => {
@@ -1152,7 +1162,10 @@ describe('rust checker-typed native container access', () => {
             "    result['k'] = result['k'] + v;\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&get_value(&result, &Value::Str("k".to_string())), &v)');
+        // The read keeps the `&str`-key helper form; the ccxt borrow-split pass
+        // hoists it on `&result` (not on the helper text), so the E0502 shape
+        // is fixed downstream either way.
+        expect(output).toContain('add(&crate::value::get_value_k(&result, "k"), &v)');
     });
 
     test('read in a &mut self method argument keeps the helper', () => {
@@ -1166,7 +1179,10 @@ describe('rust checker-typed native container access', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_value(&self.options, &Value::Str("id".to_string()))');
+        // d6's ccxt companion hunk extends the `&mut self` argument hoist to the
+        // `get_value_k` text, so the read inside the `&mut self` call is hoisted
+        // exactly like the allocating form was.
+        expect(output).toContain('crate::value::get_value_k(&self.options, "id")');
     });
 
     // native arithmetic: two checker-typed strings → format! concat

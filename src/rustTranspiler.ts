@@ -314,17 +314,6 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Class instances are emitted as their Rust struct (not a Value), so they
     // can neither be compared to Value::Null nor unwrapped with as_*().
-    isClassInstanceType(type): boolean {
-        if (type === undefined) {
-            return false;
-        }
-        if (type.flags & (ts.TypeFlags.Union | ts.TypeFlags.Intersection)) {
-            return (type.types ?? []).some((member) => this.isClassInstanceType(member));
-        }
-        const declarations = type.symbol?.declarations ?? type.aliasSymbol?.declarations ?? [];
-        return declarations.some((declaration) => ts.isClassDeclaration(declaration));
-    }
-
     callExpressionName(node): string {
         const expression = node.expression;
         if (ts.isIdentifier(expression)) {
@@ -1387,7 +1376,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     isClassInstanceType(type: ts.Type): boolean {
-        const symbol: any = this.typeSymbolOf(type);
+        if (type === undefined) return false;
+        if (type.flags & (ts.TypeFlags.Union | ts.TypeFlags.Intersection)) {
+            return ((type as any).types ?? []).some((member) => this.isClassInstanceType(member));
+        }
+        const symbol: any = this.typeSymbolOf(type) ?? type.aliasSymbol;
         if (symbol?.flags & ts.SymbolFlags.Class) return true;
         const declarations: any[] = symbol?.declarations ?? [];
         return declarations.some(d => ts.isClassDeclaration(d) || ts.isClassExpression(d));
@@ -1584,6 +1577,17 @@ export class RustTranspiler extends BaseTranspiler {
             && parent.operatorToken.kind >= SyntaxKind.FirstAssignment
             && parent.operatorToken.kind <= SyntaxKind.LastAssignment;
 
+        // `d['a'].push(v)` lowers to `append_to_array(&mut <target>, v)` and the
+        // ccxt pass that gives that append write-through semantics
+        // (`append_to_object_array`) matches the target text literally
+        // (`append_to_array(&mut get_value(&`), so a call/property target must
+        // keep the allocating `get_value(&d, &Value::Str("a").to_string())`
+        // form: the `get_value_k` spelling is invisible to that pass and the
+        // append would land on a discarded COW clone.
+        const isCallOrPropertyTarget = parent !== undefined
+            && ((ts.isPropertyAccessExpression(parent) && parent.expression === node)
+                || (ts.isCallExpression(parent) && parent.expression === node));
+
         const keys: any[] = [];
         const receivers: any[] = [];
         const containers: any[] = [];
@@ -1614,7 +1618,9 @@ export class RustTranspiler extends BaseTranspiler {
                 acc = native;
                 return;
             }
-            const staticKey = isAssignmentTarget ? undefined : this.staticKeyLookup(key, containers[index]);
+            const staticKey = (isAssignmentTarget || isCallOrPropertyTarget)
+                ? undefined
+                : this.staticKeyLookup(key, containers[index]);
             if (staticKey !== undefined) {
                 acc = `crate::value::get_value_k(&${acc}, ${staticKey})`;
                 return;
