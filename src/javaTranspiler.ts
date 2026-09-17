@@ -1869,6 +1869,45 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    // Unpacks one optional parameter. Native array access replaces Helpers.getArg
+    // when the initializer is a pure literal; the null check keeps the helper's
+    // contract that a null varargs array reads like an empty one.
+    printOptionalArgInit(paramName, index, initializer) {
+        const defaultValue = this.printNode(initializer, 0);
+        if (!this.isPureInitializer(initializer)) {
+            return `Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${defaultValue});`;
+        }
+        return `Object ${paramName} = optionalArgs != null && optionalArgs.length > ${index} ? optionalArgs[${index}] : ${defaultValue};`;
+    }
+
+    // Pure = evaluating the initializer has no effect and cannot throw, so
+    // skipping it when the argument was supplied cannot change behavior.
+    isPureInitializer(node) {
+        switch (node?.kind) {
+        case ts.SyntaxKind.NullKeyword:
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+        case ts.SyntaxKind.NumericLiteral:
+            return true;
+        case ts.SyntaxKind.Identifier:
+            // `= undefined` prints as null; any other name could be a call result
+            return node.escapedText === 'undefined';
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return node.elements.every((element) => this.isPureInitializer(element));
+        case ts.SyntaxKind.ObjectLiteralExpression:
+            return node.properties.every((property) => ts.isPropertyAssignment(property) && this.isPureInitializer(property.initializer));
+        case ts.SyntaxKind.ParenthesizedExpression:
+        case ts.SyntaxKind.AsExpression:
+        case ts.SyntaxKind.TypeAssertionExpression:
+        case ts.SyntaxKind.NonNullExpression:
+            return this.isPureInitializer(node.expression);
+        default:
+            return false;
+        }
+    }
+
     printFunctionBody(node, identation) {
         // Save/restore rather than clobber: a nested function re-enters this method
         // and must not destroy the enclosing body's analysis state on the way out.
@@ -1901,7 +1940,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 const index = i + offSetIndex;
                 // index = index < 0 ? 0 : i - 1;
                 const paramName = this.printNode(param.name, 0);
-                initParams.push(`Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)});`);
+                initParams.push(this.printOptionalArgInit(paramName, index, initializer));
             } else {
                 offSetIndex--;
             }

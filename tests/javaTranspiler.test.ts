@@ -2843,3 +2843,86 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         expect(output).toContain('Object y = Helpers.add(n, 1);');
     });
 });
+
+describe('java optional parameter unpacking', () => {
+    test('literal defaults unpack natively from optionalArgs (no Helpers.getArg)', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, symbol = undefined) {\n" +
+        "        return symbol;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("public Object m(Object arg, Object... optionalArgs)");
+        expect(output).toContain("Object symbol = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+
+    test('every literal default shape keeps its index and its default value', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, a = 1, b = true, c = 'x', d = {}, e = []) {\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1;");
+        expect(output).toContain("Object b = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true;");
+        expect(output).toContain("Object c = optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\";");
+        expect(output).toContain("Object d = optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}};");
+        expect(output).toContain("Object e = optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList());");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+
+    test('every native unpack is null-guarded, like the helper it replaces', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, params = {}) {\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // a caller passing a bare trailing null supplies a null varargs array; the
+        // guard keeps that reading like an empty one instead of throwing NPE
+        expect(output).not.toMatch(/= optionalArgs\.length/);
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 0");
+    });
+
+    test('defaults that are not pure literals keep Helpers.getArg', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, params = this.something(arg), other = someVar) {\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg }));");
+        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar);");
+        expect(output).not.toContain("optionalArgs.length >");
+    });
+
+    test('async method unpacks natively inside the supplyAsync lambda', () => {
+        const input =
+        "class T {\n" +
+        "    async m(arg, params = {}) {\n" +
+        "        return this.something(params);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("            Object parameters = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}};");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+
+    test('constructor optional parameters unpack natively', () => {
+        const input =
+        "class T {\n" +
+        "    constructor(a, b = 1) {\n" +
+        "        this.b = b;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("T(Object a, Object... optionalArgs)");
+        expect(output).toContain("Object b = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1;");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+});
