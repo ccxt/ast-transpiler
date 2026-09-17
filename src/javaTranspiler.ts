@@ -68,6 +68,15 @@ const parserConfig = {
     INFER_ARG_TYPE: false,
 };
 
+// every assignment operator (`=`, `+=`, `??=`, ...) but no comparison (`===`, `!==`, `<=`, `>=`):
+// an element access on the left of one of these is a write site and keeps the base emission
+const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
+    const kinds: any = ts.SyntaxKind;
+    const names = Object.keys(kinds).filter((name) => name.endsWith('EqualsToken')
+        && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
+    return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
+})();
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -721,6 +730,112 @@ export class JavaTranspiler extends BaseTranspiler {
         }
 
         return undefined;
+    }
+
+
+    // dict-shaped values are Map<String, Object> in the Java port: raw HashMap/ConcurrentHashMap
+    // or a types.TypedMap view (AbstractMap<String, Object> over the raw payload). Proven by the
+    // checker (string index signature, or an interface/alias declared in the base types file).
+    isJavaMapStructureType(type) {
+        if (type === undefined) {
+            return false;
+        }
+        const excludedFlags = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Union
+            | ts.TypeFlags.Intersection | ts.TypeFlags.Undefined | ts.TypeFlags.Null
+            | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional | ts.TypeFlags.Never;
+        if ((type.flags & excludedFlags) !== 0) {
+            return false;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type)) {
+            return false;
+        }
+        if (type.getStringIndexType() !== undefined) {
+            return true;
+        }
+        const symbol = (type as any).aliasSymbol ?? type.symbol;
+        const declaration = symbol?.declarations?.[0];
+        const fileName = declaration?.getSourceFile?.()?.fileName;
+        return fileName !== undefined && /(^|\/)ts\/src\/base\/types\.ts$/.test(fileName);
+    }
+
+    // tuples are List<Object> in the Java port (types.TypedList). Only an index inside the
+    // tuple's required elements goes native: .get(i) throws out of range where the helper
+    // returns null, so non-tuple array reads (any[], string[], ...) keep the helper.
+    isJavaListStructureType(type) {
+        if (type === undefined) {
+            return false;
+        }
+        const excludedFlags = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Union
+            | ts.TypeFlags.Intersection | ts.TypeFlags.Undefined | ts.TypeFlags.Null
+            | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional | ts.TypeFlags.Never;
+        if ((type.flags & excludedFlags) !== 0) {
+            return false;
+        }
+        return this.getChecker().isTupleType(type);
+    }
+
+    tupleRequiredElementCount(type) {
+        const flags = (type as any)?.target?.elementFlags ?? (type as any)?.elementFlags ?? [];
+        let required = 0;
+        for (const flag of flags) {
+            if (flag !== ts.ElementFlags.Optional && flag !== ts.ElementFlags.Rest) {
+                required++;
+            } else {
+                break;
+            }
+        }
+        return required;
+    }
+
+    isLeftSideOfAssignment(node) {
+        const parent = node.parent;
+        if (parent?.kind !== ts.SyntaxKind.BinaryExpression || parent.left !== node) {
+            return false;
+        }
+        return JAVA_ASSIGNMENT_OPERATOR_KINDS.has(parent.operatorToken.kind);
+    }
+
+    // `x[k]` reads: emit the native container accessor when the checker proves the Java
+    // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
+    printCheckerTypedElementAccessRead(node) {
+        const key = node.argumentExpression;
+        const isStringKey = ts.isStringLiteralLike(key);
+        const isNumberKey = ts.isNumericLiteral(key);
+        if (!isStringKey && !isNumberKey) {
+            return undefined;
+        }
+        if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined) {
+            return undefined; // an exchange-specific override wins, the base prints it
+        }
+        if (this.isLeftSideOfAssignment(node)) {
+            return undefined;
+        }
+        const type = this.getChecker().getTypeAtLocation(node.expression);
+        if (isStringKey) {
+            if (!this.isJavaMapStructureType(type)) {
+                return undefined;
+            }
+            const target = this.printNode(node.expression, 0);
+            return `((java.util.Map<String, Object>)${target}).get(${this.printNode(key, 0)})`;
+        }
+        if (!this.isJavaListStructureType(type)) {
+            return undefined;
+        }
+        const index = Number(key.text);
+        if (!Number.isInteger(index) || index < 0 || index >= this.tupleRequiredElementCount(type)) {
+            return undefined;
+        }
+        const target = this.printNode(node.expression, 0);
+        return `((java.util.List<Object>)${target}).get(${this.printNode(key, 0)})`;
+    }
+
+    printElementAccessExpression(node, identation) {
+        const native = this.printCheckerTypedElementAccessRead(node);
+        if (native !== undefined) {
+            return native;
+        }
+        return super.printElementAccessExpression(node, identation);
     }
 
 
