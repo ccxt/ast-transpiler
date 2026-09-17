@@ -2820,6 +2820,76 @@ ${this.getIden(identation)}${returnStatement}`;
      * calls.  This removes the root cause of the unbalanced-parenthesis bug
      * without any post-processing or regex hacks.
      */
+    // The Go static type of `printed` when the printer can name it as a native Go
+    // map or slice, undefined while the value stays boxed in `any` (GetValue,
+    // Ternary, a parameter, an untyped struct field). Only initializer shapes the
+    // printer itself types — object/array literals, helper calls whose Go return
+    // type it knows (GO_HELPER_RETURN_TYPES + the ccxt extension), and locals whose
+    // declaration got that same concrete type — are reported.
+    goIndexableTypeOf(node, printed: string): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goIndexableTypeOf(node.expression, printed);
+        case ts.SyntaxKind.ObjectLiteralExpression:
+            return 'map[string]any';
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return '[]any';
+        case ts.SyntaxKind.CallExpression:
+            return this.goTypeOfInitializer(node, printed);
+        case ts.SyntaxKind.Identifier:
+            return this.goDeclaredTypeOfIdentifier(node);
+        }
+        return undefined;
+    }
+
+    // the leftover chain after the first (native) step, still helper-wrapped:
+    // `m["a"]["b"]["c"]` prints `GetValue(GetValue(m["a"], "b"), "c")`
+    goElementAccessChain(containerStr: string, keyStrs: string[]) {
+        let acc = containerStr;
+        for (let i = 1; i < keyStrs.length; i++) {
+            acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        }
+        return acc;
+    }
+
+    // true when the printed key is a Go string, so `m[key]` reads the map with the
+    // same key GetValue resolves for a string operand (GetValue parses a non-string
+    // key, which on map[string]any just yields nil)
+    goKeyIsString(node, printed: string) {
+        if (node === undefined) {
+            return false;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return true;
+        case ts.SyntaxKind.Identifier:
+            return this.goDeclaredTypeOfIdentifier(node) === 'string';
+        case ts.SyntaxKind.CallExpression:
+            return this.goTypeOfInitializer(node, printed) === 'string';
+        }
+        return false;
+    }
+
+    // true for `this.<field>` — the one property-access shape whose Go type the
+    // printer itself cannot name (the fields live in the hand-written Go structs)
+    isGoThisPropertyAccessExpression(node) {
+        return (node?.kind === ts.SyntaxKind.PropertyAccessExpression)
+            && (node.expression?.kind === ts.SyntaxKind.ThisKeyword);
+    }
+
+    // true when the element access is the target of an assignment: the binary
+    // expression printer owns that shape (AddElementToObject / rewritten GetValue
+    // chains), a native `x[k]` index there would drop the write
+    isGoElementAccessAssignmentTarget(node) {
+        const parent = node.parent;
+        return (parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === node)
+            && ((parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) || (parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken));
+    }
+
     printElementAccessExpression(node, identation) {
         // Maintain original special-case handling first.
         const special = this.printElementAccessExpressionExceptionIfAny(node);
@@ -2848,6 +2918,15 @@ ${this.getIden(identation)}${returnStatement}`;
 
         const containerStr = this.printNode(baseExpr, 0);
         const keyStrs = keys.map(k => this.printNode(k, 0));
+
+        // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
+        // and a nil element both come back as the `any` nil, so the native index
+        // yields the identical value without the helper call
+        if (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') {
+            if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)) {
+                return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
+            }
+        }
 
         // Now build nested helpers.
         let acc = containerStr;
