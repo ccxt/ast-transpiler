@@ -578,6 +578,7 @@ declare class GoTranspiler extends BaseTranspiler {
     };
     DEFAULT_RETURN_TYPE: string;
     ASYNC_BODY_SUFFIX: string;
+    DEFAULT_IDENTATION: string;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
@@ -725,7 +726,7 @@ declare class GoTranspiler extends BaseTranspiler {
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
-    printArrayLiteralExpression(node: any): string;
+    printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
@@ -767,6 +768,25 @@ declare class GoTranspiler extends BaseTranspiler {
     printBinaryExpression(node: any, identation: any): string;
     goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;
     printTryStatement(node: any, identation: number): string;
+    /**
+     * Strip the printer's own leading indentation from every line of a printed
+     * statement block so the caller can re-place it at an explicit level. Only the
+     * common prefix goes away: relative nesting (one tab per level) is preserved.
+     */
+    dedentBlock(block: string): string;
+    /**
+     * Re-place a printed statement block at `level` (a run of tabs): the block's own
+     * leading indentation is dropped and every non-blank line is prefixed with `level`,
+     * so relative nesting (one tab per level) survives the move.
+     */
+    indentBlock(block: string, level: string): string;
+    /**
+     * gofmt writes blank lines with no whitespace at all. A multi-line statement template
+     * opens on a fresh line, so the inherited `getIden(identation) + <statement>` prefix
+     * lands on a line that carries nothing else: drop that prefix instead of leaving a
+     * whitespace-only line behind. Only blank lines are touched, never printed content.
+     */
+    stripWhitespaceOnlyLines(block: string): string;
     printPrefixUnaryExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     /**

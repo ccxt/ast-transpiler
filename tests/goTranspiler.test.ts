@@ -42,8 +42,8 @@ describe('go transpiling tests', () => {
         "}"
         const go =
         "for true {\n" +
-        "    var x any = 1\n" +
-        "    break\n" +
+        "\tvar x any = 1\n" +
+        "\tbreak\n" +
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -60,13 +60,13 @@ describe('go transpiling tests', () => {
         "}\n"+
         "\n"+
         "func NewTest() *Test {\n"+
-        "    p := &Test{}\n"+
-        "    setDefaults(p)\n"+
-        "    return p\n"+
+        "\tp := &Test{}\n"+
+        "\tsetDefaults(p)\n"+
+        "\treturn p\n"+
         "}\n"+
         "\n"+
         "func (this *Test) Main() any {\n"+
-        "    return 1\n"+
+        "\treturn 1\n"+
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -121,7 +121,7 @@ describe('go transpiling tests', () => {
         "var d bool = !(a != \"\") && !b\n" +
         "var e bool = ((a != \"\") || !b)\n" +
         "if (a != \"\") {\n" +
-        "    var f any = 1\n" +
+        "\tvar f any = 1\n" +
         "}"
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -430,7 +430,7 @@ describe('go transpiling tests', () => {
 
 describe('go typed body locals', () => {
     // the printer indents nested call expressions; gofmt collapses that downstream
-    const squash = (output: string) => output.replace(/ +/g, ' ');
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
     test('locals whose initializer has a concrete Go type are declared with it', () => {
         const input =
         "class Exchange {\n" +
@@ -527,7 +527,7 @@ describe('go typed body locals', () => {
 
 describe('go pointer-typed Safe* body locals', () => {
     // the printer indents nested call expressions; gofmt collapses that downstream
-    const squash = (output: string) => output.replace(/ +/g, ' ');
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
     test('a local initialized from a Safe* accessor is declared with its pointer type', () => {
         const input =
         "class Exchange {\n" +
