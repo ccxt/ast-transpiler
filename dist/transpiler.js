@@ -4038,6 +4038,9 @@ var GoTranspiler = class extends BaseTranspiler {
     this.DEFAULT_RETURN_TYPE = "any";
     // suffix of the sibling body method an async trampoline hands its work to
     this.ASYNC_BODY_SUFFIX = "Body";
+    // gofmt indents every nesting level with exactly one tab; the printer emits the
+    // same bytes so the generated tree needs no `gofmt` pass (campaign go-gofmt F01)
+    this.DEFAULT_IDENTATION = "	";
     // the Go type this identifier is actually *declared* with, or undefined when it
     // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
     // declaration the reject filters demoted back to `any` is reported as `any` here
@@ -4231,9 +4234,9 @@ var GoTranspiler = class extends BaseTranspiler {
   printNewStructMethod(node) {
     return `
 func New${this.capitalize(this.className)}() *${this.className} {
-    p := &${this.className}{}
-    setDefaults(p)
-    return p
+	p := &${this.className}{}
+	setDefaults(p)
+	return p
 }
 `;
   }
@@ -4763,7 +4766,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     if (declaration?.initializer?.kind === ts5.SyntaxKind.AwaitExpression) {
       const parsedName = this.printNode(declaration.name, 0);
-      const parsedInitializer = this.printNode(declaration.initializer, 0);
+      const parsedInitializer = this.printNode(declaration.initializer, identation);
       return `
 ${this.getIden(identation)}${parsedName} := ${parsedInitializer}
 ${this.getIden(identation)}PanicOnError(${parsedName})`;
@@ -4823,7 +4826,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // the section aligned. A trailing comment is one more tabwriter cell, so comments
   // line up after the widest `value,` cell of the run of consecutive commented entries.
   printObjectLiteralBody(node, identation) {
-    const entries = node.properties.map((p) => this.printNode(p, identation + 1));
+    const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
     return this.alignGoCompositeEntries(entries).join("\n");
   }
   // Applies the gofmt column alignment to already-printed `key: value` entries (the
@@ -5193,7 +5196,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
       }
       const lastKey = keyStrs[keyStrs.length - 1];
-      const rhs = this.printNode(right, 0);
+      const rhs = right.kind === ts5.SyntaxKind.ObjectLiteralExpression ? this.printNode(right, identation) : this.printNode(right, 0);
       return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (op === ts5.SyntaxKind.PlusEqualsToken && left.kind === ts5.SyntaxKind.ElementAccessExpression) {
@@ -5642,7 +5645,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (expression?.kind === ts5.SyntaxKind.ArrowFunction) {
       return "";
     }
-    const printed = this.printNode(expression, 0);
+    const printed = this.goWithExprDepth(this.goExprDepth - 1, () => this.printNode(expression, 0));
     if (this.goIsParenthesizedExpression(printed)) {
       return this.getIden(identation) + printed;
     }
@@ -5761,7 +5764,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const commentPart = bodyParts.filter((line) => this.isComment(line));
         const isComment = commentPart.length > 0;
         if (isComment) {
-          const commentPartString = commentPart.map((c) => this.getIden(identation + 1) + c.trim()).join("\n");
+          const commentPartString = commentPart.map((c) => {
+            const line = c.trim();
+            return this.getIden(identation + 1) + (line.startsWith("*") ? " " + line : line);
+          }).join("\n");
           const firstStmNoComment = bodyParts.filter((line) => !this.isComment(line)).join("\n");
           firstStatement = commentPartString + "\n" + defaultInitializers + firstStmNoComment;
         } else {
@@ -5781,13 +5787,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         functionBody = super.printFunctionBody(node, identation);
       } else {
         functionBody = node.body.statements.map((statement) => {
-          return this.printNode(statement, identation);
+          return this.printNode(statement, identation + 1);
         }).join("\n");
       }
     }
     if (wrapInChannel) {
       const functionBodySplit = functionBody.split("\n");
-      const bodyWithIndentationExtraAndNoReturn = this.indentLines(functionBodySplit, identation + 1).join("\n");
+      const bodyWithIndentationExtraAndNoReturn = functionBodySplit.join("\n");
       let shouldAddLastReturn = true;
       const bodySplit = functionBodySplit;
       const lastLine = bodySplit[bodySplit.length - 1];
@@ -5837,7 +5843,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       node = node.expression;
     }
     if (node.expression.kind !== ts5.SyntaxKind.AwaitExpression) {
-      return super.printExpressionStatement(node, identation);
+      return this.stripWhitespaceOnlyLines(super.printExpressionStatement(node, identation));
     }
     const exprStm = this.printNode(node.expression, identation);
     const returnRandName = "retRes" + this.getLineBasedSuffix(node);
@@ -5886,17 +5892,17 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
       const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
       rightPart = rightPart ? rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
       return `
-    ${this.getIden(identation)}${returnRandName} := ${rightPart}
-    ${this.getIden(identation)}PanicOnError(${returnRandName})
-    ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
-    ${this.getIden(identation)}${returnStatement}`;
+${this.getIden(identation)}${returnRandName} := ${rightPart}
+${this.getIden(identation)}PanicOnError(${returnRandName})
+${leadingComment}${this.getIden(identation)}ch <- ${returnRandName}${trailingComment}
+${this.getIden(identation)}${returnStatement}`;
     }
     if (rightPart.length === 0) {
       return `
 ${this.getIden(identation)}${returnStatement}`;
     }
     return `
-${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
+${leadingComment}${this.getIden(identation)}ch <- ${rightPart}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
   }
   printAsExpression(node, identation) {
@@ -5909,10 +5915,10 @@ ${this.getIden(identation)}${returnStatement}`;
     }
     return this.printNode(node.expression, identation);
   }
-  printArrayLiteralExpression(node) {
+  printArrayLiteralExpression(node, identation = 0) {
     let arrayOpen = this.ARRAY_OPENING_TOKEN;
     const elems = node.elements;
-    const elements = node.elements.map((e) => this.printNode(e)).join(", ");
+    const elements = node.elements.map((e) => this.printNode(e, identation)).join(", ");
     if (elems.length > 0) {
       const first = elems[0];
       if (first.kind === ts5.SyntaxKind.CallExpression) {
@@ -5947,16 +5953,6 @@ ${this.getIden(identation)}${returnStatement}`;
       return this.goWithExprDepth(this.goExprDepth + 1, () => super.printArgsForCallExpression(node, identation));
     }
     return super.printArgsForCallExpression(node, identation);
-  }
-  // parentheses undo one level of depth (go/printer reduceDepth()) - and the
-  // expression inside them keeps their own level for everything nested below
-  printParenthesizedExpression(node, identation) {
-    return this.goWithExprDepth(this.goExprDepth - 1, () => super.printParenthesizedExpression(node, identation));
-  }
-  // composite literal elements are printed at depth 1 again (go/printer prints
-  // the element list with exprList(..., 1, ...))
-  printObjectLiteralBody(node, identation) {
-    return this.goWithExprDepth(1, () => super.printObjectLiteralBody(node, identation));
   }
   // check this out later
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
@@ -6258,13 +6254,15 @@ ${this.getIden(identation)}return nil`;
       if (left.kind === ts5.SyntaxKind.ElementAccessExpression) {
         const leftSide = this.printNode(elementAccess.expression, 0);
         const propName = this.printNode(elementAccess.argumentExpression, 0);
-        return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
+        const value = right.kind === ts5.SyntaxKind.ObjectLiteralExpression ? this.printNode(right, identation) : rightSide;
+        return `AddElementToObject(${leftSide}, ${propName}, ${value})`;
       }
       if (right?.kind === ts5.SyntaxKind.AwaitExpression || rightSide.startsWith("<-this.callInternal")) {
         const leftParsed = this.printNode(left, 0);
+        const awaited = right?.kind === ts5.SyntaxKind.AwaitExpression ? this.printNode(right, identation) : rightSide;
         return `
-    ${leftParsed} = ${rightSide}
-    ${this.getIden(identation)}PanicOnError(${leftParsed})`;
+${this.getIden(identation)}${leftParsed} = ${awaited}
+${this.getIden(identation)}PanicOnError(${leftParsed})`;
       }
     }
     const op = operatorToken.kind;
@@ -6356,33 +6354,62 @@ ${this.getIden(identation)}return nil`;
     const errorName = node.catchClause.variableDeclaration.name.escapedText;
     const classPrefix = this.className !== "undefined" ? `(this *${this.className})` : "()";
     const thisWord = this.className !== "undefined" ? "this" : "";
+    const catchBodyBlock = this.indentBlock(catchBody, "					");
+    const tryBodyBlock = this.indentBlock(tryBody, "		");
     const catchBlock = `
-    {
-        ${nodeEndsWithReturn ? "ret__ :=" : ""} func${classPrefix} (ret_ any) {
-		    defer func() {
-                if ${errorName} := recover(); ${errorName} != nil {
-                    if ${errorName} == "break" {
-                        return
-                    }
-                    ret_ = func${classPrefix} any {
-                        // catch block:
-                        ${catchBody}
-                        ${catchBodyEndsWithReturn ? "" : returNil}
-                    }(${thisWord})
-                }
-            }()
-		    // try block:
-            ${tryBody}
-		    ${tryBodyEndsWithReturn ? "" : returNil}
-	    }(${thisWord})
-    ${nodeEndsWithReturn ? `
-            if ret__ != nil {
-                return ret__
-            }
-            return nil` : ""}
-        }`;
-    const indentedBlock = this.indentLines(catchBlock.split("\n"), identation).join("\n");
+{
+	${nodeEndsWithReturn ? "ret__ := " : ""}func${classPrefix} (ret_ any) {
+		defer func() {
+			if ${errorName} := recover(); ${errorName} != nil {
+				if ${errorName} == "break" {
+					return
+				}
+				ret_ = func${classPrefix} any {
+					// catch block:
+${catchBodyBlock}
+					${catchBodyEndsWithReturn ? "" : returNil}
+				}(${thisWord})
+			}
+		}()
+		// try block:
+${tryBodyBlock}
+		${tryBodyEndsWithReturn ? "" : returNil}
+	}(${thisWord})
+	${nodeEndsWithReturn ? `if ret__ != nil {
+		return ret__
+	}
+	return nil` : ""}
+}`;
+    const indentedBlock = catchBlock.split("\n").map((line) => line.trim().length ? this.getIden(identation) + line : "").join("\n");
     return indentedBlock;
+  }
+  /**
+   * Strip the printer's own leading indentation from every line of a printed
+   * statement block so the caller can re-place it at an explicit level. Only the
+   * common prefix goes away: relative nesting (one tab per level) is preserved.
+   */
+  dedentBlock(block) {
+    const lines = block.split("\n");
+    const indents = lines.filter((line) => line.trim().length > 0).map((line) => line.match(/^[	 ]*/)[0].length);
+    const common = indents.length ? Math.min(...indents) : 0;
+    return lines.map((line) => line.slice(common)).join("\n");
+  }
+  /**
+   * Re-place a printed statement block at `level` (a run of tabs): the block's own
+   * leading indentation is dropped and every non-blank line is prefixed with `level`,
+   * so relative nesting (one tab per level) survives the move.
+   */
+  indentBlock(block, level) {
+    return this.dedentBlock(block).split("\n").map((line) => line.trim().length ? level + line : "").join("\n");
+  }
+  /**
+   * gofmt writes blank lines with no whitespace at all. A multi-line statement template
+   * opens on a fresh line, so the inherited `getIden(identation) + <statement>` prefix
+   * lands on a line that carries nothing else: drop that prefix instead of leaving a
+   * whitespace-only line behind. Only blank lines are touched, never printed content.
+   */
+  stripWhitespaceOnlyLines(block) {
+    return block.split("\n").map((line) => line.trim().length ? line : "").join("\n");
   }
   printPrefixUnaryExpression(node, identation) {
     const { operand, operator } = node;

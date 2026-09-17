@@ -1,7 +1,6 @@
 import { assert } from 'console';
 import { Transpiler, alignGoTrailingComments } from '../src/transpiler';
 
-import { Transpiler } from '../src/transpiler';
 import { SyntaxKind } from 'typescript';
 import { readFileSync } from 'fs';
 
@@ -89,20 +88,20 @@ describe('go transpiling tests', () => {
         "}";
         const go =
         "type Test struct {\n" +
-        "    Base\n" +
-        "    Short               string `default:\"\"`\n" +
-        "    ALongerPropertyName any    `default:\"map[string]any {}\"`\n" +
-        "    NoTag               any\n" +
+        "\tBase\n" +
+        "\tShort               string `default:\"\"`\n" +
+        "\tALongerPropertyName any    `default:\"map[string]any{}\"`\n" +
+        "\tNoTag               any\n" +
         "}\n" +
         "\n" +
         "func NewTest() *Test {\n" +
-        "    p := &Test{}\n" +
-        "    setDefaults(p)\n" +
-        "    return p\n" +
+        "\tp := &Test{}\n" +
+        "\tsetDefaults(p)\n" +
+        "\treturn p\n" +
         "}\n" +
         "\n" +
-        "func  (this *Test) Main() any  {\n" +
-        "    return 1\n" +
+        "func (this *Test) Main() any {\n" +
+        "\treturn 1\n" +
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -1187,6 +1186,8 @@ describe('go control-clause parens (gofmt stripParens)', () => {
         expect(go.goEnclosedExpression("((x == 1) && (x == 2))")).toBe("(x == 1) && (x == 2)");
         expect(go.goEnclosedExpression("(a) && (b)")).toBeUndefined();
         expect(go.goEnclosedExpression("(len(parts) > 0)")).toBe("len(parts) > 0");
+    });
+});
 
 describe('go redundant parentheses', () => {
     // gofmt prints a ParenExpr whose child is itself a ParenExpr without its own pair
@@ -1230,6 +1231,8 @@ describe('go redundant parentheses', () => {
         // the source pairs sit on the operands, not around the whole disjunction
         expect(output).toContain("(n == 1) || (n == 2)");
         expect(output).not.toContain("((n == 1))");
+    });
+});
 
 describe('go composite literal column alignment', () => {
     // F09: gofmt aligns the values of the consecutive single-line `key: value` entries of a
@@ -1272,7 +1275,7 @@ describe('go composite literal column alignment', () => {
         expect(output).toContain('"a":  1,');
         expect(output).toContain('"bb": 2,');
         // the nested literal is not padded, and its own body starts a new block
-        expect(output).toContain('"nested": map[string]any {');
+        expect(output).toContain('"nested": map[string]any{');
         expect(output).toContain('"longerKey": 1,');
         expect(output).toContain('"x":         2,');
         // entries after the multi-line value align against each other, not against "a"/"bb"
@@ -1318,6 +1321,8 @@ describe('go composite literal column alignment', () => {
         expect(output).toContain('"a":  1,');
         expect(output).toContain('"bb": 2, // last property keeps its trailing comment');
         expect(output).not.toContain('// last property keeps its trailing comment,');
+    });
+});
 
 describe('go trailing comment alignment', () => {
     test('adjacent statements share one comment column', () => {
@@ -1401,6 +1406,8 @@ describe('go trailing comment alignment', () => {
         "}\n"
         const once = transpiler.transpileGo(input).content;
         expect(alignGoTrailingComments(once)).toBe(once);
+    });
+});
 
 describe('go comment placement on the trampoline body half (gofmt)', () => {
     // The body half of an async method is a plain function whose statements, default
@@ -1431,7 +1438,7 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         expect(lines[6]).toBe(`${indent} */`);
         expect(lines[7]).toBe(`${indent}timeframe := GetArg(optionalArgs, 0, "1m")`);
         expect(lines[8]).toBe(`${indent}_ = timeframe`);
-        expect(lines[9]).toBe(`${indent}params := GetArg(optionalArgs, 1, map[string]any {})`);
+        expect(lines[9]).toBe(`${indent}params := GetArg(optionalArgs, 1, map[string]any{})`);
     });
     test('the body statements are not indented one level deeper than the defers', () => {
         const input =
@@ -1443,7 +1450,7 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         const output = transpiler.transpileGo(input).content;
         const lines = output.slice(output.indexOf("func (this *Exchange) fetchTimeBody(")).split("\n");
         const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
-        expect(lines[3]).toBe(`${indent}params := GetArg(optionalArgs, 0, map[string]any {})`);
+        expect(lines[3]).toBe(`${indent}params := GetArg(optionalArgs, 0, map[string]any{})`);
         expect(lines[4]).toBe(`${indent}_ = params`);
         const chLine = lines.findIndex((line) => line.includes('ch <- callDynamically("milliseconds"'));
         expect(lines[chLine]).toBe(`${indent}ch <- callDynamically("milliseconds", )`);
@@ -1466,6 +1473,8 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         expect(lines[commentLine + 1]).toBe(`${indent}ch <- callDynamically("parseTicker", x)`);
         expect(lines[commentLine + 2]).toBe(`${indent}return nil`);
 
+    });
+});
 // ---------------------------------------------------------------------------
 // gofmt binary expression spacing (go/printer nodes.go: binaryExpr/cutoff)
 // ---------------------------------------------------------------------------
@@ -1527,8 +1536,8 @@ describe('gofmt binary expression spacing', () => {
     });
 
     test('composite literal elements and assignment right sides stay at the top level', () => {
-        expect(go("const p = { 'k': a + b };")).toBe('var p map[string]any = map[string]any {\n    "k": a + b,\n}');
-        expect(go("const p = { 'k': this.f2(a, b + c) };")).toBe('var p map[string]any = map[string]any {\n    "k": callDynamically("f2", a, b+c),\n}');
+        expect(go("const p = { 'k': a + b };")).toBe('var p map[string]any = map[string]any{\n\t"k": a + b,\n}');
+        expect(go("const p = { 'k': this.f2(a, b + c) };")).toBe('var p map[string]any = map[string]any{\n\t"k": callDynamically("f2", a, b+c),\n}');
         expect(go('let z = 1; z = a + b;')).toBe('var z any = 1\nz = a + b');
     });
 
@@ -1539,7 +1548,7 @@ describe('gofmt binary expression spacing', () => {
 
     test('levels 3 and below always keep their blanks', () => {
         expect(go('const x = (a && b) || c;')).toBe('var x bool = (EvalTruthy(a) && EvalTruthy(b)) || EvalTruthy(c)');
-        expect(go('if (a == b) { return 1; }')).toBe('if IsEqual(a, b) {\n    return 1\n}');
+        expect(go('if (a == b) { return 1; }')).toBe('if IsEqual(a, b) {\n\treturn 1\n}');
     });
 
     test('inside a single argument call nothing is compacted', () => {

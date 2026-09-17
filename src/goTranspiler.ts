@@ -1282,7 +1282,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the section aligned. A trailing comment is one more tabwriter cell, so comments
     // line up after the widest `value,` cell of the run of consecutive commented entries.
     printObjectLiteralBody(node, identation) {
-        const entries = node.properties.map((p) => this.printNode(p, identation + 1));
+        // composite literal elements are printed at depth 1 again (go/printer exprList(..., 1, ...))
+        const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
         return this.alignGoCompositeEntries(entries).join("\n");
     }
 
@@ -2318,7 +2319,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // ignore arrowFunctions inside parenthesis
             return "";
         }
-        const printed = this.printNode(expression, 0);
+        // parentheses undo one level of depth (go/printer reduceDepth())
+        const printed = this.goWithExprDepth(this.goExprDepth - 1, () => this.printNode(expression, 0));
         if (this.goIsParenthesizedExpression(printed)) {
             return this.getIden(identation) + printed;
         }
@@ -2648,9 +2650,6 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         const exp =  node.expression;
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
-        // a leading comment block ends on its own line, so the statement that follows it
-        // needs its own indentation (the template already indents the first comment line)
-        const afterCommentIndent = leadingComment.length > 0 ? this.getIden(identation) : "";
 
         // `return nil` only exits the synthetic try/catch closure; at the function's own
         // level the async core has to hand the (named) result channel back instead.
@@ -2673,7 +2672,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
             return `
 ${this.getIden(identation)}${returnRandName} := ${rightPart}
 ${this.getIden(identation)}PanicOnError(${returnRandName})
-${this.getIden(identation)}${leadingComment}${afterCommentIndent}ch <- ${returnRandName}${trailingComment}
+${leadingComment}${this.getIden(identation)}ch <- ${returnRandName}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
             // ${this.getIden(identation)}return ${returnRandName}`;
         }
@@ -2683,7 +2682,7 @@ ${this.getIden(identation)}${returnStatement}`;
         }
 
         return `
-${this.getIden(identation)}${leadingComment}${afterCommentIndent}ch <- ${rightPart}${trailingComment}
+${leadingComment}${this.getIden(identation)}ch <- ${rightPart}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
         // ${this.getIden(identation)}return ${rightPart}`;
         // ${this.getIden(identation)}return ${rightPart}`;
@@ -2779,18 +2778,6 @@ ${this.getIden(identation)}${returnStatement}`;
             return this.goWithExprDepth(this.goExprDepth + 1, () => super.printArgsForCallExpression(node, identation));
         }
         return super.printArgsForCallExpression(node, identation);
-    }
-
-    // parentheses undo one level of depth (go/printer reduceDepth()) - and the
-    // expression inside them keeps their own level for everything nested below
-    printParenthesizedExpression(node, identation) {
-        return this.goWithExprDepth(this.goExprDepth - 1, () => super.printParenthesizedExpression(node, identation));
-    }
-
-    // composite literal elements are printed at depth 1 again (go/printer prints
-    // the element list with exprList(..., 1, ...))
-    printObjectLiteralBody(node, identation) {
-        return this.goWithExprDepth(1, () => super.printObjectLiteralBody(node, identation));
     }
 
     // check this out later
