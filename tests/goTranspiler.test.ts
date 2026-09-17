@@ -399,7 +399,7 @@ describe('go typed body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var upper string = ToUpper(market)");
         expect(output).toContain("var parts []string = Split(market, \"/\")");
-        expect(output).toContain("var count int = GetArrayLength(parts)");
+        expect(output).toContain("var count int = len(parts)");
         expect(output).toContain("var same bool = (IsEqual(upper, market))");
         expect(output).toContain("var merged map[string]any = this.Extend(");
     });
@@ -419,7 +419,7 @@ describe('go typed body locals', () => {
         expect(output).toContain("var income any = this.SafeValue(item, \"income\")");
         expect(output).toContain("var first any = GetValue(item, \"first\")");
         expect(output).toContain("var sum any = Add(a, b)");
-        expect(output).toContain("var picked any = Ternary(");
+        expect(output).toContain("var picked any = func() any {");
     });
     test('a local reassigned with another type, appended to or spread stays any', () => {
         const input =

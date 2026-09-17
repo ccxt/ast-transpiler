@@ -71,6 +71,9 @@ const parserConfig = {
 // refines what the Go compiler knows about it.
 const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'GetArrayLength': 'int',
+    'GetLength': 'int',
+    // the printInlineArrayLength emission of `.length` on a slice
+    'len': 'int',
     'GetIndexOf': 'int',
     'ToString': 'string',
     'ToLower': 'string',
@@ -798,6 +801,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             value = value.substring(1, value.length - 1).trim();
         }
         const open = value.indexOf('(');
+        // the native `key in obj` emission is an immediately-called func literal that
+        // returns a Go bool, so it needs no EvalTruthy round-trip either
+        if (value.startsWith('func() bool {') && value.endsWith('}()')) {
+            return 'bool';
+        }
         if (open <= 0 || !this.isWholePrintedCall(value, open)) {
             return undefined;
         }
@@ -1349,7 +1357,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
 
         if (op === ts.SyntaxKind.InKeyword) {
-            return `InOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+            const dictText = this.printNode(right, 0);
+            const keyText = this.printNode(left, 0);
+            const inlined = this.printInlineInOp(right, left, dictText, keyText);
+            if (inlined !== undefined) {
+                return inlined;
+            }
+            return `InOp(${dictText}, ${keyText})`;
         }
 
         // only print the operands when this op is actually handled here; otherwise
@@ -1531,6 +1545,103 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // the concrete Go type an *expression* is printed as: a local's declared type,
+    // the return type of a runtime helper call, or a literal. undefined when the value
+    // stays inside an `any` box — a native Go operation on an `any` box would not
+    // compile, so every rule below falls back to its helper in that case.
+    goPrintedTypeOfExpression(node, printedText: string): string | undefined {
+        const inner = (node?.kind === ts.SyntaxKind.ParenthesizedExpression) ? node.expression : node;
+        if (inner?.kind === ts.SyntaxKind.Identifier) {
+            return this.goDeclaredTypeOfIdentifier(inner);
+        }
+        return this.goTypeOfInitializer(inner, printedText);
+    }
+
+    // `x.length` on a value the printer declares as a slice is `len(x)`: Go's len is
+    // 0 for a nil slice, exactly like GetArrayLength's `[]T` cases. On a map or an
+    // `any` box GetArrayLength answers 0, so only a `[]`-typed value may inline —
+    // and only for the slice types the helper itself counts (a []byte would answer 0).
+    sliceLengthTypes = [ '[]any', '[]string', '[]int64', '[]float64', '[]bool', '[]int', '[][]any', '[]map[string]any' ];
+
+    printInlineArrayLength(expression, printedText: string): string | undefined {
+        if (printedText.includes('\n')) {
+            return undefined;
+        }
+        const goType = this.goPrintedTypeOfExpression(expression, printedText);
+        if ((typeof goType === 'string') && this.sliceLengthTypes.indexOf(goType) >= 0) {
+            return `len(${printedText})`;
+        }
+        return undefined;
+    }
+
+    // Go has no ternary operator. The func literal returns the same branch value the
+    // helper would and prints the condition the same way; it evaluates only the branch
+    // TypeScript would take, while Ternary receives both already evaluated.
+    printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined {
+        if (condition.includes('\n') || whenTrue.includes('\n') || whenFalse.includes('\n')) {
+            return undefined;
+        }
+        return `func() any { if ${condition} { return ${whenTrue} }; return ${whenFalse} }()`;
+    }
+
+    // `key in obj` on a Go map[string]any with a string key. The two-value map read is
+    // a statement, hence the func literal: a present-but-nil value is ok=true, exactly
+    // like InOp's map case. InOp also answers false for a nil/number key and covers
+    // sync.Map/orderbook receivers, so anything else keeps the helper.
+    printInlineInOp(dictNode, keyNode, dictText: string, keyText: string): string | undefined {
+        if (dictText.includes('\n') || keyText.includes('\n')) {
+            return undefined;
+        }
+        if (this.goPrintedTypeOfExpression(dictNode, dictText) !== 'map[string]any') {
+            return undefined;
+        }
+        if (this.goPrintedTypeOfExpression(keyNode, keyText) !== 'string') {
+            return undefined;
+        }
+        return `func() bool { _, ok := ${dictText}[${keyText}]; return ok }()`;
+    }
+
+    // comparison helpers that normalize int/int64/float64 against each other, so a
+    // literal operand's Go default type (int) behaves like the int64 OpNeg produces
+    comparisonHelpers = [ 'IsEqual', 'IsGreaterThan', 'IsLessThan', 'IsGreaterThanOrEqual', 'IsLessThanOrEqual' ];
+
+    // OpNeg boxes `-val.Int()` / `-val.Float()`, i.e. an int64 or a float64, and nil
+    // for anything else. `-x` reproduces that exactly only for an operand that already
+    // prints as float64/int64; a Go `int` (or an integer literal) boxes as int instead.
+    printInlineOpNeg(node, printedText: string): string | undefined {
+        if (printedText.includes('\n')) {
+            return undefined;
+        }
+        const goType = this.goPrintedTypeOfExpression(node.operand, printedText);
+        if ((goType === 'float64') || (goType === 'int64')) {
+            return `-${printedText}`;
+        }
+        // a fractional/exponent literal is already a Go float64 constant; an integer
+        // literal is only interchangeable where the consumer normalizes the number
+        if (/^\d+(\.\d+)?([eE][+-]?\d+)?$/.test(printedText.trim())) {
+            if (printedText.includes('.') || /[eE]/.test(printedText)) {
+                return `-${printedText}`;
+            }
+            const parent = node.parent;
+            if (parent?.kind === ts.SyntaxKind.CallExpression) {
+                const callee = this.printNode(parent.expression, 0);
+                if (this.comparisonHelpers.indexOf(callee) >= 0) {
+                    return `-${printedText}`;
+                }
+            }
+            // `a > -1` prints as IsGreaterThan(a, …); the relational wrappers all
+            // normalise int/int64/float64 the same way the equality helpers do
+            if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
+                const op = parent.operatorToken.kind;
+                if ((op === ts.SyntaxKind.GreaterThanToken) || (op === ts.SyntaxKind.GreaterThanEqualsToken)
+                    || (op === ts.SyntaxKind.LessThanToken) || (op === ts.SyntaxKind.LessThanEqualsToken)) {
+                    return `-${printedText}`;
+                }
+            }
+        }
+        return undefined;
+    }
+
     // JS truthiness of an operand whose Go type the printer knows, expressed with
     // plain Go instead of boxing the value into `EvalTruthy(any)`. Each arm mirrors the
     // matching `EvalTruthy` case exactly, including nil (a nil *T and a nil map are
@@ -1587,6 +1698,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const printed = this.printNode(node, 0);
         if (this.goTypeOfInitializer(node, printed) === 'bool') {
             return `${this.getIden(identation)}${printed}`;
+        }
+        // a native `key in obj` prints as a `func() bool` call, which the type probe
+        // above cannot name; it is a Go bool all the same
+        const inNode = (node?.kind === ts.SyntaxKind.ParenthesizedExpression) ? node.expression : node;
+        if (inNode?.kind === ts.SyntaxKind.BinaryExpression && inNode.operatorToken.kind === ts.SyntaxKind.InKeyword) {
+            const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0));
+            if (inlined !== undefined) {
+                const text = (inNode === node) ? inlined : `(${inlined})`;
+                return `${this.getIden(identation)}${text}`;
+            }
         }
         return super.printCondition(node, identation);
     }
@@ -1697,7 +1818,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const type = (this.getChecker() as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
             // this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
-            rawExpression = this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
+            rawExpression = this.isStringType(type.flags) ? `GetLength(${leftSide})` : this.printInlineArrayLength(expression, leftSide) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
             rawExpression = `((IList<object>)${leftSide}).Add`;
@@ -2237,6 +2358,11 @@ ${this.getIden(identation)}${returnStatement}`;
         const whenTrue = this.printNode(node.whenTrue, 0);
         const whenFalse = this.printNode(node.whenFalse, 0);
 
+        const inlined = this.printInlineTernary(condition, whenTrue, whenFalse);
+        if (inlined !== undefined) {
+            return inlined;
+        }
+
         return `Ternary(${condition}, ${whenTrue}, ${whenFalse})`;
     }
 
@@ -2476,7 +2602,12 @@ ${this.getIden(identation)}${returnStatement}`;
             return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
         }
         if (operator === ts.SyntaxKind.MinusToken) {
-            return this.getIden(identation) + `OpNeg(${this.printNode(node.operand, 0)})`;
+            const printed = this.printNode(node.operand, 0);
+            const inlined = this.printInlineOpNeg(node, printed);
+            if (inlined !== undefined) {
+                return this.getIden(identation) + inlined;
+            }
+            return this.getIden(identation) + `OpNeg(${printed})`;
         }
         return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
     }
