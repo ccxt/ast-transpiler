@@ -2443,3 +2443,133 @@ describe('java asyncSupplier option', () => {
         expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
     });
 });
+
+// `obj[key] = value` prints the runtime helper by default; the native Map.put is
+// printed only when the checker proves the target is a TS dictionary, the key is a
+// string literal and the receiver is not a shared field map.
+describe('java element-access write: native Map.put for proven dictionaries', () => {
+    const put = '((java.util.Map<String, Object>)request).put("symbol", "BTC/USDT")';
+
+    test('dictionary-typed local with a string-literal key prints Map.put', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[\"symbol\"] = \"BTC/USDT\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain(put);
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('dictionary-typed parameter with a string-literal key prints Map.put', () => {
+        const input =
+        "class T {\n" +
+        "    test(request: { [key: string]: any }): void {\n" +
+        "        request[\"symbol\"] = \"BTC/USDT\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain(put);
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('shared field map keeps the helper (ConcurrentHashMap null-removal + monitor)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        this.options[\"sandboxMode\"] = true;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(this.options, "sandboxMode", true)');
+        expect(output).not.toContain(".put(");
+    });
+
+    test('non-literal key keeps the helper (the key prints as Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(code: string): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[code] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(request, code, 1)");
+    });
+
+    test('element read as key keeps the helper (GetValue returns Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(market: { [key: string]: any }): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[market[\"id\"]] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(request, Helpers.GetValue(market, "id"), 1)');
+    });
+
+    test('array target keeps the helper (index append-at-size is not provable)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const arr: any[] = [];\n" +
+        "        arr[0] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(arr, 0, 1)");
+        expect(output).not.toContain(".set(");
+    });
+
+    test('any-typed target keeps the helper (no proof)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x: any = {};\n" +
+        "        x[\"k\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(x, "k", 1)');
+    });
+
+    test('non-dictionary interface target keeps the helper', () => {
+        const input =
+        "interface Foo { a: number; }\n" +
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x: Foo = { a: 1 };\n" +
+        "        x[\"a\"] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(x, "a", 2)');
+    });
+
+    test('numeric key on a dictionary keeps the helper (Map.put takes a String key)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[0] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(request, 0, 1)");
+    });
+
+    test('nested dictionary write prints the native put on the inner map', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const features: { [key: string]: { [key: string]: any } } = {};\n" +
+        "        features[\"spot\"][\"limit\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)Helpers.GetValue(features, "spot")).put("limit", 1)');
+    });
+});
