@@ -770,6 +770,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printArgsForCallExpression(node: any, identation: any): string;
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
+    javaBooleanOperators: ts.SyntaxKind[];
     usageToFinalName: WeakMap<ts.Node, string>;
     finalVarScopeStack: Array<Set<string>>;
     finalVarMutations: Array<{
@@ -798,7 +799,28 @@ declare class JavaTranspiler extends BaseTranspiler {
     getVarMethodIfAny(node: any): string;
     getVarClassIfAny(node: any): string;
     getVarKey(node: any): string;
+    equalityOperandFamily(type: any): string | undefined;
+    isNullishLiteral(node: any): boolean;
+    printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
+    elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
+    isDictionaryType(node: any): boolean;
+    isDictionaryTsType(type: any, checker: any, depth: number): boolean;
+    javaIntegerLiteralKind(node: any): "int" | "long";
+    isVarargsArrayReference(node: any, depth?: number): any;
+    isJavaListType(type: any): boolean;
+    javaLengthKind(expression: any): "List" | "String";
+    printJavaLength(expression: any, leftSide: any): string;
+    isJavaPrimitiveForCounter(node: any): boolean;
+    javaPrimitiveOperandKind(node: any): "int" | "long";
+    isJavaMapType(type: any): boolean;
+    isJavaStringType(type: any): any;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    isJavaMapStructureType(type: any): boolean;
+    isJavaListStructureType(type: any): boolean;
+    tupleRequiredElementCount(type: any): number;
+    isLeftSideOfAssignment(node: any): boolean;
+    printCheckerTypedElementAccessRead(node: any): string;
+    printElementAccessExpression(node: any, identation: any): any;
     javaScalarFamily(node: any): string | undefined;
     javaProvableString(node: any): boolean;
     javaNativeConcat(node: any): boolean;
@@ -833,6 +855,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
+    printOptionalArgInit(paramName: any, index: any, initializer: any): string;
+    isPureInitializer(node: any): any;
     printFunctionBody(node: any, identation: any): string;
     printBlock(node: any, identation: any, chainBlock?: boolean): string;
     printInstanceOfExpression(node: any, identation: any): string;
@@ -884,6 +908,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     printLengthProperty(node: any, _identation: any, _name?: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
+    javaBooleanCondition(node: any): any;
+    javaConditionPrintsBoolean(node: any): boolean;
+    printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;
     printDeleteExpression(node: any, _identation: any): string;
     printThrowStatement(node: any, identation: any): string;
