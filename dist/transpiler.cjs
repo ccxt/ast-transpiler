@@ -7532,7 +7532,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   printNumericLiteral(node) {
     const text = node.text;
-    if (text.includes(".")) {
+    if (text.includes(".") || /[eE]/.test(text)) {
       return `Value::Float(${text})`;
     }
     return `Value::Int(${text})`;

@@ -182,7 +182,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     printNumericLiteral(node) {
         const text = node.text;
-        if (text.includes('.')) {
+        // a decimal point or an exponent makes the literal a float
+        if (text.includes('.') || /[eE]/.test(text)) {
             return `Value::Float(${text})`;
         }
         return `Value::Int(${text})`;

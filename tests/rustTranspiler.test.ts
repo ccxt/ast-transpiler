@@ -1324,3 +1324,14 @@ describe('rust checker-typed native container access', () => {
         expect(output).toBe(rust);
     });
 });
+
+describe('rust numeric literals', () => {
+    test('an exponent literal is a float, negated or not', () => {
+        const input = "class A { f(x) { const a = x.g(1e-7); const b = x.g(-1e-7); const c = -5; return [a, b, c]; } }";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('x.g(Value::Float(1e-7))');
+        expect(output).toContain('x.g(Value::Float(-1e-7))');
+        expect(output).toContain('Value::Int(-5)');
+        expect(output).not.toContain('Value::Int(1e-7)');
+    });
+});
