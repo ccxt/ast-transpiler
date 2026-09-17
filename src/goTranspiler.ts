@@ -1746,7 +1746,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const commentPart = bodyParts.filter(line => this.isComment(line));
                 const isComment = commentPart.length > 0;
                 if (isComment) {
-                    const commentPartString = commentPart.map((c) => this.getIden(identation+1) + c.trim()).join("\n");
+                    // the statement's leading comment must keep the ' * ' continuation-alignment
+                    // of printLeadingComments: gofmt re-indents a /* */ block to
+                    // `<indent> * text` (printer.stripCommonPrefix + the tab indent), so a bare
+                    // trim() here would emit `* text` under the '/**'.
+                    const commentPartString = commentPart.map((c) => {
+                        const line = c.trim();
+                        return this.getIden(identation+1) + (line.startsWith("*") ? " " + line : line);
+                    }).join("\n");
                     const firstStmNoComment = bodyParts.filter(line => !this.isComment(line)).join("\n");
                     firstStatement = commentPartString + "\n" + defaultInitializers + firstStmNoComment;
                 } else {
@@ -1771,7 +1778,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     //         return this.getIden(identation) + "ch <-" + this.printNode(statement.expression) + '\n' + this.getIden(identation) + "return " + this.printNode(statement.expression);
                     //     }
                     // }
-                    return this.printNode(statement, identation);
+                    // the trampoline body half holds its statements at identation+1, the same
+                    // level as its two defers (one tab for a top level func after gofmt)
+                    return this.printNode(statement, identation + 1);
                 }).join("\n");
 
             }
@@ -1780,9 +1789,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // return statement might be inside ifs or other complex statements so we still have to replace them manually :(
             // functionBody = functionBody.replace(/(\s*)return\s+([^\n]+\n?)/g, '$1ch <- $2$1');
             const functionBodySplit = functionBody.split("\n");
-            const bodyWithIndentationExtraAndNoReturn = functionBodySplit.map((line) => {
-                return this.getIden(identation+1) + line;
-            }).join("\n");
+            // statements come out of printFunctionBody already at identation+1 (both branches
+            // above build them that way), so no extra prefix is added here -- the body half is a
+            // plain function whose lines sit one tab in from its signature, same as the defers
+            const bodyWithIndentationExtraAndNoReturn = functionBodySplit.join("\n");
             let shouldAddLastReturn = true;
 
             // const bodySplit = bodyWithIndentationExtraAndNoReturn.split("\n");
@@ -1942,10 +1952,14 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
             const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
             rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
             // return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+            // printLeadingComments returns the comment lines with their own indentation and a
+            // trailing newline, so the comment is emitted as its own line(s) and the `ch <-`
+            // line carries the indentation the comment would otherwise have swallowed.
+            const awaitLinePrefix = `    ${this.getIden(identation)}`;
             return `
     ${this.getIden(identation)}${returnRandName} := ${rightPart}
     ${this.getIden(identation)}PanicOnError(${returnRandName})
-    ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
+${leadingComment}${awaitLinePrefix}ch <- ${returnRandName}${trailingComment}
     ${this.getIden(identation)}${returnStatement}`;
             // ${this.getIden(identation)}return ${returnRandName}`;
         }
@@ -1955,7 +1969,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         }
 
         return `
-${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
+${leadingComment}${this.getIden(identation)}ch <- ${rightPart}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
         // ${this.getIden(identation)}return ${rightPart}`;
         // ${this.getIden(identation)}return ${rightPart}`;

@@ -1038,3 +1038,69 @@ describe('go inline equality', () => {
         expect(output).not.toContain("*limit == length");
     });
 });
+
+describe('go comment placement on the trampoline body half (gofmt)', () => {
+    // The body half of an async method is a plain function whose statements, default
+    // initializers and leading `/** */` doc block all sit at the defers' level, and every
+    // `*` continuation line keeps its single leading space: gofmt re-indents a /* */ block
+    // to `<indent> * text` (go/printer stripCommonPrefix + one tab per level).
+    test('a doc block on the body first statement keeps its * alignment and level', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchMarkOHLCV (symbol: string, timeframe = '1m', params = {}): Promise<any> {\n" +
+        "        /**\n" +
+        "         * @method\n" +
+        "         * @name exchange#fetchMarkOHLCV\n" +
+        "         */\n" +
+        "        if (!this.has['fetchMarkOHLCV']) {\n" +
+        "            throw new NotSupported(this.id + ' fetchMarkOHLCV not supported');\n" +
+        "        }\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        const lines = output.slice(output.indexOf("func (this *Exchange) fetchMarkOHLCVBody(")).split("\n");
+        const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
+        expect(lines[2]).toBe(`${indent}defer ReturnPanicError(ch)`);
+        expect(lines[3]).toBe(`${indent}/**`);
+        expect(lines[4]).toBe(`${indent} * @method`);
+        expect(lines[5]).toBe(`${indent} * @name exchange#fetchMarkOHLCV`);
+        expect(lines[6]).toBe(`${indent} */`);
+        expect(lines[7]).toBe(`${indent}timeframe := GetArg(optionalArgs, 0, "1m")`);
+        expect(lines[8]).toBe(`${indent}_ = timeframe`);
+        expect(lines[9]).toBe(`${indent}params := GetArg(optionalArgs, 1, map[string]any {})`);
+    });
+    test('the body statements are not indented one level deeper than the defers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTime (params = {}): Promise<any> {\n" +
+        "        return this.milliseconds();\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        const lines = output.slice(output.indexOf("func (this *Exchange) fetchTimeBody(")).split("\n");
+        const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
+        expect(lines[3]).toBe(`${indent}params := GetArg(optionalArgs, 0, map[string]any {})`);
+        expect(lines[4]).toBe(`${indent}_ = params`);
+        const chLine = lines.findIndex((line) => line.includes('ch <- callDynamically("milliseconds"'));
+        expect(lines[chLine]).toBe(`${indent}ch <- callDynamically("milliseconds", )`);
+        expect(lines[chLine + 1]).toBe(`${indent}return nil`);
+    });
+    test('a leading comment on a return statement does not swallow the ch <- indentation', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker (symbol: string, params = {}): Promise<any> {\n" +
+        "        const x = 1;\n" +
+        "        // parse the ticker through the helper\n" +
+        "        return this.parseTicker(x);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        const lines = output.slice(output.indexOf("func (this *Exchange) fetchTickerBody(")).split("\n");
+        const commentLine = lines.findIndex((line) => line.trim() === '// parse the ticker through the helper');
+        const indent = /^([ \t]*)/.exec(lines[commentLine])[1];
+        expect(commentLine).toBeGreaterThan(-1);
+        expect(lines[commentLine + 1]).toBe(`${indent}ch <- callDynamically("parseTicker", x)`);
+        expect(lines[commentLine + 2]).toBe(`${indent}return nil`);
+    });
+});

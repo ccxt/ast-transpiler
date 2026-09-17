@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -5137,7 +5137,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const commentPart = bodyParts.filter((line) => this.isComment(line));
         const isComment = commentPart.length > 0;
         if (isComment) {
-          const commentPartString = commentPart.map((c) => this.getIden(identation + 1) + c.trim()).join("\n");
+          const commentPartString = commentPart.map((c) => {
+            const line = c.trim();
+            return this.getIden(identation + 1) + (line.startsWith("*") ? " " + line : line);
+          }).join("\n");
           const firstStmNoComment = bodyParts.filter((line) => !this.isComment(line)).join("\n");
           firstStatement = commentPartString + "\n" + defaultInitializers + firstStmNoComment;
         } else {
@@ -5157,15 +5160,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         functionBody = super.printFunctionBody(node, identation);
       } else {
         functionBody = node.body.statements.map((statement) => {
-          return this.printNode(statement, identation);
+          return this.printNode(statement, identation + 1);
         }).join("\n");
       }
     }
     if (wrapInChannel) {
       const functionBodySplit = functionBody.split("\n");
-      const bodyWithIndentationExtraAndNoReturn = functionBodySplit.map((line) => {
-        return this.getIden(identation + 1) + line;
-      }).join("\n");
+      const bodyWithIndentationExtraAndNoReturn = functionBodySplit.join("\n");
       let shouldAddLastReturn = true;
       const bodySplit = functionBodySplit;
       const lastLine = bodySplit[bodySplit.length - 1];
@@ -5263,10 +5264,11 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     if (node?.expression?.kind === ts5.SyntaxKind.AwaitExpression) {
       const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
       rightPart = rightPart ? " " + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+      const awaitLinePrefix = `    ${this.getIden(identation)}`;
       return `
     ${this.getIden(identation)}${returnRandName} := ${rightPart}
     ${this.getIden(identation)}PanicOnError(${returnRandName})
-    ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
+${leadingComment}${awaitLinePrefix}ch <- ${returnRandName}${trailingComment}
     ${this.getIden(identation)}${returnStatement}`;
     }
     if (rightPart.length === 0) {
@@ -5274,7 +5276,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
 ${this.getIden(identation)}${returnStatement}`;
     }
     return `
-${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
+${leadingComment}${this.getIden(identation)}ch <- ${rightPart}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
   }
   printAsExpression(node, identation) {
