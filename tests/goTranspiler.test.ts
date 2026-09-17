@@ -501,8 +501,8 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
         expect(output).toContain("var timestamp *int64 = this.SafeInteger(item, \"time\")");
         expect(output).toContain("var rate *float64 = this.SafeFloat(item, \"rate\")");
-        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
-        expect(output).toContain("var info *map[string]any = this.SafeDict(item, \"info\")");
+        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
     });
     test('the 2/N and lower/upper/product/timestamp variants carry the same pointer type', () => {
         const input =
@@ -529,7 +529,7 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var code *string = this.SafeStringUpper(item, \"code\")");
         expect(output).toContain("var expiry *int64 = this.SafeIntegerProduct(item, \"expiry\", 1000)");
         expect(output).toContain("var created *int64 = this.SafeTimestamp2(item, \"created\", \"ts\")");
-        expect(output).toContain("var post *bool = this.SafeBoolN(");
+        expect(output).toContain("var post any = this.SafeBoolN(");
     });
     test('a Safe* local reassigned to a differently typed value falls back to any', () => {
         const input =
@@ -576,7 +576,7 @@ describe('go pointer-typed Safe* body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
     });
-    test('a local initialized from a SafeBool/SafeDict/SafeList accessor is declared with its pointer type', () => {
+    test('a local initialized from a SafeBool/SafeDict/SafeList accessor stays any (the Go accessors return any)', () => {
         const input =
         "class Exchange {\n" +
         "    safeBool(a, b) { return a; }\n" +
@@ -590,11 +590,11 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
-        expect(output).toContain("var info *map[string]any = this.SafeDict(item, \"info\")");
-        expect(output).toContain("var rows *[]any = this.SafeList(item, \"rows\")");
+        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+        expect(output).toContain("var rows any = this.SafeList(item, \"rows\")");
     });
-    test('the 2/N variants carry the same pointer type for bool/dict/list', () => {
+    test('the 2/N bool/dict/list variants stay any too', () => {
         const input =
         "class Exchange {\n" +
         "    safeBool2(a, b, c) { return a; }\n" +
@@ -614,14 +614,14 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var post *bool = this.SafeBool2(item, \"postOnly\", \"post_only\")");
-        expect(output).toContain("var anyFlag *bool = this.SafeBoolN(");
-        expect(output).toContain("var nested *map[string]any = this.SafeDict2(item, \"a\", \"b\")");
-        expect(output).toContain("var deep *map[string]any = this.SafeDictN(");
-        expect(output).toContain("var pair *[]any = this.SafeList2(item, \"a\", \"b\")");
-        expect(output).toContain("var deepList *[]any = this.SafeListN(");
+        expect(output).toContain("var post any = this.SafeBool2(item, \"postOnly\", \"post_only\")");
+        expect(output).toContain("var anyFlag any = this.SafeBoolN(");
+        expect(output).toContain("var nested any = this.SafeDict2(item, \"a\", \"b\")");
+        expect(output).toContain("var deep any = this.SafeDictN(");
+        expect(output).toContain("var pair any = this.SafeList2(item, \"a\", \"b\")");
+        expect(output).toContain("var deepList any = this.SafeListN(");
     });
-    test('a typed dict/list local makes the downstream truthiness/nil test native', () => {
+    test('an any-typed dict/list local keeps the helper for truthiness/nil tests', () => {
         const input =
         "class Exchange {\n" +
         "    safeDict(a, b) { return a; }\n" +
@@ -637,8 +637,8 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("(rows == nil)");
-        expect(output).toContain("(flag != nil && *flag)");
+        expect(output).toContain("IsEqual(rows, nil)");
+        expect(output).toContain("EvalTruthy(flag)");
     });
     test('a local initialized from Precise arithmetic is declared as *string', () => {
         const input =
@@ -1660,13 +1660,10 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // this.SafeBool(...) is a *bool accessor: `== true` would not compile against
-        // the pointer, and the operand is a call the deref branches must not repeat,
-        // so the deref-aware IsEqual is the only emission with the same predicate
-        expect(output).toContain("var a bool = IsEqual(this.SafeBool(response, key), true)");
-        // this.SafeDict(...) is a *map[string]any, where absent is exactly a nil
-        // pointer: the nil test needs no deref and no helper
-        expect(output).toContain("var b bool = (this.SafeDict(response, key) != nil)");
+        // this.SafeBool returns an any box holding a scalar or nil: `== true` is native;
+        // an any-typed nil test is not a proven nullable scalar, so it keeps the helper
+        expect(output).toContain("var a bool = (this.SafeBool(response, key) == true)");
+        expect(output).toContain("var b bool = !IsEqual(this.SafeDict(response, key), nil)");
         expect(output).toContain("var c bool = (GetValue(response, key) == \"spot\")");
         // an any-typed operand is not a proven nullable scalar: nil stays on the helper
         expect(output).toContain("var d bool = IsEqual(GetValue(response, key), nil)");
