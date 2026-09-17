@@ -1038,3 +1038,93 @@ describe('go inline equality', () => {
         expect(output).not.toContain("*limit == length");
     });
 });
+
+describe('go composite literal column alignment', () => {
+    // F09: gofmt aligns the values of the consecutive single-line `key: value` entries of a
+    // composite literal to the widest key of the block (go/printer exprList emits `:` +
+    // vtab, text/tabwriter pads the column). The assertions below drop the leading
+    // indentation so they stay independent of the indent unit.
+    test('consecutive single-line entries align on the widest key', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'id': 'binance',\n" +
+        "            'rateLimit': 50,\n" +
+        "            'pro': true\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // "rateLimit" is the widest key cell (`"rateLimit":`, 12) -> column 13
+        expect(output).toContain('"id":        "binance",');
+        expect(output).toContain('"rateLimit": 50,');
+        expect(output).toContain('"pro":       true,');
+    });
+    test('an entry whose value spans lines ends the alignment block', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'a': 1,\n" +
+        "            'bb': 2,\n" +
+        "            'nested': { 'longerKey': 1, 'x': 2 },\n" +
+        "            'c': 3,\n" +
+        "            'dd': 4\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('"a":  1,');
+        expect(output).toContain('"bb": 2,');
+        // the nested literal is not padded, and its own body starts a new block
+        expect(output).toContain('"nested": map[string]any {');
+        expect(output).toContain('"longerKey": 1,');
+        expect(output).toContain('"x":         2,');
+        // entries after the multi-line value align against each other, not against "a"/"bb"
+        expect(output).toContain('"c":  3,');
+        expect(output).toContain('"dd": 4,');
+    });
+    test('a key larger than 40 bytes breaks the section when it leaves the 2.5 ratio', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'short': 1,\n" +
+        "            'thisIsAVeryLongKeyNameThatIsLongerThanFortyCharactersForSure': 2,\n" +
+        "            'b': 3,\n" +
+        "            'c': 4\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // 65 / 7 > 2.5 -> formfeed section break, so neither neighbour is padded
+        expect(output).toContain('"short": 1,');
+        expect(output).toContain('"thisIsAVeryLongKeyNameThatIsLongerThanFortyCharactersForSure": 2,');
+        // the ratio of "b" against the new section's geomean is under 1/2.5 -> one more break
+        expect(output).toContain('"b": 3,');
+        expect(output).toContain('"c": 4,');
+        expect(output).not.toContain('"b":   3,');
+    });
+    test('a trailing comment keeps its comma in front and aligns on the comment column', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'a': 1,\n" +
+        "            'bb': 2 // last property keeps its trailing comment\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // gofmt prints `value, // comment`; the printer used to emit `// comment,` (the
+        // comma landed inside the comment) which is not valid Go
+        expect(output).toContain('"a":  1,');
+        expect(output).toContain('"bb": 2, // last property keeps its trailing comment');
+        expect(output).not.toContain('// last property keeps its trailing comment,');
+    });
+});

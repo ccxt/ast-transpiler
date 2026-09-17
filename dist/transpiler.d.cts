@@ -661,6 +661,22 @@ declare class GoTranspiler extends BaseTranspiler {
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
+    printObjectLiteralBody(node: any, identation: any): any;
+    alignGoCompositeEntries(entries: any): any;
+    parseGoCompositeEntry(entry: any): {
+        indent: string;
+        key: string;
+        size: number;
+        singleLine: boolean;
+        value: any;
+        comment: any;
+    };
+    findGoTrailingCommentStart(line: any): number;
+    getGoCompositePaddings(parsedEntries: any): any;
+    renderGoCompositeEntry(entry: any, parsed: any, padding: any): string;
+    appendGoTrailingComma(entry: any): string;
+    getGoRuneLength(text: any): number;
+    getGoByteLength(text: any): number;
     printConstructorDeclaration(node: any, identation: any): string;
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
