@@ -4060,8 +4060,40 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const struct = this.printStruct(node, identation);
     const newMethod = this.printNewStructMethod(node);
     const methods = node.members.filter((member) => member.kind === SyntaxKind3.MethodDeclaration);
-    const classMethods = methods.map((method) => this.printMethodDeclaration(method, identation)).join("\n");
+    const classMethods = this.joinTopLevelDecls(methods.map((method) => this.printMethodDeclaration(method, identation)));
     return struct + "\n" + newMethod + "\n" + classMethods;
+  }
+  /**
+   * gofmt's declaration-list rule (go/printer nodes.go `declList`): a top-level
+   * declaration that carries a doc comment is separated from the previous declaration
+   * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
+   * keeps the source's own separation (the printer emits members adjacent to the
+   * closing brace above them). `printClass` used to join every member with a bare
+   * "\n", so a method whose leading `/** ... *​/` comment follows the previous
+   * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
+   */
+  joinTopLevelDecls(decls) {
+    return decls.map((decl, index) => {
+      if (index === 0 || !this.startsWithComment(decl)) {
+        return (index === 0 ? "" : "\n") + decl;
+      }
+      return "\n\n" + decl;
+    }).join("");
+  }
+  /**
+   * True when the emitted declaration text opens with its doc comment - the comment
+   * group gofmt attaches to the declaration (`getDoc(d) != nil` in go/printer).
+   */
+  startsWithComment(decl) {
+    return this.isComment(decl.split("\n")[0]);
+  }
+  /**
+   * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
+   * whitespace, so an indented *blank* line (only the indentation of a blank source
+   * line) must stay empty instead of becoming whitespace-only text.
+   */
+  indentLines(lines, identation) {
+    return lines.map((line) => line.trim().length === 0 ? "" : this.getIden(identation) + line);
   }
   printPropertyAccessModifiers(node) {
     return "";
@@ -5165,9 +5197,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     if (wrapInChannel) {
       const functionBodySplit = functionBody.split("\n");
-      const bodyWithIndentationExtraAndNoReturn = functionBodySplit.map((line) => {
-        return this.getIden(identation + 1) + line;
-      }).join("\n");
+      const bodyWithIndentationExtraAndNoReturn = this.indentLines(functionBodySplit, identation + 1).join("\n");
       let shouldAddLastReturn = true;
       const bodySplit = functionBodySplit;
       const lastLine = bodySplit[bodySplit.length - 1];
@@ -5634,7 +5664,7 @@ ${this.getIden(identation)}return nil`;
             }
             return nil` : ""}
         }`;
-    const indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
+    const indentedBlock = this.indentLines(catchBlock.split("\n"), identation).join("\n");
     return indentedBlock;
   }
   printPrefixUnaryExpression(node, identation) {

@@ -587,6 +587,27 @@ declare class GoTranspiler extends BaseTranspiler {
     printStruct(node: any, indentation: any): string;
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
+    /**
+     * gofmt's declaration-list rule (go/printer nodes.go `declList`): a top-level
+     * declaration that carries a doc comment is separated from the previous declaration
+     * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
+     * keeps the source's own separation (the printer emits members adjacent to the
+     * closing brace above them). `printClass` used to join every member with a bare
+     * "\n", so a method whose leading `/** ... *​/` comment follows the previous
+     * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
+     */
+    joinTopLevelDecls(decls: string[]): string;
+    /**
+     * True when the emitted declaration text opens with its doc comment - the comment
+     * group gofmt attaches to the declaration (`getDoc(d) != nil` in go/printer).
+     */
+    startsWithComment(decl: string): boolean;
+    /**
+     * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
+     * whitespace, so an indented *blank* line (only the indentation of a blank source
+     * line) must stay empty instead of becoming whitespace-only text.
+     */
+    indentLines(lines: string[], identation: number): string[];
     printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
