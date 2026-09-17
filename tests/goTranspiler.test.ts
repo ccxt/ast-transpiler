@@ -88,7 +88,7 @@ describe('go transpiling tests', () => {
         "var c bool = (a != \"\") && b\n" +
         "var d bool = !(a != \"\") && !b\n" +
         "var e bool = ((a != \"\") || !b)\n" +
-        "if (a != \"\") {\n" +
+        "if a != \"\" {\n" +
         "    var f any = 1\n" +
         "}"
         const output = transpiler.transpileGo(ts).content;
@@ -957,10 +957,10 @@ describe('go inline equality', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("if (s != nil && *s != \"\") {");
-        expect(output).toContain("if (n != nil && *n != 0) {");
+        expect(output).toContain("if s != nil && *s != \"\" {");
+        expect(output).toContain("if n != nil && *n != 0 {");
         expect(output).toContain("if flag {");
-        expect(output).toContain("if (len(parts) > 0) {");
+        expect(output).toContain("if len(parts) > 0 {");
     });
     test('EvalTruthy stays for any locals, params and non-identifiers', () => {
         const input =
@@ -1036,5 +1036,77 @@ describe('go inline equality', () => {
         expect(output).toContain("var length int =");
         expect(output).toContain("IsEqual(length, limit)");
         expect(output).not.toContain("*limit == length");
+    });
+});
+
+// gofmt's go/printer/nodes.go controlClause() prints the condition of if/for through
+// stripParens(): the outermost fully enclosing parentheses pair is dropped, and the
+// rule repeats while the enclosed expression is parenthesized as well. Every expected
+// line below was fed to /usr/local/go/bin/gofmt to prove it is a gofmt fixed point.
+describe('go control-clause parens (gofmt stripParens)', () => {
+    test('the outer parentheses of an if condition are dropped', () => {
+        const input =
+        "const a = \"x\";\n" +
+        "const b = \"y\";\n" +
+        "if ((a !== b)) {\n" +
+        "    return 1;\n" +
+        "}\n" +
+        "return 0;";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if a != b {");
+        expect(output).not.toContain("if (a != b) {");
+    });
+    test('a parenthesised else-if condition loses its parentheses too', () => {
+        const input =
+        "const a = \"x\";\n" +
+        "if ((a !== \"\")) {\n" +
+        "    const f = 1;\n" +
+        "} else if ((a !== \"y\")) {\n" +
+        "    const f = 2;\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if a != \"\" {");
+        expect(output).toContain("} else if !IsEqual(a, \"y\") {");
+    });
+    test('while and the condition of a three-clause for follow the same rule', () => {
+        const whileInput =
+        "const calls = 0;\n" +
+        "const maxCalls = 10;\n" +
+        "while ((calls < maxCalls)) {\n" +
+        "    break;\n" +
+        "}";
+        expect(transpiler.transpileGo(whileInput).content).toContain("for IsLessThan(calls, maxCalls) {");
+        const forInput =
+        "const n = 3;\n" +
+        "for (let i = 0; (i < n); i++) {\n" +
+        "    const f = 1;\n" +
+        "}";
+        expect(transpiler.transpileGo(forInput).content).toContain("for i := 0; IsLessThan(i, n); i++ {");
+    });
+    test('parentheses around an operand are not a control clause and stay', () => {
+        const input =
+        "class T {\n" +
+        "    inArray2 (a: any) { return true; }\n" +
+        "    f (params: any) {\n" +
+        "        if ((this.inArray2 (params)) || (this.inArray2 (params))) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if EvalTruthy((this.InArray2(params))) || EvalTruthy((this.InArray2(params))) {");
+    });
+    test('the composite-literal guard of stripParens keeps the parentheses', () => {
+        const go = (transpiler as any).goTranspiler;
+        // `if T{} == x` does not parse and `if x == T{} {}` is rejected by gofmt too
+        expect(go.goEnclosedExpression("(T{1} == x)")).toBeUndefined();
+        expect(go.goEnclosedExpression("(x == MyStruct{a: 1})")).toBeUndefined();
+        // a type literal is not a type name, so those parentheses go
+        expect(go.goEnclosedExpression("(x == map[string]any{\"a\": 1})")).toBe("x == map[string]any{\"a\": 1}");
+        expect(go.goEnclosedExpression("(x == []any{1})")).toBe("x == []any{1}");
+        // parentheses inside a nested pair are protected, the pair itself is not
+        expect(go.goEnclosedExpression("((x == 1))")).toBe("(x == 1)");
+        expect(go.goEnclosedExpression("((x == 1) && (x == 2))")).toBe("(x == 1) && (x == 2)");
+        expect(go.goEnclosedExpression("(a) && (b)")).toBeUndefined();
+        expect(go.goEnclosedExpression("(len(parts) > 0)")).toBe("len(parts) > 0");
     });
 });
