@@ -799,6 +799,13 @@ declare class JavaTranspiler extends BaseTranspiler {
     getVarClassIfAny(node: any): string;
     getVarKey(node: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    javaScalarFamily(node: any): string | undefined;
+    javaProvableString(node: any): boolean;
+    javaNativeConcat(node: any): boolean;
+    javaProvableNumericKind(node: any): string | undefined;
+    javaNativeArithmeticKind(node: any): string | undefined;
+    javaPrintOperandAsLong(node: any, text: any): any;
+    printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
     collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;
