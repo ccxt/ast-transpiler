@@ -2448,7 +2448,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const commentPart = bodyParts.filter(line => this.isComment(line));
                 const isComment = commentPart.length > 0;
                 if (isComment) {
-                    const commentPartString = commentPart.map((c) => this.getIden(identation+1) + c.trim()).join("\n");
+                    // the statement's leading comment must keep the ' * ' continuation-alignment
+                    // of printLeadingComments: gofmt re-indents a /* */ block to
+                    // `<indent> * text` (printer.stripCommonPrefix + the tab indent), so a bare
+                    // trim() here would emit `* text` under the '/**'.
+                    const commentPartString = commentPart.map((c) => {
+                        const line = c.trim();
+                        return this.getIden(identation+1) + (line.startsWith("*") ? " " + line : line);
+                    }).join("\n");
                     const firstStmNoComment = bodyParts.filter(line => !this.isComment(line)).join("\n");
                     firstStatement = commentPartString + "\n" + defaultInitializers + firstStmNoComment;
                 } else {
@@ -2650,6 +2657,9 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
             // flush so the receive reads `retResNNN := (<-this.X())` (gofmt spacing)
             rightPart = rightPart ? rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
             // return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+            // printLeadingComments returns the comment lines with their own indentation and a
+            // trailing newline, so the comment is emitted as its own line(s) and the `ch <-`
+            // line carries the indentation the comment would otherwise have swallowed.
             return `
 ${this.getIden(identation)}${returnRandName} := ${rightPart}
 ${this.getIden(identation)}PanicOnError(${returnRandName})
