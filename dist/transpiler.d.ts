@@ -568,6 +568,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPropertyAccessModifiers(node: any): string;
 }
 
+declare function alignGoTrailingComments(content: string): string;
+
 declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
@@ -1189,4 +1191,4 @@ declare class TranspileProgramBatch {
     transpileCppByPath(filePath: string): ITranspiledFile;
 }
 
-export { TranspileProgramBatch, Transpiler, Transpiler as default };
+export { TranspileProgramBatch, Transpiler, alignGoTrailingComments, Transpiler as default };

@@ -3876,6 +3876,151 @@ var GO_HELPER_RETURN_TYPES = {
   "Precise.StringMod": "*string"
 };
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
+var GO_COMMENT_BREAK_END = /(?:[({\[:]|[+\-*/%&|^<>=!])$/;
+function goBracketBalance(code) {
+  let depth = 0;
+  let i = 0;
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i += 1;
+      while (i < code.length) {
+        if (code[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (code[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "`") {
+      i += 1;
+      while (i < code.length && code[i] !== "`") {
+        i += 1;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "(" || ch === "[" || ch === "{") {
+      depth += 1;
+    } else if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+    }
+    i += 1;
+  }
+  return depth;
+}
+function goTrailingCommentIndex(line, state) {
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (state.block) {
+      if (ch === "*" && line[i + 1] === "/") {
+        state.block = false;
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (state.raw) {
+      if (ch === "`") {
+        state.raw = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === "`") {
+      state.raw = true;
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i += 1;
+      while (i < line.length) {
+        if (line[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (line[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "/" && line[i + 1] === "/") {
+      return i;
+    }
+    if (ch === "/" && line[i + 1] === "*") {
+      state.block = true;
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return -1;
+}
+function goRuneWidth(text) {
+  let width = 0;
+  for (const _rune of text) {
+    width += 1;
+  }
+  return width;
+}
+function alignGoTrailingComments(content) {
+  const lines = content.split("\n");
+  const entries = [];
+  const state = { "block": false, "raw": false };
+  for (let index = 0; index < lines.length; index++) {
+    const commentIndex = goTrailingCommentIndex(lines[index], state);
+    if (commentIndex < 0) {
+      continue;
+    }
+    const code = lines[index].slice(0, commentIndex).replace(/[ \t]+$/, "");
+    if (!code.trim()) {
+      continue;
+    }
+    const indent = code.match(/^[ \t]*/)[0];
+    entries.push({ "index": index, indent, code, "comment": lines[index].slice(commentIndex) });
+  }
+  const groups = [];
+  let group = [];
+  for (const entry of entries) {
+    const previous = group[group.length - 1];
+    const continues = previous && entry.index === previous.index + 1 && entry.indent === previous.indent && goBracketBalance(previous.code) === 0 && !GO_COMMENT_BREAK_END.test(previous.code);
+    if (continues) {
+      group.push(entry);
+    } else {
+      if (group.length) {
+        groups.push(group);
+      }
+      group = [entry];
+    }
+  }
+  if (group.length) {
+    groups.push(group);
+  }
+  for (const members of groups) {
+    let width = 0;
+    for (const member of members) {
+      width = Math.max(width, goRuneWidth(member.code));
+    }
+    width += 1;
+    for (const member of members) {
+      const pad = width - goRuneWidth(member.code);
+      lines[member.index] = member.code + " ".repeat(pad) + member.comment;
+    }
+  }
+  return lines.join("\n");
+}
 var GoTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig4, _nullishCoalesce(config["parser"], () => ( {})));
@@ -9532,7 +9677,7 @@ var Transpiler = class _Transpiler {
         transpiledContent = this.csharpTranspiler.printNode(src, -1);
         break;
       case 3 /* Go */:
-        transpiledContent = this.goTranspiler.printNode(src, -1);
+        transpiledContent = alignGoTrailingComments(this.goTranspiler.printNode(src, -1));
         break;
       case 4 /* Java */:
         transpiledContent = this.javaTranspiler.printNode(src, -1);
@@ -9743,5 +9888,6 @@ var TranspileProgramBatch = class {
 
 
 
-exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.default = Transpiler;
+
+exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.alignGoTrailingComments = alignGoTrailingComments; exports.default = Transpiler;
 //# sourceMappingURL=transpiler.cjs.map

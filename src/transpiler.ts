@@ -7,7 +7,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext, ITranspileProgramCache } from './types.js';
-import { GoTranspiler } from './goTranspiler.js';
+import { GoTranspiler, alignGoTrailingComments } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
@@ -379,7 +379,9 @@ export default class Transpiler {
             transpiledContent = this.csharpTranspiler.printNode(src, -1);
             break;
         case Languages.Go:
-            transpiledContent = this.goTranspiler.printNode(src, -1);
+            // gofmt aligns trailing `//` comments through its tabwriter; the printer has to do
+            // that itself so the emitted Go is already gofmt-clean (see alignGoTrailingComments)
+            transpiledContent = alignGoTrailingComments (this.goTranspiler.printNode(src, -1));
             break;
         case Languages.Java:
             transpiledContent = this.javaTranspiler.printNode(src, -1);
@@ -655,5 +657,8 @@ class TranspileProgramBatch {
 
 export {
     Transpiler,
-    TranspileProgramBatch
+    TranspileProgramBatch,
+    // the trailing-comment alignment pass, so a consumer that assembles its own Go files
+    // (ccxt build/goTranspiler.ts) can run it on the assembled text as well
+    alignGoTrailingComments,
 };
