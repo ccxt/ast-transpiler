@@ -480,6 +480,183 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     }
 
+    // The C# type of an operand of `==` / `!=` as the printer emits it, or undefined when
+    // the printer only knows `object`: an `object` operand takes the reference-comparing
+    // `operator ==`, so those keep the isEqual helper.
+    csharpEqualityOperandType(node): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.NullKeyword:
+            return 'null';
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return 'bool';
+        case ts.SyntaxKind.NumericLiteral:
+            return this.csharpNumericLiteralKind(node);
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.csharpEqualityOperandType(node.expression);
+        case ts.SyntaxKind.Identifier:
+            // printIdentifier prints the `undefined` identifier as null
+            return (node.escapedText === 'undefined') ? 'null' : this.csharpDeclaredTypeOfBinding(node);
+        }
+        if (ts.isStringLiteralLike(node)) {
+            return 'string';
+        }
+        return this.csharpTypeOfInitializer(node);
+    }
+
+    // A numeric literal prints as an untyped C# constant that adapts to the operand on the
+    // other side. isEqual's integer branches round-trip through Convert.ToInt64, which an
+    // integer literal beyond 2^53 does not survive, so those stay on the helper.
+    csharpNumericLiteralKind(node): string | undefined {
+        const value = Number(node.text);
+        if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+            return undefined;
+        }
+        return 'number';
+    }
+
+    // the C# type the declaration behind an identifier was printed with ('object' when the
+    // printer named none), or undefined when the identifier is not a printed local
+    csharpDeclaredTypeOfBinding(node): string | undefined {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        const declaration = symbol?.valueDeclaration;
+        if (declaration === undefined) {
+            return undefined;
+        }
+        if (declaration.kind === ts.SyntaxKind.VariableDeclaration) {
+            return this.getCSharpLocalType(declaration);
+        }
+        if (declaration.kind === ts.SyntaxKind.BindingElement) {
+            return 'var'; // `const [a, b] = ...` prints `var a = ((IList<object>)...)[0]`
+        }
+        return undefined; // parameters are retyped after printing by the build script
+    }
+
+    // the C# operator family an operand belongs to: `==` compares two operands of one family
+    // by value, exactly like the isEqual branches those types take
+    csharpValueEqualityKind(csharpType): string | undefined {
+        switch (csharpType) {
+        case 'string':
+        case 'string?':
+            return 'string';
+        case 'bool':
+        case 'bool?':
+            return 'bool';
+        case 'double':
+        case 'double?':
+            return 'double';
+        case 'Int64':
+        case 'long':
+        case 'Int64?':
+        case 'long?':
+            return 'Int64';
+        case 'int':
+        case 'int?':
+            return 'int';
+        case 'number':
+            return 'number'; // numeric literal, adapts to the numeric operand it is compared with
+        }
+        return undefined;
+    }
+
+    // `x == null` compiles — and matches isEqual — for reference types and nullable value
+    // types, but not for a non-nullable value type (double / bool / Int64 / int). Lists,
+    // dictionaries, class instances and `var` are references, and are the only types left
+    // once csharpValueEqualityKind has claimed the value-typed names above.
+    csharpIsNullComparableType(csharpType): boolean {
+        if ((csharpType === undefined) || (csharpType === '') || (csharpType === 'null')) {
+            return false;
+        }
+        if (csharpType.endsWith('?')) {
+            return true;
+        }
+        if ((csharpType === 'object') || (csharpType === 'string')) {
+            return true;
+        }
+        return (this.csharpValueEqualityKind(csharpType) === undefined);
+    }
+
+    // TypeScript numbers and booleans are C# value types in this port (double / bool /
+    // Int64 / int), and the ccxt build script retypes some `object` declarations to exactly
+    // those from its own tables (precisionFromString -> int, milliseconds -> Int64,
+    // isEmpty -> bool). A null comparison against one of them would not compile, and the
+    // printer's `object` cannot rule it out, so these always keep the helper.
+    csharpOperandIsValueTyped(node): boolean {
+        if (node === undefined) {
+            return true;
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return true;
+        }
+        return this.csharpTypeHasValueScalar(type);
+    }
+
+    csharpTypeHasValueScalar(type): boolean {
+        if (type === undefined) {
+            return true;
+        }
+        const flags = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const members = type.types ?? [];
+            return members.some((member) => this.csharpTypeHasValueScalar(member));
+        }
+        return (flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral | ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) !== 0;
+    }
+
+    // `==` / `!=` in place of the isEqual wrapper when both operands are C# values of one
+    // family, or one side is null/undefined against a type `== null` compiles for. Both
+    // operands are printed once, so neither is evaluated twice.
+    printInlineEquality(left, right, leftText: string, rightText: string, isEquality: boolean): string | undefined {
+        const leftType = this.csharpEqualityOperandType(left);
+        const rightType = this.csharpEqualityOperandType(right);
+        if ((leftType === undefined) || (rightType === undefined)) {
+            return undefined;
+        }
+        if (leftType === 'null') {
+            if (!this.csharpIsNullComparableType(rightType) || this.csharpOperandIsValueTyped(right)) {
+                return undefined;
+            }
+            return this.csharpNullComparison(rightText, isEquality);
+        }
+        if (rightType === 'null') {
+            if (!this.csharpIsNullComparableType(leftType) || this.csharpOperandIsValueTyped(left)) {
+                return undefined;
+            }
+            return this.csharpNullComparison(leftText, isEquality);
+        }
+        const leftKind = this.csharpValueEqualityKind(leftType);
+        const rightKind = this.csharpValueEqualityKind(rightType);
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        // mixed numeric kinds are not equal in isEqual: `int` vs `double` takes the
+        // `(int)a == (int)b` branch and throws on the boxed double, so only a numeric
+        // literal may meet a different numeric type
+        const numericKinds = [ 'double', 'Int64', 'int' ];
+        const sameKind = (leftKind === rightKind);
+        const literalVsNumeric = ((leftKind === 'number') && (numericKinds.indexOf(rightKind) >= 0))
+            || ((rightKind === 'number') && (numericKinds.indexOf(leftKind) >= 0));
+        if (!sameKind && !literalVsNumeric) {
+            return undefined;
+        }
+        return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+
+    csharpNullComparison(text: string, isEquality: boolean) {
+        return isEquality ? `(${text} == null)` : `(${text} != null)`;
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -540,6 +717,15 @@ export class CSharpTranspiler extends BaseTranspiler {
 
             if (op === ts.SyntaxKind.MinusEqualsToken) {
                 return `${leftText} = subtract(${leftText}, ${rightText})`;
+            }
+
+            const isEquality = (op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken);
+            const isDifference = (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+            if (isEquality || isDifference) {
+                const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
+                if (inlined !== undefined) {
+                    return inlined;
+                }
             }
 
             const wrapper = this.binaryExpressionsWrappers[op];
