@@ -1079,6 +1079,204 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     //     return body;
     // }
 
+    // F09 — gofmt aligns the key/value columns inside multi-line composite literals.
+    //
+    // go/printer's exprList prints a single-line `key: value` entry as `key:` + vtab, so
+    // every consecutive single-line entry of a literal body lands in one text/tabwriter
+    // column block: the value starts after the widest key cell of that block (`"key":`,
+    // the key plus its colon) and one space of padding. An entry whose value spans lines
+    // carries no vtab cell, so it ends the block on both sides, exactly like a blank line
+    // does. exprList also writes a formfeed — turned into a plain newline by the trimmer,
+    // so it never shows up in the output — before an entry that opens a new alignment
+    // section: that happens when the entry or its predecessor does not fit on a single
+    // line, and when the key size ratio against the geometric mean of the previous key
+    // sizes of the section reaches r = 2.5 (or drops to 1/r) while at least one of the
+    // two keys is larger than smallSize = 40 bytes; keys of at most 40 bytes always keep
+    // the section aligned. A trailing comment is one more tabwriter cell, so comments
+    // line up after the widest `value,` cell of the run of consecutive commented entries.
+    printObjectLiteralBody(node, identation) {
+        const entries = node.properties.map((p) => this.printNode(p, identation + 1));
+        return this.alignGoCompositeEntries(entries).join("\n");
+    }
+
+    // Applies the gofmt column alignment to already-printed `key: value` entries (the
+    // entries must not carry the separating comma). Reused by the hand-written composite
+    // literals in ccxt's build/goTranspiler.ts, which do not go through this printer.
+    alignGoCompositeEntries(entries) {
+        const parsedEntries = entries.map((entry) => this.parseGoCompositeEntry(entry));
+        const paddings = this.getGoCompositePaddings(parsedEntries);
+        return entries.map((entry, index) => this.renderGoCompositeEntry(entry, parsedEntries[index], paddings[index]));
+    }
+
+    // `        "key": value, // comment` -> the pieces gofmt's tabwriter aligns.
+    // Returns undefined for anything that is not a plain `key: value` entry (a spread, a
+    // method, a computed key): the caller then leaves that entry alone and ends the block.
+    parseGoCompositeEntry(entry) {
+        const newlineIndex = entry.indexOf("\n");
+        const firstLine = newlineIndex === -1 ? entry : entry.slice(0, newlineIndex);
+        const keyMatch = /^([ \t]*)("(?:[^"\\]|\\.)*"): /.exec(firstLine);
+        if (keyMatch === null) {
+            return undefined;
+        }
+        const singleLine = newlineIndex === -1;
+        // for a multi-line entry only the trailing comment of its last line matters here
+        const tail = singleLine ? entry.slice(keyMatch[0].length) : entry.slice(entry.lastIndexOf("\n") + 1);
+        const commentIndex = this.findGoTrailingCommentStart(tail);
+        return {
+            'indent': keyMatch[1],
+            'key': keyMatch[2],
+            // nodeSize() measures the printed key; a value that spans lines gets size 0
+            'size': singleLine ? this.getGoByteLength(keyMatch[2]) : 0,
+            'singleLine': singleLine,
+            'value': singleLine ? (commentIndex === -1 ? tail : tail.slice(0, commentIndex)).trimEnd() : undefined,
+            'comment': commentIndex === -1 ? undefined : tail.slice(commentIndex).trimEnd(),
+        };
+    }
+
+    // Index of the trailing comment of a printed line, or -1. `//` or `/*` inside a string
+    // or a rune literal (e.g. a "https://…" value) is not a comment.
+    findGoTrailingCommentStart(line) {
+        let quote;
+        for (let index = 0; index < line.length; ++index) {
+            const character = line[index];
+            if (quote !== undefined) {
+                if (character === "\\" && quote !== "`") {
+                    index += 1;
+                } else if (character === quote) {
+                    quote = undefined;
+                }
+                continue;
+            }
+            if (character === "\"" || character === "`" || character === "'") {
+                quote = character;
+            } else if (character === "/" && (line[index + 1] === "/" || line[index + 1] === "*")) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    // {key, comment} space counts per entry, i.e. the padding gofmt's tabwriter inserts.
+    // Only entries that are part of a block get a padding; every other entry is rendered
+    // as printed (gofmt leaves single-line and multi-line sections untouched).
+    getGoCompositePaddings(parsedEntries) {
+        // the sectioning below mirrors go/printer's exprList
+        const smallSize = 40;
+        const ratio = 2.5;
+        const paddings = parsedEntries.map(() => undefined);
+        let block = [];
+        let previousSize = 0;
+        let size = 0;
+        let lnSum = 0;
+        let count = 0;
+        const flushBlock = () => {
+            if (block.length === 0) {
+                return;
+            }
+            let keyWidth = 1; // widest key cell of the block + one space of padding
+            for (const index of block) {
+                keyWidth = Math.max(keyWidth, this.getGoRuneLength(parsedEntries[index].key) + 2);
+            }
+            for (const index of block) {
+                paddings[index] = { 'key': keyWidth - this.getGoRuneLength(parsedEntries[index].key) - 1, 'comment': 1 };
+            }
+            // the comment column only spans the runs of consecutive commented entries
+            let run = [];
+            const flushRun = () => {
+                if (run.length === 0) {
+                    return;
+                }
+                let runWidth = 1; // widest `value,` cell of the run + one space of padding
+                for (const index of run) {
+                    runWidth = Math.max(runWidth, this.getGoRuneLength(parsedEntries[index].value) + 2);
+                }
+                for (const index of run) {
+                    paddings[index].comment = runWidth - this.getGoRuneLength(parsedEntries[index].value) - 1;
+                }
+                run = [];
+            };
+            for (const index of block) {
+                if (parsedEntries[index].comment !== undefined) {
+                    run.push(index);
+                } else {
+                    flushRun();
+                }
+            }
+            flushRun();
+            block = [];
+        };
+        for (let index = 0; index < parsedEntries.length; ++index) {
+            const entry = parsedEntries[index];
+            previousSize = size;
+            size = entry !== undefined ? entry.size : 0;
+            let sectionBreak = true; // exprList's useFF
+            if (previousSize > 0 && size > 0) {
+                if (count === 0 || (previousSize <= smallSize && size <= smallSize)) {
+                    sectionBreak = false;
+                } else {
+                    const geomean = Math.exp(lnSum / count);
+                    const sizeRatio = size / geomean;
+                    sectionBreak = ratio * sizeRatio <= 1 || ratio <= sizeRatio;
+                }
+            }
+            const alignable = entry !== undefined && entry.singleLine;
+            if (index > 0 && sectionBreak) {
+                // exprList resets the geometric mean accumulation whenever it starts a
+                // new section (a formfeed break is two line breaks, nbreaks > 1), so the
+                // ratio below is measured against the current section only
+                lnSum = 0;
+                count = 0;
+            }
+            if (!alignable || sectionBreak) {
+                flushBlock();
+            }
+            if (alignable) {
+                block.push(index);
+            }
+            if (size > 0) {
+                lnSum += Math.log(size);
+                count += 1;
+            }
+        }
+        flushBlock();
+        return paddings;
+    }
+
+    renderGoCompositeEntry(entry, parsed, padding) {
+        if (parsed === undefined || !parsed.singleLine || padding === undefined) {
+            return this.appendGoTrailingComma(entry);
+        }
+        const comment = parsed.comment === undefined ? "" : " ".repeat(padding.comment) + parsed.comment;
+        return parsed.indent + parsed.key + ":" + " ".repeat(padding.key) + parsed.value + "," + comment;
+    }
+
+    // gofmt prints the comma of an entry before its trailing comment (`value, // comment`),
+    // the entry text carries the comment last, so move the comma in front of it
+    appendGoTrailingComma(entry) {
+        const newlineIndex = entry.lastIndexOf("\n");
+        const lastLine = newlineIndex === -1 ? entry : entry.slice(newlineIndex + 1);
+        const commentIndex = this.findGoTrailingCommentStart(lastLine);
+        if (commentIndex === -1) {
+            return entry + ",";
+        }
+        const offset = entry.length - lastLine.length + commentIndex;
+        return entry.slice(0, offset).trimEnd() + ", " + entry.slice(offset).trimEnd();
+    }
+
+    // text/tabwriter sizes cells in runes, go/printer's nodeSize counts bytes
+    getGoRuneLength(text) {
+        return [...text].length;
+    }
+
+    getGoByteLength(text) {
+        let length = 0;
+        for (const character of text) {
+            const codePoint = character.codePointAt(0);
+            length += codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+        }
+        return length;
+    }
+
     printConstructorDeclaration (node, identation) {
         const classNode = node.parent;
         const className = this.printNode(classNode.name, 0);
