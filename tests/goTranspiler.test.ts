@@ -501,8 +501,8 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
         expect(output).toContain("var timestamp *int64 = this.SafeInteger(item, \"time\")");
         expect(output).toContain("var rate *float64 = this.SafeFloat(item, \"rate\")");
-        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
-        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info *map[string]any = this.SafeDict(item, \"info\")");
     });
     test('the 2/N and lower/upper/product/timestamp variants carry the same pointer type', () => {
         const input =
@@ -529,7 +529,7 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var code *string = this.SafeStringUpper(item, \"code\")");
         expect(output).toContain("var expiry *int64 = this.SafeIntegerProduct(item, \"expiry\", 1000)");
         expect(output).toContain("var created *int64 = this.SafeTimestamp2(item, \"created\", \"ts\")");
-        expect(output).toContain("var post any = this.SafeBoolN(");
+        expect(output).toContain("var post *bool = this.SafeBoolN(");
     });
     test('a Safe* local reassigned to a differently typed value falls back to any', () => {
         const input =
@@ -575,6 +575,70 @@ describe('go pointer-typed Safe* body locals', () => {
         "}";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a local initialized from a SafeBool/SafeDict/SafeList accessor is declared with its pointer type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const flag = this.safeBool (item, 'flag');\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const rows = this.safeList (item, 'rows');\n" +
+        "        return [flag, info, rows];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info *map[string]any = this.SafeDict(item, \"info\")");
+        expect(output).toContain("var rows *[]any = this.SafeList(item, \"rows\")");
+    });
+    test('the 2/N variants carry the same pointer type for bool/dict/list', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeBool2(a, b, c) { return a; }\n" +
+        "    safeBoolN(a, b) { return a; }\n" +
+        "    safeDict2(a, b, c) { return a; }\n" +
+        "    safeDictN(a, b) { return a; }\n" +
+        "    safeList2(a, b, c) { return a; }\n" +
+        "    safeListN(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const post = this.safeBool2 (item, 'postOnly', 'post_only');\n" +
+        "        const anyFlag = this.safeBoolN (item, ['reduceOnly']);\n" +
+        "        const nested = this.safeDict2 (item, 'a', 'b');\n" +
+        "        const deep = this.safeDictN (item, ['a', 'b']);\n" +
+        "        const pair = this.safeList2 (item, 'a', 'b');\n" +
+        "        const deepList = this.safeListN (item, ['a', 'b']);\n" +
+        "        return [post, anyFlag, nested, deep, pair, deepList];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var post *bool = this.SafeBool2(item, \"postOnly\", \"post_only\")");
+        expect(output).toContain("var anyFlag *bool = this.SafeBoolN(");
+        expect(output).toContain("var nested *map[string]any = this.SafeDict2(item, \"a\", \"b\")");
+        expect(output).toContain("var deep *map[string]any = this.SafeDictN(");
+        expect(output).toContain("var pair *[]any = this.SafeList2(item, \"a\", \"b\")");
+        expect(output).toContain("var deepList *[]any = this.SafeListN(");
+    });
+    test('a typed dict/list local makes the downstream truthiness/nil test native', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const rows = this.safeList (item, 'rows');\n" +
+        "        const flag = this.safeBool (item, 'flag');\n" +
+        "        if (rows === undefined) { return info; }\n" +
+        "        if (flag) { return rows; }\n" +
+        "        return [info, rows, flag];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(rows == nil)");
+        expect(output).toContain("(flag != nil && *flag)");
     });
     test('a local initialized from Precise arithmetic is declared as *string', () => {
         const input =
