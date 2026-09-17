@@ -35,8 +35,10 @@ describe('rust transpiling tests', () => {
     });
 
     test('boolean variable declaration', () => {
+        // An unused bool literal is a native `bool` local (see the
+        // native-typed-locals tests at the end of this file).
         const ts = "const b = false;"
-        const rust = "let mut b: Value = Value::Bool(false);"
+        const rust = "let mut b: bool = false;"
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(rust);
     });
@@ -201,7 +203,7 @@ describe('rust transpiling tests', () => {
     test('true boolean literal', () => {
         const ts = 'const x = true;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Bool(true)');
+        expect(output).toContain('let mut x: bool = true;');
     });
 
     // String escape sequences
@@ -638,6 +640,110 @@ describe('rust transpiling tests', () => {
         const ts = 'const type = 1;'
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('type_var');
+    });
+
+
+    // ── native-typed locals ──────────────────────────────────────────────────
+    // A local whose initializer is already a bool in Rust is declared `bool`
+    // when every use is a condition sink (`is_true` is generic over IsTruthy).
+
+    test('bool local: comparison initializer', () => {
+        const ts = 'const ok = a === 1; if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: redundant source parens are dropped', () => {
+        const ts = 'const ok = (a === 1); if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: Value::Bool box is peeled at the init site', () => {
+        const ts = 'const ok = Array.isArray(v); if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = is_array(&v);');
+    });
+
+    test('bool local: in operator initializer', () => {
+        const ts = 'const ok = k in obj; if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = in_op(&obj, &k);');
+    });
+
+    test('bool local: boolean literal initializer', () => {
+        const ts = 'const ok = true; if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = true;');
+    });
+
+    test('bool local: parenthesized condition operand still allows bool', () => {
+        const ts = 'const ok = a === 1; if ((ok)) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = is_equal(&a, &Value::Int(1));');
+        expect(output).toContain('is_true(&(ok))');
+    });
+
+    test('bool local: && operands of a typed condition', () => {
+        const ts =
+            'class T {\n' +
+            '    m(a: boolean, b: boolean) {\n' +
+            '        const ok = a && b;\n' +
+            '        if (ok) { return 1; }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = is_true(&a) && is_true(&b);');
+    });
+
+    test('bool local: string helper results stay bool', () => {
+        const ts =
+            'class T {\n' +
+            '    m(s: string) {\n' +
+            '        const ok = s.startsWith("x");\n' +
+            '        if (ok) { return 1; }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: bool = starts_with(&s, &Value::Str("x".to_string()));');
+    });
+
+    // Rejected shapes: any sink that takes `&Value` keeps the local boxed.
+
+    test('bool local: value sink keeps Value', () => {
+        const ts = 'const ok = a === 1; m.insert("k", ok);';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: Value = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: comparison sink keeps Value', () => {
+        const ts = 'const ok = a === 1; if (ok === true) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: Value = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: return sink keeps Value', () => {
+        const ts = 'const ok = a === 1; return ok;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: Value = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: reassignment keeps Value', () => {
+        const ts = 'let ok = a === 1; ok = b === 2; if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: Value = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: a second binding of the name keeps Value', () => {
+        const ts = 'const ok = a === 1; items.filter((ok) => x(ok));';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: Value = is_equal(&a, &Value::Int(1));');
+    });
+
+    test('bool local: non-bool initializer keeps Value', () => {
+        const ts = 'const ok = v; if (ok) { x(); }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut ok: Value = v;');
     });
 
     test('reserved keyword match is renamed', () => {
