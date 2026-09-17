@@ -5054,11 +5054,154 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
+  // gofmt prints the condition of every `if`/`for`/`switch` through
+  // go/printer/nodes.go controlClause() -> stripParens(): the single outermost,
+  // fully enclosing parentheses pair is dropped, and the rule applies again to the
+  // enclosed expression while that one is parenthesized as well
+  // (`if (x == 1) {` -> `if x == 1 {`, `if ((x == 1)) {` -> `if x == 1 {`).
+  // Parentheses survive when the enclosed expression holds an unparenthesized
+  // composite literal whose type is a type name, because `if T{} == x {` does not
+  // parse. The printer emits text instead of an ast.Expr, so stripParens runs over
+  // the printed condition text here.
+  goControlClauseParens(node, expression) {
+    if (!this.goIsControlClauseCondition(node)) {
+      return expression;
+    }
+    let text = expression;
+    for (; ; ) {
+      const inner = this.goEnclosedExpression(text);
+      if (inner === void 0) {
+        return text;
+      }
+      text = inner;
+    }
+  }
+  // the expression inside the outermost parentheses pair of `text`, or undefined
+  // when `text` is not one fully enclosing pair or gofmt keeps that pair
+  goEnclosedExpression(text) {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) {
+      return void 0;
+    }
+    if (this.goSkipBalanced(trimmed, 0, "(", ")") !== trimmed.length) {
+      return void 0;
+    }
+    const inner = trimmed.substring(1, trimmed.length - 1).trim();
+    if (this.goHasTypeNameCompositeLiteral(inner)) {
+      return void 0;
+    }
+    return inner;
+  }
+  // the expression a Go `if`/`for`/`switch` statement tests, the only positions
+  // gofmt's controlClause() rewrites
+  goIsControlClauseCondition(node) {
+    const parent = node?.parent;
+    switch (parent?.kind) {
+      case ts5.SyntaxKind.IfStatement:
+      case ts5.SyntaxKind.WhileStatement:
+      case ts5.SyntaxKind.SwitchStatement:
+        return parent.expression === node;
+      case ts5.SyntaxKind.ForStatement:
+        return parent.condition === node;
+    }
+    return false;
+  }
+  // stripParens' ast.Inspect stops at nested parentheses, which protect whatever
+  // they enclose, and reports a composite literal whenever its type is a type name
+  goHasTypeNameCompositeLiteral(text) {
+    let index = 0;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === '"' || char === "`" || char === "'") {
+        index = this.goSkipQuoted(text, index);
+        continue;
+      }
+      if (char === "(") {
+        const next = this.goSkipBalanced(text, index, "(", ")");
+        if (next < 0) {
+          return false;
+        }
+        index = next;
+        continue;
+      }
+      if (char === "{") {
+        if (this.goCompositeLitHasTypeName(text, index)) {
+          return true;
+        }
+        const next = this.goSkipBalanced(text, index, "{", "}");
+        if (next < 0) {
+          return false;
+        }
+        index = next;
+        continue;
+      }
+      index += 1;
+    }
+    return false;
+  }
+  // `{` opens a composite literal whose type is a type name when the text in front
+  // of it is an ident or a selector chain of idents; `map[string]any{` and `[]any{`
+  // are type literals and do not count (isTypeName in go/printer/nodes.go)
+  goCompositeLitHasTypeName(text, braceIndex) {
+    let start = braceIndex;
+    while (start > 0 && /[A-Za-z0-9_.\[\]]/.test(text[start - 1])) {
+      start -= 1;
+    }
+    const typeText = text.substring(start, braceIndex).trim();
+    if (["map", "struct", "interface", "func", "chan"].indexOf(typeText) >= 0) {
+      return false;
+    }
+    return /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$/.test(typeText);
+  }
+  // the index right after the bracket closing the one at `start`, or -1 when the
+  // brackets are unbalanced (the printer sees statement fragments, not whole files)
+  goSkipBalanced(text, start, open, close) {
+    let depth = 0;
+    let index = start;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === '"' || char === "`" || char === "'") {
+        index = this.goSkipQuoted(text, index);
+        continue;
+      }
+      if (char === open) {
+        depth += 1;
+      } else if (char === close) {
+        depth -= 1;
+        if (depth === 0) {
+          return index + 1;
+        }
+      }
+      index += 1;
+    }
+    return -1;
+  }
+  // the index right after the string, rune or raw string literal opening at `start`
+  goSkipQuoted(text, start) {
+    const quote = text[start];
+    let index = start + 1;
+    while (index < text.length) {
+      const char = text[index];
+      if (char === "\\" && quote !== "`") {
+        index += 2;
+        continue;
+      }
+      if (char === quote) {
+        return index + 1;
+      }
+      index += 1;
+    }
+    return text.length;
+  }
+  printNode(node, identation = 0) {
+    const printed = super.printNode(node, identation);
+    return this.goControlClauseParens(node, printed);
+  }
   printCondition(node, identation) {
     if (node?.kind === ts5.SyntaxKind.Identifier) {
       const inlined = this.printInlineTruthy(node);
       if (inlined !== void 0) {
-        return `${this.getIden(identation)}${inlined}`;
+        return `${this.getIden(identation)}${this.goControlClauseParens(node, inlined)}`;
       }
       return super.printCondition(node, identation);
     }

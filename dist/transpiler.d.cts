@@ -703,6 +703,14 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsPointerIdentifier(node: any): boolean;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
     printInlineTruthy(node: any): string | undefined;
+    goControlClauseParens(node: any, expression: string): string;
+    goEnclosedExpression(text: string): string | undefined;
+    goIsControlClauseCondition(node: any): boolean;
+    goHasTypeNameCompositeLiteral(text: string): boolean;
+    goCompositeLitHasTypeName(text: string, braceIndex: number): boolean;
+    goSkipBalanced(text: string, start: number, open: string, close: string): number;
+    goSkipQuoted(text: string, start: number): number;
+    printNode(node: any, identation?: number): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
