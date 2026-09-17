@@ -7356,8 +7356,40 @@ var JavaTranspiler = class extends BaseTranspiler {
   printReplaceCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
   }
-  printReplaceAllCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+  printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    const pattern = this.stringLiteralArgument(node?.arguments?.[0]);
+    const replacement = this.stringLiteralArgument(node?.arguments?.[1]);
+    const receiver = this.sideEffectFreeReceiver(node?.expression);
+    if (pattern !== void 0 && replacement !== void 0 && receiver) {
+      return `(${name} == null ? null : ((String)${name}).replace(${pattern}, ${replacement}))`;
+    }
     return `Helpers.replaceAll((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
+  }
+  // Printed form of a non-empty string-literal argument with no escapes, or undefined when the
+  // argument is not a literal, prints with an escape sequence, or is the empty pattern.
+  stringLiteralArgument(argument) {
+    if (argument === void 0 || !ts6.isStringLiteral(argument)) {
+      return void 0;
+    }
+    const printed = this.printNode(argument, 0);
+    return /^"[^"\\]+"$/.test(printed) ? printed : void 0;
+  }
+  // True for receivers that read a value without calling anything: `x`, `x.y`, `this.x`,
+  // `(x as string)` and parenthesised forms of those. Guards the double read of the ternary.
+  sideEffectFreeReceiver(expression) {
+    if (expression === void 0) {
+      return false;
+    }
+    if (ts6.isParenthesizedExpression(expression) || ts6.isAsExpression(expression) || ts6.isTypeAssertionExpression(expression)) {
+      return this.sideEffectFreeReceiver(expression.expression);
+    }
+    if (ts6.isIdentifier(expression) || expression.kind === ts6.SyntaxKind.ThisKeyword) {
+      return true;
+    }
+    if (ts6.isPropertyAccessExpression(expression)) {
+      return this.sideEffectFreeReceiver(expression.expression);
+    }
+    return false;
   }
   printPadEndCall(_node, _identation, name, parsedArg, parsedArg2) {
     return `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;

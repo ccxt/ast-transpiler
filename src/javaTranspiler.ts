@@ -2589,8 +2589,47 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
     }
 
-    printReplaceAllCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        // Native when both arguments are plain string literals and the pattern is non-empty: the
+        // helper's null / empty-pattern guards cannot fire for them, and `String.replace` is the
+        // literal all-occurrences replacement. The null guard on the receiver keeps the helper's
+        // null -> null behaviour; it is only emitted for a side-effect-free receiver (identifier
+        // or property access), so a double read cannot change semantics.
+        const pattern = this.stringLiteralArgument(node?.arguments?.[0]);
+        const replacement = this.stringLiteralArgument(node?.arguments?.[1]);
+        const receiver = this.sideEffectFreeReceiver(node?.expression);
+        if (pattern !== undefined && replacement !== undefined && receiver) {
+            return `(${name} == null ? null : ((String)${name}).replace(${pattern}, ${replacement}))`;
+        }
         return `Helpers.replaceAll((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
+    }
+
+    // Printed form of a non-empty string-literal argument with no escapes, or undefined when the
+    // argument is not a literal, prints with an escape sequence, or is the empty pattern.
+    stringLiteralArgument(argument) {
+        if (argument === undefined || !ts.isStringLiteral(argument)) {
+            return undefined;
+        }
+        const printed = this.printNode(argument, 0);
+        return /^"[^"\\]+"$/.test(printed) ? printed : undefined;
+    }
+
+    // True for receivers that read a value without calling anything: `x`, `x.y`, `this.x`,
+    // `(x as string)` and parenthesised forms of those. Guards the double read of the ternary.
+    sideEffectFreeReceiver(expression) {
+        if (expression === undefined) {
+            return false;
+        }
+        if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)) {
+            return this.sideEffectFreeReceiver(expression.expression);
+        }
+        if (ts.isIdentifier(expression) || expression.kind === ts.SyntaxKind.ThisKeyword) {
+            return true;
+        }
+        if (ts.isPropertyAccessExpression(expression)) {
+            return this.sideEffectFreeReceiver(expression.expression);
+        }
+        return false;
     }
 
     printPadEndCall(_node, _identation, name, parsedArg, parsedArg2) {

@@ -3221,3 +3221,70 @@ describe('helper removal: native comparison / containsKey / size', () => {
         expect(output).toContain("((java.util.Map<?, ?>)Helpers.GetValue(o, k)).containsKey(j)");
     });
 });
+
+describe('java replaceAll native emission', () => {
+    // Literal pattern and replacement on a side-effect-free receiver: the helper's null /
+    // empty-pattern guards cannot fire, so the call is emitted as a native String.replace
+    // with a null-safe receiver read.
+    test('literal pattern and replacement emit String.replace with a null guard', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.replaceAll(\"-\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(x == null ? null : ((String)x).replace(\"-\", \"+\"))");
+        expect(output).not.toContain("Helpers.replaceAll");
+    });
+
+    test('a property receiver stays native (no call in the read)', () => {
+        const input =
+        "class T {\n" +
+        "    m = \"a-b\";\n" +
+        "    test(): void {\n" +
+        "        const y = this.m.replaceAll(\"-\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(this.m == null ? null : ((String)this.m).replace(\"-\", \"+\"))");
+    });
+
+    // Fallbacks: every shape the native rule cannot prove keeps the runtime helper.
+    test('a non-literal pattern keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(p: string): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.replaceAll(p, \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.replaceAll((String)x, (String)p, (String)\"+\")");
+    });
+
+    test('the empty literal pattern keeps the helper (helper is a no-op there)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.replaceAll(\"\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.replaceAll((String)x, (String)\"\", (String)\"+\")");
+    });
+
+    test('a call receiver keeps the helper (single evaluation of the receiver)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.toLowerCase().replaceAll(\"-\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
+    });
+});
