@@ -1038,3 +1038,48 @@ describe('go inline equality', () => {
         expect(output).not.toContain("*limit == length");
     });
 });
+
+describe('go redundant parentheses', () => {
+    // gofmt prints a ParenExpr whose child is itself a ParenExpr without its own pair
+    // (`((x))` prints as `(x)`): a source parenthesis around an expression the printer
+    // already prints parenthesised must emit the single pair gofmt keeps.
+    test('a parenthesised expression that already prints parenthesised collapses to one pair', () => {
+        const input =
+        "function f (x: string, o: any) {\n" +
+        "    const a = (x === 'delivery');\n" +
+        "    const b = ((x === 'delivery'));\n" +
+        "    const c = (o === 'delivery');\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toMatch(/var a bool =\s+\(x == "delivery"\)/);
+        expect(output).toMatch(/var b bool =\s+\(x == "delivery"\)/);
+        expect(output).toMatch(/var c bool =\s+\(IsEqual\(o, "delivery"\)\)/);
+        expect(output).not.toContain("((x == \"delivery\"");
+        expect(output).not.toContain("((IsEqual");
+    });
+    test('a parenthesised ternary condition emits one pair', () => {
+        const input =
+        "function f (x: string) {\n" +
+        "    const a = (x === 'delivery') ? 'yes' : 'no';\n" +
+        "    return a;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Ternary((x == \"delivery\"), \"yes\", \"no\")");
+        expect(output).not.toContain("Ternary(((x == \"delivery\")");
+    });
+    test('parentheses that are not redundant stay: call arguments and operand pairs', () => {
+        const input =
+        "function f (n: number) {\n" +
+        "    const a = Math.abs((n));\n" +
+        "    const b = (n === 1) || (n === 2);\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the parentheses of a call are not a ParenExpr, the argument keeps its own pair
+        expect(output).toContain("mathAbs((n))");
+        // the source pairs sit on the operands, not around the whole disjunction
+        expect(output).toContain("(n == 1) || (n == 2)");
+        expect(output).not.toContain("((n == 1))");
+    });
+});
