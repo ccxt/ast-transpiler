@@ -583,6 +583,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printSuperCallInsideConstructor(node: any, identation: any): string;
     printStringLiteral(node: any): any;
     transformFunctionNameIfNeeded(name: any): string;
+    getStructFieldCells(node: any): string[];
     printPropertyDeclaration(node: any, identation: any): string;
     printStruct(node: any, indentation: any): string;
     printNewStructMethod(node: any): string;

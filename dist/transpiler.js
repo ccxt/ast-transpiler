@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4006,7 +4006,11 @@ var GoTranspiler = class extends BaseTranspiler {
   transformFunctionNameIfNeeded(name) {
     return this.capitalize(name);
   }
-  printPropertyDeclaration(node, identation) {
+  // The cells of one struct field in the shape gofmt's fieldList() prints them: a named
+  // field is `Name Type [Tag]` (the name cell — and, when the field carries a tag, the type
+  // cell too — is a tab-terminated column cell) and an embedded field is a single cell.
+  // printStruct() lays those cells out; printPropertyDeclaration() joins them with spaces.
+  getStructFieldCells(node) {
     const name = this.capitalize(this.printNode(node.name, 0));
     let type = "any";
     if (node.type === void 0) {
@@ -4020,15 +4024,19 @@ var GoTranspiler = class extends BaseTranspiler {
     } else if (node.type.kind === SyntaxKind3.ArrayType) {
       type = "[]any";
     }
+    const cells = [name, type];
     if (node.initializer) {
       let initializer = this.printNode(node.initializer, 0);
       initializer = initializer.replaceAll('"', "");
-      return this.getIden(identation) + name + " " + type + ` \`default:"${initializer}"\`` + this.LINE_TERMINATOR;
+      cells.push(`\`default:"${initializer}"\``);
     }
-    return this.getIden(identation) + name + " " + type + this.LINE_TERMINATOR;
+    return cells;
+  }
+  printPropertyDeclaration(node, identation) {
+    return this.getIden(identation) + this.getStructFieldCells(node).join(" ") + this.LINE_TERMINATOR;
   }
   printStruct(node, indentation) {
-    let heritageName = "";
+    const rows = [];
     if (node?.heritageClauses?.length > 0) {
       const heritage = node.heritageClauses[0];
       const heritageType = heritage.types[0];
@@ -4036,12 +4044,26 @@ var GoTranspiler = class extends BaseTranspiler {
       if (this.classNameMap[heritageEscapedText]) {
         heritageEscapedText = this.classNameMap[heritageEscapedText];
       }
-      heritageName = this.getIden(indentation + 1) + heritageEscapedText + "\n";
+      rows.push([heritageEscapedText]);
     }
     const propDeclarations = node.members.filter((member) => member.kind === SyntaxKind3.PropertyDeclaration);
-    return `type ${this.className} struct {
-${heritageName}${propDeclarations.map((member) => this.printNode(member, indentation + 1)).join("\n")}
-}`;
+    propDeclarations.forEach((member) => rows.push(this.getStructFieldCells(member)));
+    const lines = rows.map((cells, row) => {
+      let line = cells[0];
+      for (let column = 0; column < cells.length - 1; column++) {
+        let width = 0;
+        for (let previous = row; previous >= 0 && rows[previous].length > column + 1; previous--) {
+          width = Math.max(width, rows[previous][column].length);
+        }
+        for (let next = row + 1; next < rows.length && rows[next].length > column + 1; next++) {
+          width = Math.max(width, rows[next][column].length);
+        }
+        line += " ".repeat(width + 1 - cells[column].length) + cells[column + 1];
+      }
+      return this.getIden(indentation + 1) + line;
+    });
+    const body = lines.length ? "\n" + lines.join("\n") + "\n" : "\n";
+    return `type ${this.className} struct {${body}}`;
   }
   printNewStructMethod(node) {
     return `

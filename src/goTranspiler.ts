@@ -300,9 +300,11 @@ export class GoTranspiler extends BaseTranspiler {
     }
 
 
-    printPropertyDeclaration(node, identation) {
-        // let modifiers = this.printModifiers(node);
-        // modifiers = modifiers ? modifiers + " " : modifiers;
+    // The cells of one struct field in the shape gofmt's fieldList() prints them: a named
+    // field is `Name Type [Tag]` (the name cell — and, when the field carries a tag, the type
+    // cell too — is a tab-terminated column cell) and an embedded field is a single cell.
+    // printStruct() lays those cells out; printPropertyDeclaration() joins them with spaces.
+    getStructFieldCells(node) {
         const name = this.capitalize(this.printNode(node.name, 0));
         let type = 'any';
         if (node.type === undefined) {
@@ -316,20 +318,25 @@ export class GoTranspiler extends BaseTranspiler {
         } else if (node.type.kind === SyntaxKind.ArrayType) {
             type = '[]any';
         }
+        const cells = [ name, type ];
         if (node.initializer) {
             // we have to save the value and initialize it later
             let initializer = this.printNode(node.initializer, 0);
             // quick fix
             initializer = initializer.replaceAll('"', '');
-            return this.getIden(identation) + name + ' ' + type + ' ' + `\`default:"${initializer}"\`` + this.LINE_TERMINATOR;
+            cells.push(`\`default:"${initializer}"\``);
         }
-        return this.getIden(identation) + name + ' ' + type + this.LINE_TERMINATOR;
+        return cells;
+    }
+
+    printPropertyDeclaration(node, identation) {
+        return this.getIden(identation) + this.getStructFieldCells(node).join(' ') + this.LINE_TERMINATOR;
     }
 
     printStruct(node, indentation) {
 
+        const rows: string[][] = [];
         // check if we have heritage
-        let heritageName = '';
         if (node?.heritageClauses?.length > 0) {
             const heritage = node.heritageClauses[0];
             const heritageType = heritage.types[0];
@@ -337,11 +344,37 @@ export class GoTranspiler extends BaseTranspiler {
             if (this.classNameMap[heritageEscapedText]) {
                 heritageEscapedText = this.classNameMap[heritageEscapedText];
             }
-            heritageName = this.getIden(indentation+1) + heritageEscapedText + '\n';
+            // an embedded field has no type cell: it is a single, unterminated cell
+            rows.push([ heritageEscapedText ]);
         }
 
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
-        return `type ${this.className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
+        propDeclarations.forEach(member => rows.push(this.getStructFieldCells(member)));
+
+        // gofmt lays the fields out with text/tabwriter (go/printer's fieldList): a column
+        // block is a run of consecutive fields whose cell in that column is tab-terminated,
+        // and every cell of the block is padded with spaces to the widest cell of the block
+        // plus one. An embedded field (a single cell) and a field without a tag (its type is
+        // the trailing cell) end the block of every column they have no cell in, which is
+        // what keeps `Exchange` from widening the `exchangeTyped *ExchangeTyped` column.
+        const lines = rows.map((cells, row) => {
+            let line = cells[0];
+            for (let column = 0; column < cells.length - 1; column++) {
+                let width = 0;
+                for (let previous = row; previous >= 0 && rows[previous].length > column + 1; previous--) {
+                    width = Math.max(width, rows[previous][column].length);
+                }
+                for (let next = row + 1; next < rows.length && rows[next].length > column + 1; next++) {
+                    width = Math.max(width, rows[next][column].length);
+                }
+                line += ' '.repeat(width + 1 - cells[column].length) + cells[column + 1];
+            }
+            return this.getIden(indentation + 1) + line;
+        });
+
+        // a struct with no fields is `type X struct {\n}`: no stray blank line before the brace
+        const body = lines.length ? '\n' + lines.join('\n') + '\n' : '\n';
+        return `type ${this.className} struct {${body}}`;
     }
 
     printNewStructMethod(node){
