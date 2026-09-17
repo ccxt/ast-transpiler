@@ -1693,3 +1693,99 @@ describe('csharp native numeric comparisons', () => {
     });
 });
 
+
+describe('csharp helper removal: inOp / getArrayLength become native members', () => {
+    test('in-operator on a checker-typed dictionary emits ContainsKey', () => {
+        const input =
+        "class Exchange {\n" +
+        "    options: { [key: string]: any } = {};\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main(key) {\n" +
+        "        if ('cached' in this.options) { return 1; }\n" +
+        "        if ('test' in this.urls) { return 2; }\n" +
+        "        if (key in this.options) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (isTrue(this.options.ContainsKey("cached")))');
+        // `urls` is a hand-written `object` field whose box is always a dict: the same
+        // (IDictionary<string, object>) cast the helper body applies
+        expect(output).toContain('if (isTrue(((IDictionary<string, object>)this.urls).ContainsKey("test")))');
+        // the key is not proven a string -> the runtime helper keeps its coercion
+        expect(output).toContain('if (isTrue(inOp(this.options, key)))');
+    });
+    test('length on a list this printer typed itself emits Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const params: { [key: string]: any } = {};\n" +
+        "        const keys = Object.keys(params);\n" +
+        "        const n = keys.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('List<object> keys = new List<object>(((IDictionary<string,object>)parameters).Keys);');
+        expect(output).toContain('int n = keys.Count;');
+        expect(output).not.toContain('getArrayLength(keys)');
+    });
+    test('unproven operands keep the runtime helpers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(arr, obj) {\n" +
+        "        const n = arr.length;\n" +
+        "        const m = obj.length;\n" +
+        "        if ('x' in obj) { return 1; }\n" +
+        "        return [n, m];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // parameters print `object name = null`, so neither the checker proof nor a
+        // printed C# type exists -> getArrayLength / inOp stay
+        expect(output).toContain('int n = getArrayLength(arr);');
+        expect(output).toContain('int m = getArrayLength(obj);');
+        expect(output).toContain('if (isTrue(inOp(obj, "x")))');
+    });
+    test('a dictionary local of a call this printer typed emits ContainsKey', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a: { [key: string]: any }, b: any): { [key: string]: any } { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const merged = this.extend(a, b);\n" +
+        "        const has = ('k' in merged);\n" +
+        "        return has;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('Dictionary<string, object> merged = this.extend(a, b);');
+        expect(output).toContain('bool has = (merged.ContainsKey("k"));');
+    });
+    test('a checker array that is not a dictionary keeps inOp', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(d: { [key: string]: any }) {\n" +
+        "        const keys = Object.keys(d);\n" +
+        "        const has = ('k' in keys);\n" +
+        "        return has;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('bool has = (inOp(keys, "k"));');
+    });
+    test('a string-typed parameter key keeps inOp: the printed C# parameter is object', () => {
+        const input =
+        "class Exchange {\n" +
+        "    options: { [key: string]: any } = {};\n" +
+        "    main(key: string) {\n" +
+        "        if (key in this.options) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // ContainsKey takes a string, and a parameter is still `object` in the generated
+        // C# (its narrowing happens in a later pass), so the helper must stay
+        expect(output).toContain('public virtual object main(object key)');
+        expect(output).toContain('if (isTrue(inOp(this.options, key)))');
+    });
+});

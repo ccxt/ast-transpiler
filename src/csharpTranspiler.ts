@@ -177,6 +177,27 @@ const CSHARP_NATIVE_COMPARISON_TOKENS = {
     [ts.SyntaxKind.GreaterThanEqualsToken]: '>=',
 };
 
+// hand-written BaseExchange fields whose C# declaration already is a concrete
+// dictionary/list (cs/ccxt/base/Exchange.Options.cs): a read of the field carries
+// that static type, so its own members (`Count`, `ContainsKey`) replace the helper
+const CSHARP_NATIVE_FIELDS: { [name: string]: string } = {
+    'options': 'ConcurrentDictionary<string, object>',
+    'features': 'Dictionary<string, object>',
+    'httpExceptions': 'Dictionary<string, object>',
+    'markets_by_id': 'IDictionary<string, object>',
+    'symbols': 'List<object>',
+    'codes': 'List<object>',
+    'ids': 'List<object>',
+};
+
+// hand-written BaseExchange fields declared `object` that always box a dictionary
+// (dict / CustomConcurrentDictionary<string, object>): the member needs the same
+// `(IDictionary<string, object>)` cast the transpiled helper body itself applies
+const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks', 'ohlcvs', 'trades', 'markets', 'currencies', 'currencies_by_id' ];
+
+// C# collection types this printer can name whose members replace the helpers
+const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -190,6 +211,12 @@ export class CSharpTranspiler extends BaseTranspiler {
     // layer for the locals it retypes itself (ccxt: build/csharp-local-types.js); it must
     // describe the same type the declaration is emitted with, or the operator will not compile
     csharpExpressionTypeResolver?: (node) => string | undefined;
+    // variable declaration -> the concrete C# type this printer named for it
+    // (getCSharpLocalType): 'List<object>' / 'Dictionary<string, object>' / 'string' / ...
+    // Only declarations the printer typed itself are kept: the printed `<type> name = `
+    // prefix is final, so every later read of the local is statically that type and its
+    // members may replace inOp/getArrayLength
+    csharpTypedLocals = new WeakMap<ts.Node, string>();
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -1046,6 +1073,121 @@ export class CSharpTranspiler extends BaseTranspiler {
         return leftText + ' ' + token + ' ' + rightText;
     }
 
+    // the printed receiver whose C# static type is a known collection: a local this
+    // printer declared with a concrete type (csharpTypedLocals), or a hand-written
+    // BaseExchange field. undefined keeps the runtime helper, since the printer cannot
+    // name the type of the value the operand holds
+    csharpNativeReceiver(node): { text: string, type: string } | undefined {
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            const inner = this.csharpNativeReceiver(node.expression);
+            return inner === undefined ? undefined : { text: `(${inner.text})`, type: inner.type };
+        }
+        if (ts.isIdentifier(node)) {
+            const named = this.csharpTypedLocalType(node);
+            return (named === undefined || CSHARP_NATIVE_COLLECTION_TYPES.indexOf(named) < 0) ? undefined : { text: this.printNode(node, 0), type: named };
+        }
+        if (ts.isPropertyAccessExpression(node) && node.expression?.kind === ts.SyntaxKind.ThisKeyword) {
+            const name = node.name?.escapedText as string;
+            if (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) {
+                // the field is declared `object`; its box is always a dictionary
+                return { text: `((IDictionary<string, object>)${this.printNode(node, 0)})`, type: 'IDictionary<string, object>' };
+            }
+            return CSHARP_NATIVE_FIELDS[name] === undefined ? undefined : { text: this.printNode(node, 0), type: CSHARP_NATIVE_FIELDS[name] };
+        }
+        // a call whose printed C# type this printer already names (Object.keys, this.indexBy,
+        // x.split, ...) is a collection too
+        const callType = this.csharpCallReturnType(node);
+        if (callType !== undefined && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(callType) >= 0) {
+            const printed = this.printNode(node, 0);
+            return { text: printed.startsWith('new ') ? `(${printed})` : printed, type: callType };
+        }
+        return undefined;
+    }
+
+    // the C# types this printer can name on a local whose members replace the helpers:
+    // the collection types (Count/ContainsKey) and string (Length/ContainsKey keys)
+    csharpTypeIsNative(csharpType: string): boolean {
+        return CSHARP_NATIVE_COLLECTION_TYPES.indexOf(csharpType) >= 0 || csharpType.indexOf('string') === 0;
+    }
+
+    // the C# type this printer declared for a local read, or undefined
+    csharpTypedLocalType(node): string | undefined {
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        return declaration === undefined ? undefined : this.csharpTypedLocals.get(declaration);
+    }
+
+    // the printed key of ContainsKey must itself be a C# string: a literal, a local this
+    // printer declared `string`, a call it types as string, or its own `((string)x)` cast
+    csharpNativeStringKey(key): string | undefined {
+        if (key?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.csharpNativeStringKey(key.expression);
+        }
+        if (ts.isStringLiteralLike(key)) {
+            return this.printNode(key, 0);
+        }
+        if (ts.isIdentifier(key)) {
+            const named = this.csharpTypedLocalType(key);
+            return (named === undefined || named.indexOf('string') !== 0) ? undefined : this.printNode(key, 0);
+        }
+        if (this.csharpCallReturnType(key) === 'string') {
+            return this.printNode(key, 0);
+        }
+        const printed = this.printNode(key, 0);
+        return printed.startsWith('((string)') ? printed : undefined;
+    }
+
+    // the checker's view of an `in` / `.length` operand: a dictionary carries a string
+    // index signature, an array is the Array reference type. `any` proves nothing
+    csharpIsDictionaryType(type): boolean {
+        if (type === undefined || this.isAnyType(type.flags)) {
+            return false;
+        }
+        return this.getChecker().getIndexTypeOfType(type, ts.IndexKind.String) !== undefined;
+    }
+
+    csharpIsArrayType(type): boolean {
+        if (type === undefined || this.isAnyType(type.flags)) {
+            return false;
+        }
+        return type?.symbol?.escapedName === 'Array';
+    }
+
+    // `key in obj` -> `obj.ContainsKey(key)`, only when the checker proves obj is a
+    // dictionary and both the printed key and the printed operand are already C#
+    // dictionary/string values. Every other shape keeps the inOp helper
+    csharpNativeInExpression(key, obj): string | undefined {
+        const checker = this.getChecker();
+        if (!this.isStringType(checker.getTypeAtLocation(key).flags)) {
+            return undefined;
+        }
+        if (!this.csharpIsDictionaryType(checker.getTypeAtLocation(obj))) {
+            return undefined;
+        }
+        const receiver = this.csharpNativeReceiver(obj);
+        // only a dictionary C# type carries ContainsKey (IList<object> keeps the helper)
+        if (receiver === undefined || receiver.type.indexOf('Dictionary<') < 0) {
+            return undefined;
+        }
+        const printedKey = this.csharpNativeStringKey(key);
+        if (printedKey === undefined) {
+            return undefined;
+        }
+        return `${receiver.text}.ContainsKey(${printedKey})`;
+    }
+
+    // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
+    // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
+    csharpNativeLengthExpression(expression): string | undefined {
+        if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+            return undefined;
+        }
+        const receiver = this.csharpNativeReceiver(expression);
+        if (receiver === undefined) {
+            return undefined;
+        }
+        return `${receiver.text}.Count`;
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -1090,6 +1232,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
 
         if (op === ts.SyntaxKind.InKeyword) {
+            const nativeIn = this.csharpNativeInExpression(left, right);
+            if (nativeIn !== undefined) {
+                return nativeIn;
+            }
             return `inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
@@ -1495,6 +1641,12 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.getIden(identation) + specificVarToken + " " + this.printNode(declaration.name) + " = " + parsedValue;
         }
         const declaredType = isNew ? 'var' : this.getCSharpLocalType(declaration);
+        // remember the concrete types this printer declared itself: the printed prefix is
+        // final (a host wrapper only rewrites untyped `object <name> = ` declarations), so
+        // the local's static type is known at every later read
+        if (!isNew && node.declarations.length === 1 && this.csharpTypeIsNative(declaredType)) {
+            this.csharpTypedLocals.set(declaration, declaredType);
+        }
         return this.getIden(identation) + declaredType + " " + this.printNode(declaration.name) + " = " + parsedValue;
     }
 
@@ -1510,7 +1662,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const type = (this.getChecker() as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
             this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
-            rawExpression = this.isStringType(type.flags) ? `((string)${leftSide}).Length` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
+            rawExpression = this.isStringType(type.flags) ? `((string)${leftSide}).Length` : (this.csharpNativeLengthExpression(expression) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
             rawExpression = `((IList<object>)${leftSide}).Add`;
@@ -1986,7 +2138,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const leftSide = this.printNode(node.expression, 0);
         const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSide, "length");
-        return this.isStringType(type.flags) ? `((string)${leftSide}).Length` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+        return this.isStringType(type.flags) ? `((string)${leftSide}).Length` : (this.csharpNativeLengthExpression(node.expression) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`);
     }
 
     printPostFixUnaryExpression(node, identation) {
