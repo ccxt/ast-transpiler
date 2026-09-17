@@ -121,6 +121,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     // method node -> 'bool' | 'bool?' | undefined (see csharpBooleanReturnType)
     csharpBooleanReturnTypes = new WeakMap<ts.Node, string | undefined>();
+    // variable declaration -> getCSharpLocalType result, shared by the condition checks
+    csharpLocalTypes = new WeakMap<ts.Node, string>();
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -1336,6 +1338,115 @@ export class CSharpTranspiler extends BaseTranspiler {
         } else {
             return `prefixUnaryNeg(ref ${leftSide})`;
         }
+    }
+
+    // `isTrue(x)` is the identity function on a C# bool (`isTrue` returns a bool unchanged),
+    // so the wrapper is only needed for values the printer leaves boxed as `object`. Every
+    // shape below is rendered as a C# bool by the printer itself; anything else keeps the helper.
+    csharpConditionPrintsBool(node): boolean {
+        switch (node?.kind) {
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return true; // `true` / `false`
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.csharpConditionPrintsBool(node.expression);
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            // `!x` prints `!isTrue(x)`, and printCondition always returns a bool
+            return node.operator === ts.SyntaxKind.ExclamationToken;
+        case ts.SyntaxKind.BinaryExpression:
+            return this.csharpBinaryExpressionPrintsBool(node);
+        case ts.SyntaxKind.Identifier:
+            return this.csharpIdentifierPrintsBool(node);
+        case ts.SyntaxKind.CallExpression:
+            return this.csharpCallPrintsBool(node);
+        }
+        return false;
+    }
+
+    // isEqual / !isEqual / isGreaterThan / ... / inOp all have a C# `bool` signature, and a
+    // `&&` / `||` prints both operands through printCondition, i.e. as bool themselves
+    csharpBinaryExpressionPrintsBool(node): boolean {
+        switch (node.operatorToken.kind) {
+        case ts.SyntaxKind.EqualsEqualsToken:
+        case ts.SyntaxKind.EqualsEqualsEqualsToken:
+        case ts.SyntaxKind.ExclamationEqualsToken:
+        case ts.SyntaxKind.ExclamationEqualsEqualsToken:
+        case ts.SyntaxKind.GreaterThanToken:
+        case ts.SyntaxKind.GreaterThanEqualsToken:
+        case ts.SyntaxKind.LessThanToken:
+        case ts.SyntaxKind.LessThanEqualsToken:
+        case ts.SyntaxKind.InKeyword:
+        case ts.SyntaxKind.BarBarToken:
+        case ts.SyntaxKind.AmpersandAmpersandToken:
+            return true;
+        }
+        return false;
+    }
+
+    // the checker sees a value that is exactly boolean; `boolean | undefined` is a
+    // TypeFlags.Union here and is therefore rejected (`bool?` is no condition in C#)
+    csharpIsCheckedBoolean(node): boolean {
+        const type = this.getChecker().getTypeAtLocation(node);
+        return ((type?.flags ?? 0) & ts.TypeFlags.BooleanLike) !== 0;
+    }
+
+    // `bool name = ...` is only declared when getCSharpLocalType resolved that exact
+    // declaration to `bool`, so ask the same function: the condition and the declaration
+    // cannot disagree. Parameters, members and demoted locals return `object` there.
+    csharpIdentifierPrintsBool(node): boolean {
+        if (!this.csharpIsCheckedBoolean(node)) {
+            return false;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        if (!this.csharpLocalTypes.has(declaration)) {
+            this.csharpLocalTypes.set(declaration, this.getCSharpLocalType(declaration));
+        }
+        return this.csharpLocalTypes.get(declaration) === 'bool';
+    }
+
+    // calls the printer gives a concrete bool signature (inArray, valueIsDefined, startsWith,
+    // Array.isArray, ...); safeBool and friends are `bool?` / `object` and keep the wrapper
+    csharpCallPrintsBool(node): boolean {
+        return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === 'bool');
+    }
+
+    // same emission as the base implementation except for the bare-bool branch: the node is
+    // printed once and only wrapped in isTrue(...) when the printer did not already render a bool
+    printCondition(node, identation) {
+        if (this.supportsFalsyOrTruthyValues) {
+            return this.printNode(node, identation);
+        }
+        // can be called from ifs or conditional expressions or binary expressions so might contain the ! operator
+        if (node?.kind === ts.SyntaxKind.PrefixUnaryExpression && node.operator === ts.SyntaxKind.ExclamationToken) {
+            return this.printPrefixUnaryExpression(node, identation); // avoid infinite recursion
+        }
+        const printed = this.printNode(node, 0);
+        if (this.csharpConditionPrintsBool(node)) {
+            return `${this.getIden(identation)}${this.csharpConditionParensIfNeeded(node, printed)}`;
+        }
+        return `${this.getIden(identation)}${this.FALSY_WRAPPER_OPEN}${printed}${this.FALSY_WRAPPER_CLOSE}`;
+    }
+
+    // dropping the wrapper exposes the `&&` / `||` of the node, so the bare text needs its own
+    // parentheses where C# binds tighter than the JS it replaces: under `!` (which binds tighter
+    // than both), and a `||` that becomes an operand of a `&&` (`(a || b) && c` must not flatten
+    // to `a || b && c`). Source parentheses, when present, already come out in `printed`.
+    csharpConditionParensIfNeeded(node, printed: string): string {
+        if (node?.kind !== ts.SyntaxKind.BinaryExpression) {
+            return printed;
+        }
+        const op = node.operatorToken.kind;
+        if (op !== ts.SyntaxKind.BarBarToken && op !== ts.SyntaxKind.AmpersandAmpersandToken) {
+            return printed;
+        }
+        const parent = node.parent;
+        const underNot = parent?.kind === ts.SyntaxKind.PrefixUnaryExpression && parent.operator === ts.SyntaxKind.ExclamationToken;
+        const underAnd = op === ts.SyntaxKind.BarBarToken && parent?.kind === ts.SyntaxKind.BinaryExpression
+            && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken;
+        return (underNot || underAnd) ? `(${printed})` : printed;
     }
 
     printConditionalExpression(node, identation) {

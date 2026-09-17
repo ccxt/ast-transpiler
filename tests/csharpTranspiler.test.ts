@@ -483,9 +483,9 @@ describe('csharp transpiling tests', () => {
         const csharp =
         "string a = \"hi\";\n" +
         "bool b = false;\n" +
-        "bool c = isTrue(a) && isTrue(b);\n" +
-        "bool d = !isTrue(a) && !isTrue(b);\n" +
-        "bool e = (isTrue(a) || !isTrue(b));\n" +
+        "bool c = isTrue(a) && b;\n" +
+        "bool d = !isTrue(a) && !b;\n" +
+        "bool e = (isTrue(a) || !b);\n" +
         "if (isTrue(a))\n" +
         "{\n" +
         "    object f = 1;\n" +
@@ -1160,7 +1160,7 @@ describe('csharp typed body locals', () => {
         "}";
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("public virtual bool isDictionary(object value)");
-        expect(output).toContain("return ((bool)((object)(isTrue((!isEqual(value, null))) && isTrue(((value is IDictionary<string, object>)))))!);");
+        expect(output).toContain("return ((bool)((object)((!isEqual(value, null)) && ((value is IDictionary<string, object>))))!);");
     });
     test('a method declared `: boolean | undefined` (or an alias) returns bool? and keeps null', () => {
         const input =
@@ -1215,5 +1215,95 @@ describe('csharp typed body locals', () => {
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("public override bool? flag(object x)");
         expect(output).toContain("return ((bool?)((object)(true)));");
+    });
+});
+
+describe('isTrue is dropped when the condition already prints a C# bool', () => {
+    test('comparison results and bool locals need no isTrue round-trip', () => {
+        const input =
+        "class T {\n" +
+        "    f(a, b) {\n" +
+        "        const same = (a === b);\n" +
+        "        if (a === b) { return 1; }\n" +
+        "        if (same) { return 2; }\n" +
+        "        if (!same) { return 3; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isEqual(a, b))");
+        expect(output).toContain("if (same)");
+        expect(output).toContain("if (!same)");
+        expect(output).not.toContain("isTrue");
+    });
+    test('object locals, parameters and bool? calls keep the wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    f(a, p) {\n" +
+        "        const v = a['k'];\n" +
+        "        if (v) { return 1; }\n" +
+        "        if (p) { return 2; }\n" +
+        "        if (this.safeBool(a, 'k')) { return 3; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isTrue(v))");
+        expect(output).toContain("if (isTrue(p))");
+        expect(output).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+    });
+    test('logical conditions keep their operator binding when the wrapper goes', () => {
+        const input =
+        "class T {\n" +
+        "    f(a, b, p) {\n" +
+        "        const x = (a === b);\n" +
+        "        const y = (a !== b);\n" +
+        "        if ((a === b) && x && p) { return 1; }\n" +
+        "        if (!(x && (a === b))) { return 2; }\n" +
+        "        return ((x || y) && x);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if ((isEqual(a, b)) && x && isTrue(p))");
+        expect(output).toContain("if (!(x && (isEqual(a, b))))");
+        expect(output).toContain("return ((x || y) && x);");
+    });
+    test('a ternary condition and typed bool-returning calls also go bare', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: string, b: string) {\n" +
+        "        const z = (a === b) ? 1 : 2;\n" +
+        "        if (a.startsWith('x')) { return 1; }\n" +
+        "        return z;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((bool) (isEqual(a, b))) ? 1 : 2");
+        expect(output).toContain("if (((string)a).StartsWith(((string)\"x\")))");
+    });
+    test('a bool local reassigned with another bool keeps the type and the bare condition', () => {
+        const input =
+        "class T {\n" +
+        "    f(a, b, c) {\n" +
+        "        let flag = (a === b);\n" +
+        "        flag = (b === c);\n" +
+        "        if (flag) { return 1; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("bool flag = (isEqual(a, b));");
+        expect(output).toContain("if (flag)");
+    });
+    test('a local demoted back to object by an unsafe reassignment keeps the wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a, b, c) {\n" +
+        "        let flag = (a === b);\n" +
+        "        flag = c;\n" +
+        "        if (flag) { return 1; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object flag = (isEqual(a, b));");
+        expect(output).toContain("if (isTrue(flag))");
     });
 });
