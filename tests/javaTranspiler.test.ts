@@ -2600,3 +2600,148 @@ describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
         expect(output).not.toContain("java.util.Objects.equals");
     });
 });
+
+describe('checker-typed element access: Helpers.GetValue -> native Map/List access', () => {
+    // the Java runtime holds every dict-shaped value as a Map<String, Object> (raw HashMap or a
+    // types.TypedMap view) and every tuple as List<Object>, so a read the checker proves to be a
+    // dict/tuple with a literal key prints the native accessor instead of the helper. `any`,
+    // unions, strings, nullable values, non-tuple arrays and non-literal keys keep the helper.
+    test('dict-typed container with a string literal key goes native', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D): void {\n" +
+        "        const a = d['k'];\n" +
+        "        const b = d['price'];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)d).get("k")');
+        expect(output).toContain('((java.util.Map<String, Object>)d).get("price")');
+        expect(output).not.toContain('Helpers.GetValue(d,');
+    });
+
+    test('non-literal keys keep the helper', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D, k: string): void {\n" +
+        "        const a = d[k];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(d, k)");
+        expect(output).not.toContain("((java.util.Map<String, Object>)d).get(k)");
+    });
+
+    test('any-typed containers keep the helper (nothing is proven)', () => {
+        const input =
+        "class T {\n" +
+        "    test(p: any): void {\n" +
+        "        const a = p['k'];\n" +
+        "        const b = p[0];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(p, "k")');
+        expect(output).toContain("Helpers.GetValue(p, 0)");
+    });
+
+    test('string containers keep the helper (index access yields a char)', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const a = s['abc'];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(s, "abc")');
+    });
+
+    test('nullable containers keep the helper (a null container must stay null)', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D | undefined): void {\n" +
+        "        const a = d['k'];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(d, "k")');
+    });
+
+    test('tuple reads go native inside the required elements and keep the helper outside', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(tup: [any, D]): void {\n" +
+        "        const a = tup[1];\n" +
+        "        const b = tup[4];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.List<Object>)tup).get(1)");
+        expect(output).toContain("Helpers.GetValue(tup, 4)");
+    });
+
+    test('non-tuple array reads keep the helper (get() would throw out of range)', () => {
+        const input =
+        "class T {\n" +
+        "    test(arr: number[], symbols: string[]): void {\n" +
+        "        const a = arr[0];\n" +
+        "        const b = symbols[1];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(arr, 0)");
+        expect(output).toContain("Helpers.GetValue(symbols, 1)");
+    });
+
+    test('element writes keep the base emission (only reads go native)', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D, arr: number[]): void {\n" +
+        "        d['x'] = 1;\n" +
+        "        d['x'] += 1;\n" +
+        "        arr[0] = 5;\n" +
+        "        this.something(d, arr);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(d, "x", 1)');
+        expect(output).toContain("Helpers.addElementToObject(arr, 0, 5)");
+        expect(output).toContain('((java.util.HashMap<String, Object>)d).get("x") = Helpers.add(');
+    });
+
+    test('comparison operators are reads, not writes (regression: !== is not an assignment)', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D): void {\n" +
+        "        if (d['k'] !== undefined && d['k'] !== false) {\n" +
+        "            this.something(d);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('!Helpers.isEqual(((java.util.Map<String, Object>)d).get("k"), null)');
+        expect(output).not.toContain('!Helpers.isEqual(Helpers.GetValue(d, "k"), null)');
+    });
+});
