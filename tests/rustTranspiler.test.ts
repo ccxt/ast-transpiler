@@ -164,7 +164,131 @@ describe('rust transpiling tests', () => {
         "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('while');
-        expect(output).toContain('is_less_than(&i, &Value::Int(10))');
+        // Both operands are checker-typed numbers — native f64 comparison.
+        expect(output).toContain('i.as_f64().unwrap_or(f64::NAN) < Value::Int(10).as_f64().unwrap_or(f64::NAN)');
+    });
+
+    // Numeric comparisons: numbers go native, everything else keeps the helper
+    test('less than on typed numbers compares natively', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "if (a < b) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) < b.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_less_than(');
+    });
+
+    test('less than or equal on typed numbers compares natively', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "if (a <= b) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) <= b.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_less_than_or_equal(');
+    });
+
+    test('greater than on typed numbers compares natively', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "if (a > b) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) > b.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_greater_than(');
+    });
+
+    test('greater than or equal on typed numbers compares natively', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "if (a >= b) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) >= b.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_greater_than_or_equal(');
+    });
+
+    test('number literal operand compares natively', () => {
+        const ts =
+        "let a = 1;\n" +
+        "if (a > 0) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) > Value::Int(0).as_f64().unwrap_or(f64::NAN)');
+    });
+
+    test('native comparison in a value position is boxed in Value::Bool', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "const r = a >= b;";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut r: Value = Value::Bool(a.as_f64().unwrap_or(f64::NAN) >= b.as_f64().unwrap_or(f64::NAN));');
+    });
+
+    test('native comparison as a ternary condition stays a bare bool', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "const r = a > b ? 1 : 2;";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('ternary(a.as_f64().unwrap_or(f64::NAN) > b.as_f64().unwrap_or(f64::NAN), Value::Int(1), Value::Int(2))');
+    });
+
+    test('native comparison as a logical operand stays a bare bool', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "const c = false;\n" +
+        "if (a > b || c) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) > b.as_f64().unwrap_or(f64::NAN) || is_true(&c)');
+    });
+
+    test('parenthesized native comparison under ! stays a bare bool', () => {
+        const ts =
+        "let a = 1;\n" +
+        "let b = 2;\n" +
+        "if (!(a < b)) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a.as_f64().unwrap_or(f64::NAN) < b.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('Value::Bool(a.as_f64()');
+    });
+
+    test('string comparison keeps the helper', () => {
+        const ts =
+        "let a = 'x';\n" +
+        "let b = 'y';\n" +
+        "if (a < b) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_less_than(&a, &b)');
+    });
+
+    test('any-typed comparison keeps the helper', () => {
+        const ts =
+        "let a: any = 1;\n" +
+        "let b: any = 2;\n" +
+        "if (a < b) {\n" +
+        "    const x = 1;\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_less_than(&a, &b)');
     });
 
     test('object keys', () => {

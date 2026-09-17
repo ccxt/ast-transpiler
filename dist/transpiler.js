@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -7554,6 +7554,52 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `&${expr}`;
   }
+  // TS `number` / number-literal type proof for a comparison operand. Unions
+  // (`number | undefined`) and `any` are rejected — those keep the helper.
+  isNumberTyped(node) {
+    const type = this.getChecker().getTypeAtLocation(node);
+    if (type === void 0) {
+      return false;
+    }
+    return (type.flags & (ts7.TypeFlags.Number | ts7.TypeFlags.NumberLiteral)) !== 0;
+  }
+  // Positions whose emitted Rust is a native `bool`: if/while/do/for
+  // conditions, `? :` conditions, `!` operands and `&&` / `||` operands.
+  // Parentheses are transparent.
+  isBooleanPosition(node) {
+    let current = node;
+    let parent = current.parent;
+    while (parent !== void 0 && ts7.isParenthesizedExpression(parent)) {
+      current = parent;
+      parent = parent.parent;
+    }
+    if (parent === void 0) {
+      return false;
+    }
+    switch (parent.kind) {
+      case SyntaxKind4.IfStatement:
+      case SyntaxKind4.WhileStatement:
+      case SyntaxKind4.DoStatement:
+        return parent.expression === current;
+      case SyntaxKind4.ForStatement:
+        return parent.condition === current;
+      case SyntaxKind4.ConditionalExpression:
+        return parent.condition === current;
+      case SyntaxKind4.PrefixUnaryExpression:
+        return parent.operator === SyntaxKind4.ExclamationToken;
+      case SyntaxKind4.BinaryExpression:
+        return parent.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || parent.operatorToken.kind === SyntaxKind4.BarBarToken;
+    }
+    return false;
+  }
+  // `is_less_than` & co. compare two `Value`s and answer `false` for
+  // non-numbers; with both operands checker-typed numbers the same f64
+  // comparison runs natively on `Value::as_f64()` unwraps.
+  printNativeNumericComparison(node, operator, leftText, rightText) {
+    const unwrap = (text) => `${text}.as_f64().unwrap_or(f64::NAN)`;
+    const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
+    return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
+  }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
     const right = node.right;
@@ -7624,6 +7670,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `${leftText} = subtract(&${leftText}, &${rightText})`;
     }
     if (op in this.binaryExpressionsWrappers) {
+      const nativeOperator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+      if (nativeOperator !== void 0 && this.isNumberTyped(left) && this.isNumberTyped(right)) {
+        return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
+      }
       const [fnName, close] = this.binaryExpressionsWrappers[op];
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
@@ -8182,6 +8232,13 @@ _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.GreaterThanToken,
   SyntaxKind4.GreaterThanEqualsToken
 ]);
+// Comparison helpers that can be replaced by a native numeric operator.
+_RustTranspiler.NATIVE_COMPARISON_OPERATORS = {
+  [SyntaxKind4.LessThanToken]: "<",
+  [SyntaxKind4.LessThanEqualsToken]: "<=",
+  [SyntaxKind4.GreaterThanToken]: ">",
+  [SyntaxKind4.GreaterThanEqualsToken]: ">="
+};
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts
