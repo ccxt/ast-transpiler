@@ -6034,7 +6034,7 @@ ${this.getIden(identation)}`;
     return `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
-    return `Contains(${name},${parsedArg})`;
+    return `Contains(${name}, ${parsedArg})`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
     return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;

@@ -2887,7 +2887,7 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `Contains(${name},${parsedArg})`;
+        return `Contains(${name}, ${parsedArg})`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
