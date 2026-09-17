@@ -932,16 +932,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
-            let arrayBindingStatement =  `${this.getIden(identation)}${syntheticName} := ${this.printNode(declaration.initializer, 0)};\n`;
+            // gofmt drops every redundant statement terminator: Go statements are
+            // newline-separated, so the joins below must not emit ';'
+            let arrayBindingStatement =  `${this.getIden(identation)}${syntheticName} := ${this.printNode(declaration.initializer, 0)}\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
                 // const parsedType = this.getTypeFromRawType(type);
-                const statement = this.getIden(identation) + `${e} := GetValue(${syntheticName},${index})`;
+                const statement = this.getIden(identation) + `${e} := GetValue(${syntheticName}, ${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
+                    arrayBindingStatement += statement + "\n";
                 } else {
-                    // printStatement adds the last ;
                     arrayBindingStatement += statement;
                 }
             });
@@ -1254,15 +1255,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
+            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
 
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName},${index})`;
+                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
+                    arrayBindingStatement += statement + "\n";
                 } else {
-                    // printStatement adds the last ;
                     arrayBindingStatement += statement;
                 }
             });
@@ -2269,12 +2269,14 @@ ${this.getIden(identation)}${returnStatement}`;
                     if (isClassDeclaration){
                         // return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
                     } else {
-                        return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg});return nil;`;
+                        // Go has no statement terminator: the two statements go on
+                        // their own lines (gofmt splits `a; b` exactly like this)
+                        return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg})\n${this.getIden(identation)}return nil`;
                     }
                 }
                 return this.getIden(identation) + `panic(${id.escapedText}(${parsedArg}))${this.LINE_TERMINATOR}`;
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
-                return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
+                return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg})`;
             }
             return super.printThrowStatement(node, identation);
         }
@@ -2324,7 +2326,7 @@ ${this.getIden(identation)}${returnStatement}`;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
+            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
@@ -2336,11 +2338,10 @@ ${this.getIden(identation)}${returnStatement}`;
                 const castExp = parsedType ? `(${parsedType})` : "";
 
                 // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}),${index})`;
+                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
+                    arrayBindingStatement += statement + "\n";
                 } else {
-                    // printStatement adds the last ;
                     arrayBindingStatement += statement;
                 }
             });
