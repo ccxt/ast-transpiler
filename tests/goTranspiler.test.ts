@@ -666,7 +666,12 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         // the direct call IS the concurrent start now
         expect(output).toContain("var spotMarketPromise any = this.FetchSpotMarkets(params)");
         expect(output).toContain("var swapMarketPromise any = this.FetchSwapMarkets(params)");
-        expect(output).toContain("spotMarketswapMarketVariable := (<-promiseAll([]any{spotMarketPromise, swapMarketPromise}));");
+        expect(output).toContain("spotMarketswapMarketVariable := (<-promiseAll([]any{spotMarketPromise, swapMarketPromise}))");
+        // the array binding is newline-separated Go: no explicit ';' terminators,
+        // and the GetValue index argument is separated by a space
+        expect(output).toContain("spotMarket := GetValue(spotMarketswapMarketVariable, 0)");
+        expect(output).toContain("swapMarket := GetValue(spotMarketswapMarketVariable, 1)");
+        expect(output).not.toMatch(/;[ \t]*\n/);
         // no call-site wrapper of any kind
         expect(output).not.toContain("Spawn");
         expect(output).not.toContain(".Await()");

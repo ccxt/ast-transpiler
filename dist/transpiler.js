@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4530,12 +4530,12 @@ func New${this.capitalize(this.className)}() *${this.className} {
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
       const syntheticName = parsedArrayBindingElements.join("") + "Variable";
-      let arrayBindingStatement = `${this.getIden(identation)}${syntheticName} := ${this.printNode(declaration.initializer, 0)};
+      let arrayBindingStatement = `${this.getIden(identation)}${syntheticName} := ${this.printNode(declaration.initializer, 0)}
 `;
       parsedArrayBindingElements.forEach((e, index) => {
-        const statement = this.getIden(identation) + `${e} := GetValue(${syntheticName},${index})`;
+        const statement = this.getIden(identation) + `${e} := GetValue(${syntheticName}, ${index})`;
         if (index < parsedArrayBindingElements.length - 1) {
-          arrayBindingStatement += statement + ";\n";
+          arrayBindingStatement += statement + "\n";
         } else {
           arrayBindingStatement += statement;
         }
@@ -4757,12 +4757,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const arrayBindingPatternElements = left.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
       const syntheticName = parsedArrayBindingElements.join("") + "Variable";
-      let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};
+      let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}
 `;
       parsedArrayBindingElements.forEach((e, index) => {
-        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName},${index})`;
+        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
         if (index < parsedArrayBindingElements.length - 1) {
-          arrayBindingStatement += statement + ";\n";
+          arrayBindingStatement += statement + "\n";
         } else {
           arrayBindingStatement += statement;
         }
@@ -5493,12 +5493,13 @@ ${this.getIden(identation)}`;
           const isClassDeclaration = declarations.find((l) => l.kind === ts5.SyntaxKind.InterfaceDeclaration || l.kind === ts5.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
           } else {
-            return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg});return nil;`;
+            return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg})
+${this.getIden(identation)}return nil`;
           }
         }
         return this.getIden(identation) + `panic(${id.escapedText}(${parsedArg}))${this.LINE_TERMINATOR}`;
       } else if (expression.expression.kind === ts5.SyntaxKind.ElementAccessExpression) {
-        return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
+        return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg})`;
       }
       return super.printThrowStatement(node, identation);
     }
@@ -5532,16 +5533,16 @@ ${this.getIden(identation)}`;
       const arrayBindingPatternElements = left.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
       const syntheticName = parsedArrayBindingElements.join("") + "Variable";
-      let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};
+      let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}
 `;
       parsedArrayBindingElements.forEach((e, index) => {
         const leftElement = arrayBindingPatternElements[index];
         const leftType = this.getChecker().getTypeAtLocation(leftElement);
         const parsedType = this.getTypeFromRawType(leftType);
         const castExp = parsedType ? `(${parsedType})` : "";
-        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}),${index})`;
+        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
         if (index < parsedArrayBindingElements.length - 1) {
-          arrayBindingStatement += statement + ";\n";
+          arrayBindingStatement += statement + "\n";
         } else {
           arrayBindingStatement += statement;
         }
