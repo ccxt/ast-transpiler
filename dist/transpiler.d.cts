@@ -728,6 +728,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goCompositeLitHasTypeName(text: string, braceIndex: number): boolean;
     goSkipBalanced(text: string, start: number, open: string, close: string): number;
     goSkipQuoted(text: string, start: number): number;
+    printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;

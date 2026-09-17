@@ -4317,14 +4317,13 @@ func New${this.capitalize(this.className)}() *${this.className} {
     let functionDef = this.printFunctionDefinition(node, identation);
     const funcBody = this.printFunctionBody(node, identation, isAsync);
     if (!isAsync) {
-      functionDef += funcBody;
-      return this.printNodeCommentsIfAny(node, identation, functionDef);
+      return functionDef + funcBody;
     }
     const goName = this.transformMethodNameIfNeeded(node.name.escapedText);
     const bodyName = this.getAsyncBodyName(node, goName);
     const trampoline = functionDef + this.printAsyncTrampolineBlock(node, identation, bodyName);
     const bodyDef = `${this.getIden(identation)}func ${bodyName}(${this.printAsyncBodyParameters(node)}) ${this.DEFAULT_RETURN_TYPE} `;
-    return this.printNodeCommentsIfAny(node, identation, trampoline) + "\n" + bodyDef + funcBody;
+    return trampoline + "\n" + bodyDef + funcBody;
   }
   /**
    * Name of the sibling *body* method/function an async core hands its work to.
@@ -5553,6 +5552,25 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       index += 1;
     }
     return text.length;
+  }
+  // gofmt keeps a comment group that the source separates from the following
+  // declaration by a blank line as a free-standing comment; joined to it, it becomes
+  // the declaration's doc comment and its indented lines are re-laid out as a code
+  // block. The blank line is preserved so the emitted text keeps the source's shape.
+  printLeadingComments(node, identation) {
+    const printed = super.printLeadingComments(node, identation);
+    if (printed.length === 0) {
+      return printed;
+    }
+    const fullText = this.getSrc().getFullText();
+    const ranges = ts5.getLeadingCommentRanges(fullText, node.pos) ?? [];
+    const last = ranges[ranges.length - 1];
+    if (last === void 0) {
+      return printed;
+    }
+    const gap = fullText.slice(last.end, node.getStart());
+    const detached = (gap.match(/\n/g) ?? []).length > 1;
+    return detached ? printed + "\n" : printed;
   }
   printNode(node, identation = 0) {
     const isStatement = node !== void 0 && ts5.isStatement(node) && node.kind !== ts5.SyntaxKind.Block;
