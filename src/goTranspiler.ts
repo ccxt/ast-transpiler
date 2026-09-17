@@ -1284,9 +1284,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the section aligned. A trailing comment is one more tabwriter cell, so comments
     // line up after the widest `value,` cell of the run of consecutive commented entries.
     printObjectLiteralBody(node, identation) {
-        // composite literal elements are printed at depth 1 again (go/printer exprList(..., 1, ...))
-        const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
-        return this.alignGoCompositeEntries(entries).join("\n");
+        // composite literal elements are printed at depth 1 again (go/printer exprList(..., 1, ...));
+        // a literal nested in an entry's value is laid out relative to that entry
+        const previousLevel = this.goStatementLevel;
+        this.goStatementLevel = identation + 1;
+        try {
+            const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
+            return this.alignGoCompositeEntries(entries).join("\n");
+        } finally {
+            this.goStatementLevel = previousLevel;
+        }
     }
 
     // Applies the gofmt column alignment to already-printed `key: value` entries (the
@@ -1565,12 +1572,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    printWrappedUnknownThisProperty(node) {
+    printWrappedUnknownThisProperty(node, identation = 0) {
         const type = this.getChecker().getResolvedSignature(node);
         if (type?.declaration === undefined) {
-            // the emitted call carries the property name as its first argument
+            // the emitted call carries the property name as its first argument; arguments
+            // print at the call's level so a multi-line literal keeps its nesting
             const argumentDepth = this.goExprDepth + ((node.arguments?.length > 0) ? 1 : 0);
-            let parsedArguments = node.arguments?.map((a) => this.goWithExprDepth(argumentDepth, () => this.printNode(a, 0))).join(", ");
+            let parsedArguments = node.arguments?.map((a) => this.goWithExprDepth(argumentDepth, () => this.printNode(a, identation).trimStart())).join(", ");
             parsedArguments = parsedArguments ? parsedArguments : "";
             const propName = node.expression?.name.escapedText;
             // const isAsyncDecl = true;
@@ -1643,7 +1651,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             // wrap unknown property this.X calls
             if (leftSideText === this.THIS_TOKEN || leftSide.getFullText().indexOf("(this as any)") > -1) { // double check this
-                const res = this.printWrappedUnknownThisProperty(node);
+                const res = this.printWrappedUnknownThisProperty(node, identation);
                 if (res) {
                     return res;
                 }
@@ -1767,12 +1775,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
 
             const lastKey = keyStrs[keyStrs.length - 1];
-            // an object-literal value spans lines: it is printed at the statement's own
-            // level so its body lands one level deeper and its closing brace at the
-            // statement level (printObjectLiteralExpression adds no indentation prefix)
-            const rhs     = (right.kind === ts.SyntaxKind.ObjectLiteralExpression)
-                ? this.printNode(right, identation)
-                : this.printNode(right, 0);
+            // the value is printed at the statement's own level so a multi-line object
+            // literal (bare, or nested inside a call argument) lands one level deeper with
+            // its closing brace at the statement level; the leading indentation is dropped
+            const rhs     = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
 
             return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -2195,11 +2201,33 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return text.length;
     }
 
+    // level of the statement being printed: a multi-line composite literal is laid out
+    // relative to it (go/printer), whatever level the expression printers hand down
+    goStatementLevel = 0;
+
     printNode(node, identation = 0): string {
-        const printed = super.printNode(node, identation);
-        // the if/for/switch conditions go through here (printCondition resolves the
-        // bool and the falsy/truthy paths before printing the node's text)
-        return this.goControlClauseParens(node, printed);
+        const isStatement = node !== undefined && ts.isStatement(node) && node.kind !== ts.SyntaxKind.Block;
+        const previousLevel = this.goStatementLevel;
+        if (isStatement) {
+            this.goStatementLevel = identation;
+        }
+        try {
+            const printed = super.printNode(node, identation);
+            // the if/for/switch conditions go through here (printCondition resolves the
+            // bool and the falsy/truthy paths before printing the node's text)
+            return this.goControlClauseParens(node, printed);
+        } finally {
+            this.goStatementLevel = previousLevel;
+        }
+    }
+
+    // composite literal body one level deeper than the statement, closing brace at the
+    // statement's level; the leading indentation belongs to the enclosing printer
+    printObjectLiteralExpression(node, identation) {
+        const level = this.goStatementLevel;
+        const objectBody = this.printObjectLiteralBody(node, level);
+        const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(level) : objectBody;
+        return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
     }
 
     printCondition(node, identation) {
@@ -3163,12 +3191,11 @@ ${this.getIden(identation)}${returnStatement}`;
             if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
-                // the value is usually a multi-line object literal, so it is printed at the
-                // statement's own level: its body then lands one level deeper and its closing
-                // brace at the statement level (printObjectLiteralExpression adds no prefix)
-                const value = (right.kind === ts.SyntaxKind.ObjectLiteralExpression)
-                    ? this.printNode(right, identation)
-                    : rightSide;
+                // the value is printed at the statement's own level so a multi-line object
+                // literal (bare, or nested inside a call argument) lands one level deeper with
+                // its closing brace at the statement level; the leading indentation a call
+                // printer adds is dropped, since the value sits after the `(`
+                const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
                 return `AddElementToObject(${leftSide}, ${propName}, ${value})`;
             }
 

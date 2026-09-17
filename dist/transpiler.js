@@ -4054,6 +4054,9 @@ var GoTranspiler = class extends BaseTranspiler {
     // per-occurrence cost at one scope scan per declaration.
     this.goDeclaredTypeCache = /* @__PURE__ */ new Map();
     this.goDeclaredTypeInProgress = /* @__PURE__ */ new Set();
+    // level of the statement being printed: a multi-line composite literal is laid out
+    // relative to it (go/printer), whatever level the expression printers hand down
+    this.goStatementLevel = 0;
     // -----------------------------------------------------------------------
     // gofmt-compatible spacing of the binary expressions this printer emits
     // -----------------------------------------------------------------------
@@ -4826,8 +4829,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // the section aligned. A trailing comment is one more tabwriter cell, so comments
   // line up after the widest `value,` cell of the run of consecutive commented entries.
   printObjectLiteralBody(node, identation) {
-    const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
-    return this.alignGoCompositeEntries(entries).join("\n");
+    const previousLevel = this.goStatementLevel;
+    this.goStatementLevel = identation + 1;
+    try {
+      const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
+      return this.alignGoCompositeEntries(entries).join("\n");
+    } finally {
+      this.goStatementLevel = previousLevel;
+    }
   }
   // Applies the gofmt column alignment to already-printed `key: value` entries (the
   // entries must not carry the separating comma). Reused by the hand-written composite
@@ -5063,11 +5072,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
-  printWrappedUnknownThisProperty(node) {
+  printWrappedUnknownThisProperty(node, identation = 0) {
     const type = this.getChecker().getResolvedSignature(node);
     if (type?.declaration === void 0) {
       const argumentDepth = this.goExprDepth + (node.arguments?.length > 0 ? 1 : 0);
-      let parsedArguments = node.arguments?.map((a) => this.goWithExprDepth(argumentDepth, () => this.printNode(a, 0))).join(", ");
+      let parsedArguments = node.arguments?.map((a) => this.goWithExprDepth(argumentDepth, () => this.printNode(a, identation).trimStart())).join(", ");
       parsedArguments = parsedArguments ? parsedArguments : "";
       const propName = node.expression?.name.escapedText;
       const argsArray = `${parsedArguments}`;
@@ -5123,7 +5132,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const leftSide = node.expression?.expression;
       const leftSideText = leftSide ? this.printNode(leftSide, 0) : void 0;
       if (leftSideText === this.THIS_TOKEN || leftSide.getFullText().indexOf("(this as any)") > -1) {
-        const res = this.printWrappedUnknownThisProperty(node);
+        const res = this.printWrappedUnknownThisProperty(node, identation);
         if (res) {
           return res;
         }
@@ -5196,7 +5205,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
       }
       const lastKey = keyStrs[keyStrs.length - 1];
-      const rhs = right.kind === ts5.SyntaxKind.ObjectLiteralExpression ? this.printNode(right, identation) : this.printNode(right, 0);
+      const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (op === ts5.SyntaxKind.PlusEqualsToken && left.kind === ts5.SyntaxKind.ElementAccessExpression) {
@@ -5546,8 +5555,25 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     return text.length;
   }
   printNode(node, identation = 0) {
-    const printed = super.printNode(node, identation);
-    return this.goControlClauseParens(node, printed);
+    const isStatement = node !== void 0 && ts5.isStatement(node) && node.kind !== ts5.SyntaxKind.Block;
+    const previousLevel = this.goStatementLevel;
+    if (isStatement) {
+      this.goStatementLevel = identation;
+    }
+    try {
+      const printed = super.printNode(node, identation);
+      return this.goControlClauseParens(node, printed);
+    } finally {
+      this.goStatementLevel = previousLevel;
+    }
+  }
+  // composite literal body one level deeper than the statement, closing brace at the
+  // statement's level; the leading indentation belongs to the enclosing printer
+  printObjectLiteralExpression(node, identation) {
+    const level = this.goStatementLevel;
+    const objectBody = this.printObjectLiteralBody(node, level);
+    const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(level) : objectBody;
+    return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
   }
   printCondition(node, identation) {
     if (node?.kind === ts5.SyntaxKind.Identifier) {
@@ -6254,7 +6280,7 @@ ${this.getIden(identation)}return nil`;
       if (left.kind === ts5.SyntaxKind.ElementAccessExpression) {
         const leftSide = this.printNode(elementAccess.expression, 0);
         const propName = this.printNode(elementAccess.argumentExpression, 0);
-        const value = right.kind === ts5.SyntaxKind.ObjectLiteralExpression ? this.printNode(right, identation) : rightSide;
+        const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
         return `AddElementToObject(${leftSide}, ${propName}, ${value})`;
       }
       if (right?.kind === ts5.SyntaxKind.AwaitExpression || rightSide.startsWith("<-this.callInternal")) {

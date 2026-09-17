@@ -706,7 +706,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): string;
-    printWrappedUnknownThisProperty(node: any): string;
+    printWrappedUnknownThisProperty(node: any, identation?: number): string;
     transformMethodNameIfNeeded(name: string): string;
     transformCallExpressionName(name: string, nameNode?: any): string;
     transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
@@ -728,7 +728,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goCompositeLitHasTypeName(text: string, braceIndex: number): boolean;
     goSkipBalanced(text: string, start: number, open: string, close: string): number;
     goSkipQuoted(text: string, start: number): number;
+    goStatementLevel: number;
     printNode(node: any, identation?: number): string;
+    printObjectLiteralExpression(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
