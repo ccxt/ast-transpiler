@@ -1132,6 +1132,19 @@ describe('csharp typed body locals', () => {
         expect(output).toContain("object found = this.safeString(item, \"id\")");
         expect(output).toContain("object count = this.safeInteger(item, \"count\")");
     });
+    test('a this-call the printer cannot resolve stays object — it prints callDynamically', () => {
+        // no class declares `safeString` here, so the printed call is
+        // `callDynamically(this, "safeString", ...)`, whose C# signature returns `object`:
+        // the concrete-type table describes the same-name base helper, not this wrapper
+        const input =
+        "function f () {\n" +
+        "    const x = this.safeString({}, 'k');\n" +
+        "    return x;\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object x = callDynamically(this, \"safeString\"");
+        expect(output).not.toContain("string? x =");
+    });
     test('a local appended to, incremented or spread stays object', () => {
         const input =
         "class Exchange {\n" +
@@ -1267,7 +1280,8 @@ describe('csharp typed body locals', () => {
         "    return undefined;\n" +
         "}";
         const guardedOutput = transpiler.transpileCSharp(guarded).content;
-        expect(guardedOutput).toContain('if (isTrue(inOp(parameters, "x")))');
+        // the `in` guard prints a C# bool of its own (`inOp` returns bool): no isTrue round-trip
+        expect(guardedOutput).toContain('if (inOp(parameters, "x"))');
         expect(guardedOutput).toContain('object y = ((IDictionary<string,object>)parameters)["x"];');
         // the else-branch of a negated guard runs only when the key is there
         const negatedElse =
@@ -1708,12 +1722,13 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain('if (isTrue(this.options.ContainsKey("cached")))');
+        // both members print a C# bool, so the isTrue round-trip is gone with the helper
+        expect(output).toContain('if (this.options.ContainsKey("cached"))');
         // `urls` is a hand-written `object` field whose box is always a dict: the same
         // (IDictionary<string, object>) cast the helper body applies
-        expect(output).toContain('if (isTrue(((IDictionary<string, object>)this.urls).ContainsKey("test")))');
+        expect(output).toContain('if (((IDictionary<string, object>)this.urls).ContainsKey("test"))');
         // the key is not proven a string -> the runtime helper keeps its coercion
-        expect(output).toContain('if (isTrue(inOp(this.options, key)))');
+        expect(output).toContain('if (inOp(this.options, key))');
     });
     test('length on a list this printer typed itself emits Count', () => {
         const input =
@@ -1745,7 +1760,7 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         // printed C# type exists -> getArrayLength / inOp stay
         expect(output).toContain('int n = getArrayLength(arr);');
         expect(output).toContain('int m = getArrayLength(obj);');
-        expect(output).toContain('if (isTrue(inOp(obj, "x")))');
+        expect(output).toContain('if (inOp(obj, "x"))'); // inOp returns a C# bool: no isTrue round-trip
     });
     test('a dictionary local of a call this printer typed emits ContainsKey', () => {
         const input =
@@ -1786,6 +1801,6 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         // ContainsKey takes a string, and a parameter is still `object` in the generated
         // C# (its narrowing happens in a later pass), so the helper must stay
         expect(output).toContain('public virtual object main(object key)');
-        expect(output).toContain('if (isTrue(inOp(this.options, key)))');
+        expect(output).toContain('if (inOp(this.options, key))');
     });
 });

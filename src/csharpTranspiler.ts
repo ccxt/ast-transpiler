@@ -1319,6 +1319,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         const methodName = expression.name?.escapedText as string;
         const target = expression.expression;
         if (target?.kind === ts.SyntaxKind.ThisKeyword) {
+            // the table names the C# signature of the same-name base helper, which the printed
+            // call only binds when the printer resolves the callee. An unresolvable one
+            // (`this.proxyUrlCallback(...)` — a property holding the function — or a
+            // checker-less program) prints `callDynamically(this, "name", ...)` instead, and
+            // that helper returns `object`: no concrete type may be named for its value
+            if (!this.csharpCalleeResolves(initializer)) {
+                return undefined;
+            }
             return CSHARP_THIS_RETURN_TYPES[methodName];
         }
         if (target?.kind === ts.SyntaxKind.Identifier) {
@@ -1328,6 +1336,19 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
         }
         return CSHARP_METHOD_RETURN_TYPES[methodName];
+    }
+
+    // mirrors printWrappedUnknownThisProperty: a `this.<name>(...)` call whose callee the
+    // checker cannot resolve is printed as `callDynamically(this, "<name>", ...)`, whose C#
+    // signature returns `object` whatever the name says
+    csharpCalleeResolves(node): boolean {
+        let signature;
+        try {
+            signature = this.getChecker().getResolvedSignature(node);
+        } catch (e) {
+            return false;
+        }
+        return signature?.declaration !== undefined;
     }
 
     // the concrete C# type the initializer already produces, or undefined when the
