@@ -714,6 +714,9 @@ declare class GoTranspiler extends BaseTranspiler {
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    printParenthesizedExpression(node: any, identation: any): string;
+    goIsParenthesizedExpression(printed: string): boolean;
+    goSkipGoLiteral(text: string, start: number): number;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;

@@ -5278,6 +5278,82 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
+  // Go's printer never wraps an already parenthesised expression: gofmt prints a
+  // ParenExpr whose child is itself a ParenExpr without its own parentheses
+  // (`((x))` prints as `(x)`), because the text it is handed is re-parsed that way.
+  // Our output is re-parsed exactly like that, so a source parenthesis around an
+  // expression that already prints parenthesised -- an inlined comparison, a nested
+  // parenthesised expression, an EvalTruthy(...) arm -- must emit the single pair
+  // gofmt keeps instead of doubling it.
+  printParenthesizedExpression(node, identation) {
+    const expression = node.expression;
+    if (expression?.kind === ts5.SyntaxKind.AsExpression) {
+      return this.getIden(identation) + this.printNode(expression, 0);
+    }
+    if (expression?.kind === ts5.SyntaxKind.ArrowFunction) {
+      return "";
+    }
+    const printed = this.printNode(expression, 0);
+    if (this.goIsParenthesizedExpression(printed)) {
+      return this.getIden(identation) + printed;
+    }
+    return this.getIden(identation) + this.LEFT_PARENTHESIS + printed + this.RIGHT_PARENTHESIS;
+  }
+  // true when the printed text is exactly one parenthesised expression: its first
+  // `(` closes on the last non-space character. Literals and comments are skipped
+  // so a parenthesis inside them cannot unbalance the scan.
+  goIsParenthesizedExpression(printed) {
+    const text = printed.trimStart();
+    if (text[0] !== "(") {
+      return false;
+    }
+    let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === "/" && text[i + 1] === "/") {
+        return false;
+      }
+      if (c === "/" && text[i + 1] === "*") {
+        const end = text.indexOf("*/", i + 2);
+        if (end < 0) {
+          return false;
+        }
+        i = end + 1;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        i = this.goSkipGoLiteral(text, i);
+        if (i < 0) {
+          return false;
+        }
+        continue;
+      }
+      if (c === "(") {
+        depth += 1;
+      } else if (c === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          return text.substring(i + 1).trim().length === 0;
+        }
+      }
+    }
+    return false;
+  }
+  // index of the quote closing the Go string/rune literal that starts at `start`, -1 when unterminated
+  goSkipGoLiteral(text, start) {
+    const quote = text[start];
+    for (let i = start + 1; i < text.length; i++) {
+      const c = text[i];
+      if (c === "\\") {
+        i += 1;
+        continue;
+      }
+      if (c === quote) {
+        return i;
+      }
+    }
+    return -1;
+  }
   // castVariableAssignmentIfNeeded(left, right, identation) {
   //     const leftType = this.getChecker().getTypeAtLocation(left);
   //     const rightType = this.getChecker().getTypeAtLocation(right);
