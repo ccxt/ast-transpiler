@@ -656,8 +656,242 @@ export class RustTranspiler extends BaseTranspiler {
             return `${this.getIden(identation)}let mut ${varName} = ${parsedValue}`;
         }
 
+        const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
+        if (boolValue !== undefined) {
+            return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
+        }
+
         return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
     }
+
+    // ── native-typed locals ───────────────────────────────────────────────────
+    //
+    // A local is declared `bool` (instead of `Value`) when its initializer is
+    // already a bool-valued Rust expression and every use is a condition sink
+    // (`is_true(&x)`) — the one sink that accepts a native bool today.
+    //
+    // `is_true` is generic over `IsTruthy` (impl for `bool`/`&bool` in
+    // runtime.rs); every other sink takes `&Value`, so any other use keeps the
+    // local boxed. Bools come in two shapes: helpers whose Rust return type is
+    // already `bool` (below), and the printer's own `Value::Bool(...)` box,
+    // which the declaration drops at the init site.
+
+    private static readonly RUST_BOOL_RESULT_HELPERS = new Set([
+        'is_true', 'is_equal', 'is_greater_than', 'is_greater_than_or_equal',
+        'is_less_than', 'is_less_than_or_equal', 'is_array', 'is_object',
+        'is_string', 'is_number', 'is_bool', 'is_integer', 'is_function',
+        'is_instance', 'starts_with', 'ends_with', 'in_op', 'contains',
+    ]);
+
+    // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
+    peelValueBoolBox(printedValue: string): string | undefined {
+        const prefix = 'Value::Bool(';
+        if (!printedValue.startsWith(prefix) || !printedValue.endsWith(')')) {
+            return undefined;
+        }
+        let depth = 0;
+        for (let i = prefix.length - 1; i < printedValue.length; i++) {
+            const char = printedValue[i];
+            if (char === '"') {
+                i++;
+                while (i < printedValue.length && printedValue[i] !== '"') {
+                    if (printedValue[i] === '\\') i++;
+                    i++;
+                }
+                continue;
+            }
+            if (char === '(') depth++;
+            else if (char === ')') {
+                depth--;
+                if (depth === 0) {
+                    return i === printedValue.length - 1 ? printedValue.slice(prefix.length, i) : undefined;
+                }
+            }
+        }
+        return undefined;
+    }
+
+    // `((expr))` → `expr` — a redundant layer kept from the TS source; the
+    // right-hand side of a declaration binds the whole expression anyway.
+    stripOuterParens(printedValue: string): string {
+        let value = printedValue.trim();
+        while (value.startsWith('(') && value.endsWith(')')) {
+            let depth = 0;
+            let closesAtEnd = true;
+            for (let i = 0; i < value.length; i++) {
+                const char = value[i];
+                if (char === '"') {
+                    i++;
+                    while (i < value.length && value[i] !== '"') {
+                        if (value[i] === '\\') i++;
+                        i++;
+                    }
+                    continue;
+                }
+                if (char === '(') depth++;
+                else if (char === ')') {
+                    depth--;
+                    if (depth === 0 && i !== value.length - 1) {
+                        closesAtEnd = false;
+                        break;
+                    }
+                }
+            }
+            if (!closesAtEnd || depth !== 0) break;
+            value = value.slice(1, -1).trim();
+        }
+        return value;
+    }
+
+    // `is_equal(...)` / `!is_true(...)` / `contains(...)` — bare bool helper calls.
+    printedBoolHelperCall(printedValue: string): boolean {
+        const stripped = printedValue.startsWith('!') ? printedValue.slice(1).trim() : printedValue;
+        const match = /^([a-z_][a-z0-9_]*)\(/.exec(stripped);
+        return match !== null && (RustTranspiler as any).RUST_BOOL_RESULT_HELPERS.has(match[1]);
+    }
+
+    // Source shapes the printer turns into a bool: comparisons, `&&`/`||`
+    // (each operand is is_true-wrapped), `!`, `in`, `instanceof`, true/false.
+    rustNodeIsBoolExpression(node): boolean {
+        switch (node?.kind) {
+        case SyntaxKind.TrueKeyword:
+        case SyntaxKind.FalseKeyword:
+            return true;
+        case SyntaxKind.ParenthesizedExpression:
+            return this.rustNodeIsBoolExpression(node.expression);
+        case SyntaxKind.PrefixUnaryExpression:
+            return node.operator === SyntaxKind.ExclamationToken;
+        case SyntaxKind.BinaryExpression:
+            return (RustTranspiler as any).COMPARISON_OPS.has(node.operatorToken.kind)
+                || node.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken
+                || node.operatorToken.kind === SyntaxKind.BarBarToken
+                || node.operatorToken.kind === SyntaxKind.InKeyword
+                || node.operatorToken.kind === SyntaxKind.InstanceOfKeyword;
+        }
+        return false;
+    }
+
+    rustTypeIsBoolean(node): boolean {
+        try {
+            const type = this.getChecker().getTypeAtLocation(node);
+            if ((type.flags & ts.TypeFlags.BooleanLike) !== 0) {
+                return true;
+            }
+            return this.getChecker().typeToString(type).trim() === 'boolean';
+        } catch (e) {
+            return false; // no checker type → keep the boxed form
+        }
+    }
+
+    rustEnclosingFunction(node) {
+        let current = node?.parent;
+        while (current) {
+            switch (current.kind) {
+            case SyntaxKind.MethodDeclaration:
+            case SyntaxKind.FunctionDeclaration:
+            case SyntaxKind.FunctionExpression:
+            case SyntaxKind.ArrowFunction:
+            case SyntaxKind.Constructor:
+            case SyntaxKind.SourceFile:
+                return current;
+            }
+            current = current.parent;
+        }
+        return undefined;
+    }
+
+    rustBindsName(node, name: string): boolean {
+        switch (node?.kind) {
+        case SyntaxKind.VariableDeclaration:
+        case SyntaxKind.Parameter:
+        case SyntaxKind.FunctionDeclaration:
+        case SyntaxKind.ClassDeclaration:
+        case SyntaxKind.PropertyDeclaration:
+        case SyntaxKind.FunctionExpression:
+        case SyntaxKind.ArrowFunction:
+            return node.name?.kind === SyntaxKind.Identifier && node.name.escapedText === name;
+        }
+        return false;
+    }
+
+    // Only these uses compile against a native `bool` local today: `is_true(&x)`
+    // (under any depth of `(...)`, `!`, `&&`/`||`), and the condition slot of
+    // if/while/for/ternary — all printed is_true-wrapped.
+    rustIdentifierUseIsCondition(node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while (parent) {
+            switch (parent.kind) {
+            case SyntaxKind.ParenthesizedExpression:
+                if (parent.expression !== current) return false;
+                break;
+            case SyntaxKind.PrefixUnaryExpression:
+                if (parent.operator !== SyntaxKind.ExclamationToken || parent.operand !== current) return false;
+                break;
+            case SyntaxKind.BinaryExpression:
+                if (parent.operatorToken.kind !== SyntaxKind.AmpersandAmpersandToken
+                    && parent.operatorToken.kind !== SyntaxKind.BarBarToken) return false;
+                break;
+            case SyntaxKind.IfStatement:
+            case SyntaxKind.WhileStatement:
+            case SyntaxKind.DoStatement:
+                return parent.expression === current;
+            case SyntaxKind.ForStatement:
+            case SyntaxKind.ConditionalExpression:
+                return parent.condition === current;
+            default:
+                return false;
+            }
+            current = parent;
+            parent = current.parent;
+        }
+        return false;
+    }
+
+    rustLocalUsesAcceptBool(declaration, sourceName: string): boolean {
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || sourceName === undefined) {
+            return false;
+        }
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) return;
+            if (n !== declaration && this.rustBindsName(n, sourceName)) {
+                safe = false; // a second binding of the name in scope — stay boxed
+                return;
+            }
+            if (n.kind === SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
+                if (!this.rustIdentifierUseIsCondition(n)) {
+                    safe = false;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    // `let x = <bool expr>` → the printed bool expression, or undefined.
+    getRustBoolLocalInitializer(declaration, printedValue: string): string | undefined {
+        const initializer = declaration.initializer;
+        if (initializer === undefined || declaration.name?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const inner = this.stripOuterParens(printedValue);
+        const peeled = this.peelValueBoolBox(inner);
+        if (peeled === undefined && !this.printedBoolHelperCall(inner) && !this.rustNodeIsBoolExpression(initializer)) {
+            return undefined;
+        }
+        if (!this.rustTypeIsBoolean(initializer)) {
+            return undefined;
+        }
+        if (!this.rustLocalUsesAcceptBool(declaration, declaration.name.escapedText)) {
+            return undefined;
+        }
+        return peeled !== undefined ? peeled : inner;
+    }
+
 
     printPropertyDeclaration(node, identation) {
         const name = this.printNode(node.name, 0);
