@@ -5,7 +5,7 @@ const SyntaxKind = ts.SyntaxKind;
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
-    'OBJECT_OPENING': 'map[string]any {',
+    'OBJECT_OPENING': 'map[string]any{',
     'ARRAY_OPENING_TOKEN': '[]any{',
     'ARRAY_CLOSING_TOKEN': '}',
     'PROPERTY_ASSIGNMENT_TOKEN': ':',

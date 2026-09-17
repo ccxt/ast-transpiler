@@ -288,7 +288,7 @@ describe('go transpiling tests', () => {
         expect(output).toContain("go this.fetchTickerBody(ch, symbol, optionalArgs...)");
         expect(output).toContain("fetchTickerBody(ch chan any, symbol any, optionalArgs ...any) any");
         // the defaults are unpacked in the BODY, not in the trampoline
-        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any {})");
+        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any{})");
         expect(output.indexOf("params := GetArg")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
     });
     test('a colliding body name is uniquified instead of clobbered', () => {
@@ -377,6 +377,22 @@ describe('go transpiling tests', () => {
         expect(output).toContain("recover()");
         expect(output).toContain("return ret__");
         expect(output).toContain("return ch");
+    });
+    test('object literals open with `map[string]any{`, never `map[string]any {` (gofmt)', () => {
+        // gofmt writes `map[string]any{` / `map[string]any{}`: a space before the brace
+        // puts one extra char on every object literal line of the generated tree.
+        const input =
+        "class Exchange {\n" +
+        "    fetchTicker(symbol: string) {\n" +
+        "        const empty = {};\n" +
+        "        const opts = { 'symbol': symbol, 'nested': { 'a': 1 } };\n" +
+        "        return [ empty, opts ];\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("map[string]any{");
+        expect(output).toContain("map[string]any{}");
+        expect(output).not.toContain("map[string]any {");
     });
 });
 
