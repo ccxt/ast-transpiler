@@ -211,8 +211,12 @@ export class RustTranspiler extends BaseTranspiler {
             const elements = left.elements;
             const rhs = this.printNode(right, 0);
             const tmpName = '__destr_tmp';
+            const nativeList = this.isProvenListExpression(right);
             const assignments = elements.map((e, idx) => {
                 const target = this.printNode(e, 0);
+                if (nativeList) {
+                    return `${target} = ${this.printNativeListIndex(tmpName, idx)}`;
+                }
                 return `${target} = get_value(&${tmpName}, &Value::Int(${idx}))`;
             }).join('; ');
             return `{ let ${tmpName} = ${rhs}; ${assignments}; }`;
@@ -323,8 +327,12 @@ export class RustTranspiler extends BaseTranspiler {
             const parsedElements = elements.map(e => this.printNode(e.name, 0));
             const syntheticName = parsedElements.join('') + 'Variable';
             let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
+            const nativeList = this.isProvenListExpression(declaration.initializer);
             parsedElements.forEach((e, idx) => {
-                const line = `${this.getIden(identation)}let mut ${e}: Value = get_value(&${syntheticName}, &Value::Int(${idx}))`;
+                const access = nativeList
+                    ? this.printNativeListIndex(syntheticName, idx)
+                    : `get_value(&${syntheticName}, &Value::Int(${idx}))`;
+                const line = `${this.getIden(identation)}let mut ${e}: Value = ${access}`;
                 stmt += idx < parsedElements.length - 1 ? line + ';\n' : line;
             });
             return stmt;
@@ -578,7 +586,197 @@ export class RustTranspiler extends BaseTranspiler {
             return `get_array_length(&${leftExpr})`;
         }
 
+        // Typed field on a checker-proven map local (`x.field`) reads natively;
+        // the ccxt post-pass otherwise rewrites it to `get_value(&x, "field")`.
+        if (ts.isIdentifier(node.name) && this.isShallowValueReceiver(node.expression) &&
+            this.isNativeAccessPositionSafe(node)) {
+            const native = this.printNativeMapAccess(leftExpr, node.expression, String(rightSide));
+            if (native) return native;
+        }
+
         return `${leftExpr}.${rightSide}`;
+    }
+
+    // ── native container access (`get_value(...)` -> `.get(...)`) ─────────────
+    // When the TypeScript checker proves the receiver is a plain Map/List value
+    // and the key is a literal, the runtime `get_value` key-marker / `__live_id`
+    // paths cannot apply, so the access is emitted natively. Missing keys still
+    // fall back to `Value::Null`.
+
+    /** Methods whose Rust counterpart takes `&mut self`: a `self.<field>` read in
+     *  their args must keep the `get_value(...)` shape the ccxt post-pass hoists. */
+    static readonly MUT_SELF_METHODS = new Set([
+        'watch', 'watch_multiple', 'fetch_order_book_snapshot', 'un_watch',
+        'client', 'spawn', 'delay', 'fetch_tickers', 'extend', 'fetch',
+        'send_evm_transaction',
+    ]);
+
+    toSnakeCaseName(name: string): string {
+        return name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2').replace(/([a-z\d])([A-Z])/g, '$1_$2').toLowerCase();
+    }
+
+    escapeRustStringLiteral(text: string): string {
+        return String(text).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+            .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+    }
+
+    getCheckedTypeOf(node): ts.Type | undefined {
+        try {
+            return this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    typeSymbolOf(type: ts.Type): ts.Symbol | undefined {
+        if (type === undefined || type === null) return undefined;
+        return (type as any).getSymbol?.() ?? (type as any).symbol ?? (type as any).aliasSymbol;
+    }
+
+    /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
+     *  backed by a plain `Value` map in the rust port. */
+    isLibDeclaredType(type: ts.Type): boolean {
+        const declarations: any[] = (this.typeSymbolOf(type) as any)?.declarations ?? [];
+        return declarations.some(d => {
+            const file = d?.getSourceFile?.()?.fileName ?? '';
+            return /[\\/]lib\.[^\\/]*\.d\.ts$/.test(file) || /[\\/]node_modules[\\/]typescript[\\/]/.test(file);
+        });
+    }
+
+    isClassInstanceType(type: ts.Type): boolean {
+        const symbol: any = this.typeSymbolOf(type);
+        if (symbol?.flags & ts.SymbolFlags.Class) return true;
+        const declarations: any[] = symbol?.declarations ?? [];
+        return declarations.some(d => ts.isClassDeclaration(d) || ts.isClassExpression(d));
+    }
+
+    hasCallableShape(type: ts.Type): boolean {
+        const checker = this.getChecker();
+        return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0 ||
+            checker.getSignaturesOfType(type, ts.SignatureKind.Construct).length > 0;
+    }
+
+    isProvenListType(type: ts.Type): boolean {
+        if (!(type.flags & ts.TypeFlags.Object)) return false;
+        // Tuple references carry the Tuple flag on their target.
+        const objectFlags = ((type as any).objectFlags ?? 0) | (((type as any).target?.objectFlags) ?? 0);
+        if (objectFlags & ts.ObjectFlags.Tuple) return true;
+        const name = (this.typeSymbolOf(type) as any)?.getName?.();
+        if (name === 'Array' || name === 'ReadonlyArray') return true;
+        const targetName = (this.typeSymbolOf((type as any).target) as any)?.getName?.();
+        return targetName === 'Array' || targetName === 'ReadonlyArray';
+    }
+
+    /** True only for object types the rust port represents as `Value::Dict`
+     *  (plain interfaces / index-signature / literal types — never classes). */
+    isProvenMapType(type: ts.Type): boolean {
+        if (!(type.flags & ts.TypeFlags.Object)) return false;
+        if (this.isProvenListType(type)) return false;
+        if (this.hasCallableShape(type)) return false;
+        if (this.isClassInstanceType(type)) return false;
+        if (this.isLibDeclaredType(type)) return false;
+        // A named type or a string index signature; a bare `object` proves nothing.
+        const hasStringIndex = this.getChecker().getIndexTypeOfType(type, ts.IndexKind.String) !== undefined;
+        return hasStringIndex || this.typeSymbolOf(type) !== undefined;
+    }
+
+    isProvenMapExpression(node: ts.Node): boolean {
+        const type = this.getCheckedTypeOf(node);
+        return type !== undefined && this.isProvenMapType(type);
+    }
+
+    isProvenListExpression(node: ts.Node): boolean {
+        const type = this.getCheckedTypeOf(node);
+        return type !== undefined && this.isProvenListType(type);
+    }
+
+    /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
+    printNativeListIndex(receiverText: string, index: number): string {
+        return `${receiverText}.as_array().and_then(|__arr| __arr.get(${index})).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** Native read for one chain level, or undefined to keep `get_value`. */
+    printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
+        if (ts.isStringLiteralLike(keyNode)) {
+            return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text);
+        }
+        if (ts.isNumericLiteral(keyNode)) {
+            const index = Number(keyNode.text);
+            if (!Number.isInteger(index) || index < 0) return undefined;
+            if (!this.isProvenListExpression(receiverNode)) return undefined;
+            return this.printNativeListIndex(receiverText, index);
+        }
+        return undefined;
+    }
+
+    printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined {
+        if (!this.isProvenMapExpression(receiverNode)) return undefined;
+        const key = this.escapeRustStringLiteral(keyText);
+        return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+    }
+
+    isNodeInsideNode(node: ts.Node, container: ts.Node): boolean {
+        return node.pos >= container.pos && node.end <= container.end;
+    }
+
+    /** Root place of an access chain (`x` for `x['a']['b']`, `this.balance` for
+     *  `this.balance['usdt']`), or undefined for a temporary. */
+    rootPlaceText(node: ts.Node): string | undefined {
+        let current: any = node;
+        while (current) {
+            if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+                if (current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.getText().trim();
+                current = current.expression;
+                continue;
+            }
+            if (ts.isParenthesizedExpression(current)) {
+                current = current.expression;
+                continue;
+            }
+            if (ts.isIdentifier(current) || current.kind === ts.SyntaxKind.ThisKeyword) {
+                return current.getText().trim();
+            }
+            return undefined;
+        }
+        return undefined;
+    }
+
+    /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
+     *  matching their text; the native form is invisible to them, so it is only
+     *  emitted where no such hoist is needed. */
+    isNativeAccessPositionSafe(node: ts.Node): boolean {
+        const parent = node.parent;
+        // `x['k'].push(...)` / `x['k'](...)`: the post-pass rewrites the target.
+        if (parent && ts.isPropertyAccessExpression(parent) && parent.expression === node) return false;
+        if (parent && ts.isCallExpression(parent) && parent.expression === node) return false;
+        const root = this.rootPlaceText(node);
+        let current: any = node.parent;
+        while (current) {
+            if (ts.isStatement(current) || ts.isSourceFile(current) || ts.isFunctionLike(current)) break;
+            if (ts.isBinaryExpression(current) && this.isNodeInsideNode(node, current.right)) {
+                const op = current.operatorToken.kind;
+                const isAssign = op === ts.SyntaxKind.EqualsToken ||
+                    (op >= ts.SyntaxKind.PlusEqualsToken && op <= ts.SyntaxKind.CaretEqualsToken);
+                if (isAssign && root !== undefined && this.rootPlaceText(current.left) === root) return false;
+            }
+            if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression) &&
+                this.isNodeInsideNode(node, current) && current.arguments.some(a => this.isNodeInsideNode(node, a))) {
+                const callee = current.expression;
+                // Same-place receiver (`x.push(x[0])`) is rewritten to `&mut x` args.
+                if (root !== undefined && this.rootPlaceText(callee.expression) === root) return false;
+                // `&mut self.<method>(...)` arg lists are hoisted by the ccxt pass.
+                if (callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
+                    RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText)))) return false;
+            }
+            current = current.parent;
+        }
+        return true;
+    }
+
+    /** Receiver shapes whose printed text is a single `Value` place (`x`, `this.x`). */
+    isShallowValueReceiver(node: ts.Node): boolean {
+        if (ts.isIdentifier(node)) return true;
+        return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword;
     }
 
     transformPropertyAcessExpressionIfNeeded(node) {
@@ -595,10 +793,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (special) return special;
 
         const keys: any[] = [];
+        const receivers: any[] = [];
         let baseExpr = null;
         let current: any = node;
         while (ts.isElementAccessExpression(current)) {
             keys.unshift(current.argumentExpression);
+            receivers.unshift(current.expression);
             const expr = current.expression;
             if (!ts.isElementAccessExpression(expr)) {
                 baseExpr = expr;
@@ -607,13 +807,17 @@ export class RustTranspiler extends BaseTranspiler {
             current = expr;
         }
 
-        const containerStr = this.printNode(baseExpr, 0);
-        const keyStrs = keys.map(k => this.printNode(k, 0));
+        // One checker proof per chain: the emitted text replaces `get_value` only
+        // when it is legal at the position the whole chain occupies.
+        const nativeAllowed = this.isNativeAccessPositionSafe(node);
 
-        let acc = containerStr;
-        keyStrs.forEach(k => {
-            const kRef = k.startsWith('Value::') ? `&${k}` : `&${k}`;
-            acc = `get_value(&${acc}, ${kRef})`;
+        let acc = this.printNode(baseExpr, 0);
+        keys.forEach((key, index) => {
+            const native = nativeAllowed
+                ? this.printNativeContainerAccess(acc, receivers[index], key)
+                : undefined;
+            const kRef = `&${this.printNode(key, 0)}`;
+            acc = native ?? `get_value(&${acc}, ${kRef})`;
         });
         return acc;
     }

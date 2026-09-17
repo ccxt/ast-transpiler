@@ -646,3 +646,162 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('match_val');
     });
 });
+
+describe('rust checker-typed native container access', () => {
+    const MAP_NATIVE = 'market.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null)';
+
+    test('string-literal element access on a typed map emits a native read', () => {
+        const ts =
+            "interface Market { id: string; }\n" +
+            "function f(market: Market) {\n" +
+            "    return market['id'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(MAP_NATIVE);
+        expect(output).not.toContain('get_value(&market');
+    });
+
+    test('nested string-literal element accesses chain native reads', () => {
+        const ts =
+            "interface Info { symbol: string; }\n" +
+            "interface Market { info: Info; }\n" +
+            "function f(market: Market) {\n" +
+            "    return market['info']['symbol'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(
+            'market.as_map().and_then(|__m| __m.get("info")).cloned().unwrap_or(Value::Null)' +
+            '.as_map().and_then(|__m| __m.get("symbol")).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&market');
+    });
+
+    test('numeric-literal element access on a typed array emits a native read', () => {
+        const ts =
+            "function f(rows: number[][]) {\n" +
+            "    return rows[0];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('rows.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&rows');
+    });
+
+    test('property access on a typed map local emits a native read', () => {
+        const ts =
+            "interface Cfg { defaultType: string; }\n" +
+            "function f(cfg: Cfg) {\n" +
+            "    return cfg.defaultType;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('cfg.as_map().and_then(|__m| __m.get("defaultType")).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('array binding pattern over a tuple return emits native reads', () => {
+        const ts =
+            "function g(): [string, number] { return ['a', 1]; }\n" +
+            "function h() {\n" +
+            "    const [p, q] = g();\n" +
+            "    return p;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut pqVariable = g();');
+        expect(output).toContain('let mut p: Value = pqVariable.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('let mut q: Value = pqVariable.as_array().and_then(|__arr| __arr.get(1)).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('Value::Int(0)');
+    });
+
+    test('array destructuring reassignment over a tuple emits native reads', () => {
+        const ts =
+            "function g(): [string, number] { return ['a', 1]; }\n" +
+            "function h() {\n" +
+            "    let p: any = undefined;\n" +
+            "    let q: any = undefined;\n" +
+            "    [p, q] = g();\n" +
+            "    return p;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('{ let __destr_tmp = g(); p = __destr_tmp.as_array()');
+        expect(output).not.toContain('get_value(&__destr_tmp');
+    });
+
+    // keep the helper unless the checker proves a plain map/list receiver
+
+    test('any-typed receiver keeps the get_value helper', () => {
+        const ts =
+            "function f(o: any) {\n" +
+            "    return o['k'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&o, &Value::Str("k".to_string()))');
+    });
+
+    test('class-typed receiver keeps the get_value helper', () => {
+        const ts =
+            "class Book { url: string = 'x'; }\n" +
+            "function f(book: Book) {\n" +
+            "    return book['url'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&book, &Value::Str("url".to_string()))');
+    });
+
+    test('lib-declared receiver keeps the get_value helper', () => {
+        const ts =
+            "function f(d: Date) {\n" +
+            "    return d['x'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&d, &Value::Str("x".to_string()))');
+    });
+
+    test('string receiver keeps the get_value helper', () => {
+        const ts =
+            "function f(s: string) {\n" +
+            "    return s[0];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&s, &Value::Int(0))');
+    });
+
+    test('non-literal key keeps the get_value helper', () => {
+        const ts =
+            "function f(rows: string[], i: number) {\n" +
+            "    return rows[i];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&rows, &i)');
+    });
+
+    test('method call target of an element access keeps the helper', () => {
+        const ts =
+            "type Dict = { [key: string]: any };\n" +
+            "function f(d: Dict, v: any) {\n" +
+            "    d['a'].push(v);\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('append_to_array(&mut get_value(&d, &Value::Str("a".to_string())), v)');
+    });
+
+    test('same-place write then read keeps the helper', () => {
+        const ts =
+            "type Dict = { [key: string]: any };\n" +
+            "function f(result: Dict, v: any) {\n" +
+            "    result['k'] = result['k'] + v;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&get_value(&result, &Value::Str("k".to_string())), &v)');
+    });
+
+    test('read in a &mut self method argument keeps the helper', () => {
+        const ts =
+            "type Dict = { [key: string]: any };\n" +
+            "class A {\n" +
+            "    options: Dict = {};\n" +
+            "    watch(a: any, b: any) { return b; }\n" +
+            "    run() {\n" +
+            "        return this.watch('x', this.options['id']);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.options, &Value::Str("id".to_string()))');
+    });
+});
