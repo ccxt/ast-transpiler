@@ -120,6 +120,23 @@ export class JavaTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
 
     varListFromObjectLiterals = {};
+    // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
+    // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
+    // Helpers.isInstance and the native `&&` / `||`
+    javaBooleanOperators = [
+        ts.SyntaxKind.EqualsEqualsToken,
+        ts.SyntaxKind.EqualsEqualsEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsToken,
+        ts.SyntaxKind.ExclamationEqualsEqualsToken,
+        ts.SyntaxKind.LessThanToken,
+        ts.SyntaxKind.LessThanEqualsToken,
+        ts.SyntaxKind.GreaterThanToken,
+        ts.SyntaxKind.GreaterThanEqualsToken,
+        ts.SyntaxKind.AmpersandAmpersandToken,
+        ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.InKeyword,
+        ts.SyntaxKind.InstanceOfKeyword,
+    ];
     // Per-function analysis results. Populated by analyzeFinalVars at the start of
     // printFunctionBody and consumed during printing of the same function body.
     usageToFinalName: WeakMap<ts.Node, string> = new WeakMap();
@@ -1995,6 +2012,38 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.opNeg(${leftSide})`;
         }
         return super.printPrefixUnaryExpression(node, identation);
+    }
+
+    javaBooleanCondition(node) {
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaBooleanCondition(node.expression);
+        }
+        if (node.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+            return node.operator === ts.SyntaxKind.ExclamationToken && this.javaBooleanCondition(node.operand);
+        }
+        if (node.kind !== ts.SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        return this.javaBooleanOperators.includes(node.operatorToken.kind);
+    }
+
+    // the printer already emits these conditions as Java `boolean` (the comparison helpers,
+    // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
+    // Helpers.isTrue would only re-test a value the checker proves is boolean
+    javaConditionPrintsBoolean(node) {
+        if (!this.javaBooleanCondition(node)) {
+            return false;
+        }
+        // TS models `boolean` as the true|false union: the Boolean bit is set on plain
+        // boolean and cleared on `boolean | undefined`-style unions, which keep the helper
+        return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
+    }
+
+    printCondition(node, identation) {
+        if (this.javaConditionPrintsBoolean(node)) {
+            return this.getIden(identation) + this.printNode(node, 0);
+        }
+        return super.printCondition(node, identation);
     }
 
     printConditionalExpression(node, _identation) {

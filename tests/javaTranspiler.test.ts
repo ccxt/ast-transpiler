@@ -2443,3 +2443,89 @@ describe('java asyncSupplier option', () => {
         expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
     });
 });
+
+describe('java boolean conditions emitted without the Helpers.isTrue wrapper', () => {
+    const conditionOf = (body: string, signature = 'test(x: any): void') => {
+        const input =
+        "class T {\n" +
+        "    " + signature + " {\n" +
+        body +
+        "    }\n" +
+        "}"
+        return transpiler.transpileJava(input).content;
+    };
+
+    test('comparison conditions print the comparison helper alone', () => {
+        expect(conditionOf("        if (x === 1) { return; }\n")).toContain("if (Helpers.isEqual(x, 1))");
+        expect(conditionOf("        if (x !== null) { return; }\n")).toContain("if (!Helpers.isEqual(x, null))");
+        expect(conditionOf("        if (x == 1) { return; }\n")).toContain("if (Helpers.isEqual(x, 1))");
+        expect(conditionOf("        if (x != null) { return; }\n")).toContain("if (!Helpers.isEqual(x, null))");
+    });
+
+    test('relational conditions print the comparison helper alone', () => {
+        expect(conditionOf("        if (x > 1) { return; }\n")).toContain("if (Helpers.isGreaterThan(x, 1))");
+        expect(conditionOf("        if (x >= 1) { return; }\n")).toContain("if (Helpers.isGreaterThanOrEqual(x, 1))");
+        expect(conditionOf("        if (x < 1) { return; }\n")).toContain("if (Helpers.isLessThan(x, 1))");
+        expect(conditionOf("        if (x <= 1) { return; }\n")).toContain("if (Helpers.isLessThanOrEqual(x, 1))");
+    });
+
+    test('while and ternary conditions are unwrapped too', () => {
+        const loop = conditionOf("        while (x > 1) { x = 2; }\n");
+        expect(loop).toContain("while (Helpers.isGreaterThan(x, 1))");
+        const ternary = conditionOf("        return (x === 1) ? \"y\" : \"n\";\n", 'test(x: any): string');
+        expect(ternary).toContain("(Helpers.isEqual(x, 1))");
+        expect(ternary).not.toContain("Helpers.isTrue(");
+    });
+
+    test('typeof guards and instanceof print native/helper checks without the wrapper', () => {
+        const typeofGuard = conditionOf("        if (typeof x === 'string') { return; }\n");
+        expect(typeofGuard).toContain("if ((x instanceof String))");
+        expect(typeofGuard).not.toContain("Helpers.isTrue(");
+        const instance = conditionOf("        if (x instanceof Error) { return; }\n");
+        expect(instance).toContain("if (Helpers.isInstance(x, Error.class))");
+    });
+
+    test('the `in` operator condition prints Helpers.inOp without the wrapper', () => {
+        const output = conditionOf("        if (x in this.options) { return; }\n");
+        expect(output).toContain("if (Helpers.inOp(this.options, x))");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('logical operators of boolean conditions print native, no wrapper anywhere', () => {
+        const and = conditionOf("        if (x === 1 && x !== 2) { return; }\n");
+        expect(and).toContain("if (Helpers.isEqual(x, 1) && !Helpers.isEqual(x, 2))");
+        expect(and).not.toContain("Helpers.isTrue(");
+        const or = conditionOf("        if (x === 1 || x !== 2) { return; }\n");
+        expect(or).toContain("if (Helpers.isEqual(x, 1) || !Helpers.isEqual(x, 2))");
+        expect(or).not.toContain("Helpers.isTrue(");
+    });
+
+    test('negated boolean conditions drop the wrapper but keep the operator', () => {
+        const output = conditionOf("        if (!(x === 1)) { return; }\n");
+        expect(output).toContain("if (!(Helpers.isEqual(x, 1)))");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('non-boolean conditions keep the falsy helper', () => {
+        // a string / any condition still needs the runtime truthiness test
+        expect(conditionOf("        if (x) { return; }\n", 'test(x: string): void'))
+            .toContain("if (Helpers.isTrue(x))");
+        expect(conditionOf("        if (x) { return; }\n")).toContain("if (Helpers.isTrue(x))");
+        // `boolean | undefined` is not proven boolean - the helper must stay
+        expect(conditionOf("        if (x) { return; }\n", 'test(x: boolean | undefined): void'))
+            .toContain("if (Helpers.isTrue(x))");
+        // negation of a non-boolean keeps the helper inside the `!`
+        expect(conditionOf("        if (!x) { return; }\n", 'test(x: string): void'))
+            .toContain("if (!Helpers.isTrue(x))");
+    });
+
+    test('logical operators over non-boolean operands keep the wrapper', () => {
+        const output = conditionOf("        if (x && x) { return; }\n", 'test(x: string): void');
+        expect(output).toContain("if (Helpers.isTrue(Helpers.isTrue(x) && Helpers.isTrue(x)))");
+    });
+
+    test('comparison operands inside a logical expression are unwrapped individually', () => {
+        const output = conditionOf("        if (x && x === 1) { return; }\n", 'test(x: string): void');
+        expect(output).toContain("Helpers.isTrue(x) && Helpers.isEqual(x, 1)");
+    });
+});
