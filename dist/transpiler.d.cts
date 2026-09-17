@@ -868,7 +868,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     printAssertCall(_node: any, _identation: any, parsedArgs: any): string;
     printSliceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
-    printReplaceAllCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    stringLiteralArgument(argument: any): string;
+    sideEffectFreeReceiver(expression: any): any;
     printPadEndCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadStartCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(_node: any, _identation: any): string;
