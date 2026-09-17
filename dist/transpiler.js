@@ -4782,7 +4782,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
       }
       const varName = this.printNode(declaration.name);
       const declaredType = this.getGoLocalType(declaration, parsedValue);
-      const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue;
+      const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue.trimStart();
       if (parsedValue.startsWith("<-this.callInternal(")) {
         return `
 ${stm}
