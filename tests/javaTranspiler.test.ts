@@ -1004,10 +1004,10 @@ describe('java transpiling tests', () => {
         const output = transpiler.transpileJava(input).content;
         // All values referencing type must use finalType (check each put's value part)
         expect(output).toContain('put( "type", finalType )');
-        expect(output).toContain('Helpers.isEqual(finalType, "spot")');
+        expect(output).toContain('java.util.Objects.equals(finalType, "spot")');
         // finalType must appear in ternary expressions too (not raw 'type')
-        expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? true/);
-        expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? false/);
+        expect(output).toMatch(/java\.util\.Objects\.equals\(finalType, "swap"\).*\? true/);
+        expect(output).toMatch(/java\.util\.Objects\.equals\(finalType, "swap"\).*\? false/);
     });
 
     // --- Bug: PrefixUnaryExpression not handled for final var replacement ---
@@ -2441,5 +2441,76 @@ describe('java asyncSupplier option', () => {
         expect(output).not.toContain("VIRTUAL_EXECUTOR");
         expect(output).toContain("return null;");
         expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
+    });
+});
+
+describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
+    test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
+        const input =
+        "function f (x: string, s: string | undefined, o: any) {\n" +
+        "    const a = x === 'delivery';\n" +
+        "    const b = x !== 'delivery';\n" +
+        "    const c = s === x;\n" +
+        "    const d = o === 'delivery';\n" +
+        "    const e = o !== 'delivery';\n" +
+        "    return [ a, b, c, d, e ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('java.util.Objects.equals(x, "delivery")');
+        expect(output).toContain('!java.util.Objects.equals(x, "delivery")');
+        // string | undefined folds into the string family
+        expect(output).toContain("java.util.Objects.equals(s, x)");
+        // an untyped operand still compares natively once the other side is a string
+        expect(output).toContain('java.util.Objects.equals(o, "delivery")');
+        expect(output).toContain('!java.util.Objects.equals(o, "delivery")');
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('undefined/null literals compare natively against any operand type', () => {
+        const input =
+        "function f (o: any, n: number) {\n" +
+        "    const a = o === undefined;\n" +
+        "    const b = o !== undefined;\n" +
+        "    const c = n === undefined;\n" +
+        "    const d = o === null;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Objects.equals(o, null)");
+        expect(output).toContain("!java.util.Objects.equals(o, null)");
+        expect(output).toContain("java.util.Objects.equals(n, null)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('boolean operands compare natively', () => {
+        const input =
+        "function f (b: boolean, o: any) {\n" +
+        "    const a = b === true;\n" +
+        "    const c = o === true;\n" +
+        "    const d = b !== o;\n" +
+        "    return [ a, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Objects.equals(b, true)");
+        expect(output).toContain("java.util.Objects.equals(o, true)");
+        expect(output).toContain("!java.util.Objects.equals(b, o)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('numeric and unproven pairs keep Helpers.isEqual', () => {
+        const input =
+        "function f (n: number, o: any) {\n" +
+        "    const a = n === 1;\n" +
+        "    const b = n === n;\n" +
+        "    const e = o === o;\n" +
+        "    const g = 1 === 2;\n" +
+        "    return [ a, b, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isEqual(n, 1)");
+        expect(output).toContain("Helpers.isEqual(n, n)");
+        expect(output).toContain("Helpers.isEqual(o, o)");
+        expect(output).toContain("Helpers.isEqual(1, 2)");
+        expect(output).not.toContain("java.util.Objects.equals");
     });
 });

@@ -609,6 +609,67 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${this.getVarClassIfAny(node)}-${this.getVarMethodIfAny(node)}-${varName}`;
     }
 
+    // Static operand family of one side of an equality, undefined when the checker proves
+    // nothing usable. Null/undefined union members are folded away: Objects.equals handles
+    // those exactly like the helper, so `string | undefined` still counts as string.
+    equalityOperandFamily(type: any): string | undefined {
+        if (type === undefined || type === null) {
+            return undefined;
+        }
+        const flags = type.flags;
+        if (flags & ts.TypeFlags.Intersection) {
+            return undefined;
+        }
+        if (flags & ts.TypeFlags.Union) {
+            // `boolean` is itself the union true|false and carries the Boolean bit
+            if (flags & ts.TypeFlags.Boolean) {
+                return 'boolean';
+            }
+            const families = new Set<string>((type.types ?? []).map((t) => this.equalityOperandFamily(t)));
+            families.delete(undefined as any);
+            families.delete('null');
+            return families.size === 1 ? families.values().next().value : undefined;
+        }
+        if (flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) {
+            return 'string';
+        }
+        if (flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
+            return 'boolean';
+        }
+        if (flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void)) {
+            return 'null';
+        }
+        return undefined;
+    }
+
+    // The null/undefined literal: its Java text is `null`, so Objects.equals(x, null)
+    // is literally the identity test Helpers.isEqual performs on that operand.
+    isNullishLiteral(node): boolean {
+        return node?.kind === ts.SyntaxKind.NullKeyword
+            || (node?.kind === ts.SyntaxKind.Identifier && node.escapedText === 'undefined');
+    }
+
+    // ==/===/!=/!== become java.util.Objects.equals once the checker proves one operand is
+    // a string, a boolean or the null/undefined literal: for those Helpers.isEqual reduces
+    // to Objects.equals (value compare, class-strict, no numeric promotion). Numbers stay.
+    printNativeEqualityIfProvable(node, leftText: string, rightText: string): string | undefined {
+        const op = node.operatorToken.kind;
+        const negated = op === ts.SyntaxKind.ExclamationEqualsToken || op === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+        if (!negated && op !== ts.SyntaxKind.EqualsEqualsToken && op !== ts.SyntaxKind.EqualsEqualsEqualsToken) {
+            return undefined;
+        }
+        const checker = this.getChecker();
+        const leftFamily = this.equalityOperandFamily(checker?.getTypeAtLocation(node.left));
+        const rightFamily = this.equalityOperandFamily(checker?.getTypeAtLocation(node.right));
+        const leftProved = leftFamily !== undefined && (leftFamily !== 'null' || this.isNullishLiteral(node.left));
+        const rightProved = rightFamily !== undefined && (rightFamily !== 'null' || this.isNullishLiteral(node.right));
+        if (!leftProved && !rightProved) {
+            return undefined;
+        }
+        const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+        return negated ? `!${equalCall}` : equalCall;
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -715,6 +776,10 @@ export class JavaTranspiler extends BaseTranspiler {
             }
 
             const wrapper = this.binaryExpressionsWrappers[op];
+            const nativeEquality = this.printNativeEqualityIfProvable(node, leftText, rightText);
+            if (nativeEquality !== undefined) {
+                return nativeEquality;
+            }
             const open = wrapper[0];
             const close = wrapper[1];
             return `${open}${leftText}, ${rightText}${close}`;
