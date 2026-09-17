@@ -1038,3 +1038,95 @@ describe('go inline equality', () => {
         expect(output).not.toContain("*limit == length");
     });
 });
+
+describe('go ordered comparisons inline to native operators', () => {
+    test('a for-loop counter compared to a length emits `<`', () => {
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        for (let i = 0; i < arr.length; i++) {\\n" +
+        "            const z = arr[i];\\n" +
+        "        }\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("for i := 0; (i < GetArrayLength(arr)); i++ {");
+        expect(output).not.toContain("IsLessThan(i, GetArrayLength(arr))");
+    });
+    test('an int local compared to an int literal emits `>` `>=` `<=`', () => {
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        const n = arr.length;\\n" +
+        "        const a = n > 0;\\n" +
+        "        const b = n >= 2;\\n" +
+        "        const c = n <= 3;\\n" +
+        "        return [ a, b, c ];\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (n > 0)");
+        expect(output).toContain("var b bool = (n >= 2)");
+        expect(output).toContain("var c bool = (n <= 3)");
+        expect(output).not.toContain("IsGreaterThan(n, 0)");
+        expect(output).not.toContain("IsLessThanOrEqual(n, 3)");
+    });
+    test('float64 keeps IsLessThan/IsLessThanOrEqual but inlines `>`/`>=`', () => {
+        // the helper answers true when an operand is NaN, Go answers false, so only
+        // the two operators whose result cannot differ are inlined
+        const input =
+        "class T {\\n" +
+        "    f (v: number) {\\n" +
+        "        const g = Math.floor(v);\\n" +
+        "        const a = g > 5;\\n" +
+        "        const b = g >= 5;\\n" +
+        "        const c = g < 5;\\n" +
+        "        const d = g <= 5;\\n" +
+        "        return [ a, b, c, d ];\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (g > 5)");
+        expect(output).toContain("var b bool = (g >= 5)");
+        expect(output).toContain("var c bool = IsLessThan(g, 5)");
+        expect(output).toContain("var d bool = IsLessThanOrEqual(g, 5)");
+    });
+    test('an `any` operand stays on the helper', () => {
+        const input =
+        "class T {\\n" +
+        "    f (x: any) {\\n" +
+        "        return x < 5;\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("return IsLessThan(x, 5)");
+        expect(output).not.toContain("(x < 5)");
+    });
+    test('a float literal against an int local stays on the helper', () => {
+        // `n < 1.5` does not compile when n is an int, and Go would reject the constant
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        const n = arr.length;\\n" +
+        "        return n < 1.5;\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("return IsLessThan(n, 1.5)");
+    });
+    test('the inlined comparison stays a Go bool in a condition', () => {
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        const n = arr.length;\\n" +
+        "        if (n > 0) {\\n" +
+        "            return 1;\\n" +
+        "        }\\n" +
+        "        return 0;\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if (n > 0) {");
+        expect(output).not.toContain("EvalTruthy((n > 0))");
+    });
+});

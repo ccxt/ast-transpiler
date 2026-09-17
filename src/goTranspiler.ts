@@ -168,6 +168,17 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
+// the Go numeric kinds. `<` `>` `<=` `>=` compile without a conversion only when
+// both operands carry the same one of these
+const GO_NUMERIC_KINDS = [ 'int', 'int64', 'float64' ];
+
+const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
+    [ts.SyntaxKind.GreaterThanToken]: '>',
+    [ts.SyntaxKind.GreaterThanEqualsToken]: '>=',
+    [ts.SyntaxKind.LessThanToken]: '<',
+    [ts.SyntaxKind.LessThanEqualsToken]: '<=',
+};
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -784,9 +795,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 return 'bool';
             }
             // `a === b` prints either `IsEqual(a, b)` or an inlined `(a == b)`;
-            // both are Go bools
+            // `a < b` prints either `IsLessThan(a, b)` or an inlined `(a < b)`.
+            // All of them are Go bools.
             if ((op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken)
-                || (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+                || (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken)
+                || (ORDERED_COMPARISON_OPERATORS[op] !== undefined)) {
                 return 'bool';
             }
             break;
@@ -1376,6 +1389,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 }
             }
 
+            if (ORDERED_COMPARISON_OPERATORS[op] !== undefined) {
+                const inlined = this.printInlineOrderedComparison(left, right, leftText, rightText, op);
+                if (inlined !== undefined) {
+                    return inlined;
+                }
+            }
+
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
@@ -1669,6 +1689,125 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         return undefined;
+    }
+
+    // the Go numeric kind an operand's static type is, or undefined when it stays
+    // `any` (unknown helper result, union, pointer box): only a concrete kind can
+    // join a comparison the Go compiler accepts
+    goOperandNumericKind(node, printedText: string): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            const declared = this.goDeclaredTypeOfIdentifier(node);
+            if (declared !== undefined) {
+                return (GO_NUMERIC_KINDS.indexOf(declared) >= 0) ? declared : undefined;
+            }
+            return this.goLiteralTypedLocalKind(node);
+        }
+        if (node.kind === ts.SyntaxKind.NumericLiteral) {
+            return this.goNumericLiteralKind(node);
+        }
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.goOperandNumericKind(node.expression, this.printNode(node.expression, 0));
+        }
+        const goType = this.goTypeOfInitializer(node, printedText);
+        return (goType !== undefined && GO_NUMERIC_KINDS.indexOf(goType) >= 0) ? goType : undefined;
+    }
+
+    // a local bound by `:=` takes its Go type from the initializer: an untyped
+    // integer constant is `int`, a floating-point one is `float64`. A variable
+    // statement prints `var x <type> = …` instead, where the printer already
+    // decided the type, so only the `:=` form may be trusted here.
+    goLiteralTypedLocalKind(node): string | undefined {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        const declaration = symbol?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
+            return undefined;
+        }
+        const declarationList = declaration.parent;
+        if (declarationList?.kind !== ts.SyntaxKind.VariableDeclarationList
+            || declarationList.parent?.kind === ts.SyntaxKind.FirstStatement) {
+            return undefined;
+        }
+        return this.goNumericLiteralKind(declaration.initializer);
+    }
+
+    // an untyped Go constant: the integer forms adopt any numeric kind, the
+    // floating-point ones only fit float64
+    goNumericLiteralKind(node): string | undefined {
+        const text = node?.text;
+        if (text === undefined) {
+            return undefined;
+        }
+        if (/^[0-9][0-9_]*$/.test(text) || /^0[xXoObB][0-9a-fA-F_]+$/.test(text)) {
+            return 'int';
+        }
+        if (/^[0-9][.eE]/.test(text)) {
+            return 'float64';
+        }
+        return undefined;
+    }
+
+    // a constant only joins a comparison when its value is representable in the
+    // other operand's kind: `0.5` is not an int, and neither is 1e400 (infinity)
+    goLiteralFitsKind(node, kind: string): boolean {
+        const value = Number(node?.text?.replaceAll('_', ''));
+        if (!Number.isFinite(value)) {
+            return false;
+        }
+        if (kind === 'float64') {
+            return true;
+        }
+        return Number.isInteger(value) && (Math.abs(value) <= 2147483647);
+    }
+
+    // the kind both operands are compared in, or undefined when Go would need a
+    // conversion (two different concrete kinds) or the constant does not fit
+    goComparisonKind(left, leftKind: string, right, rightKind: string): string | undefined {
+        if (leftKind === rightKind) {
+            return leftKind;
+        }
+        if ((left?.kind === ts.SyntaxKind.NumericLiteral) && (right?.kind !== ts.SyntaxKind.NumericLiteral)) {
+            return this.goLiteralFitsKind(left, rightKind) ? rightKind : undefined;
+        }
+        if ((right?.kind === ts.SyntaxKind.NumericLiteral) && (left?.kind !== ts.SyntaxKind.NumericLiteral)) {
+            return this.goLiteralFitsKind(right, leftKind) ? leftKind : undefined;
+        }
+        return undefined;
+    }
+
+    // `<` `>` `<=` `>=` between two operands the checker proves to be numbers of the
+    // same Go kind is exactly the comparison the helper performs, minus the interface
+    // round-trip, so the call carries no information. Everything else — `any` boxes,
+    // pointers, mixed kinds, strings — keeps the helper. float64 keeps
+    // IsLessThan/IsLessThanOrEqual: the helper answers true whenever an operand is
+    // NaN while Go (and JS) answer false, and only those two operators differ.
+    printInlineOrderedComparison(left, right, leftText: string, rightText: string, op): string | undefined {
+        const operator = ORDERED_COMPARISON_OPERATORS[op];
+        if (operator === undefined) {
+            return undefined;
+        }
+        const leftKind = this.goOperandNumericKind(left, leftText);
+        const rightKind = this.goOperandNumericKind(right, rightText);
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        // both operands may additionally be checker-typed numbers; that check is
+        // implied by the concrete Go kind above and buys nothing
+        const kind = this.goComparisonKind(left, leftKind, right, rightKind);
+        if (kind === undefined) {
+            return undefined;
+        }
+        if ((kind === 'float64') && ((operator === '<') || (operator === '<='))) {
+            return undefined;
+        }
+        return `(${leftText} ${operator} ${rightText})`;
     }
 
     // castVariableAssignmentIfNeeded(left, right, identation) {
