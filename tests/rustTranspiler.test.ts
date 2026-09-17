@@ -1270,4 +1270,41 @@ describe('rust checker-typed native container access', () => {
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('Value::Str(format!("{}{}", self.id, Value::Str("x".to_string())))');
     });
+
+    // Dictionary reads with a string-literal key skip the `Value::Str`
+    // allocation through `get_value_k`, the `&str` lookup in value.rs.
+    test('literal element access key uses get_value_k', () => {
+        const ts = "const id = market['id'];"
+        const rust = 'let mut id: Value = crate::value::get_value_k(&market, "id");'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(rust);
+    });
+
+    test('computed element access key keeps get_value', () => {
+        const ts = 'const id = market[key];'
+        const rust = 'let mut id: Value = get_value(&market, &key);'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(rust);
+    });
+
+    test('live client keys keep get_value', () => {
+        const ts = "const subs = client['subscriptions'];"
+        const rust = 'let mut subs: Value = get_value(&client, &Value::Str("subscriptions".to_string()));'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(rust);
+    });
+
+    test('numeric-string keys keep get_value', () => {
+        const ts = "const v = cache['0'];"
+        const rust = 'let mut v: Value = get_value(&cache, &Value::Str("0".to_string()));'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(rust);
+    });
+
+    test('nested literal element access chains get_value_k', () => {
+        const ts = "const a = obj['x']['y'];"
+        const rust = 'let mut a: Value = crate::value::get_value_k(&crate::value::get_value_k(&obj, "x"), "y");'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toBe(rust);
+    });
 });

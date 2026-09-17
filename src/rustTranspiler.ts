@@ -1533,17 +1533,66 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    // `crate::value::get_value_k` is `get_value` for a `&str` key — the same
+    // dict lookup minus the per-read `Value::Str` allocation. Three literal-key
+    // families reach branches only `get_value` has (numeric cache/side indices,
+    // the cache `hashmap` bucket, live client `subscriptions`/`futures`) and a
+    // `this`/class receiver is not a `Value`, so those keep `get_value`.
+    staticKeyLookup(node, container): string | undefined {
+        if (!ts.isStringLiteral(node)) {
+            return undefined;
+        }
+        // Test sources keep the allocating form: the test-only post-passes
+        // pattern-match `get_value(&…, &Value::Str(…))` call sites.
+        const source = (node as any).getSourceFile ? (node as any).getSourceFile().fileName : '';
+        if (typeof source === 'string' && /\/test\//.test(source)) {
+            return undefined;
+        }
+        if (container.kind === SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const text = node.text;
+        if (text === '' || text in this.StringLiteralReplacements) {
+            return undefined;
+        }
+        if (/^\d+$/.test(text) || text === 'hashmap' || text === 'subscriptions' || text === 'futures') {
+            return undefined;
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(container);
+        } catch (e) {
+            return undefined;
+        }
+        if (type !== undefined && ((type as any).objectFlags & ts.ObjectFlags.Class)) {
+            return undefined;
+        }
+        return this.quotedStringLiteral(text);
+    }
+
     printElementAccessExpression(node, identation) {
         const special = this.printElementAccessExpressionExceptionIfAny(node);
         if (special) return special;
 
+        // `obj['x'] = v` is rewritten to `crate::set_value(...)` by a pass that
+        // matches the `get_value(&obj, &key)` target shape, so targets and
+        // computed reads keep that shape.
+        const parent = node.parent;
+        const isAssignmentTarget = parent !== undefined
+            && ts.isBinaryExpression(parent)
+            && parent.left === node
+            && parent.operatorToken.kind >= SyntaxKind.FirstAssignment
+            && parent.operatorToken.kind <= SyntaxKind.LastAssignment;
+
         const keys: any[] = [];
         const receivers: any[] = [];
+        const containers: any[] = [];
         let baseExpr = null;
         let current: any = node;
         while (ts.isElementAccessExpression(current)) {
             keys.unshift(current.argumentExpression);
             receivers.unshift(current.expression);
+            containers.unshift(current.expression);
             const expr = current.expression;
             if (!ts.isElementAccessExpression(expr)) {
                 baseExpr = expr;
@@ -1561,8 +1610,17 @@ export class RustTranspiler extends BaseTranspiler {
             const native = nativeAllowed
                 ? this.printNativeContainerAccess(acc, receivers[index], key)
                 : undefined;
+            if (native !== undefined) {
+                acc = native;
+                return;
+            }
+            const staticKey = isAssignmentTarget ? undefined : this.staticKeyLookup(key, containers[index]);
+            if (staticKey !== undefined) {
+                acc = `crate::value::get_value_k(&${acc}, ${staticKey})`;
+                return;
+            }
             const kRef = `&${this.printNode(key, 0)}`;
-            acc = native ?? `get_value(&${acc}, ${kRef})`;
+            acc = `get_value(&${acc}, ${kRef})`;
         });
         return acc;
     }
