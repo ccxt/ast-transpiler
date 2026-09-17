@@ -105,16 +105,62 @@ const CSHARP_THIS_RETURN_TYPES: { [name: string]: string } = {
     'json': 'string',
     'inArray': 'bool',
     'valueIsDefined': 'bool',
+    // the safe* accessor family: cs/ccxt/base already declares these with a concrete
+    // return type (`string? safeString(...)`, `Int64? safeInteger(...)`, `bool? safeBool(...)`,
+    // `IDictionary<string, object> safeDict(...)`, `List<object> safeList(...)`, ...), so a
+    // local initialised by one of them already holds that type inside its `object` box
+    'safeString': 'string?',
+    'safeString2': 'string?',
+    'safeStringN': 'string?',
+    'safeStringLower': 'string?',
+    'safeStringLower2': 'string?',
+    'safeStringLowerN': 'string?',
+    'safeStringUpper': 'string?',
+    'safeStringUpper2': 'string?',
+    'safeStringUpperN': 'string?',
+    'safeCurrencyCode': 'string?',
+    'safeInteger': 'Int64?',
+    'safeInteger2': 'Int64?',
+    'safeIntegerN': 'Int64?',
+    'safeIntegerProduct': 'Int64?',
+    'safeFloat': 'double?',
+    'safeFloat2': 'double?',
+    'safeFloatN': 'double?',
+    'safeNumberN': 'double?',
+    'safeBool': 'bool?',
+    'safeBool2': 'bool?',
+    'safeBoolN': 'bool?',
+    'safeDict': 'IDictionary<string, object>',
+    'safeDict2': 'IDictionary<string, object>',
+    'safeDictN': 'IDictionary<string, object>',
+    'safeList': 'List<object>',
+    'safeList2': 'List<object>',
+    'safeListN': 'List<object>',
 };
 
-// helpers whose C# signature is `object` (safeString, getValue, parseInt, add,
-// slice, ...) are deliberately absent above: their box holds a value the printer
+// helpers whose C# signature is `object` (safeValue, getValue, parseInt, add,
+// slice, safeTimestamp, ...) are deliberately absent above: their box holds a value the printer
 // cannot name, so those locals stay `object`.
+
+// the safe* accessor names of the table above: a local initialised by one of them gets the
+// extra sink guards of csharpLocalIsSafeToType (list-only methods, hard `(string)` casts,
+// the `+` LEFT operand overload rebinding)
+const CSHARP_SAFE_ACCESSOR_NAMES = [
+    'safeString', 'safeString2', 'safeStringN',
+    'safeStringLower', 'safeStringLower2', 'safeStringLowerN',
+    'safeStringUpper', 'safeStringUpper2', 'safeStringUpperN',
+    'safeCurrencyCode',
+    'safeInteger', 'safeInteger2', 'safeIntegerN', 'safeIntegerProduct',
+    'safeFloat', 'safeFloat2', 'safeFloatN', 'safeNumberN',
+    'safeBool', 'safeBool2', 'safeBoolN',
+    'safeDict', 'safeDict2', 'safeDictN',
+    'safeList', 'safeList2', 'safeListN',
+];
 
 // a transpiled parameter or local can literally be named `bool`, which would turn
 // `bool x = ...` into a reference to that value instead of the type. `string` and
 // `object` are already renamed by ReservedKeywordsReplacements.
-const CSHARP_TYPE_NAMES = [ 'string', 'bool', 'int', 'long', 'Int64', 'double', 'object', 'List', 'Dictionary', 'var' ];
+const CSHARP_TYPE_NAMES = [ 'string', 'bool', 'int', 'long', 'Int64', 'double', 'object', 'List', 'IList', 'Dictionary', 'IDictionary', 'var' ];
 
 export class CSharpTranspiler extends BaseTranspiler {
 
@@ -685,7 +731,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `x.push(v)` prints `((IList<object>)x).Add(v)` on a value that must be boxed, a
     // later assignment of another concrete type would stop compiling, and `x++` prints
     // `postFixIncrement(ref x)` whose parameter is `ref object`
-    csharpLocalIsSafeToType(scope, declaration, varName: string, csharpType: string): boolean {
+    csharpLocalIsSafeToType(scope, declaration, varName: string, csharpType: string, safeAccessor = false): boolean {
         if (scope === undefined) {
             return false;
         }
@@ -701,6 +747,12 @@ export class CSharpTranspiler extends BaseTranspiler {
                     const op = parent.operator;
                     if ((op === ts.SyntaxKind.PlusPlusToken) || (op === ts.SyntaxKind.MinusMinusToken)) {
                         safe = false; // postFixIncrement(ref x) takes a ref object
+                        return;
+                    }
+                    // prefixUnaryNeg/Plus(ref x) has int / Int64 / double twins only: a
+                    // nullable or reference local would not bind any overload
+                    if (safeAccessor && (op !== ts.SyntaxKind.ExclamationToken) && (csharpType !== 'int') && (csharpType !== 'Int64') && (csharpType !== 'double')) {
+                        safe = false;
                         return;
                     }
                 }
@@ -722,6 +774,30 @@ export class CSharpTranspiler extends BaseTranspiler {
                         safe = false;
                         return;
                     }
+                    // the remaining list methods print an `((IList<object>)x)` cast too; only
+                    // a safe* list local can carry one
+                    if (safeAccessor && !this.csharpTypeIsList(csharpType) && ((method === 'join') || (method === 'shift') || (method === 'pop'))) {
+                        safe = false;
+                        return;
+                    }
+                }
+                if (safeAccessor) {
+                    // `const [a, b] = x` prints a `((IList<object>)x)[0]` read
+                    if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name?.kind === ts.SyntaxKind.ArrayBindingPattern && !this.csharpTypeIsList(csharpType)) {
+                        safe = false;
+                        return;
+                    }
+                    // `throw new ExchangeError (x)` wraps the argument in a hard `(string)`
+                    // cast, which only compiles from `object` or a string
+                    if (!this.csharpTypeIsStringType(csharpType) && this.csharpIsClassThrowArgument(n)) {
+                        safe = false;
+                        return;
+                    }
+                    // `delete obj[x]` prints `.Remove((string)x)`, the same hard cast
+                    if (!this.csharpTypeIsStringType(csharpType) && this.csharpIsDeleteKey(n)) {
+                        safe = false;
+                        return;
+                    }
                 }
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
                     const op = parent.operatorToken.kind;
@@ -734,6 +810,14 @@ export class CSharpTranspiler extends BaseTranspiler {
                         safe = false;
                         return;
                     }
+                }
+                // a `string?` local as the LEFT operand of `+` prints add(<x>, ...): the
+                // nullable-to-`string` conversion makes add(string, ...) a better match than
+                // add(object, object), which turns a null left into the right operand instead
+                // of null (see the same rule in the ccxt cs/ccxt/base comments)
+                if (safeAccessor && (csharpType === 'string?') && this.csharpIsLeftPlusOperand(n)) {
+                    safe = false;
+                    return;
                 }
             }
             ts.forEachChild(n, visit);
@@ -754,10 +838,74 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.VAR_TOKEN;
         }
         const scope = this.csharpEnclosingFunction(declaration);
-        if (this.csharpTypeNameIsShadowed(scope, csharpType) || !this.csharpLocalIsSafeToType(scope, declaration, sourceName, csharpType)) {
+        const safeAccessor = this.csharpIsSafeAccessorCall(declaration.initializer);
+        if (this.csharpTypeNameIsShadowed(scope, csharpType) || !this.csharpLocalIsSafeToType(scope, declaration, sourceName, csharpType, safeAccessor)) {
             return this.VAR_TOKEN;
         }
         return csharpType;
+    }
+
+    // `this.safeString2 (...)`: the printed call binds the concrete C# signature of the
+    // same-name base helper (see CSHARP_THIS_RETURN_TYPES). Used to gate the extra sinks.
+    csharpIsSafeAccessorCall(initializer): boolean {
+        if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const expression = initializer.expression;
+        if (expression?.kind !== ts.SyntaxKind.PropertyAccessExpression || expression.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        return CSHARP_SAFE_ACCESSOR_NAMES.indexOf(expression.name?.escapedText as string) >= 0;
+    }
+
+    csharpTypeIsList(csharpType: string): boolean {
+        return (csharpType === 'List<object>') || (csharpType === 'IList<object>');
+    }
+
+    csharpTypeIsStringType(csharpType: string): boolean {
+        return (csharpType === 'string') || (csharpType === 'string?');
+    }
+
+    // `throw new ExchangeError (x)`: the printer wraps the argument in a hard `(string)`
+    csharpIsClassThrowArgument(node): boolean {
+        let current = node;
+        while (current.parent) {
+            const parent = current.parent;
+            if ((parent.kind === ts.SyntaxKind.ParenthesizedExpression) || (parent.kind === ts.SyntaxKind.AsExpression)) {
+                current = parent;
+                continue;
+            }
+            if ((parent.kind === ts.SyntaxKind.NewExpression) && (parent.arguments?.indexOf(current) >= 0)) {
+                current = parent;
+                continue;
+            }
+            return parent.kind === ts.SyntaxKind.ThrowStatement;
+        }
+        return false;
+    }
+
+    // `delete obj[x]` prints `.Remove((string)x)`
+    csharpIsDeleteKey(node): boolean {
+        let value = node;
+        while (value.parent && ((value.parent.kind === ts.SyntaxKind.ParenthesizedExpression) || (value.parent.kind === ts.SyntaxKind.AsExpression))) {
+            value = value.parent;
+        }
+        const access = value.parent;
+        return access?.kind === ts.SyntaxKind.ElementAccessExpression && access.argumentExpression === value && access.parent?.kind === ts.SyntaxKind.DeleteExpression;
+    }
+
+    // `(x) + y` / `x + y` prints `add(x, y)`: the parentheses keep x's static type
+    csharpIsLeftPlusOperand(node): boolean {
+        let value = node;
+        while (value.parent && (value.parent.kind === ts.SyntaxKind.ParenthesizedExpression)) {
+            value = value.parent;
+        }
+        const parent = value.parent;
+        if (parent?.kind !== ts.SyntaxKind.BinaryExpression || parent.left !== value) {
+            return false;
+        }
+        const op = parent.operatorToken.kind;
+        return (op === ts.SyntaxKind.PlusToken) || (op === ts.SyntaxKind.PlusEqualsToken);
     }
 
     printVariableDeclarationList(node,identation) {

@@ -1074,9 +1074,9 @@ describe('csharp typed body locals', () => {
     test('helpers that return object keep the local untyped', () => {
         const input =
         "class Exchange {\n" +
-        "    safeString(a, b) { return a; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
         "    main(item, a, b) {\n" +
-        "        const income = this.safeString(item, 'income');\n" +
+        "        const income = this.safeValue(item, 'income');\n" +
         "        const first = item['first'];\n" +
         "        const sum = a + b;\n" +
         "        const picked = a ? b : item;\n" +
@@ -1085,11 +1085,52 @@ describe('csharp typed body locals', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain("object income = this.safeString(item, \"income\")");
+        expect(output).toContain("object income = this.safeValue(item, \"income\")");
         expect(output).toContain("object first = getValue(item, \"first\")");
         expect(output).toContain("object sum = add(a, b)");
         expect(output).toContain("object picked = ");
         expect(output).toContain("object sliced = slice(item, 0, 2)");
+    });
+    test('safe* locals are declared with the helper\'s concrete C# type', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const id = this.safeString(item, 'id');\n" +
+        "        const count = this.safeInteger(item, 'count');\n" +
+        "        const flag = this.safeBool(item, 'flag');\n" +
+        "        const nested = this.safeDict(item, 'nested');\n" +
+        "        const rows = this.safeList(item, 'rows');\n" +
+        "        return [id, count, flag, nested, rows];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("string? id = this.safeString(item, \"id\")");
+        expect(output).toContain("Int64? count = this.safeInteger(item, \"count\")");
+        expect(output).toContain("bool? flag = this.safeBool(item, \"flag\")");
+        expect(output).toContain("IDictionary<string, object> nested = this.safeDict(item, \"nested\")");
+        expect(output).toContain("List<object> rows = this.safeList(item, \"rows\")");
+    });
+    test('safe* locals under a `+` LEFT operand or a numeric ref sink stay object', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const found = this.safeString(item, 'id');\n" +
+        "        const key = found + ':x';\n" +
+        "        const count = this.safeInteger(item, 'count');\n" +
+        "        const negated = -count;\n" +
+        "        return [key, negated];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object found = this.safeString(item, \"id\")");
+        expect(output).toContain("object count = this.safeInteger(item, \"count\")");
     });
     test('a local appended to, incremented or spread stays object', () => {
         const input =
