@@ -645,4 +645,80 @@ describe('rust transpiling tests', () => {
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('match_val');
     });
+
+    // Native equality on unwrapped payloads (is_equal removal) — typed operands
+    describe('native equality', () => {
+        const typed = (body: string) => `class A {\n    run(a: string, b: string, n: number, m: number, flag: boolean, other: boolean, anything: any) {\n${body}\n    }\n}`;
+
+        test('null literal compares natively for any operand type', () => {
+            const output = transpiler.transpileRust(typed('        if (a === undefined) {\n            return b;\n        }\n        return a;')).content;
+            expect(output).toContain('if (a == Value::Null) {');
+            expect(output).not.toContain('is_equal(&a, &Value::Null)');
+        });
+
+        test('string literal compares the unwrapped &str', () => {
+            const output = transpiler.transpileRust(typed("        return a === 'swap';")).content;
+            expect(output).toContain('return Value::Bool(a.as_str() == Some("swap"));');
+            expect(output).not.toContain('is_equal(');
+        });
+
+        test('number literal compares the unwrapped f64', () => {
+            const output = transpiler.transpileRust(typed('        return n === 1;')).content;
+            expect(output).toContain('return Value::Bool(n.as_f64() == Some(1.0));');
+        });
+
+        test('boolean literal compares the unwrapped bool', () => {
+            const output = transpiler.transpileRust(typed('        return flag === true;')).content;
+            expect(output).toContain('return Value::Bool(flag.as_bool() == Some(true));');
+        });
+
+        test('two string operands compare their payloads', () => {
+            const output = transpiler.transpileRust(typed('        return a !== b;')).content;
+            expect(output).toContain('return Value::Bool(a.as_str() != b.as_str());');
+        });
+
+        test('two number operands compare their payloads', () => {
+            const output = transpiler.transpileRust(typed('        return n === m;')).content;
+            expect(output).toContain('return Value::Bool(n.as_f64() == m.as_f64());');
+        });
+
+        test('two boolean operands compare their payloads', () => {
+            const output = transpiler.transpileRust(typed('        return flag == other;')).content;
+            expect(output).toContain('return Value::Bool(flag.as_bool() == other.as_bool());');
+        });
+
+        test('boolean string literal stays on the helper without a string proof', () => {
+            const output = transpiler.transpileRust(typed("        return anything === '1';")).content;
+            expect(output).toContain('is_equal(&anything, &Value::Str("1".to_string()))');
+        });
+
+        test('a bool-valued comparison operand stays on the helper', () => {
+            const output = transpiler.transpileRust(typed("        return (a === b) === flag;")).content;
+            expect(output).toContain('is_equal(&(Value::Bool(a.as_str() == b.as_str())), &flag)');
+        });
+
+        test('a class instance operand stays on the helper', () => {
+            const ts =
+                'class B {}\n' +
+                'class A {\n' +
+                '    run(u: any) {\n' +
+                '        const created = new B();\n' +
+                '        return created === undefined;\n' +
+                '    }\n' +
+                '}';
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('is_equal(&created, &Value::Null)');
+        });
+
+        test('a logical expression with native compares is boxed for Value positions', () => {
+            const output = transpiler.transpileRust(typed("        return a === 'x' || n === 1;")).content;
+            expect(output).toContain('return Value::Bool((a.as_str() == Some("x")) || (n.as_f64() == Some(1.0)));');
+        });
+
+        test('a logical expression keeps bare compares in a condition', () => {
+            const output = transpiler.transpileRust(typed("        if (a === 'x' || n === 1) {\n            return b;\n        }\n        return a;")).content;
+            expect(output).toContain('if (a.as_str() == Some("x")) || (n.as_f64() == Some(1.0)) {');
+            expect(output).not.toContain('Value::Bool((a.as_str()');
+        });
+    });
 });
