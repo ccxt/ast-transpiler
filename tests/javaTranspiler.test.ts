@@ -2457,9 +2457,14 @@ describe('java boolean conditions emitted without the Helpers.isTrue wrapper', (
 
     test('comparison conditions print the comparison helper alone', () => {
         expect(conditionOf("        if (x === 1) { return; }\n")).toContain("if (Helpers.isEqual(x, 1))");
-        expect(conditionOf("        if (x !== null) { return; }\n")).toContain("if (!Helpers.isEqual(x, null))");
+        // the null literal is native equality (d2): Objects.equals(x, null) is the identity test
+        // Helpers.isEqual(x, null) performs, and the boolean needs no isTrue wrapper (d1)
+        const notNull = conditionOf("        if (x !== null) { return; }\n");
+        expect(notNull).toContain("if (!java.util.Objects.equals(x, null))");
+        expect(notNull).not.toContain("Helpers.isTrue(");
         expect(conditionOf("        if (x == 1) { return; }\n")).toContain("if (Helpers.isEqual(x, 1))");
-        expect(conditionOf("        if (x != null) { return; }\n")).toContain("if (!Helpers.isEqual(x, null))");
+        expect(conditionOf("        if (x != null) { return; }\n"))
+            .toContain("if (!java.util.Objects.equals(x, null))");
     });
 
     test('relational conditions print the comparison helper alone', () => {
@@ -2526,7 +2531,10 @@ describe('java boolean conditions emitted without the Helpers.isTrue wrapper', (
 
     test('comparison operands inside a logical expression are unwrapped individually', () => {
         const output = conditionOf("        if (x && x === 1) { return; }\n", 'test(x: string): void');
-        expect(output).toContain("Helpers.isTrue(x) && Helpers.isEqual(x, 1)");
+        // the string operand prints native equality (d2); the comparison is still unwrapped on
+        // its own - only the non-boolean `x` operand keeps an isTrue inside the &&
+        expect(output).toContain("Helpers.isTrue(x) && java.util.Objects.equals(x, 1)");
+        expect(output).not.toContain("Helpers.isTrue(java.util.Objects.equals(");
     });
 });
 
@@ -2724,7 +2732,10 @@ describe('checker-typed element access: Helpers.GetValue -> native Map/List acce
         "    something(...args: any[]): void {}\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Helpers.addElementToObject(d, "x", 1)');
+        // d6: a string-literal write into a checker-proven dictionary is a native Map.put
+        expect(output).toContain('((java.util.Map<String, Object>)d).put("x", 1)');
+        expect(output).not.toContain('Helpers.addElementToObject(d, "x"');
+        // the array target keeps the helper (index append-at-size is not provable)
         expect(output).toContain("Helpers.addElementToObject(arr, 0, 5)");
         expect(output).toContain('((java.util.HashMap<String, Object>)d).get("x") = Helpers.add(');
     });
@@ -2741,7 +2752,10 @@ describe('checker-typed element access: Helpers.GetValue -> native Map/List acce
         "    something(...args: any[]): void {}\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('!Helpers.isEqual(((java.util.Map<String, Object>)d).get("k"), null)');
+        // both the read (d3) and the comparison on literal operands (d2) are native now; the
+        // comparison must stay a comparison - nothing here is a write
+        expect(output).toContain('!java.util.Objects.equals(((java.util.Map<String, Object>)d).get("k"), null)');
+        expect(output).not.toContain('.put(');
         expect(output).not.toContain('!Helpers.isEqual(Helpers.GetValue(d, "k"), null)');
     });
 });
@@ -2991,7 +3005,10 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Helpers.addElementToObject(request, Helpers.GetValue(market, "id"), 1)');
+        // the key is a plain read, so the d3 rule rewrites it; the write stays the helper
+        // because the key is not a string literal
+        expect(output).toContain('Helpers.addElementToObject(request, ((java.util.Map<String, Object>)market).get("id"), 1)');
+        expect(output).not.toContain("Helpers.GetValue(");
     });
 
     test('array target keeps the helper (index append-at-size is not provable)', () => {
