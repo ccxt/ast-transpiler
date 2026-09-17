@@ -162,6 +162,9 @@ const CSHARP_SAFE_ACCESSOR_NAMES = [
 // `object` are already renamed by ReservedKeywordsReplacements.
 const CSHARP_TYPE_NAMES = [ 'string', 'bool', 'int', 'long', 'Int64', 'double', 'object', 'List', 'IList', 'Dictionary', 'IDictionary', 'var' ];
 
+// joins a receiver's printed text with a literal key in the `key in recv` guard index
+const GUARD_KEY_SEPARATOR = "\u0000";
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -169,6 +172,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpBooleanReturnTypes = new WeakMap<ts.Node, string | undefined>();
     // variable declaration -> getCSharpLocalType result, shared by the condition checks
     csharpLocalTypes = new WeakMap<ts.Node, string>();
+    // method node -> `key in recv` guards of that method, keyed by receiver text + key
+    csharpGuardIndex = new WeakMap<ts.Node, Map<string, any[]>>();
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -427,6 +432,267 @@ export class CSharpTranspiler extends BaseTranspiler {
     //         const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
     //         return open.replace('(', '');
     //    }
+    }
+
+    // reads print getValue(recv, key), which yields null for a missing key; a C# indexer
+    // throws instead, so the native form is only emitted where the source guarantees the key
+    // is there: a dominating `key in recv` guard, or a receiver local built by a literal that
+    // declares the key. every other read keeps the helper.
+    printElementAccessExpression(node, identation) {
+        const native = this.csharpNativeElementAccess(node);
+        if (native !== undefined) {
+            return native;
+        }
+        return super.printElementAccessExpression(node, identation);
+    }
+
+    csharpNativeElementAccess(node): string | undefined {
+        if (!this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
+            return undefined;
+        }
+        const exception: any = this.printElementAccessExpressionExceptionIfAny(node);
+        if (exception) {
+            return undefined; // the exception printing wins over the native form
+        }
+        const { expression, argumentExpression } = node;
+        const parent = node.parent;
+        const isWrite = parent?.kind === ts.SyntaxKind.BinaryExpression &&
+            (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken || parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) &&
+            parent.left === node;
+        if (isWrite) {
+            return undefined; // writes are native already, they are printed with the cast
+        }
+        const isStringKey = ts.isStringLiteralLike(argumentExpression);
+        const isNumberKey = ts.isNumericLiteral(argumentExpression);
+        if (!isStringKey && !isNumberKey) {
+            return undefined; // only literal keys can be proven present
+        }
+        const key = (argumentExpression as any).text;
+        const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
+        const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
+        if (!builtFromLiteral && !guarded) {
+            return undefined;
+        }
+        const receiver = this.printNode(expression, 0);
+        const printedKey = this.printNode(argumentExpression, 0);
+        if (isNumberKey) {
+            return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
+        }
+        return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
+    }
+
+    // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
+    // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`
+    csharpKeyPresenceGuarded(node, expression, key): boolean {
+        const func = this.csharpEnclosingFunction(node);
+        if (func === undefined || this.csharpEnclosingFunction(node) !== func) {
+            return false;
+        }
+        const guards = this.csharpInGuardsOf(func).get(expression.getText() + GUARD_KEY_SEPARATOR + key);
+        if (guards === undefined || !this.csharpReceiverIsDictionaryLike(expression, key)) {
+            return false;
+        }
+        if (this.csharpReceiverIsRewritten(func, expression)) {
+            return false; // a reassigned receiver is not the object the guard inspected
+        }
+        if (this.csharpHasKeyRemoval(func, expression, key)) {
+            return false; // delete could have removed the guarded key
+        }
+        for (const guard of guards) {
+            if (this.csharpGuardAdmitsRead(guard, node)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    csharpGuardAdmitsRead(guard, read): boolean {
+        const negated = this.csharpGuardIsNegated(guard);
+        let statement: any = guard;
+        while (statement !== undefined && statement.parent !== undefined) {
+            const parent: any = statement.parent;
+            if (ts.isIfStatement(parent) && this.csharpContains(parent.expression, guard)) {
+                if (!negated && this.csharpContains(parent.thenStatement, read)) {
+                    return true;
+                }
+                if (negated && parent.elseStatement !== undefined && this.csharpContains(parent.elseStatement, read)) {
+                    return true;
+                }
+                // `if (!(key in recv)) { return/throw/continue; }` then the read after it
+                if (negated && this.csharpAlwaysExits(parent.thenStatement) &&
+                    read.getStart() >= parent.getEnd() && this.csharpContains(parent.parent, read)) {
+                    return true;
+                }
+                return false;
+            }
+            if (ts.isWhileStatement(parent) && this.csharpContains(parent.expression, guard)) {
+                return !negated && this.csharpContains(parent.statement, read);
+            }
+            statement = parent;
+        }
+        return false;
+    }
+
+    // `key in recv` guards in the function body, indexed by receiver text + key; nested
+    // functions are skipped, their guards cannot dominate a read of the outer function
+    csharpInGuardsOf(func): Map<string, any[]> {
+        const cached = this.csharpGuardIndex.get(func);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const index: Map<string, any[]> = new Map();
+        const collect = (n: any) => {
+            if (n !== func && ts.isFunctionLike(n)) {
+                return;
+            }
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.InKeyword) {
+                const keyNode: any = n.left;
+                if (ts.isStringLiteralLike(keyNode) || ts.isNumericLiteral(keyNode)) {
+                    const id = n.right.getText() + GUARD_KEY_SEPARATOR + keyNode.text;
+                    const list = index.get(id);
+                    if (list === undefined) {
+                        index.set(id, [ n ]);
+                    } else {
+                        list.push(n);
+                    }
+                }
+            }
+            ts.forEachChild(n, collect);
+        };
+        collect(func);
+        this.csharpGuardIndex.set(func, index);
+        return index;
+    }
+
+    // the read's receiver is a local whose only initializer is a literal that declares the
+    // key, and the local is not reassigned or deleted from afterwards
+    csharpLiteralDeclaresKey(node, expression, key, isNumberKey): boolean {
+        if (!ts.isIdentifier(expression)) {
+            return false;
+        }
+        const symbol: any = this.getChecker().getSymbolAtLocation(expression);
+        const declarations: any = symbol?.declarations ?? [];
+        if (declarations.length !== 1 || !ts.isVariableDeclaration(declarations[0])) {
+            return false;
+        }
+        const declaration: any = declarations[0];
+        if (declaration.initializer === undefined || declaration.getStart() >= node.getStart()) {
+            return false;
+        }
+        const initializer = declaration.initializer;
+        let declares = false;
+        if (isNumberKey && ts.isArrayLiteralExpression(initializer)) {
+            const spread = initializer.elements.some((element: any) => ts.isSpreadElement(element));
+            declares = !spread && Number(key) < initializer.elements.length;
+        } else if (!isNumberKey && ts.isObjectLiteralExpression(initializer)) {
+            declares = this.csharpObjectLiteralDeclaresKey(initializer, key);
+        }
+        if (!declares) {
+            return false;
+        }
+        const func = this.csharpEnclosingFunction(node);
+        return func !== undefined && !this.csharpReceiverIsRewritten(func, expression);
+    }
+
+    csharpObjectLiteralDeclaresKey(literal, key): boolean {
+        for (const property of literal.properties) {
+            if (ts.isSpreadAssignment(property)) {
+                return false; // spread keys cannot be enumerated
+            }
+            const name: any = (property as any).name;
+            if (name !== undefined && (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) && name.text === key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the receiver must be a dictionary at runtime for the IDictionary cast to hold; `any`
+    // receivers are rejected because the checker cannot tell what the read reaches
+    csharpReceiverIsDictionaryLike(expression, key): boolean {
+        const type: any = this.getChecker().getTypeAtLocation(expression);
+        if (type.flags === ts.TypeFlags.Any || type.flags === ts.TypeFlags.Unknown) {
+            return false;
+        }
+        const checker = this.getChecker();
+        return checker.getIndexInfoOfType(type, ts.IndexKind.String) !== undefined ||
+            checker.getPropertyOfType(type, key) !== undefined;
+    }
+
+    // any assignment to the receiver (or to a same-named binding) in the function makes the
+    // object the read evaluates unprovable, so the read falls back to the helper
+    csharpReceiverIsRewritten(func, expression): boolean {
+        const text = expression.getText();
+        const name = ts.isIdentifier(expression) ? text : text.split(/[.\[]/)[1];
+        if (name === undefined) {
+            return true;
+        }
+        let rewritten = false;
+        const walk = (n: any) => {
+            if (rewritten) {
+                return;
+            }
+            if (ts.isIdentifier(n) && n.text === name) {
+                const parent: any = n.parent;
+                if (ts.isBinaryExpression(parent) && parent.left === n) {
+                    rewritten = true;
+                } else if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && parent.operand === n) {
+                    rewritten = true;
+                } else if (ts.isDeleteExpression(parent)) {
+                    rewritten = true;
+                }
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(func);
+        return rewritten;
+    }
+
+    csharpHasKeyRemoval(func, expression, key): boolean {
+        const text = expression.getText();
+        let removed = false;
+        const walk = (n: any) => {
+            if (removed) {
+                return;
+            }
+            if (ts.isDeleteExpression(n) && ts.isElementAccessExpression(n.expression) &&
+                n.expression.expression.getText() === text && n.expression.argumentExpression.getText().replace(/['"]/g, '') === key.replace(/['"]/g, '')) {
+                removed = true;
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(func);
+        return removed;
+    }
+
+    csharpGuardIsNegated(guard): boolean {
+        let node: any = guard;
+        while (node.parent !== undefined && ts.isParenthesizedExpression(node.parent)) {
+            node = node.parent;
+        }
+        return node.parent !== undefined && ts.isPrefixUnaryExpression(node.parent) &&
+            node.parent.operator === ts.SyntaxKind.ExclamationToken;
+    }
+
+    csharpAlwaysExits(statement): boolean {
+        if (statement === undefined) {
+            return false;
+        }
+        const exits = (n: any) => ts.isReturnStatement(n) || ts.isThrowStatement(n) || ts.isContinueStatement(n) || ts.isBreakStatement(n);
+        if (exits(statement)) {
+            return true;
+        }
+        if (ts.isBlock(statement) && statement.statements.length > 0) {
+            return exits(statement.statements[statement.statements.length - 1]);
+        }
+        return false;
+    }
+
+    csharpContains(outer, inner): boolean {
+        if (outer === undefined || inner === undefined) {
+            return false;
+        }
+        return inner.getStart() >= outer.getStart() && inner.getEnd() <= outer.getEnd();
     }
 
     printWrappedUnknownThisProperty(node) {

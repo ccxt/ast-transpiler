@@ -1257,6 +1257,151 @@ describe('csharp typed body locals', () => {
         expect(output).toContain("public override bool? flag(object x)");
         expect(output).toContain("return ((bool?)((object)(true)));");
     });
+    test('guarded reads print the native dictionary indexer', () => {
+        const guarded =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    if ('x' in params) {\n" +
+        "        const y = params['x'];\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "    return undefined;\n" +
+        "}";
+        const guardedOutput = transpiler.transpileCSharp(guarded).content;
+        expect(guardedOutput).toContain('if (isTrue(inOp(parameters, "x")))');
+        expect(guardedOutput).toContain('object y = ((IDictionary<string,object>)parameters)["x"];');
+        // the else-branch of a negated guard runs only when the key is there
+        const negatedElse =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    let y = undefined;\n" +
+        "    if (!('x' in params)) {\n" +
+        "        y = 1;\n" +
+        "    } else {\n" +
+        "        y = params['x'];\n" +
+        "    }\n" +
+        "    return y;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(negatedElse).content).toContain('y = ((IDictionary<string,object>)parameters)["x"];');
+        // `if (!(key in recv)) return ...;` proves presence for everything after it
+        const earlyExit =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    if (!('x' in params)) {\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    return params['x'];\n" +
+        "}";
+        expect(transpiler.transpileCSharp(earlyExit).content).toContain('return ((IDictionary<string,object>)parameters)["x"];');
+        // a loop condition holds for its body
+        const whileGuard =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    while ('x' in params) {\n" +
+        "        return params['x'];\n" +
+        "    }\n" +
+        "    return undefined;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(whileGuard).content).toContain('return ((IDictionary<string,object>)parameters)["x"];');
+    });
+    test('literal-built receivers print the native indexer for the keys they declare', () => {
+        const objectLiteral =
+        "function f (): any {\n" +
+        "    const x = { 'a': 1 };\n" +
+        "    const y = x['a'];\n" +
+        "    return y;\n" +
+        "}";
+        const objectOutput = transpiler.transpileCSharp(objectLiteral).content;
+        expect(objectOutput).toContain('object x = new Dictionary<string, object>() {');
+        expect(objectOutput).toContain('object y = ((IDictionary<string,object>)x)["a"];');
+        const arrayLiteral =
+        "function f (): any {\n" +
+        "    const x = [ 1, 2 ];\n" +
+        "    const y = x[0];\n" +
+        "    return y;\n" +
+        "}";
+        const arrayOutput = transpiler.transpileCSharp(arrayLiteral).content;
+        expect(arrayOutput).toContain('object x = new List<object>() {1, 2};');
+        expect(arrayOutput).toContain('object y = ((List<object>)x)[0];');
+    });
+    test('reads the checker cannot prove present keep getValue', () => {
+        // no guard at all
+        const unproven =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    const y = params['x'];\n" +
+        "    return y;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(unproven).content).toContain('object y = getValue(parameters, "x");');
+        // non-literal key
+        const identifierKey =
+        "function f (params: { [key: string]: any }, k: string): any {\n" +
+        "    const y = params[k];\n" +
+        "    return y;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(identifierKey).content).toContain('object y = getValue(parameters, k);');
+        // guard for another key
+        const otherKey =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    if ('z' in params) {\n" +
+        "        const y = params['x'];\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "    return undefined;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(otherKey).content).toContain('object y = getValue(parameters, "x");');
+        // read outside the guarded branch
+        const outsideBranch =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    if ('x' in params) {\n" +
+        "        const y = 1;\n" +
+        "    }\n" +
+        "    const z = params['x'];\n" +
+        "    return z;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(outsideBranch).content).toContain('object z = getValue(parameters, "x");');
+        // the guard's key is deleted before the read
+        const deleted =
+        "function f (params: { [key: string]: any }): any {\n" +
+        "    if ('x' in params) {\n" +
+        "        delete params['x'];\n" +
+        "        const y = params['x'];\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "    return undefined;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(deleted).content).toContain('object y = getValue(parameters, "x");');
+        // any-typed receivers are not dictionary-like
+        const anyReceiver =
+        "function f (params: any): any {\n" +
+        "    if ('x' in params) {\n" +
+        "        const y = params['x'];\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "    return undefined;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(anyReceiver).content).toContain('object y = getValue(parameters, "x");');
+        // literal that does not declare the key
+        const otherLiteralKey =
+        "function f (): any {\n" +
+        "    const x = { 'a': 1 };\n" +
+        "    const y = x['b'];\n" +
+        "    return y;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(otherLiteralKey).content).toContain('object y = getValue(x, "b");');
+        // a reassigned local is not the literal the proof described
+        const reassigned =
+        "function f (): any {\n" +
+        "    let x = { 'a': 1 };\n" +
+        "    x = undefined;\n" +
+        "    const y = x['a'];\n" +
+        "    return y;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(reassigned).content).toContain('object y = getValue(x, "a");');
+        // index outside the literal's length
+        const outOfRange =
+        "function f (): any {\n" +
+        "    const x = [ 1, 2 ];\n" +
+        "    const y = x[5];\n" +
+        "    return y;\n" +
+        "}";
+        expect(transpiler.transpileCSharp(outOfRange).content).toContain('object y = getValue(x, 5);');
+    });
 });
 
 describe('isTrue is dropped when the condition already prints a C# bool', () => {
