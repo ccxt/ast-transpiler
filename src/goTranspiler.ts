@@ -2835,7 +2835,8 @@ ${this.getIden(identation)}${returnStatement}`;
     printArrayPushCall(node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
         let returnValue = '';
         let returnRandName = name;
-        if (name?.startsWith('GetValue')) {
+        // a map/slice index or a GetValue box is not addressable: copy it into a local first
+        if (name?.startsWith('GetValue') || /[\]\)]$/.test(name ?? '')) {
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
             returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
         }

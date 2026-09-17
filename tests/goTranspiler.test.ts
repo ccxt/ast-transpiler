@@ -1706,3 +1706,20 @@ describe('go native element assignment', () => {
         expect(output).toContain("var c bool = (values == \"\")");
     });
 });
+
+describe('go array push onto an element access', () => {
+    test('a native map index receiver is hoisted into a local before AppendToArray', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market: Dict) {\n" +
+        "        const request: Dict = {};\n" +
+        "        request['base'] = [];\n" +
+        "        request['base'].push (market['baseId']);\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain('AppendToArray(&request["base"]');
+        expect(output).toMatch(/retRes\d+ := request\["base"\]\n\s*AppendToArray\(&retRes\d+, /);
+    });
+});
