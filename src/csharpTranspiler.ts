@@ -116,11 +116,27 @@ const CSHARP_THIS_RETURN_TYPES: { [name: string]: string } = {
 // `object` are already renamed by ReservedKeywordsReplacements.
 const CSHARP_TYPE_NAMES = [ 'string', 'bool', 'int', 'long', 'Int64', 'double', 'object', 'List', 'Dictionary', 'var' ];
 
+// C# kinds a comparison can be printed natively on: the runtime isLessThan family compares two
+// boxes of one kind with the conversions the C# operator applies too. `double` keeps only
+// `>`/`>=` — the helper reads a NaN operand as "less than", a native comparison is false.
+const CSHARP_NUMERIC_KINDS = [ 'int', 'Int64', 'double' ];
+
+const CSHARP_NATIVE_COMPARISON_TOKENS = {
+    [ts.SyntaxKind.LessThanToken]: '<',
+    [ts.SyntaxKind.GreaterThanToken]: '>',
+    [ts.SyntaxKind.LessThanEqualsToken]: '<=',
+    [ts.SyntaxKind.GreaterThanEqualsToken]: '>=',
+};
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
     // method node -> 'bool' | 'bool?' | undefined (see csharpBooleanReturnType)
     csharpBooleanReturnTypes = new WeakMap<ts.Node, string | undefined>();
+    // optional proof of the concrete C# type of an expression, installed by the embedding build
+    // layer for the locals it retypes itself (ccxt: build/csharp-local-types.js); it must
+    // describe the same type the declaration is emitted with, or the operator will not compile
+    csharpExpressionTypeResolver?: (node) => string | undefined;
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -480,6 +496,65 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     }
 
+    // the concrete C# type of an expression the printer can name, or undefined: the embedding
+    // build layer's proof wins (it retypes locals the printer leaves `object`), then the
+    // printer's own tables and the literals whose C# type is fixed by their text
+    csharpExpressionTypeOf(node): string | undefined {
+        const provided = this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : undefined;
+        if (provided !== undefined) {
+            return provided;
+        }
+        if (ts.isNumericLiteral(node)) {
+            const value = Number(node.text);
+            // wider literals are typed uint/long/ulong by the C# compiler, keep the helper
+            return (Number.isInteger(value) && Math.abs(value) <= 2147483647) ? 'int' : undefined;
+        }
+        if (ts.isPrefixUnaryExpression(node) && (node.operator === ts.SyntaxKind.MinusToken) && ts.isNumericLiteral(node.operand)) {
+            const value = Number(node.operand.text);
+            return (Number.isInteger(value) && (value <= 2147483647)) ? 'int' : undefined;
+        }
+        return this.csharpTypeOfInitializer(node);
+    }
+
+    // the TypeScript checker must see two plain numbers: `any` (could be a string box) and a
+    // nullable union (the helper orders null, C# would throw) both keep the runtime helper
+    csharpOperandsAreNumbers(node): boolean {
+        const isNumber = (operand) => {
+            let flags;
+            try {
+                flags = this.getChecker().getTypeAtLocation(operand)?.flags;
+            } catch (e) {
+                return false; // in-memory program without a checker
+            }
+            return (flags === ts.TypeFlags.Number) || (flags === ts.TypeFlags.NumberLiteral);
+        };
+        return isNumber(node.left) && isNumber(node.right);
+    }
+
+    // `<`, `>`, `<=`, `>=` on two operands of the same proven C# number kind print natively:
+    // the helper compares the two boxes with the conversions the operator applies, and only
+    // `double` carries a value (NaN) the two disagree on — see CSHARP_NUMERIC_KINDS
+    csharpNativeNumericComparison(node, identation): string | undefined {
+        const token = CSHARP_NATIVE_COMPARISON_TOKENS[node.operatorToken.kind];
+        if (token === undefined) {
+            return undefined;
+        }
+        const leftKind = this.csharpExpressionTypeOf(node.left);
+        const rightKind = this.csharpExpressionTypeOf(node.right);
+        if ((leftKind === undefined) || (leftKind !== rightKind) || (CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0)) {
+            return undefined;
+        }
+        if ((leftKind === 'double') && ((token === '<') || (token === '<='))) {
+            return undefined;
+        }
+        if (!this.csharpOperandsAreNumbers(node)) {
+            return undefined;
+        }
+        const leftText = this.printNode(node.left, 0).trim();
+        const rightText = this.printNode(node.right, 0).trim();
+        return leftText + ' ' + token + ' ' + rightText;
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -531,6 +606,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         // the base printBinaryExpression prints them, and doing it eagerly means
         // every unhandled binary expression gets its subtrees printed twice
         if (op === ts.SyntaxKind.PlusEqualsToken || op === ts.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
+            const nativeComparison = this.csharpNativeNumericComparison(node, identation);
+            if (nativeComparison !== undefined) {
+                return nativeComparison;
+            }
             const leftText = this.printNode(left, 0);
             const rightText = this.printNode(right, 0);
 
