@@ -952,8 +952,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (declaration?.initializer?.kind=== ts.SyntaxKind.AwaitExpression) {
             const parsedName = this.printNode(declaration.name, 0);
             const parsedInitializer = this.printNode(declaration.initializer, 0);
+            // gofmt spacing: `name := (<-this.X())` — one space on each side of `:=`
             return `
-${this.getIden(identation)}${parsedName}:= ${parsedInitializer}
+${this.getIden(identation)}${parsedName} := ${parsedInitializer}
 ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         }
@@ -1940,7 +1941,9 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         if (node?.expression?.kind === ts.SyntaxKind.AwaitExpression) {
             // const returnRandName = "retRes" + this.getRandomNameSuffix();
             const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
-            rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+            // the template's `:= ` already supplies the separator; keep the printed expression
+            // flush so the receive reads `retResNNN := (<-this.X())` (gofmt spacing)
+            rightPart = rightPart ? rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
             // return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
             return `
     ${this.getIden(identation)}${returnRandName} := ${rightPart}

@@ -706,7 +706,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "}"
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("AppendToArray(&promises, this.FetchTicker(GetValue(symbols, i)))");
-        expect(output).toContain("results:= (<-promiseAll(promises))");
+        expect(output).toContain("results := (<-promiseAll(promises))");
         expect(output).not.toContain("Spawn");
     });
     test('a zero-argument deferred call needs no wrapper', () => {
@@ -724,7 +724,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(output).toContain("var p any = this.LoadMarkets()");
         expect(output).not.toContain("Spawn");
         // the deferred value is still awaited through a plain channel receive
-        expect(normalize(output)).toContain("retRes :=  (<-p)");
+        expect(normalize(output)).toContain("retRes := (<-p)");
     });
     test('an immediately awaited async call keeps its direct receive', () => {
         const input =
@@ -741,9 +741,32 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         // trampoline/body pairs: FetchSpotMarkets, fetchSpotMarketsBody, DoAwait, doAwaitBody
         const [, , doAwaitTrampoline, doAwaitBody] = methodBodies(output);
         expect(doAwaitTrampoline).toContain("go this.doAwaitBody(ch, optionalArgs...)");
-        expect(doAwaitBody).toContain("a:= (<-this.FetchSpotMarkets(params))");
+        expect(doAwaitBody).toContain("a := (<-this.FetchSpotMarkets(params))");
         expect(doAwaitBody).toContain("PanicOnError(a)");
         expect(doAwaitBody).not.toContain("Spawn");
+    });
+    test('receive assignments use gofmt spacing', () => {
+        // gofmt writes `x := (<-this.X())`: one space either side of `:=`, none after `<-`
+        const input =
+        "class Exchange {\n" +
+        "    async fetchSpotMarkets (params = {}): Promise<any> {\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "    async doAwait (params = {}): Promise<any> {\n" +
+        "        const a = await this.fetchSpotMarkets (params);\n" +
+        "        return await this.fetchSpotMarkets (params);\n" +
+        "    }\n" +
+        "}"
+        const output = normalize(transpiler.transpileGo(input).content);
+        // declaration path and awaited-return path both keep the single space
+        expect(output).toContain("a := (<-this.FetchSpotMarkets(params))");
+        expect(output).toContain("retRes := (<-this.FetchSpotMarkets(params))");
+        // no `name:=`, no double space after `:=` and no space after `<-`
+        expect(output).not.toMatch(/\w:= /);
+        expect(output).not.toMatch(/:= {2}\(<-/);
+        expect(output).not.toMatch(/<-\(/);
+        // sends keep their space
+        expect(output).toContain("ch <- retRes");
     });
     test('a stored SYNC method call is unchanged', () => {
         const input =
