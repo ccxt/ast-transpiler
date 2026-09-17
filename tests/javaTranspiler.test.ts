@@ -2443,3 +2443,168 @@ describe('java asyncSupplier option', () => {
         expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
     });
 });
+
+describe('helper removal: native comparison / containsKey / size', () => {
+    test('checker-proven array length prints List.size() instead of the runtime helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: number[]): void {\n" +
+        "        const n = xs.length;\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.List<?>)xs).size()");
+        expect(output).not.toContain("Helpers.getArrayLength");
+    });
+
+    test('unproven (any) receiver keeps the length helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(x: any): void {\n" +
+        "        const n = x.length;\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArrayLength(x)");
+    });
+
+    test('rest parameter (varargs array, not a List) keeps the length helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(...args: any[]): void {\n" +
+        "        const n = args.length;\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArrayLength(args)");
+    });
+
+    test('for-loop counter with an integer-literal initializer compares natively', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: number[]): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("for (var i = 0; i < ((java.util.List<?>)xs).size(); i++)");
+        expect(output).not.toContain("Helpers.isLessThan");
+    });
+
+    test('while-loop counter (Object-typed local, not a for-counter) keeps the comparison helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: number[]): void {\n" +
+        "        let i = 0;\n" +
+        "        while (i < xs.length) {\n" +
+        "            i++;\n" +
+        "        }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("while (Helpers.isLessThan(i, ((java.util.List<?>)xs).size()))");
+    });
+
+    test('Object operands keep the comparison helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: number, b: number): void {\n" +
+        "        if (a < b) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isLessThan(a, b)");
+    });
+
+    test('string length stays a native int inside a comparison', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        if (s.length > 3) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)s).length() > 3");
+        expect(output).not.toContain("Helpers.isGreaterThan");
+    });
+
+    test('checker-proven object receiver prints Map.containsKey', () => {
+        const input =
+        "interface Cfg { [key: string]: number; }\n" +
+        "class T {\n" +
+        "    f(c: Cfg, k: string): void {\n" +
+        "        if (k in c) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)c).containsKey(k)");
+        expect(output).not.toContain("Helpers.inOp");
+    });
+
+    test('string-literal-union key prints Map.containsKey', () => {
+        const input =
+        "interface Cfg { [key: string]: number; }\n" +
+        "class T {\n" +
+        "    f(c: Cfg, k: 'a' | 'b'): void {\n" +
+        "        if (k in c) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)c).containsKey(k)");
+    });
+
+    test('array receiver of `in` keeps the membership helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(arr: number[], k: string): void {\n" +
+        "        if (k in arr) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(arr, k)");
+    });
+
+    test('any-typed receiver of `in` keeps the membership helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(c: any, k: string): void {\n" +
+        "        if (k in c) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(c, k)");
+    });
+
+    test('unproven nested receiver keeps the membership helper', () => {
+        const input =
+        "interface Cfg { [key: string]: number; }\n" +
+        "interface Outer { [key: string]: Cfg; }\n" +
+        "class T {\n" +
+        "    f(o: Outer, k: string, j: string): void {\n" +
+        "        if (j in o[k]) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)Helpers.GetValue(o, k)).containsKey(j)");
+    });
+});

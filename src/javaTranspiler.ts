@@ -609,6 +609,175 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${this.getVarClassIfAny(node)}-${this.getVarMethodIfAny(node)}-${varName}`;
     }
 
+    // -------------------------------------------------------------------
+    // helper removal: native emission when the checker proves the printed
+    // operand is a Java numeric primitive / List / Map
+    // -------------------------------------------------------------------
+
+    // int/long kind of a literal as printNumericLiteral emits it. Fraction and
+    // exponent forms are Java doubles and a double can hold NaN, which the
+    // comparison helpers order differently (`NaN < x` is true there), so those
+    // never become a native comparison.
+    javaIntegerLiteralKind(node) {
+        if (!node || !ts.isNumericLiteral(node)) {
+            return undefined;
+        }
+        const text = node.text;
+        if (text.indexOf('.') !== -1 || text.indexOf('e') !== -1 || text.indexOf('E') !== -1) {
+            return undefined;
+        }
+        return Number(text) > 2147483647 ? 'long' : 'int';
+    }
+
+    // A rest parameter is a Java varargs array, not a List, so a List cast on it
+    // would throw ClassCastException; simple identifier aliases are followed too.
+    isVarargsArrayReference(node, depth = 0) {
+        if (!node || depth > 4 || node.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(node);
+        const declaration: any = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (!declaration) {
+            return false;
+        }
+        if (declaration.dotDotDotToken !== undefined) {
+            return true;
+        }
+        const initializer = declaration.initializer;
+        if (initializer && ts.isIdentifier(initializer)) {
+            return this.isVarargsArrayReference(initializer, depth + 1);
+        }
+        return false;
+    }
+
+    // checker proof that the value is printed as a java.util.List: TS arrays and
+    // tuples become ArrayList, ReadonlyArray only adds a readonly modifier
+    isJavaListType(type) {
+        if (!type) {
+            return false;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type)) {
+            return true;
+        }
+        return type.target?.symbol?.escapedName === 'ReadonlyArray';
+    }
+
+    // `.length` is a Java int for exactly these two receivers; every other
+    // receiver keeps Helpers.getArrayLength, whose result type is not proven
+    javaLengthKind(expression) {
+        const type = this.getChecker().getTypeAtLocation(expression);
+        if (this.isStringType(type.flags)) {
+            return 'String';
+        }
+        if (this.isJavaListType(type) && !this.isVarargsArrayReference(expression)) {
+            return 'List';
+        }
+        return undefined;
+    }
+
+    // shared by printLengthProperty and transformPropertyAcessExpressionIfNeeded
+    printJavaLength(expression, leftSide) {
+        const kind = this.javaLengthKind(expression);
+        if (kind === 'String') {
+            return `((String)${leftSide}).length()`;
+        }
+        if (kind === 'List') {
+            return `((java.util.List<?>)${leftSide}).size()`;
+        }
+        return `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+    }
+
+    // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the
+    // Object initializer into `var`, so javac infers a primitive counter there,
+    // and only ++/-- writes keep it primitive
+    isJavaPrimitiveForCounter(node) {
+        if (node.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const comparison = node.parent;
+        if (!comparison || comparison.kind !== ts.SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const forStatement = comparison.parent;
+        if (!forStatement || forStatement.kind !== ts.SyntaxKind.ForStatement || forStatement.condition !== comparison) {
+            return false;
+        }
+        const initializer = forStatement.initializer;
+        if (!initializer || initializer.kind !== ts.SyntaxKind.VariableDeclarationList) {
+            return false;
+        }
+        const declarations = initializer.declarations ?? [];
+        if (declarations.length !== 1) {
+            return false;
+        }
+        const declaration = declarations[0];
+        if (!ts.isIdentifier(declaration.name) || declaration.name.escapedText !== node.escapedText) {
+            return false;
+        }
+        if (this.javaIntegerLiteralKind(declaration.initializer) === undefined) {
+            return false;
+        }
+        const counterSymbol = this.getChecker().getSymbolAtLocation(node);
+        const declarationSymbol = this.getChecker().getSymbolAtLocation(declaration.name);
+        if (counterSymbol !== undefined && declarationSymbol !== undefined && counterSymbol !== declarationSymbol) {
+            return false;
+        }
+        const incrementor = forStatement.incrementor;
+        if (!incrementor || incrementor.operand?.kind !== ts.SyntaxKind.Identifier || incrementor.operand.escapedText !== node.escapedText) {
+            return false;
+        }
+        return incrementor.kind === ts.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts.SyntaxKind.PrefixUnaryExpression;
+    }
+
+    // Java primitive kind of a comparison operand; undefined keeps the helper
+    javaPrimitiveOperandKind(node) {
+        const literalKind = this.javaIntegerLiteralKind(node);
+        if (literalKind !== undefined) {
+            return literalKind;
+        }
+        if (this.isJavaPrimitiveForCounter(node)) {
+            return 'int';
+        }
+        if (node.kind === ts.SyntaxKind.PropertyAccessExpression && node.name.escapedText === 'length') {
+            return this.javaLengthKind(node.expression) !== undefined ? 'int' : undefined;
+        }
+        return undefined;
+    }
+
+    // checker proof that the value is printed as a java.util.HashMap: TS object
+    // shapes (interfaces, object literals, aliases) become HashMaps, while class
+    // instances are real Java objects and arrays/unions are not proven here
+    isJavaMapType(type) {
+        if (!type || (type.flags & ts.TypeFlags.Object) === 0) {
+            return false;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type)) {
+            return false;
+        }
+        if (type.getCallSignatures().length > 0) {
+            return false;
+        }
+        const declarations = type.getSymbol()?.declarations ?? [];
+        return !declarations.some((declaration) => declaration.kind === ts.SyntaxKind.ClassDeclaration
+            || declaration.getSourceFile().fileName.indexOf('typescript') > -1);
+    }
+
+    // string keys (plain, literal or a union of literals) print as Java Strings
+    isJavaStringType(type) {
+        if (!type) {
+            return false;
+        }
+        if (this.isStringType(type.flags)) {
+            return true;
+        }
+        if ((type.flags & ts.TypeFlags.Union) === 0) {
+            return false;
+        }
+        return type.types.every((member) => this.isStringType(member.flags));
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -696,7 +865,21 @@ export class JavaTranspiler extends BaseTranspiler {
         }
 
         if (op === ts.SyntaxKind.InKeyword) {
+            const objectType = this.getChecker().getTypeAtLocation(right);
+            const keyType = this.getChecker().getTypeAtLocation(left);
+            if (this.isJavaMapType(objectType) && this.isJavaStringType(keyType)) {
+                return `((java.util.Map<?, ?>)${this.printNode(right, 0)}).containsKey(${this.printNode(left, 0)})`;
+            }
             return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+        }
+
+        // native comparison for two operands that are provably Java int/long
+        // values; the helper's ordering is identical for every int/long pair
+        if (op === ts.SyntaxKind.LessThanToken || op === ts.SyntaxKind.GreaterThanToken ||
+            op === ts.SyntaxKind.LessThanEqualsToken || op === ts.SyntaxKind.GreaterThanEqualsToken) {
+            if (this.javaPrimitiveOperandKind(left) !== undefined && this.javaPrimitiveOperandKind(right) !== undefined) {
+                return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
+            }
         }
 
         // only print the operands when this op is actually handled here; otherwise
@@ -1460,9 +1643,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 expression
             );
             this.warnIfAnyType(node, (type as any).flags, leftSide, "length");
-            rawExpression = this.isStringType((type as any).flags)
-                ? `((String)${leftSide}).length()`
-                : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+            rawExpression = this.printJavaLength(expression, leftSide);
             break;
         }
         case "push":
@@ -1967,9 +2148,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const leftSide = this.printNode(node.expression, 0);
         const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression);
         this.warnIfAnyType(node, (type as any).flags, leftSide, "length");
-        return this.isStringType((type as any).flags)
-            ? `((String)${leftSide}).length()`
-            : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+        return this.printJavaLength(node.expression, leftSide);
     }
 
     // For ++/--, prefer native Java operators rather than the C# ref-helpers
