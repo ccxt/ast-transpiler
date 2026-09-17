@@ -432,6 +432,58 @@ export class RustTranspiler extends BaseTranspiler {
         return `&${expr}`;
     }
 
+    // TS `number` / number-literal type proof for a comparison operand. Unions
+    // (`number | undefined`) and `any` are rejected — those keep the helper.
+    isNumberTyped(node) {
+        const type = this.getChecker().getTypeAtLocation(node);
+        if (type === undefined) {
+            return false;
+        }
+        return (type.flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral)) !== 0;
+    }
+
+    // Positions whose emitted Rust is a native `bool`: if/while/do/for
+    // conditions, `? :` conditions, `!` operands and `&&` / `||` operands.
+    // Parentheses are transparent.
+    isBooleanPosition(node) {
+        let current = node;
+        let parent = current.parent;
+        while (parent !== undefined && ts.isParenthesizedExpression(parent)) {
+            current = parent;
+            parent = parent.parent;
+        }
+        if (parent === undefined) {
+            return false;
+        }
+        switch (parent.kind) {
+        case SyntaxKind.IfStatement:
+        case SyntaxKind.WhileStatement:
+        case SyntaxKind.DoStatement:
+            return parent.expression === current;
+        case SyntaxKind.ForStatement:
+            return parent.condition === current;
+        case SyntaxKind.ConditionalExpression:
+            return parent.condition === current;
+        case SyntaxKind.PrefixUnaryExpression:
+            return parent.operator === SyntaxKind.ExclamationToken;
+        case SyntaxKind.BinaryExpression:
+            return parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+                parent.operatorToken.kind === SyntaxKind.BarBarToken;
+        }
+        return false;
+    }
+
+    // `is_less_than` & co. compare two `Value`s and answer `false` for
+    // non-numbers; with both operands checker-typed numbers the same f64
+    // comparison runs natively on `Value::as_f64()` unwraps.
+    printNativeNumericComparison(node, operator, leftText, rightText) {
+        const unwrap = (text: string) => `${text}.as_f64().unwrap_or(f64::NAN)`;
+        const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
+        // Conditions/logical operands already expect a bool; every other
+        // position stores the result in a `Value`, so box it as before.
+        return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -534,6 +586,10 @@ export class RustTranspiler extends BaseTranspiler {
 
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
         if (op in this.binaryExpressionsWrappers) {
+            const nativeOperator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+            if (nativeOperator !== undefined && this.isNumberTyped(left) && this.isNumberTyped(right)) {
+                return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
+            }
             const [fnName, close] = this.binaryExpressionsWrappers[op];
             const leftText = this.printNode(left, 0);
             const rightText = this.printNode(right, 0);
@@ -1111,6 +1167,14 @@ export class RustTranspiler extends BaseTranspiler {
         SyntaxKind.GreaterThanToken,
         SyntaxKind.GreaterThanEqualsToken,
     ]);
+
+    // Comparison helpers that can be replaced by a native numeric operator.
+    private static readonly NATIVE_COMPARISON_OPERATORS: Record<number, string> = {
+        [SyntaxKind.LessThanToken]: '<',
+        [SyntaxKind.LessThanEqualsToken]: '<=',
+        [SyntaxKind.GreaterThanToken]: '>',
+        [SyntaxKind.GreaterThanEqualsToken]: '>=',
+    };
 
     printCondition(node, identation) {
         if (node.kind === SyntaxKind.BinaryExpression) {

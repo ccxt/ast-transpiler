@@ -902,6 +902,9 @@ declare class RustTranspiler extends BaseTranspiler {
     printBooleanLiteral(node: any): "Value::Bool(true)" | "Value::Bool(false)";
     printNullKeyword(node: any, identation: any): string;
     ensureRef(expr: string): string;
+    isNumberTyped(node: any): boolean;
+    isBooleanPosition(node: any): boolean;
+    printNativeNumericComparison(node: any, operator: any, leftText: any, rightText: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
     printDateNowCall(node: any, identation: any): string;
@@ -930,6 +933,7 @@ declare class RustTranspiler extends BaseTranspiler {
     printElementAccessExpression(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
     private static readonly COMPARISON_OPS;
+    private static readonly NATIVE_COMPARISON_OPERATORS;
     printCondition(node: any, identation: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
