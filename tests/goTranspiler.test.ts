@@ -57,7 +57,6 @@ describe('go transpiling tests', () => {
         "}";
         const go =
         "type Test struct {\n"+
-        "\n"+
         "}\n"+
         "\n"+
         "func NewTest() *Test {\n"+
@@ -68,6 +67,39 @@ describe('go transpiling tests', () => {
         "\n"+
         "func (this *Test) Main() any {\n"+
         "    return 1\n"+
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toBe(go);
+    });
+    test('struct field columns are aligned like go/printer (tabwriter, block per column)', () => {
+        // gofmt pads every field cell to the widest cell of its column block plus one: the
+        // embedded `Base` has no type cell, so it terminates the block it opens, and the
+        // untagged `NoTag` terminates the type block (its type is the trailing cell).
+        const ts =
+        "class Test extends Base {\n" +
+        "    short: string = '';\n" +
+        "    aLongerPropertyName: any = {};\n" +
+        "    noTag: any;\n" +
+        "    main() {\n" +
+        "        return 1\n" +
+        "    }\n" +
+        "}";
+        const go =
+        "type Test struct {\n" +
+        "    Base\n" +
+        "    Short               string `default:\"\"`\n" +
+        "    ALongerPropertyName any    `default:\"map[string]any {}\"`\n" +
+        "    NoTag               any\n" +
+        "}\n" +
+        "\n" +
+        "func NewTest() *Test {\n" +
+        "    p := &Test{}\n" +
+        "    setDefaults(p)\n" +
+        "    return p\n" +
+        "}\n" +
+        "\n" +
+        "func  (this *Test) Main() any  {\n" +
+        "    return 1\n" +
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
