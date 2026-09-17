@@ -491,6 +491,7 @@ declare class PhpTranspiler extends BaseTranspiler {
 declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     csharpBooleanReturnTypes: WeakMap<ts.Node, string>;
+    csharpTypedLocals: WeakMap<ts.Node, string>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -503,6 +504,17 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printWrappedUnknownThisProperty(node: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
+    csharpNativeReceiver(node: any): {
+        text: string;
+        type: string;
+    } | undefined;
+    csharpTypeIsNative(csharpType: string): boolean;
+    csharpTypedLocalType(node: any): string | undefined;
+    csharpNativeStringKey(key: any): string | undefined;
+    csharpIsDictionaryType(type: any): boolean;
+    csharpIsArrayType(type: any): boolean;
+    csharpNativeInExpression(key: any, obj: any): string | undefined;
+    csharpNativeLengthExpression(expression: any): string | undefined;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     csharpCallReturnType(initializer: any): string | undefined;
     csharpTypeOfInitializer(initializer: any): string | undefined;
