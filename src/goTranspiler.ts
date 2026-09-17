@@ -192,6 +192,17 @@ const GO_BOOL_FIELDS = new Set([
     'this.SubstituteCommonCurrencyCodes',
     'this.IsSandboxModeEnabled',
 ]);
+// A printed call the printer cannot type *and* whose Go signature returns `any`
+// can be compared with nil / a string / a bool literal without the helper: the
+// box holds a scalar or nil, never a typed pointer.
+const GO_ANY_BOX_CALLS = [
+    'GetValue', 'Ternary',
+    'SafeValue', 'this.SafeValue',
+    'SafeDict', 'this.SafeDict',
+    'SafeList', 'this.SafeList',
+    'SafeBool', 'this.SafeBool',
+    'SafeNumber', 'this.SafeNumber',
+];
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
@@ -1686,31 +1697,95 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.goScalarFamilyOfType(type);
     }
 
-    goScalarFamilyOfType(type): string | undefined {
+    // the scalar family the TypeScript type of an operand belongs to, where a
+    // `string | undefined` union still counts as 'string': the Go box holds that
+    // scalar or nil, and both `x == nil` and `x == "lit"` are then the same
+    // predicate as the helper. Numbers are excluded by the caller.
+    goScalarFamilyWithNil(node): string | undefined {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return this.goScalarFamilyOfType(type, true);
+    }
+
+    // the callee name of a printed call, e.g. `this.SafeDict(x, 0, {})` → `this.SafeDict`
+    goPrintedCallee(printedValue: string): string | undefined {
+        let value = printedValue.trim();
+        while (value.startsWith('(') && this.isWholePrintedCall(value, 0)) {
+            value = value.substring(1, value.length - 1).trim();
+        }
+        const open = value.indexOf('(');
+        if (open <= 0 || !this.isWholePrintedCall(value, open)) {
+            return undefined;
+        }
+        const callee = value.substring(0, open);
+        return /^[A-Za-z_][\w.]*$/.test(callee) ? callee : undefined;
+    }
+
+    // true when this expression prints to an interface (`any`) box: a parameter, a
+    // local the printer left `any`, or one of the helpers whose Go signature returns
+    // `any`. A *T / scalar local or call is not a box and keeps its own rule.
+    goIsAnyBoxExpression(node, printedText: string): boolean {
+        if (node?.kind === ts.SyntaxKind.Identifier) {
+            let symbol;
+            try {
+                symbol = this.getChecker().getSymbolAtLocation(node);
+            } catch (e) {
+                return false;
+            }
+            const decl = symbol?.valueDeclaration;
+            const isBinding = (decl?.kind === ts.SyntaxKind.Parameter)
+                || (decl?.kind === ts.SyntaxKind.VariableDeclaration);
+            if (!isBinding) {
+                return false;
+            }
+            // the printer names a Go type for this local/`:=` initializer, so the
+            // value is not behind an interface
+            return this.goDeclaredTypeOfIdentifier(node) === undefined;
+        }
+        if (node?.kind === ts.SyntaxKind.CallExpression) {
+            if (this.goTypeOfInitializer(node, printedText) !== undefined) {
+                return false; // a *T or a scalar the printer can name
+            }
+            return GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0;
+        }
+        return false;
+    }
+
+    goScalarFamilyOfType(type, allowNil = false): string | undefined {
         if (type === undefined) {
             return undefined;
         }
         // Str/Int/Num/Bool are nullable aliases of `string | undefined` & friends;
-        // their Go representation is still `any`, so they never inline
+        // their Go representation is still `any`, so they never inline — unless the
+        // caller is asking about the value the `any` box holds (allowNil)
         const alias = type.aliasSymbol?.escapedName;
-        switch (alias) {
-        case 'Str':
-        case 'Int':
-        case 'Num':
-        case 'Bool':
-            return undefined;
+        if (!allowNil) {
+            switch (alias) {
+            case 'Str':
+            case 'Int':
+            case 'Num':
+            case 'Bool':
+                return undefined;
+            }
         }
         const flags = type.flags;
         if (flags & ts.TypeFlags.Union) {
             const families = new Set<string>();
             for (const member of type.types) {
-                const family = this.goScalarFamilyOfType(member);
+                const family = this.goScalarFamilyOfType(member, allowNil);
                 if (family === undefined) {
                     return undefined;
                 }
                 // `string | undefined` is `any` in Go, never a bare Go string:
                 // one nullable member disqualifies the whole union
                 if (family === 'nil') {
+                    if (allowNil) {
+                        continue; // the box holds nil for that member
+                    }
                     return undefined;
                 }
                 families.add(family);
@@ -2187,6 +2262,46 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // returned undefined by goScalarFamily, so they keep IsEqual.
         if (!lPtr && !rPtr && lFam !== undefined && rFam !== undefined
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        // an operand the printer boxes into `any` whose TypeScript type proves the box
+        // holds a scalar or nil: `x === undefined` and `x === 'lit'` are then the same
+        // predicate as the helper, without the interface round-trip. Numbers stay on
+        // IsEqual: an `any` box may hold int, int64 or float64, and Go compares those
+        // by exact width.
+        const lNilFam = this.goScalarFamilyWithNil(left);
+        const rNilFam = this.goScalarFamilyWithNil(right);
+        const lBox = !lPtr && this.goIsAnyBoxExpression(left, leftText);
+        const rBox = !rPtr && this.goIsAnyBoxExpression(right, rightText);
+        if (lBox && (rFam === 'nil') && (lNilFam !== undefined) && (lNilFam !== 'number')) {
+            return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        if (rBox && (lFam === 'nil') && (rNilFam !== undefined) && (rNilFam !== 'number')) {
+            return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+        }
+        // a string or bool literal: only a value of that very type is equal in both
+        // predicates, so no numeric or nil member can be compared away
+        const isLiteral = (node): boolean => {
+            switch (node?.kind) {
+            case ts.SyntaxKind.StringLiteral:
+            case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            case ts.SyntaxKind.TrueKeyword:
+            case ts.SyntaxKind.FalseKeyword:
+                return true;
+            }
+            return false;
+        };
+        const literalMatchesBox = (boxFam: string | undefined, litNode, litFam: string | undefined): boolean =>
+            ((litFam === 'string') || (litFam === 'bool')) && isLiteral(litNode)
+            && ((boxFam === litFam) || (boxFam === undefined));
+        if (lBox && literalMatchesBox(lNilFam, right, rFam)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        if (rBox && literalMatchesBox(rNilFam, left, lFam)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        // two boxes of one non-numeric family: both hold that scalar or nil
+        if (lBox && rBox && (lNilFam !== undefined) && (lNilFam !== 'number') && (lNilFam === rNilFam)) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         return undefined;

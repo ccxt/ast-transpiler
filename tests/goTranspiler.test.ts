@@ -944,7 +944,9 @@ describe('go inline equality', () => {
         expect(output).toContain("var c bool = (x != \"delivery\")");
         expect(output).toContain("var d bool = (n == 1)");
         expect(output).toContain("var e bool = (b == true)");
-        expect(output).toContain("var g bool = IsEqual(o, \"delivery\")");
+        // an `any` operand: only a string/bool literal may drop the helper, the
+        // box can hold a number and IsEqual converts across numeric widths
+        expect(output).toContain("var g bool = (o == \"delivery\")");
         expect(output).not.toContain("*x");
         expect(output).not.toContain("IsEqualString");
         expect(output).not.toContain("IsEqualInt");
@@ -960,13 +962,16 @@ describe('go inline equality', () => {
         "    const b = s !== 'delivery';\n" +
         "    const c = i === 1;\n" +
         "    const d = s === undefined;\n" +
-        "    return [ a, b, c, d ];\n" +
+        "    const e = i === undefined;\n" +
+        "    return [ a, b, c, d, e ];\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var a bool = IsEqual(s, \"delivery\")");
-        expect(output).toContain("var b bool = !IsEqual(s, \"delivery\")");
+        expect(output).toContain("var a bool = (s == \"delivery\")");
+        expect(output).toContain("var b bool = (s != \"delivery\")");
         expect(output).toContain("var c bool = IsEqual(i, 1)");
-        expect(output).toContain("var d bool = IsEqual(s, nil)");
+        expect(output).toContain("var d bool = (s == nil)");
+        // a nullable number keeps the helper: the box may hold int, int64 or float64
+        expect(output).toContain("var e bool = IsEqual(i, nil)");
         expect(output).not.toContain("IsEqualString");
         expect(output).not.toContain("*s");
     });
@@ -1592,5 +1597,101 @@ describe('go native element assignment', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("this.Id += \"x\"");
+    });
+
+    test('a nullable scalar in an any box compares natively', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "type Bool = boolean | undefined;\n" +
+        "function f (s: Str, flag: Bool, n: number | undefined) {\n" +
+        "    const a = s === 'delivery';\n" +
+        "    const b = s !== undefined;\n" +
+        "    const c = flag === true;\n" +
+        "    const d = flag === undefined;\n" +
+        "    const e = n === undefined;\n" +
+        "    const g = n === 1;\n" +
+        "    return [ a, b, c, d, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (s == \"delivery\")");
+        expect(output).toContain("var b bool = (s != nil)");
+        expect(output).toContain("var c bool = (flag == true)");
+        expect(output).toContain("var d bool = (flag == nil)");
+        expect(output).toContain("var e bool = IsEqual(n, nil)");
+        // numbers keep the helper: the box may hold int, int64 or float64
+        expect(output).toContain("var g bool = IsEqual(n, 1)");
+    });
+    test('two nullable boxes of the same family compare natively', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "function f (a: Str, b: Str, c: string, d: Str) {\n" +
+        "    const x = a === b;\n" +
+        "    const y = c === d;\n" +
+        "    return [ x, y ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var x bool = (a == b)");
+        expect(output).toContain("var y bool = (c == d)");
+    });
+    test('a boxed helper result compares against nil, a string and a bool', () => {
+        const input =
+        "class T {\n" +
+        "    safeValue (a, b) { return a; }\n" +
+        "    safeBool (a, b) { return a; }\n" +
+        "    safeDict (a, b) { return a; }\n" +
+        "    f (response: any, key: string) {\n" +
+        "        const v = this.safeValue (response, key);\n" +
+        "        const r = GetValue(response, key);\n" +
+        "        const a = this.safeBool (response, key) === true;\n" +
+        "        const b = this.safeDict (response, key) !== undefined;\n" +
+        "        const c = GetValue(response, key) === 'spot';\n" +
+        "        const d = GetValue(response, key) === undefined;\n" +
+        "        const e = Ternary(true, r, v) === false;\n" +
+        "        return [ v, r, a, b, c, d, e ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (this.SafeBool(response, key) == true)");
+        expect(output).toContain("var b bool = !IsEqual(this.SafeDict(response, key), nil)");
+        expect(output).toContain("var c bool = (GetValue(response, key) == \"spot\")");
+        // an any-typed operand is not a proven nullable scalar: nil stays on the helper
+        expect(output).toContain("var d bool = IsEqual(GetValue(response, key), nil)");
+        expect(output).toContain("var e bool = (Ternary(true, r, v) == false)");
+    });
+    test('a concrete Go scalar keeps the helper for a nil test', () => {
+        const input =
+        "class T {\n" +
+        "    f (s: string, d: any) {\n" +
+        "        const n = s.length;\n" +
+        "        const m = d.length;\n" +
+        "        const a = n === undefined;\n" +
+        "        const b = m === undefined;\n" +
+        "        return [ a, b ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // `n` is an `any` box whose TypeScript type is `number` and `m` is a plain Go
+        // int: `== nil` would not compile against the int, and the number family stays
+        // on the helper in both cases
+        expect(output).toContain("IsEqual(n, nil)");
+        expect(output).toContain("IsEqual(m, nil)");
+        expect(output).not.toContain("n == nil");
+        expect(output).not.toContain("m == nil");
+    });
+    test('a number literal on a box stays on the helper, string and bool inline', () => {
+        const input =
+        "class T {\n" +
+        "    f (o: any) {\n" +
+        "        const values = o;\n" +
+        "        const a = values === 0;\n" +
+        "        const b = values === false;\n" +
+        "        const c = values === '';\n" +
+        "        return [ a, b, c ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(values, 0)");
+        expect(output).toContain("var b bool = (values == false)");
+        expect(output).toContain("var c bool = (values == \"\")");
     });
 });
