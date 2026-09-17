@@ -402,7 +402,65 @@ describe('rust transpiling tests', () => {
     test('ternary expression', () => {
         const ts = 'const x = a ? b : c;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('ternary(');
+        expect(output).toContain('(if is_true(&a) { b.clone() } else { c.clone() })');
+        expect(output).not.toContain('ternary(');
+    });
+
+    test('ternary bool arm is boxed as Value', () => {
+        const ts = 'const x = c ? (a || b) : false;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(if is_true(&c) { Value::Bool((is_true(&a) || is_true(&b))) } else { Value::Bool(false) })');
+    });
+
+    test('ternary with value arms', () => {
+        const ts = "const x = flag ? 'a' : 'b';"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(if is_true(&flag) { Value::Str("a".to_string()) } else { Value::Str("b".to_string()) })');
+    });
+
+    // Checker-proven helper removal: array/string .length → native Value::len()
+    test('array length native for typed array', () => {
+        const ts = 'const arr = [1, 2, 3];\nconst n = arr.length;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Int(arr.len() as i64)');
+        expect(output).not.toContain('get_array_length(&arr)');
+    });
+
+    test('string length native for typed string', () => {
+        const ts = 'const s = "test";\nconst n = s.length;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Int(s.len() as i64)');
+        expect(output).not.toContain('get_array_length(&s)');
+    });
+
+    test('object length keeps the helper', () => {
+        const ts = 'const o: { [key: string]: any } = {};\nconst n = o.length;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_array_length(&o)');
+    });
+
+    // Checker-proven helper removal: key in dict → native contains_key
+    test('in operator native for typed object', () => {
+        const ts = 'const o: { [key: string]: any } = {};\nconst r = "key" in o;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Bool(matches!(&o, Value::Dict(__d) if __d.contains_key("key")))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator keeps the helper for typed array', () => {
+        const ts = 'const a: any[] = [];\nconst r = "key" in a;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&a,');
+    });
+
+    // Checker-proven helper removal: negate of a numeric literal folds
+    test('negate literal folds to a literal', () => {
+        const intOutput = transpiler.transpileRust('const x = -1;').content;
+        expect(intOutput).toContain('Value::Int(-1)');
+        expect(intOutput).not.toContain('negate(');
+        const floatOutput = transpiler.transpileRust('const x = -0.5;').content;
+        expect(floatOutput).toContain('Value::Float(-0.5)');
+        expect(floatOutput).not.toContain('negate(');
     });
 
     // instanceof

@@ -193,6 +193,95 @@ export class RustTranspiler extends BaseTranspiler {
         return 'Value::Null';
     }
 
+    // ── checker-typed helper elimination ─────────────────────────────────
+    // Each predicate proves a static TS shape for which the native Rust form
+    // is exactly what the runtime helper computes; only then is the helper
+    // call dropped, anything unproven keeps the helper.
+
+    typeOfNodeIfAny(node: ts.Node): ts.Type | undefined {
+        // A transpile without a program/checker (bare snippet) has no types.
+        try {
+            return this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // Arrays/tuples/strings: `.length` is exactly what `Value::len()` returns.
+    // Other shapes (Dict) keep the helper — ArrayCache / OrderBookSide markers
+    // hold their length in the marker dict, which get_array_length unwraps.
+    isValueLengthType(type: ts.Type | undefined): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            const parts: ts.Type[] = (type as any).types ?? [];
+            return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
+        }
+        return this.getChecker().isArrayType(type)
+            || this.getChecker().isTupleType(type)
+            || this.isStringType(type.flags);
+    }
+
+    printArrayLength(node, identation, leftExpr = undefined) {
+        const receiver = leftExpr ?? this.printNode(node.expression, 0);
+        if (this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) {
+            return `Value::Int(${receiver}.len() as i64)`;
+        }
+        return `get_array_length(&${receiver})`;
+    }
+
+    // Object-typed values are Dicts at runtime, so `key in obj` is a plain
+    // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
+    isDictShapedType(type: ts.Type | undefined): boolean {
+        if (type === undefined || !(type.flags & ts.TypeFlags.Object)) {
+            return false;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
+            return false;
+        }
+        const objectFlags = (type as ts.ObjectType).objectFlags;
+        if (objectFlags & (ts.ObjectFlags.Class | ts.ObjectFlags.Reference)) {
+            return false;
+        }
+        return type.getCallSignatures().length === 0;
+    }
+
+    // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
+    // In the TS AST `key` is the left operand and `obj` the right one.
+    printNativeInOperator(key, obj) {
+        if (!ts.isStringLiteral(key)) {
+            return undefined;
+        }
+        if (!this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
+            return undefined;
+        }
+        const printedKey = this.printStringLiteral(key);
+        const keyLiteral = printedKey.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
+        if (!keyLiteral) {
+            return undefined;
+        }
+        const objExpr = this.printNode(obj, 0);
+        return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral[1]})))`;
+    }
+
+    // `negate(&Value::Int(n))` is `Value::Int(-n)` (same for Float) — fold the
+    // literal so no helper call is needed. Runtime `negate` also coerces
+    // strings/bools/floats, so only Int/Float literals can be folded.
+    foldNegateLiteral(operandText: string): string | undefined {
+        const match = operandText.match(/^Value::(Int|Float)\((-?)(\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\)$/);
+        if (!match) {
+            return undefined;
+        }
+        const digits = match[3].replaceAll('_', '');
+        if (digits.replace('.', '').length > 18) {
+            return undefined; // leave big literals to the runtime helper
+        }
+        const sign = match[2] === '-' ? '' : '-';
+        return `Value::${match[1]}(${sign}${match[3]})`;
+    }
+
     // Ensure a & ref prefix — skip only if already a reference
     ensureRef(expr: string): string {
         if (expr.startsWith('&')) {
@@ -261,6 +350,10 @@ export class RustTranspiler extends BaseTranspiler {
 
         // Handle in operator — wrap as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
+            const native = this.printNativeInOperator(left, right);
+            if (native !== undefined) {
+                return native;
+            }
             return `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
 
@@ -575,7 +668,7 @@ export class RustTranspiler extends BaseTranspiler {
         const leftExpr = this.printNode(node.expression, 0);
 
         if (rightSide === 'length') {
-            return `get_array_length(&${leftExpr})`;
+            return this.printArrayLength(node, 0, leftExpr);
         }
 
         return `${leftExpr}.${rightSide}`;
@@ -583,9 +676,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     transformPropertyAcessExpressionIfNeeded(node) {
         const rightSide = node.name.escapedText;
+        // Printed here (as before) so the receiver's loop-flag numbering in the
+        // generated file matches the pinned baseline for non-length accesses.
         const leftExpr = this.printNode(node.expression, 0);
         if (rightSide === 'length') {
-            return `get_array_length(&${leftExpr})`;
+            return this.printArrayLength(node, 0, leftExpr);
         }
         return undefined;
     }
@@ -727,7 +822,12 @@ export class RustTranspiler extends BaseTranspiler {
             return this.getIden(identation) + '!' + this.printCondition(node.operand, 0);
         }
         if (operator === SyntaxKind.MinusToken) {
-            return this.getIden(identation) + `negate(&${this.printNode(operand, 0)})`;
+            const operandText = this.printNode(operand, 0);
+            const folded = this.foldNegateLiteral(operandText);
+            if (folded !== undefined) {
+                return this.getIden(identation) + folded;
+            }
+            return this.getIden(identation) + `negate(&${operandText})`;
         }
         return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
     }
@@ -773,9 +873,66 @@ export class RustTranspiler extends BaseTranspiler {
 
     printConditionalExpression(node, identation) {
         const condition = this.printCondition(node.condition, 0);
-        const whenTrue = this.printNode(node.whenTrue, 0);
-        const whenFalse = this.printNode(node.whenFalse, 0);
-        return `ternary(${condition}, ${whenTrue}, ${whenFalse})`;
+        const whenTrue = this.printTernaryArm(node.whenTrue);
+        const whenFalse = this.printTernaryArm(node.whenFalse);
+        // `ternary` is `if cond { a } else { b }` over `Value`; the arms are
+        // normalized to `Value` below, so the native form matches it and
+        // evaluates only the taken arm (TS semantics).
+        return `(if ${condition} { ${whenTrue} } else { ${whenFalse} })`;
+    }
+
+    // Free runtime functions that print as `bool` (not `Value`) — mirror of the
+    // Rust pipeline's `ternary()` bool-boxing list.
+    private static readonly BOOL_VALUE_PREFIXES = [
+        'is_equal', 'is_true', 'is_greater_than', 'is_less_than',
+        'is_greater_than_or_equal', 'is_less_than_or_equal', 'is_array',
+        'is_object', 'in_op', 'is_number', 'is_string',
+    ];
+
+    private static isBoolValueExpression(text: string): boolean {
+        let value = text.trim();
+        for (;;) {
+            if (!(value.startsWith('(') && value.endsWith(')'))) {
+                break;
+            }
+            let depth = 0;
+            let wrapsWhole = true;
+            for (let i = 0; i < value.length; i++) {
+                if (value[i] === '(') {
+                    depth++;
+                } else if (value[i] === ')') {
+                    depth--;
+                    if (depth === 0 && i < value.length - 1) {
+                        wrapsWhole = false;
+                        break;
+                    }
+                }
+            }
+            if (!wrapsWhole) {
+                break;
+            }
+            value = value.slice(1, -1).trim();
+        }
+        if (value.startsWith('!')) {
+            value = value.slice(1).trim();
+        }
+        return RustTranspiler.BOOL_VALUE_PREFIXES.some((fn) => value.startsWith(fn + '('));
+    }
+
+    // An if-expression arm keeps the type `ternary()`'s `Value` parameters gave
+    // it: box bool expressions, and clone bare identifiers so the arm does not
+    // move a local the caller still uses.
+    printTernaryArm(node, identation = 0) {
+        const text = this.printNode(node, identation);
+        const trimmed = text.trim();
+        if (RustTranspiler.isBoolValueExpression(trimmed)) {
+            return `Value::Bool(${trimmed})`;
+        }
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) &&
+            trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false') {
+            return `${trimmed}.clone()`;
+        }
+        return text;
     }
 
     // Built-in method call overrides
