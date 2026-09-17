@@ -148,6 +148,18 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'this.SafeFloat': '*float64',
     'this.SafeFloat2': '*float64',
     'this.SafeFloatN': '*float64',
+    // the boolean/dict/list accessors carry the same absent-vs-present distinction:
+    // a nil pointer is an absent flag/dict/list (JS undefined), a non-nil one is
+    // present even when its pointee is the zero value (false / empty)
+    'this.SafeBool': '*bool',
+    'this.SafeBool2': '*bool',
+    'this.SafeBoolN': '*bool',
+    'this.SafeDict': '*map[string]any',
+    'this.SafeDict2': '*map[string]any',
+    'this.SafeDictN': '*map[string]any',
+    'this.SafeList': '*[]any',
+    'this.SafeList2': '*[]any',
+    'this.SafeListN': '*[]any',
     // Precise arithmetic returns a numeric string, or nil when an operand is
     // absent, so it carries the same *string shape as the Safe* string accessors
     'Precise.StringMul': '*string',
@@ -162,9 +174,10 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'Precise.StringMod': '*string',
 };
 
-// helpers whose Go signature is `any` (GetValue, Ternary, Add, ...) are
+// helpers whose Go signature is `any` (GetValue, Ternary, Add, SafeValue, ...) are
 // deliberately absent above: their box holds a value the printer cannot name, so
-// those locals stay `any`.
+// those locals stay `any`. A Safe* entry presupposes the matching Go accessor
+// returns that shape (as the hand-written base already does for Str/Int/Float).
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
