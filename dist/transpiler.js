@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2684,6 +2684,13 @@ var CSHARP_THIS_RETURN_TYPES = {
   "valueIsDefined": "bool"
 };
 var CSHARP_TYPE_NAMES = ["string", "bool", "int", "long", "Int64", "double", "object", "List", "Dictionary", "var"];
+var CSHARP_NUMERIC_KINDS = ["int", "Int64", "double"];
+var CSHARP_NATIVE_COMPARISON_TOKENS = {
+  [ts4.SyntaxKind.LessThanToken]: "<",
+  [ts4.SyntaxKind.GreaterThanToken]: ">",
+  [ts4.SyntaxKind.LessThanEqualsToken]: "<=",
+  [ts4.SyntaxKind.GreaterThanEqualsToken]: ">="
+};
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -2961,6 +2968,61 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
+  // the concrete C# type of an expression the printer can name, or undefined: the embedding
+  // build layer's proof wins (it retypes locals the printer leaves `object`), then the
+  // printer's own tables and the literals whose C# type is fixed by their text
+  csharpExpressionTypeOf(node) {
+    const provided = this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : void 0;
+    if (provided !== void 0) {
+      return provided;
+    }
+    if (ts4.isNumericLiteral(node)) {
+      const value = Number(node.text);
+      return Number.isInteger(value) && Math.abs(value) <= 2147483647 ? "int" : void 0;
+    }
+    if (ts4.isPrefixUnaryExpression(node) && node.operator === ts4.SyntaxKind.MinusToken && ts4.isNumericLiteral(node.operand)) {
+      const value = Number(node.operand.text);
+      return Number.isInteger(value) && value <= 2147483647 ? "int" : void 0;
+    }
+    return this.csharpTypeOfInitializer(node);
+  }
+  // the TypeScript checker must see two plain numbers: `any` (could be a string box) and a
+  // nullable union (the helper orders null, C# would throw) both keep the runtime helper
+  csharpOperandsAreNumbers(node) {
+    const isNumber = (operand) => {
+      let flags;
+      try {
+        flags = this.getChecker().getTypeAtLocation(operand)?.flags;
+      } catch (e) {
+        return false;
+      }
+      return flags === ts4.TypeFlags.Number || flags === ts4.TypeFlags.NumberLiteral;
+    };
+    return isNumber(node.left) && isNumber(node.right);
+  }
+  // `<`, `>`, `<=`, `>=` on two operands of the same proven C# number kind print natively:
+  // the helper compares the two boxes with the conversions the operator applies, and only
+  // `double` carries a value (NaN) the two disagree on — see CSHARP_NUMERIC_KINDS
+  csharpNativeNumericComparison(node, identation) {
+    const token = CSHARP_NATIVE_COMPARISON_TOKENS[node.operatorToken.kind];
+    if (token === void 0) {
+      return void 0;
+    }
+    const leftKind = this.csharpExpressionTypeOf(node.left);
+    const rightKind = this.csharpExpressionTypeOf(node.right);
+    if (leftKind === void 0 || leftKind !== rightKind || CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0) {
+      return void 0;
+    }
+    if (leftKind === "double" && (token === "<" || token === "<=")) {
+      return void 0;
+    }
+    if (!this.csharpOperandsAreNumbers(node)) {
+      return void 0;
+    }
+    const leftText = this.printNode(node.left, 0).trim();
+    const rightText = this.printNode(node.right, 0).trim();
+    return leftText + " " + token + " " + rightText;
+  }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
     const right = node.right;
@@ -2995,6 +3057,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return `inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
     }
     if (op === ts4.SyntaxKind.PlusEqualsToken || op === ts4.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
+      const nativeComparison = this.csharpNativeNumericComparison(node, identation);
+      if (nativeComparison !== void 0) {
+        return nativeComparison;
+      }
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
       if (op === ts4.SyntaxKind.PlusEqualsToken) {

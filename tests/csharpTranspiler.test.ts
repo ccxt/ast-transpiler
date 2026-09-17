@@ -1243,7 +1243,7 @@ describe('csharp typed body locals', () => {
         expect(output).toContain("public virtual object mixed(object x)");
         expect(output).toContain("public virtual bool filtered(object items)");
         expect(output).toContain("return isGreaterThan(i, 1);");
-        expect(output).toContain("return ((bool)((object)(isGreaterThan(getArrayLength(found), 0)))!);");
+        expect(output).toContain("return ((bool)((object)(getArrayLength(found) > 0))!);");
     });
     test('an un-annotated override of a bool? method inherits the parent type and unboxes', () => {
         const input =
@@ -1604,3 +1604,92 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         expect(output).toContain("isEqual(x, null)");
     });
 });
+
+describe('csharp native numeric comparisons', () => {
+    // the printer names the C# kind of int-range literals, `.length` and a few call results
+    // itself; locals it leaves `object` (or that the embedding build layer retypes) come back
+    // through csharpExpressionTypeResolver — these tests stub that resolver with a name map
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('two operands of one proven kind print the native operator', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number) {\n" +
+        "        const lt = alpha < beta;\n" +
+        "        const gt = alpha > beta;\n" +
+        "        const le = alpha <= beta;\n" +
+        "        const ge = alpha >= beta;\n" +
+        "        return [lt, gt, le, ge];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ alpha: 'int', beta: 'int' }, input);
+        expect(output).toContain("bool lt = alpha < beta;");
+        expect(output).toContain("bool gt = alpha > beta;");
+        expect(output).toContain("bool le = alpha <= beta;");
+        expect(output).toContain("bool ge = alpha >= beta;");
+        expect(output).not.toContain("isLessThan(");
+        expect(output).not.toContain("isGreaterThan");
+    });
+    test('an unproven or mismatched kind keeps the runtime helper', () => {
+        const unproven =
+        "class Exchange {\n" +
+        "    main(gamma: number, delta: number) {\n" +
+        "        return gamma < delta;\n" +
+        "    }\n" +
+        "}";
+        expect(withKinds({}, unproven)).toContain("isLessThan(gamma, delta)");
+        const mismatched =
+        "class Exchange {\n" +
+        "    main(epsilon: number, zeta: number) {\n" +
+        "        return epsilon < zeta;\n" +
+        "    }\n" +
+        "}";
+        expect(withKinds({ epsilon: 'int', zeta: 'Int64' }, mismatched)).toContain("isLessThan(epsilon, zeta)");
+    });
+    test('an operand the checker does not see as a plain number keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(eta: any, theta: number) {\n" +
+        "        return eta < theta;\n" +
+        "    }\n" +
+        "}";
+        // the resolver claims int for both, the checker sees `any` on the left
+        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("isLessThan(eta, theta)");
+    });
+    test('two doubles print `>`/`>=` but keep `<`/`<=` (NaN)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(iota: number, kappa: number) {\n" +
+        "        return [iota < kappa, iota <= kappa, iota > kappa, iota >= kappa];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ iota: 'double', kappa: 'double' }, input);
+        expect(output).toContain("isLessThan(iota, kappa)");
+        expect(output).toContain("isLessThanOrEqual(iota, kappa)");
+        expect(output).toContain("iota > kappa");
+        expect(output).toContain("iota >= kappa");
+    });
+    test('printer-named operands compare natively without a resolver', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(items: any[]): boolean {\n" +
+        "        const lambda = items.filter ((i) => i > 1);\n" +
+        "        const floor = Math.floor(1) > Math.floor(2);\n" +
+        "        const smaller = Math.floor(1) < Math.floor(2);\n" +
+        "        return lambda.length >= 1 && floor && smaller;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("getArrayLength(lambda) >= 1");
+        expect(output).toContain(") > (Math.Floor("); // two doubles, `>` only
+        expect(output).toContain("isLessThan((Math.Floor("); // NaN: `<` keeps the helper
+        expect(output).toContain("isGreaterThan(i, 1)"); // `any` callback parameter stays a helper
+    });
+});
+
