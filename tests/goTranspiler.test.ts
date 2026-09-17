@@ -1484,4 +1484,113 @@ describe('go native element assignment', () => {
         expect(output).toContain('var m any =');
         expect(output).toContain('GetValue(m, "a")');
     });
+    test('string concat replaces Add when both operands are Go strings', () => {
+        const input =
+        "class T {\n" +
+        "    id: string = 'test';\n" +
+        "    f () {\n" +
+        "        var s = this.id + ' does not support ' + 'market';\n" +
+        "        return s;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var s any = this.Id + \" does not support \" + \"market\"");
+        expect(output).not.toContain("Add(");
+    });
+    test('concat with an any operand keeps the outer Add but inlines the string part', () => {
+        const input =
+        "class T {\n" +
+        "    id: string = 'test';\n" +
+        "    f (t: string) {\n" +
+        "        var s = this.id + ' does not support ' + t + ' market';\n" +
+        "        return s;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(Add(this.Id + \" does not support \", t), \" market\")");
+    });
+    test('int64 local minus an integer literal is a bare Go subtraction', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f () {\n" +
+        "        var now = this.milliseconds();\n" +
+        "        var since = now - 2592000000;\n" +
+        "        return since;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var now int64 = this.Milliseconds()");
+        expect(output).toContain("var since any = now - 2592000000");
+    });
+    test('Divide inlines a literal divisor but keeps the helper for a zero divisor', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f () {\n" +
+        "        var q = this.milliseconds() / 2;\n" +
+        "        var z = this.milliseconds() / 0;\n" +
+        "        return q;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var q any = this.Milliseconds() / 2");
+        expect(output).toContain("var z any = Divide(this.Milliseconds(), 0)");
+    });
+    test('Mod stays a helper (float semantics, no panic on a zero divisor)', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f () {\n" +
+        "        var r = this.milliseconds() % 2;\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var r any = Mod(this.Milliseconds(), 2)");
+    });
+    test('Subtract on an int-typed helper result keeps the helper (it returns int64)', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: string[]) {\n" +
+        "        var n = a.length - 1;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var n any = Subtract(GetArrayLength(a), 1)");
+    });
+    test('Add on an int-typed helper result is native (the helper returns int too)', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: string[]) {\n" +
+        "        var n = a.length + 1;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var n any = GetArrayLength(a) + 1");
+    });
+    test('float operands keep Add (the helper collapses integral results to int64)', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: number) {\n" +
+        "        var n = Math.floor(a) + 1;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(MathFloor(a), 1)");
+    });
+    test('concatenating into a typed string field is a compound assignment', () => {
+        const input =
+        "class T {\n" +
+        "    id: string = 'test';\n" +
+        "    f () {\n" +
+        "        this.id += 'x';\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("this.Id += \"x\"");
+    });
 });

@@ -203,11 +203,26 @@ const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
     [ts.SyntaxKind.LessThanEqualsToken]: '<=',
 };
 
+// hand-written BaseExchange fields (go/v4/exchange.go) declared `string`: their Go
+// value is never nil, so `this.<field> + s` matches Add(field, s) exactly.
+const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version' ];
+
+// operator kinds the arithmetic helpers are emitted for
+const GO_ARITHMETIC_KINDS = [
+    ts.SyntaxKind.PlusToken,
+    ts.SyntaxKind.MinusToken,
+    ts.SyntaxKind.AsteriskToken,
+    ts.SyntaxKind.SlashToken,
+    ts.SyntaxKind.PercentToken,
+];
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
+    // declarations whose Go local type is being resolved right now (see goLocalStaticType)
+    goLocalTypeResolution = new Set<any>();
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     asyncMethodSuffix = '';
@@ -845,6 +860,185 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return GO_HELPER_RETURN_TYPES[callee];
     }
 
+    // strips the wrapping parentheses the source (or an operand) printed around a
+    // whole expression, so the inner text can be classified
+    goUnwrapPrintedParens(printedText: string): string {
+        let value = (printedText ?? '').trim();
+        while (value.startsWith('(') && this.isWholePrintedCall(value, 0)) {
+            value = value.substring(1, value.length - 1).trim();
+        }
+        return value;
+    }
+
+    // the concrete Go type of a `var x T = <init>` local, undefined for `any`
+    goLocalStaticType(node): string | undefined {
+        const declaration: any = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
+            return undefined;
+        }
+        if (declaration.parent?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
+            return undefined; // declared with `:=`, where the printer annotates nothing
+        }
+        if (this.goLocalTypeResolution.has(declaration)) {
+            return undefined; // the safety scan below prints an expression using this same local
+        }
+        this.goLocalTypeResolution.add(declaration);
+        try {
+            return this.getGoLocalType(declaration, this.printNode(declaration.initializer, 0));
+        } finally {
+            this.goLocalTypeResolution.delete(declaration);
+        }
+    }
+
+    // `this.<field>` read of a hand-written BaseExchange string field
+    goStringFieldStaticType(node, printedText: string): string | undefined {
+        const match = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
+        if (match === null || GO_STRING_FIELD_NAMES.indexOf(match[1]) < 0) {
+            return undefined;
+        }
+        // a `string | undefined` field prints a nilable Go value, where Add's nil
+        // branch is reachable — only a non-optional string is provable
+        return this.getChecker().getTypeAtLocation(node).flags === ts.TypeFlags.String ? 'string' : undefined;
+    }
+
+    // Go static type of an operand's printed form: 'string', 'int', 'int64' or
+    // 'const-int' (untyped integer literal). undefined when the printer cannot name
+    // it — a nilable/`any` operand keeps the helper call.
+    goOperandStaticType(node, printedText: string): string | undefined {
+        switch (node?.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return 'string';
+        case ts.SyntaxKind.NumericLiteral:
+            return /^[0-9]+$/.test(node.text) ? 'const-int' : undefined;
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
+        case ts.SyntaxKind.BinaryExpression:
+            return this.goNativeArithmetic(node)?.goType;
+        case ts.SyntaxKind.Identifier:
+            return this.goLocalStaticType(node);
+        case ts.SyntaxKind.PropertyAccessExpression:
+            // `a.length` / `s.replace(...)` print as helper calls, `this.Id` as a field
+            return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
+        }
+        return this.goStringCallStaticType(node, printedText);
+    }
+
+    // the Go type the printed expression already produces; '*string' / '*int64'
+    // helpers box a nilable pointer, so those keep the helper call as well
+    goStringCallStaticType(node, printedText: string): string | undefined {
+        const goType = this.goTypeOfInitializer(node, printedText);
+        return ('string' === goType || 'int' === goType || 'int64' === goType) ? goType : undefined;
+    }
+
+    isNonZeroIntegerLiteral(node): boolean {
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.isNonZeroIntegerLiteral(node.expression);
+        }
+        return node?.kind === ts.SyntaxKind.NumericLiteral && /^[1-9][0-9]*$/.test(node.text);
+    }
+
+    // The bare Go operator must yield the same type the runtime helper returns for
+    // the same operands (go/v4/exchange_helpers.go): Add keeps int/int64, while
+    // Subtract/Multiply/Divide collapse every integer result to int64 and Mod is
+    // float-based, so only the rows below are equivalent.
+    goNativeIntResultType(op, leftType: string, rightType: string, rightNode): string | undefined {
+        let operands = undefined;
+        if (leftType === 'int64' && (rightType === 'int64' || rightType === 'const-int')) {
+            operands = 'int64';
+        } else if (leftType === 'const-int' && rightType === 'int64') {
+            operands = 'int64';
+        } else if (leftType === 'int' && (rightType === 'int' || rightType === 'const-int')) {
+            operands = 'int'; // Add's int/int branch, the only int-typed helper result
+        } else if (leftType === 'const-int' && (rightType === 'int' || rightType === 'const-int')) {
+            operands = 'int';
+        }
+        if (operands === undefined || op === ts.SyntaxKind.PercentToken) {
+            return undefined;
+        }
+        if (op === ts.SyntaxKind.SlashToken && !this.isNonZeroIntegerLiteral(rightNode)) {
+            return undefined; // Divide returns nil on a zero divisor, the operator panics
+        }
+        if (op === ts.SyntaxKind.PlusToken) {
+            return operands === 'int64' ? 'int64' : 'int';
+        }
+        // int64 in, int64 out: Subtract goes through ParseInt, Multiply/Divide use reflect Int()
+        return operands === 'int64' ? 'int64' : undefined;
+    }
+
+    // an operand that is itself a bare operator expression needs parens under a
+    // tighter parent operator; a whole helper call is already delimited
+    goNativeOperandText(node, printedText: string): string {
+        const text = printedText.trim();
+        if (node?.kind !== ts.SyntaxKind.BinaryExpression || text.startsWith('(')) {
+            return text;
+        }
+        const open = text.indexOf('(');
+        if (open > 0 && this.isWholePrintedCall(text, open)) {
+            return text;
+        }
+        // `a + b` on strings is the only shape that can never sit under a tighter
+        // operator, so it is the only one left unwrapped
+        return (this.goOperandStaticType(node, text) === 'string') ? text : '(' + text + ')';
+    }
+
+    // `Add(a, b)` & co. become the Go operator when both printed operands already
+    // hold a concrete Go type the helper would return unchanged; undefined keeps the
+    // helper call (nil branches, `any` boxes, strings passed to Subtract, ...).
+    goNativeArithmetic(node, leftText = undefined, rightText = undefined): { goType: string, text: string } | undefined {
+        const op = node.operatorToken.kind;
+        if (GO_ARITHMETIC_KINDS.indexOf(op) < 0) {
+            return undefined;
+        }
+        leftText = leftText ?? this.printNode(node.left, 0);
+        rightText = rightText ?? this.printNode(node.right, 0);
+        const leftType = this.goOperandStaticType(node.left, leftText);
+        const rightType = this.goOperandStaticType(node.right, rightText);
+        if (leftType === undefined || rightType === undefined) {
+            return undefined;
+        }
+        if (leftType === 'string' || rightType === 'string') {
+            if (leftType !== 'string' || rightType !== 'string' || op !== ts.SyntaxKind.PlusToken) {
+                return undefined; // the other four helpers return nil for strings
+            }
+            return { 'goType': 'string', 'text': leftText.trim() + ' + ' + rightText.trim() };
+        }
+        const goType = this.goNativeIntResultType(op, leftType, rightType, node.right);
+        if (goType === undefined) {
+            return undefined;
+        }
+        const symbol = this.SupportedKindNames[op];
+        return { goType, 'text': this.goNativeOperandText(node.left, leftText) + ' ' + symbol + ' ' + this.goNativeOperandText(node.right, rightText) };
+    }
+
+    // `x += y` prints `x = Add(x, y)`; the compound operator is equivalent while
+    // both sides hold a concrete Go type that can never make the helper return nil
+    goNativeCompoundAssignment(op, leftNode, leftText: string, rightNode, rightText: string): string | undefined {
+        const leftType = this.goOperandStaticType(leftNode, leftText);
+        const rightType = this.goOperandStaticType(rightNode, rightText);
+        if (leftType === undefined || rightType === undefined) {
+            return undefined;
+        }
+        const isAdd = op === ts.SyntaxKind.PlusEqualsToken;
+        const isSubtract = op === ts.SyntaxKind.MinusEqualsToken;
+        if (!isAdd && !isSubtract) {
+            return undefined;
+        }
+        if (leftType === 'string' && isAdd && rightType === 'string') {
+            return `${leftText.trim()} += ${rightText.trim()}`;
+        }
+        if (leftType !== 'int64') {
+            return undefined;
+        }
+        if (isAdd && (rightType === 'int64' || rightType === 'const-int')) {
+            return `${leftText.trim()} += ${rightText.trim()}`;
+        }
+        if (isSubtract && (rightType === 'int64' || rightType === 'const-int')) {
+            return `${leftText.trim()} -= ${rightText.trim()}`;
+        }
+        return undefined;
+    }
+
     goEnclosingFunction(node) {
         let current = node?.parent;
         while (current) {
@@ -1411,6 +1605,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const leftText = this.printNode(left, 0);
             const rightText = this.printNode(right, 0);
 
+            const nativeAssignment = this.goNativeCompoundAssignment(op, left, leftText, right, rightText);
+            if (nativeAssignment !== undefined) {
+                return nativeAssignment;
+            }
+
             if (op === ts.SyntaxKind.PlusEqualsToken) {
                 return `${leftText} = Add(${leftText}, ${rightText})`;
             }
@@ -1438,6 +1637,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
+            const nativeArithmetic = this.goNativeArithmetic(node, leftText, rightText);
+            if (nativeArithmetic !== undefined) {
+                return nativeArithmetic.text;
+            }
             return `${open}${leftText}, ${rightText}${close}`;
         }
 
