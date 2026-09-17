@@ -1,5 +1,6 @@
 import { assert } from 'console';
 import { Transpiler } from '../src/transpiler';
+import { SyntaxKind } from 'typescript';
 import { readFileSync } from 'fs';
 
 jest.mock('module',()=>({
@@ -1036,5 +1037,93 @@ describe('go inline equality', () => {
         expect(output).toContain("var length int =");
         expect(output).toContain("IsEqual(length, limit)");
         expect(output).not.toContain("*limit == length");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// gofmt binary expression spacing (go/printer nodes.go: binaryExpr/cutoff)
+// ---------------------------------------------------------------------------
+// gofmt prints a level-4/5 operator (`+ - * / % & | ^ << >>`) with a blank around
+// it only at the top level of a statement - `x := "a" + "b"` - and compact one
+// level down: as an argument of a call with more than one argument, inside an
+// index expression (`a[i+1]`), or as the operand that a `+`/`*` chain nests
+// (`a*b + c`). Every expectation below was checked against `/usr/local/go/bin/gofmt`
+// (the same Go text is what gofmt prints, i.e. `gofmt -d` reports no difference).
+describe('gofmt binary expression spacing', () => {
+    let native: Transpiler;
+
+    beforeAll(() => {
+        const config = {
+            'verbose': false,
+            'go': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                }
+            }
+        }
+        native = new Transpiler(config);
+        // the Go printer routes `+ - * / %` through the numeric helpers
+        // (Add/Subtract/Multiply/Divide/Mod); printing them natively exercises the
+        // gofmt spacing rule itself, which is what the campaign removes gofmt for
+        const goTranspiler: any = (native as any).goTranspiler;
+        goTranspiler.binaryExpressionsWrappers = {};
+        Object.assign(goTranspiler.SupportedKindNames, {
+            [SyntaxKind.PlusToken]: '+',
+            [SyntaxKind.MinusToken]: '-',
+            [SyntaxKind.AsteriskToken]: '*',
+            [SyntaxKind.SlashToken]: '/',
+            [SyntaxKind.PercentToken]: '%',
+            [SyntaxKind.LessThanLessThanToken]: '<<',
+        });
+    });
+
+    const go = (source: string) => native.transpileGo(source).content;
+
+    test('top level of a statement keeps the blanks', () => {
+        expect(go('const x = a + b;')).toBe('var x any = a + b');
+        expect(go('const x = a + b + c;')).toBe('var x any = a + b + c');
+        expect(go('const x = a + b * c;')).toBe('var x any = a + b*c');
+        expect(go('const x = a * b + c;')).toBe('var x any = a*b + c');
+        expect(go('const x = a % b + c % d;')).toBe('var x any = a%b + c%d');
+        expect(go('const x = (a + b) * c;')).toBe('var x any = (a + b) * c');
+    });
+
+    test('an index expression prints its operand one level deeper', () => {
+        expect(go('const x = y[i + 1];')).toBe('var x any = GetValue(y, i+1)');
+        expect(go('const x = y[i] + 1;')).toBe('var x any = GetValue(y, i) + 1');
+    });
+
+    test('arguments of a call with more than one argument print one level deeper', () => {
+        expect(go('const x = this.f2(a, b + c);')).toBe('var x any = callDynamically("f2", a, b+c)');
+        expect(go('const x = this.f2(a + b);')).toBe('var x any = callDynamically("f2", a+b)');
+        expect(go('const x = this.f3(a, b, c + d);')).toBe('var x any = callDynamically("f3", a, b, c+d)');
+        expect(go('const x = this.f4(this.g(a, b + c));')).toBe('var x any = callDynamically("f4", callDynamically("g", a, b+c))');
+    });
+
+    test('composite literal elements and assignment right sides stay at the top level', () => {
+        expect(go("const p = { 'k': a + b };")).toBe('var p map[string]any = map[string]any {\n    "k": a + b,\n}');
+        expect(go("const p = { 'k': this.f2(a, b + c) };")).toBe('var p map[string]any = map[string]any {\n    "k": callDynamically("f2", a, b+c),\n}');
+        expect(go('let z = 1; z = a + b;')).toBe('var z any = 1\nz = a + b');
+    });
+
+    test('parentheses undo one level of depth', () => {
+        expect(go('const x = a * (b - c);')).toBe('var x any = a * (b - c)');
+        expect(go('const x = (a << b) + c;')).toBe('var x any = (a << b) + c');
+    });
+
+    test('levels 3 and below always keep their blanks', () => {
+        expect(go('const x = (a && b) || c;')).toBe('var x bool = (EvalTruthy(a) && EvalTruthy(b)) || EvalTruthy(c)');
+        expect(go('if (a == b) { return 1; }')).toBe('if IsEqual(a, b) {\n    return 1\n}');
+    });
+
+    test('inside a single argument call nothing is compacted', () => {
+        expect(go('const x = this.f2(a + b);').startsWith('var x any = callDynamically')).toBe(true);
+        expect(go('const x = f(a + b);')).toBe('var x any = F(a + b)');
+    });
+
+    test('without the native operator mapping the helper calls are unchanged', () => {
+        expect(transpiler.transpileGo('const x = a + b;').content).toBe('var x any = Add(a, b)');
+        expect(transpiler.transpileGo('const x = a + b * c;').content).toBe('var x any = Add(a, Multiply(b, c))');
+        expect(transpiler.transpileGo('let z = 1; z = a + b;').content).toBe('var z any = 1\nz = Add(a, b)');
     });
 });
