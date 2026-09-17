@@ -1348,3 +1348,114 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
         expect(output).toContain("if (isTrue(flag))");
     });
 });
+
+// `a === b` / `a !== b` print the native operator instead of isEqual whenever both
+// operands are C# values of one scalar family, or one side is null/undefined and the
+// other is a type `== null` compiles for.
+describe('csharp equality operators instead of the isEqual wrapper', () => {
+    const equalityTests = (input: string) => transpiler.transpileCSharp(input).content;
+    test('two string-typed operands, including a string literal', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const s = 'abc';\n" +
+        "    const isAbc = s === 'abc';\n" +
+        "    const notAbc = s !== 'abc';\n" +
+        "    return [isAbc, notAbc];\n" +
+        "}");
+        expect(output).toContain("bool isAbc = (s == \"abc\");");
+        expect(output).toContain("bool notAbc = (s != \"abc\");");
+    });
+    test('two bool operands, including a bool literal', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const b = true;\n" +
+        "    const isTrue_ = b === true;\n" +
+        "    return isTrue_;\n" +
+        "}");
+        expect(output).toContain("bool isTrue_ = (b == true);");
+    });
+    test('a length-derived int against a numeric literal', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const s = 'abc';\n" +
+        "    const n = s.length;\n" +
+        "    const isThree = n === 3;\n" +
+        "    return isThree;\n" +
+        "}");
+        expect(output).toContain("bool isThree = (n == 3);");
+    });
+    test('an object-typed local keeps isEqual — `==` would compare references', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const x = this.safeString({}, 'k');\n" +
+        "    const isAbc = x === 'abc';\n" +
+        "    return isAbc;\n" +
+        "}");
+        expect(output).toContain("isEqual(x, \"abc\")");
+        expect(output).not.toContain("(x == \"abc\")");
+    });
+    test('a mixed int/double pair keeps isEqual — isEqual is not a numeric cast', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const s = 'abc';\n" +
+        "    const n = s.length;\n" +
+        "    const d = Math.floor(1.5);\n" +
+        "    const same = n === d;\n" +
+        "    return same;\n" +
+        "}");
+        expect(output).toContain("isEqual(n, d)");
+    });
+    test('an integer literal that a double cannot hold exactly keeps isEqual', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const s = 'abc';\n" +
+        "    const n = s.length;\n" +
+        "    const big = n === 9007199254740993;\n" +
+        "    return big;\n" +
+        "}");
+        // 9007199254740993 does not survive the double round-trip isEqual's
+        // Convert.ToInt64 does, so the operand stays on the helper (the printer
+        // prints the rounded literal next to the untouched isEqual call)
+        expect(output).toContain("isEqual(n, 9007199254740992)");
+    });
+    test('null checks inline for a string local and for an object box', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const s = 'abc';\n" +
+        "    let t: string | undefined = undefined;\n" +
+        "    const x = this.safeString({}, 'k');\n" +
+        "    const noS = s == undefined;\n" +
+        "    const noT = t === undefined;\n" +
+        "    const noX = x !== undefined;\n" +
+        "    return [noS, noT, noX];\n" +
+        "}");
+        expect(output).toContain("bool noS = (s == null);");
+        expect(output).toContain("bool noT = (t == null);");
+        expect(output).toContain("bool noX = (x != null);");
+    });
+    test('a number-typed operand keeps isEqual — its C# type is a value type', () => {
+        const output = equalityTests(
+        "function f (limit: number) {\n" +
+        "    const noLimit = limit === undefined;\n" +
+        "    return noLimit;\n" +
+        "}");
+        expect(output).toContain("isEqual(limit, null)");
+        expect(output).not.toContain("(limit == null)");
+    });
+    test('a boolean-typed operand keeps isEqual — its C# type is a value type', () => {
+        const output = equalityTests(
+        "function f (flag: boolean) {\n" +
+        "    const noFlag = flag === undefined;\n" +
+        "    return noFlag;\n" +
+        "}");
+        expect(output).toContain("isEqual(flag, null)");
+    });
+    test('a union with a number member keeps isEqual', () => {
+        const output = equalityTests(
+        "function f (x: string | number) {\n" +
+        "    const missing = x === undefined;\n" +
+        "    return missing;\n" +
+        "}");
+        expect(output).toContain("isEqual(x, null)");
+    });
+});
