@@ -4182,7 +4182,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   /**
    * The trampoline: an async core hands back a *hot handle*.
    *
-   *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+   *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
    *         ch := make(chan any, 1)
    *         go this.fetchTickerBody(ch, symbol)
    *         return ch
@@ -4195,7 +4195,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
    *     with work already in flight. That is what makes
    *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
    *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-   *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+   *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
    *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
    *     lives on the body, not here.
    */
@@ -4203,7 +4203,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const args = this.printAsyncTrampolineArgs(node);
     const argList = args ? `, ${args}` : "";
     return [
-      "{",
+      // F04: the signature above ends WITHOUT a trailing space, so the block opener
+      // carries the one space before `{` (same contract as getBlockOpen)
+      " {",
       `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
       `${this.getIden(identation + 1)}go ${callee}(ch${argList})`,
       `${this.getIden(identation + 1)}return ch`,
@@ -4249,22 +4251,22 @@ func New${this.capitalize(this.className)}() *${this.className} {
   printMethodDefinition(node, identation) {
     let name = node.name.escapedText;
     name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
-    let returnType = this.printFunctionType(node);
+    const returnType = this.printFunctionType(node).trim();
     const parsedArgs = this.printMethodParameters(node);
-    returnType = returnType ? returnType + " " : returnType;
-    const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
+    const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
     const structReceiver = `(${this.THIS_TOKEN} *${this.className})`;
-    const methodDef = this.getIden(identation) + methodToken + " " + structReceiver + " " + name + "(" + parsedArgs + ") " + returnType;
+    const returnSignature = returnType ? " " + returnType : "";
+    const methodDef = this.getIden(identation) + methodToken + structReceiver + " " + name + "(" + parsedArgs + ")" + returnSignature;
     return this.printNodeCommentsIfAny(node, identation, methodDef);
   }
   printFunctionDefinition(node, identation) {
     let name = node.name.escapedText;
     name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
-    let returnType = this.printFunctionType(node);
+    const returnType = this.printFunctionType(node).trim();
     const parsedArgs = this.printMethodParameters(node);
-    returnType = returnType ? returnType + " " : returnType;
-    const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-    const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ") " + returnType;
+    const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
+    const returnSignature = returnType ? " " + returnType : "";
+    const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ")" + returnSignature;
     return this.printNodeCommentsIfAny(node, identation, methodDef);
   }
   printMethodParameters(node) {
@@ -4316,7 +4318,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (typeText === void 0 || typeText !== this.VOID_KEYWORD && typeText !== this.PROMISE_TYPE_KEYWORD) {
       let res = "";
       if (this.isAsyncFunction(node)) {
-        res = `<- chan ${this.DEFAULT_RETURN_TYPE}`;
+        res = `<-chan ${this.DEFAULT_RETURN_TYPE}`;
       } else {
         res = this.DEFAULT_RETURN_TYPE;
       }
@@ -4324,7 +4326,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return res;
     }
     if (typeText === this.PROMISE_TYPE_KEYWORD) {
-      return `<- chan any`;
+      return `<-chan any`;
     }
     if (typeText && typeText.endsWith("[]")) {
       const core = typeText.substring(0, typeText.length - 2);

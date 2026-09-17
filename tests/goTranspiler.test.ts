@@ -66,7 +66,7 @@ describe('go transpiling tests', () => {
         "    return p\n"+
         "}\n"+
         "\n"+
-        "func  (this *Test) Main() any  {\n"+
+        "func (this *Test) Main() any {\n"+
         "    return 1\n"+
         "}";
         const output = transpiler.transpileGo(ts).content;
@@ -119,7 +119,7 @@ describe('go transpiling tests', () => {
     // "   return p\n"+
     // "}\n"+
     // "\n"+
-    // "func  (this *A) Main() any  {\n"+
+    // "func (this *A) Main() any {\n"+
     // "    \n"+
     // "    {		ret__ := func(this *A) (ret_ any) {\n"+
     // "    		defer func() {\n"+
@@ -237,7 +237,7 @@ describe('go transpiling tests', () => {
         "}"
         const output = transpiler.transpileGo(input).content;
         // the trampoline
-        expect(output).toContain("func  (this *Exchange) FetchTicker(symbol any) <- chan any {");
+        expect(output).toContain("func (this *Exchange) FetchTicker(symbol any) <-chan any {");
         expect(output).toContain("ch := make(chan any, 1)");
         expect(output).toContain("go this.fetchTickerBody(ch, symbol)");
         expect(output).toContain("return ch");
@@ -284,7 +284,7 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(symbol any, optionalArgs ...any) <- chan any");
+        expect(output).toContain("FetchTicker(symbol any, optionalArgs ...any) <-chan any");
         expect(output).toContain("go this.fetchTickerBody(ch, symbol, optionalArgs...)");
         expect(output).toContain("fetchTickerBody(ch chan any, symbol any, optionalArgs ...any) any");
         // the defaults are unpacked in the BODY, not in the trampoline
@@ -309,7 +309,7 @@ describe('go transpiling tests', () => {
         // With the trampoline the recover (`defer ReturnPanicError(ch)`) lives on the
         // BODY method, not on the trampoline, so the trampoline's `return ch` always
         // runs and can never hand back a zero-value nil channel. The named result
-        // (`out <- chan any` / `out = ch`) that the flat emitter needed is therefore
+        // (`out <-chan any` / `out = ch`) that the flat emitter needed is therefore
         // gone, and the signature is the plain Go one again.
         const input =
         "class Exchange {\n" +
@@ -318,8 +318,8 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(symbol any) <- chan any");
-        expect(output).not.toContain("(out <- chan any)");
+        expect(output).toContain("FetchTicker(symbol any) <-chan any");
+        expect(output).not.toContain("(out <-chan any)");
         expect(output).not.toContain("out = ch");
         // the recover must sit on the body, i.e. AFTER the `go this....Body(...)` handoff
         expect(output.indexOf("go this.fetchTickerBody(")).toBeLessThan(output.indexOf("defer ReturnPanicError(ch)"));
@@ -333,7 +333,7 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(out any) <- chan any");
+        expect(output).toContain("FetchTicker(out any) <-chan any");
         expect(output).not.toContain("out1");
         expect(output).toContain("ch <- out");
     });
@@ -373,7 +373,7 @@ describe('go transpiling tests', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("go this.fetchTickerBody(ch, symbol)");
         expect(output).toContain("func (this *Exchange) fetchTickerBody(ch chan any, symbol any) any {");
-        expect(output).not.toContain("(out <- chan any)");
+        expect(output).not.toContain("(out <-chan any)");
         expect(output).toContain("recover()");
         expect(output).toContain("return ret__");
         expect(output).toContain("return ch");
@@ -807,7 +807,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "    await Promise.all ([ withSymbol, withoutSymbol ]);\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("func TestWatchTickersHelper(exchange any, skippedProperties any, argSymbols any) <- chan any");
+        expect(output).toContain("func TestWatchTickersHelper(exchange any, skippedProperties any, argSymbols any) <-chan any");
         expect(output).toContain("var withoutSymbol any = TestWatchTickersHelper(exchange, skippedProperties, nil)");
         expect(output).toContain("var withSymbol any = TestWatchTickersHelper(exchange, skippedProperties, []any{symbol})");
         expect(output).not.toContain("Spawn");
@@ -867,10 +867,10 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "}";
         const output = suffixed.transpileGo(input).content;
         // declarations: async (explicit and implicit) get the suffix, sync does not
-        expect(output).toMatch(/func\s+HelperAsync\(x any\) <- chan any/);
-        expect(output).toMatch(/func\s+\(this \*Base\) FetchTickerAsync\(symbol any\) <- chan any/);
-        expect(output).toMatch(/func\s+\(this \*Exchange\) FetchTickerAsync\(symbol any\) <- chan any/);
-        expect(output).toMatch(/func\s+\(this \*Exchange\) WatchTickerAsync\(symbol any\) <- chan any/);
+        expect(output).toMatch(/func\s+HelperAsync\(x any\) <-chan any/);
+        expect(output).toMatch(/func\s+\(this \*Base\) FetchTickerAsync\(symbol any\) <-chan any/);
+        expect(output).toMatch(/func\s+\(this \*Exchange\) FetchTickerAsync\(symbol any\) <-chan any/);
+        expect(output).toMatch(/func\s+\(this \*Exchange\) WatchTickerAsync\(symbol any\) <-chan any/);
         expect(output).toMatch(/func\s+\(this \*Base\) ParseTicker\(t any\) any/);
         // call sites follow the callee's declaration through this/super/bare-identifier
         expect(output).toContain("<-base.FetchTickerAsync(symbol)");

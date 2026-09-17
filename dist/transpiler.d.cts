@@ -618,7 +618,7 @@ declare class GoTranspiler extends BaseTranspiler {
     /**
      * The trampoline: an async core hands back a *hot handle*.
      *
-     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
      *         ch := make(chan any, 1)
      *         go this.fetchTickerBody(ch, symbol)
      *         return ch
@@ -631,7 +631,7 @@ declare class GoTranspiler extends BaseTranspiler {
      *     with work already in flight. That is what makes
      *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
      *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
      *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
      *     lives on the body, not here.
      */
