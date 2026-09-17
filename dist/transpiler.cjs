@@ -7548,51 +7548,90 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `&${expr}`;
   }
-  // TS `number` / number-literal type proof for a comparison operand. Unions
-  // (`number | undefined`) and `any` are rejected — those keep the helper.
-  isNumberTyped(node) {
-    const type = this.getChecker().getTypeAtLocation(node);
-    if (type === void 0) {
+  // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
+  // When the checker proves both operands are numbers (`Int`/`Float` at
+  // runtime) or, for `+`, both are strings, the helper call is replaced by
+  // the arithmetic itself: a 4-arm `Value` match reproducing the helper's
+  // Int/Float dispatch, `as_f64()` division, or a `format!` string concat.
+  // Anything the checker cannot prove keeps the runtime helper.
+  isNumberLikeType(type) {
+    if (!type) {
       return false;
     }
-    return (type.flags & (_typescript2.default.TypeFlags.Number | _typescript2.default.TypeFlags.NumberLiteral)) !== 0;
-  }
-  // Positions whose emitted Rust is a native `bool`: if/while/do/for
-  // conditions, `? :` conditions, `!` operands and `&&` / `||` operands.
-  // Parentheses are transparent.
-  isBooleanPosition(node) {
-    let current = node;
-    let parent = current.parent;
-    while (parent !== void 0 && _typescript2.default.isParenthesizedExpression(parent)) {
-      current = parent;
-      parent = parent.parent;
+    if (type.flags === _typescript2.default.TypeFlags.Number || type.flags === _typescript2.default.TypeFlags.NumberLiteral) {
+      return true;
     }
-    if (parent === void 0) {
-      return false;
-    }
-    switch (parent.kind) {
-      case SyntaxKind4.IfStatement:
-      case SyntaxKind4.WhileStatement:
-      case SyntaxKind4.DoStatement:
-        return parent.expression === current;
-      case SyntaxKind4.ForStatement:
-        return parent.condition === current;
-      case SyntaxKind4.ConditionalExpression:
-        return parent.condition === current;
-      case SyntaxKind4.PrefixUnaryExpression:
-        return parent.operator === SyntaxKind4.ExclamationToken;
-      case SyntaxKind4.BinaryExpression:
-        return parent.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || parent.operatorToken.kind === SyntaxKind4.BarBarToken;
+    if (type.flags === _typescript2.default.TypeFlags.Union && Array.isArray(type.types)) {
+      return type.types.length > 0 && type.types.every((member) => this.isNumberLikeType(member));
     }
     return false;
   }
-  // `is_less_than` & co. compare two `Value`s and answer `false` for
-  // non-numbers; with both operands checker-typed numbers the same f64
-  // comparison runs natively on `Value::as_f64()` unwraps.
-  printNativeNumericComparison(node, operator, leftText, rightText) {
-    const unwrap = (text) => `${text}.as_f64().unwrap_or(f64::NAN)`;
-    const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
-    return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
+  isStringLikeType(type) {
+    if (!type) {
+      return false;
+    }
+    if (type.flags === _typescript2.default.TypeFlags.String || type.flags === _typescript2.default.TypeFlags.StringLiteral) {
+      return true;
+    }
+    if (type.flags === _typescript2.default.TypeFlags.Union && Array.isArray(type.types)) {
+      return type.types.length > 0 && type.types.every((member) => this.isStringLikeType(member));
+    }
+    return false;
+  }
+  // `(+|-)` with the left operand of `+=`/`-=`: assignment plus the same
+  // native emission as the plain binary form.
+  printNativeAssignmentArithmetic(op, left, right, leftText, rightText) {
+    let leftType, rightType;
+    try {
+      const checker = this.getChecker();
+      leftType = checker.getTypeAtLocation(left);
+      rightType = checker.getTypeAtLocation(right);
+    } catch (e) {
+      return void 0;
+    }
+    if (op === SyntaxKind4.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+      return `${leftText} = ${this.printNativeStringConcat(leftText, rightText)}`;
+    }
+    if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
+      return void 0;
+    }
+    return `${leftText} = ${this.printNativeNumeric(op, leftText, rightText)}`;
+  }
+  printNativeArithmetic(op, left, right, leftText, rightText) {
+    if (op !== SyntaxKind4.PlusToken && op !== SyntaxKind4.MinusToken && op !== SyntaxKind4.AsteriskToken && op !== SyntaxKind4.SlashToken) {
+      return void 0;
+    }
+    let leftType, rightType;
+    try {
+      const checker = this.getChecker();
+      leftType = checker.getTypeAtLocation(left);
+      rightType = checker.getTypeAtLocation(right);
+    } catch (e) {
+      return void 0;
+    }
+    if (op === SyntaxKind4.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+      return this.printNativeStringConcat(leftText, rightText);
+    }
+    if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
+      return void 0;
+    }
+    return this.printNativeNumeric(op, leftText, rightText);
+  }
+  printNativeStringConcat(leftText, rightText) {
+    return `Value::Str(format!("{}{}", ${leftText}, ${rightText}))`;
+  }
+  // Both operands are `Int`/`Float` at runtime; `-> Value::Null` covers the
+  // `Null`/non-numeric values the same way the helper's fallthrough does.
+  // Always parenthesised so it composes under `&`, in argument position and
+  // as an operand of another native match.
+  printNativeNumeric(op, leftText, rightText) {
+    const left = `(${leftText})`;
+    const right = `(${rightText})`;
+    if (op === SyntaxKind4.SlashToken) {
+      return `(match (${left}.as_f64(), ${right}.as_f64()) { (Some(x), Some(y)) if y != 0.0 => Value::Float(x / y), _ => Value::Null })`;
+    }
+    const sign = op === SyntaxKind4.PlusToken ? "+" : op === SyntaxKind4.MinusToken ? "-" : "*";
+    return `(match (&${left}, &${right}) { (Value::Int(x), Value::Int(y)) => Value::Int(x ${sign} y), (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 ${sign} *y), (Value::Float(x), Value::Int(y)) => Value::Float(*x ${sign} *y as f64), (Value::Float(x), Value::Float(y)) => Value::Float(x ${sign} y), _ => Value::Null })`;
   }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
@@ -7656,21 +7695,29 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (op === SyntaxKind4.PlusEqualsToken && left.kind !== SyntaxKind4.ElementAccessExpression) {
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const native = this.printNativeAssignmentArithmetic(SyntaxKind4.PlusToken, left, right, leftText, rightText);
+      if (native !== void 0) {
+        return native;
+      }
       return `${leftText} = add(&${leftText}, &${rightText})`;
     }
     if (op === SyntaxKind4.MinusEqualsToken && left.kind !== SyntaxKind4.ElementAccessExpression) {
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const native = this.printNativeAssignmentArithmetic(SyntaxKind4.MinusToken, left, right, leftText, rightText);
+      if (native !== void 0) {
+        return native;
+      }
       return `${leftText} = subtract(&${leftText}, &${rightText})`;
     }
     if (op in this.binaryExpressionsWrappers) {
-      const nativeOperator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
-      if (nativeOperator !== void 0 && this.isNumberTyped(left) && this.isNumberTyped(right)) {
-        return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
-      }
       const [fnName, close] = this.binaryExpressionsWrappers[op];
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const native = this.printNativeArithmetic(op, left, right, leftText, rightText);
+      if (native !== void 0) {
+        return native;
+      }
       const leftRef = this.ensureRef(leftText);
       const rightRef = this.ensureRef(rightText);
       return `${fnName}${leftRef}, ${rightRef}${close}`;
@@ -8021,12 +8068,31 @@ ${idn}}`;
     const { operand, operator } = node;
     const operandText = this.printNode(operand, 0);
     if (operator === SyntaxKind4.PlusPlusToken) {
+      const native = this.printNativeIncrement(SyntaxKind4.PlusToken, operand, operandText);
+      if (native !== void 0) {
+        return `${this.getIden(identation)}${operandText} = ${native}`;
+      }
       return `${this.getIden(identation)}${operandText} = add(&${operandText}, &Value::Int(1))`;
     }
     if (operator === SyntaxKind4.MinusMinusToken) {
+      const native = this.printNativeIncrement(SyntaxKind4.MinusToken, operand, operandText);
+      if (native !== void 0) {
+        return `${this.getIden(identation)}${operandText} = ${native}`;
+      }
       return `${this.getIden(identation)}${operandText} = subtract(&${operandText}, &Value::Int(1))`;
     }
     return super.printPostFixUnaryExpression(node, identation);
+  }
+  // `x++` / `x--` on a checker-typed number: native `+`/`-` with `Value::Int(1)`.
+  printNativeIncrement(op, operand, operandText) {
+    try {
+      if (!this.isNumberLikeType(this.getChecker().getTypeAtLocation(operand))) {
+        return void 0;
+      }
+    } catch (e) {
+      return void 0;
+    }
+    return this.printNativeNumeric(op, operandText, "Value::Int(1)");
   }
   printPrefixUnaryExpression(node, identation) {
     const { operand, operator } = node;
@@ -8226,13 +8292,6 @@ _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.GreaterThanToken,
   SyntaxKind4.GreaterThanEqualsToken
 ]);
-// Comparison helpers that can be replaced by a native numeric operator.
-_RustTranspiler.NATIVE_COMPARISON_OPERATORS = {
-  [SyntaxKind4.LessThanToken]: "<",
-  [SyntaxKind4.LessThanEqualsToken]: "<=",
-  [SyntaxKind4.GreaterThanToken]: ">",
-  [SyntaxKind4.GreaterThanEqualsToken]: ">="
-};
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts

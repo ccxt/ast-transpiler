@@ -902,9 +902,12 @@ declare class RustTranspiler extends BaseTranspiler {
     printBooleanLiteral(node: any): "Value::Bool(true)" | "Value::Bool(false)";
     printNullKeyword(node: any, identation: any): string;
     ensureRef(expr: string): string;
-    isNumberTyped(node: any): boolean;
-    isBooleanPosition(node: any): boolean;
-    printNativeNumericComparison(node: any, operator: any, leftText: any, rightText: any): string;
+    isNumberLikeType(type: any): boolean;
+    isStringLikeType(type: any): boolean;
+    printNativeAssignmentArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
+    printNativeArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
+    printNativeStringConcat(leftText: string, rightText: string): string;
+    printNativeNumeric(op: any, leftText: string, rightText: string): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
     printDateNowCall(node: any, identation: any): string;
@@ -933,11 +936,11 @@ declare class RustTranspiler extends BaseTranspiler {
     printElementAccessExpression(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
     private static readonly COMPARISON_OPS;
-    private static readonly NATIVE_COMPARISON_OPERATORS;
     printCondition(node: any, identation: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
+    printNativeIncrement(op: any, operand: any, operandText: string): string | undefined;
     printPrefixUnaryExpression(node: any, identation: any): any;
     printObjectLiteralExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation: any): string;
