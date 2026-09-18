@@ -6300,7 +6300,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       const containerStr = this.printNode(baseExpr, 0);
       const keyStrs = keys.map((k) => this.printNode(k, 0));
-      const acc = this.goElementWriteChain(baseExpr, containerStr, keys, keyStrs);
+      let acc = containerStr;
+      for (let i = 0; i < keyStrs.length - 1; i++) {
+        acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+      }
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       const nativeRhs = right.kind === _typescript2.default.SyntaxKind.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs;
@@ -6325,7 +6328,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       const containerStr = this.printNode(baseExpr, 0);
       const keyStrs = keys.map((k) => this.printNode(k, 0));
-      const acc = this.goElementWriteChain(baseExpr, containerStr, keys, keyStrs);
+      let acc = containerStr;
+      for (let i = 0; i < keyStrs.length - 1; i++) {
+        acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+      }
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
       const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
@@ -8169,8 +8175,6 @@ ${tryBodyBlock}
     switch (node.kind) {
       case _typescript2.default.SyntaxKind.ParenthesizedExpression:
         return this.goIndexableTypeOf(node.expression, printed);
-      case _typescript2.default.SyntaxKind.AsExpression:
-        return this.goIndexableTypeOf(node.expression, printed);
       case _typescript2.default.SyntaxKind.ObjectLiteralExpression:
         return "map[string]any";
       case _typescript2.default.SyntaxKind.ArrayLiteralExpression:
@@ -8191,23 +8195,6 @@ ${tryBodyBlock}
     }
     return acc;
   }
-  // the container of a nested `m["a"]["b"] = v` write, for all but the last key: its
-  // first step is a plain read of the receiver, so a receiver the printer typed as a
-  // map indexes natively and only the `any` steps above it keep the helper (Go refuses
-  // to index an `any`). A missing key and a nil map read as nil in both forms, and a
-  // non-map container is a no-op for AddElementToObject either way.
-  goElementWriteChain(baseExpr, containerStr, keyNodes, keyStrs) {
-    let acc = containerStr;
-    let first = 0;
-    if (keyStrs.length > 1 && this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any" && this.goKeyIsString(keyNodes[0], keyStrs[0])) {
-      acc = `${containerStr}[${keyStrs[0]}]`;
-      first = 1;
-    }
-    for (let i = first; i < keyStrs.length - 1; i++) {
-      acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
-    }
-    return acc;
-  }
   // true when the printed key is a Go string, so `m[key]` reads the map with the
   // same key GetValue resolves for a string operand (GetValue parses a non-string
   // key, which on map[string]any just yields nil)
@@ -8219,9 +8206,6 @@ ${tryBodyBlock}
       case _typescript2.default.SyntaxKind.StringLiteral:
       case _typescript2.default.SyntaxKind.NoSubstitutionTemplateLiteral:
         return true;
-      case _typescript2.default.SyntaxKind.ParenthesizedExpression:
-      case _typescript2.default.SyntaxKind.AsExpression:
-        return this.goKeyIsString(node.expression, printed);
       case _typescript2.default.SyntaxKind.Identifier:
         return this.goDeclaredTypeOfIdentifier(node) === "string";
       case _typescript2.default.SyntaxKind.CallExpression:

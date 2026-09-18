@@ -937,8 +937,7 @@ declare class GoTranspiler extends BaseTranspiler {
      */
     goIndexableTypeOf(node: any, printed: string): string | undefined;
     goElementAccessChain(containerStr: string, keyStrs: string[]): string;
-    goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
-    goKeyIsString(node: any, printed: string): any;
+    goKeyIsString(node: any, printed: string): boolean;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
     printElementAccessExpression(node: any, identation: any): string;
