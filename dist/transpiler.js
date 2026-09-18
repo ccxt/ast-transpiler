@@ -2783,7 +2783,6 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
-var CSHARP_NULL_COMPARISON_REFERENCE_HEADS = ["string", "IDictionary<", "Dictionary<", "IList<", "List<", "ConcurrentDictionary<", "ccxt.pro.", "ArrayCache", "IOrderBook", "Future", "WebSocketClient", "Delegates"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -3539,18 +3538,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpValueEqualityKind(csharpType) === void 0;
   }
-  // U55: the null-comparison rule's gate, stricter than csharpIsNullComparableType above:
-  // only a type the hook names (the emitted declaration's own text) is accepted, `object` /
-  // `var` included in the refusal because those are the boxes the classifier did not name.
-  csharpNullComparisonTypeIsProvable(csharpType) {
-    if (csharpType === void 0 || csharpType === "" || csharpType === "object" || csharpType === "var" || csharpType === "null") {
-      return false;
-    }
-    if (csharpType.endsWith("?")) {
-      return true;
-    }
-    return CSHARP_NULL_COMPARISON_REFERENCE_HEADS.some((head) => csharpType.startsWith(head));
-  }
   // TypeScript numbers and booleans are C# value types in this port (double / bool /
   // Int64 / int), and the ccxt build script retypes some `object` declarations to exactly
   // those from its own tables (precisionFromString -> int, milliseconds -> Int64,
@@ -3801,42 +3788,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return `${leftText} ${inequality ? "!=" : "=="} ${rightText}`;
   }
-  // U55: `isEqual (x, null)` -> `x == null` (and `!isEqual (x, null)` -> `x != null`) when the
-  // operand's emitted declaration is a typed reference or a nullable value scalar. The helper's
-  // first two guards are `a == null && b == null` / `a == null || b == null`, so with the null
-  // literal on one side it returns exactly the C# null test — reference equality for a reference
-  // type, `!HasValue` for `T?` — and never reaches a typed branch. `null` and the `undefined`
-  // identifier print as the same literal. Gated on the csharpNullComparisonTypeOf hook: an
-  // operand the embedding classifier cannot name (a parameter, a member read, an `object` local,
-  // a call result) keeps the helper call, so the untyped emission is byte-identical.
-  csharpNullLiteralEquality(op, left, right, leftText, rightText) {
-    const equality = op === ts4.SyntaxKind.EqualsEqualsToken || op === ts4.SyntaxKind.EqualsEqualsEqualsToken;
-    const inequality = op === ts4.SyntaxKind.ExclamationEqualsToken || op === ts4.SyntaxKind.ExclamationEqualsEqualsToken;
-    if (!equality && !inequality) {
-      return void 0;
-    }
-    const leftNull = this.csharpOperandIsNullLiteral(left);
-    const rightNull = this.csharpOperandIsNullLiteral(right);
-    if (leftNull === rightNull) {
-      return void 0;
-    }
-    let operand = leftNull ? right : left;
-    while (operand?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
-      operand = operand.expression;
-    }
-    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    const operandType = typeof this.csharpNullComparisonTypeOf === "function" ? this.csharpNullComparisonTypeOf(operand) : void 0;
-    if (!this.csharpNullComparisonTypeIsProvable(operandType)) {
-      return void 0;
-    }
-    return this.csharpNullComparison(leftNull ? rightText : leftText, equality);
-  }
-  // `null` and the `undefined` identifier both print as the C# null literal
-  csharpOperandIsNullLiteral(node) {
-    return node?.kind === ts4.SyntaxKind.NullKeyword || node?.kind === ts4.SyntaxKind.Identifier && node.escapedText === "undefined";
-  }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
     const right = node.right;
@@ -3897,13 +3848,15 @@ var CSharpTranspiler = class extends BaseTranspiler {
         if (nativeEquality !== void 0) {
           return nativeEquality;
         }
-        const nativeNullEquality = this.csharpNullLiteralEquality(op, left, right, leftText, rightText);
-        if (nativeNullEquality !== void 0) {
-          return nativeNullEquality;
-        }
         const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
         if (inlined !== void 0) {
           return inlined;
+        }
+      }
+      if (op === ts4.SyntaxKind.PlusToken) {
+        const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
+        if (nativeConcat !== void 0) {
+          return nativeConcat;
         }
       }
       const wrapper = this.binaryExpressionsWrappers[op];
@@ -4290,21 +4243,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const negated = parent?.kind === ts4.SyntaxKind.PrefixUnaryExpression && parent.operator === ts4.SyntaxKind.ExclamationToken;
     return this.getIden(identation) + (negated ? `(${equalsTrue})` : equalsTrue);
   }
-  // `!x` on the `bool?` the hook names prints `x != true`: exactly `!(x == true)` (null -> true)
-  // and the value isTrue computes for the box. A `bool` operand keeps the base `!x`; an operand
-  // the hook cannot name keeps `!isTrue(x)` (the untyped emission is untouched).
-  csharpNegatedConditionOperand(operand) {
-    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (this.csharpConditionOperandType(operand) !== "bool?") {
-      return void 0;
-    }
-    return `${this.printNode(operand, 0)} != true`;
-  }
-  // only the if / while / && / || / ! condition positions print natively through this gate; the
-  // ternary condition has its own hook-driven fold (csharpTernaryConditionOperand, U56) because
-  // its operand is a plain value position the base printCondition path never asks about.
+  // only the if / while / && / || / ! condition positions print natively: the ternary
+  // condition keeps the base path (its `((bool) …)` wrapper and the isTrue drop on a
+  // typed bool local are that unit's change, not this one).
   csharpConditionPositionAllowsNative(node) {
     const parent = node?.parent;
     switch (parent?.kind) {
@@ -4671,12 +4612,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpLocalTypeOf(node) {
     return void 0;
   }
-  // U55: the emitted C# type of an identifier operand of a null comparison, installed by
-  // build/csharp-local-types.js from the PRINTED declaration lines (the same record the
-  // string-equality hook reads) — a type the printer cannot see for itself, because the
-  // classifier retypes the declaration after printing it. Undefined by default: without the
-  // embedding classifier every null comparison keeps the isEqual helper, byte-identical.
-  csharpNullComparisonTypeOf(node) {
+  // `add (x, y)` -> `(x + y)` when the consumer's classifier proves the LEFT operand's
+  // emitted declaration is a string (unit U57). The helper call such a left operand binds
+  // is add(string, string) (`a + b`) or add(string, object) (`a + b?.ToString()`), and C#'s
+  // string concatenation computes exactly that for both, null operands included -- so the
+  // operator and the helper are the same value. Undefined by default: without the hook the
+  // helper emission is byte-identical. The result is parenthesised because the printer
+  // embeds a subexpression's text in receivers and arguments, where `+` binds looser.
+  csharpNativeStringConcat(left, right, leftText, rightText) {
     return void 0;
   }
   // is this receiver expression, as printed, a local declared List<object> /
@@ -4785,10 +4728,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return super.printPrefixUnaryExpression(node, identation);
     }
     if (operator === ts4.SyntaxKind.ExclamationToken) {
-      const nativeNot = this.csharpNegatedConditionOperand(operand);
-      if (nativeNot !== void 0) {
-        return nativeNot;
-      }
       return this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
     }
     const leftSide = this.printNode(operand, 0);
@@ -4921,36 +4860,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const whenFalse = this.printNode(node.whenFalse, 0);
     return condition + " ? " + whenTrue + " : " + whenFalse;
   }
-  // the ternary condition is a condition position the native gate above never sees (the operand
-  // sits under a ConditionalExpression): the same hook answer prints natively there -- `bool`
-  // bare, `bool?` as `x == true` (isTrue's value for the box, null -> false), source parens
-  // unwrapped. Undefined keeps the base path, so an operand the hook cannot name is unchanged.
-  csharpTernaryConditionOperand(node) {
-    let operand = node;
-    while (operand?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
-      operand = operand.expression;
-    }
-    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    const type = this.csharpConditionOperandType(operand);
-    if (type === "bool") {
-      return this.printNode(operand, 0);
-    }
-    if (type === "bool?") {
-      return `${this.printNode(operand, 0)} == true`;
-    }
-    return void 0;
-  }
   // printCondition already yields a C# `bool` (`isTrue(x)` / `!isTrue(x)`), so the
-  // `((bool) <cond>)` wrapper this printer used to emit was a cast on a bool. The hook fold
-  // above answers the emitted declaration's own type first; anything it cannot name keeps the
-  // printer's `bool` fold (getCSharpLocalType) and then `isTrue`.
+  // `((bool) <cond>)` wrapper this printer used to emit was a cast on a bool.
+  // `isTrue` is the identity on a C# `bool`, so a condition the printer itself
+  // declares `bool` (getCSharpLocalType, same proof as the declaration) needs no
+  // wrapper either; anything the printer cannot name `bool` keeps `isTrue`.
   printTernaryCondition(node) {
-    const native = this.csharpTernaryConditionOperand(node);
-    if (native !== void 0) {
-      return native;
-    }
     if (this.csharpConditionPrintsAsBool(node)) {
       return this.printNode(node, 0);
     }

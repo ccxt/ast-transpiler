@@ -1577,6 +1577,17 @@ export class CSharpTranspiler extends BaseTranspiler {
                 }
             }
 
+            if (op === ts.SyntaxKind.PlusToken) {
+                // `add (x, y)` -> `(x + y)` when the consumer's classifier proves the LEFT
+                // operand's emitted declaration is a string (U57): the call then binds
+                // add(string, string) / add(string, object), i.e. exactly this concatenation.
+                // Gated on the hook, so an operand the classifier cannot name keeps the helper
+                const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
+                if (nativeConcat !== undefined) {
+                    return nativeConcat;
+                }
+            }
+
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
@@ -2533,6 +2544,17 @@ export class CSharpTranspiler extends BaseTranspiler {
     // classifier retypes the declaration after printing it. Undefined by default: without the
     // embedding classifier every null comparison keeps the isEqual helper, byte-identical.
     csharpNullComparisonTypeOf(node): string | undefined {
+        return undefined;
+    }
+
+    // `add (x, y)` -> `(x + y)` when the consumer's classifier proves the LEFT operand's
+    // emitted declaration is a string (unit U57). The helper call such a left operand binds
+    // is add(string, string) (`a + b`) or add(string, object) (`a + b?.ToString()`), and C#'s
+    // string concatenation computes exactly that for both, null operands included -- so the
+    // operator and the helper are the same value. Undefined by default: without the hook the
+    // helper emission is byte-identical. The result is parenthesised because the printer
+    // embeds a subexpression's text in receivers and arguments, where `+` binds looser.
+    csharpNativeStringConcat(left, right, leftText: string, rightText: string): string | undefined {
         return undefined;
     }
 

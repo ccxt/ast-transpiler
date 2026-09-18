@@ -2661,6 +2661,93 @@ describe('S62: falsy wrapper around a printed bool', () => {
         expect(output).not.toContain("((bool)");
         expect(output).not.toContain("if (isTrue(flag) ? a : b)");
     });
+
+    // U57: `add (x, y)` -> `(x + y)` when csharpNativeStringConcat proves the LEFT operand's
+    // printed declaration is a string. The call such an operand binds is add(string, string)
+    // (`a + b`) or add(string, object) (`a + b?.ToString()`), and C#'s string concatenation
+    // computes exactly those values for every input, null operands included.
+    test('addition keeps the add helper while csharpNativeStringConcat is not installed', () => {
+        const input =
+        "class Exchange {\n" +
+        "    test (a: any, b: any) {\n" +
+        "        const s = a;\n" +
+        "        const one = s + 'lit';\n" +
+        "        const two = s + b;\n" +
+        "        const three = 'lit' + s;\n" +
+        "        return [one, two, three];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('add(s, "lit")');
+        expect(output).toContain('add(s, b)');
+        expect(output).toContain('add("lit", s)');
+        expect(output).not.toContain('(s + "lit")');
+        expect(output).not.toContain('("lit" + s)');
+    });
+    test('a proven string answer emits the parenthesised native concat', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpNativeStringConcat = (left: any, right: any, leftText: string, rightText: string) =>
+            ((left?.escapedText === 's') ? `(${leftText} + ${rightText})` : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    test (a: any, b: any) {\n" +
+            "        const s = a;\n" +
+            "        const one = s + 'lit';\n" +
+            "        const two = s + b;\n" +
+            "        return [one, two];\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('(s + "lit")');
+            expect(output).toContain('(s + b)');
+            expect(output).not.toContain('add(s, "lit")');
+            expect(output).not.toContain('add(s, b)');
+        } finally {
+            delete csharp.csharpNativeStringConcat;
+        }
+    });
+    test('a nested add chain converts through the same hook and stays parenthesised', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpNativeStringConcat = (left: any, right: any, leftText: string, rightText: string) =>
+            ((left?.escapedText === 's' || (left?.kind === tsApi.SyntaxKind.BinaryExpression && left?.operatorToken?.kind === tsApi.SyntaxKind.PlusToken))
+                ? `(${leftText} + ${rightText})` : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    test (a: any, b: any) {\n" +
+            "        const s = a;\n" +
+            "        return s + 'a' + b;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('((s + "a") + b)');
+            expect(output).not.toContain('add(');
+        } finally {
+            delete csharp.csharpNativeStringConcat;
+        }
+    });
+    test('an undefined answer and a compound assignment keep the helper', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpNativeStringConcat = () => undefined;
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    test (a: any, b: any) {\n" +
+            "        const s = a;\n" +
+            "        let acc = b;\n" +
+            "        acc += s;\n" +
+            "        return [s + 'lit', acc];\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('add(s, "lit")');
+            // `acc += s` prints `acc = add(acc, s)`; the hook is not consulted for `+=`
+            expect(output).toContain('acc = add(acc, s)');
+        } finally {
+            delete csharp.csharpNativeStringConcat;
+        }
+    });
 });
 
 describe('csharp declared-receiver .length: getArrayLength -> Count/Length (hook gated)', () => {
