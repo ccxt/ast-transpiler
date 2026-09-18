@@ -77,6 +77,13 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
+// the relational `Precise.string*` statics are declared `public static boolean` in the
+// hand-written java/lib/src/main/java/io/github/ccxt/base/Precise.java, so their printed call is
+// already a Java primitive boolean (the String-returning statics are NOT listed here)
+const JAVA_PRECISE_BOOLEAN_STATICS: Set<string> = new Set([
+    'stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe',
+]);
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -2690,16 +2697,48 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaBooleanOperators.includes(node.operatorToken.kind);
     }
 
+    // `Precise.<relational>(a, b)` where the callee resolves to a static of the base `Precise`
+    // class: the hand-written Precise.java declares those statics `public static boolean`, so the
+    // printed call is a Java primitive boolean; the printed receiver name alone is no proof (a
+    // shadowing local or another class prints the same text), so the resolution is checked too
+    javaPreciseBooleanCall(node) {
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaPreciseBooleanCall(node.expression);
+        }
+        // `!<relational call>` is a boolean too (the negation of a proven boolean)
+        if (node.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+            return node.operator === ts.SyntaxKind.ExclamationToken && this.javaPreciseBooleanCall(node.operand);
+        }
+        if (node.kind !== ts.SyntaxKind.CallExpression
+            || node.expression.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || node.expression.expression.kind !== ts.SyntaxKind.Identifier
+            || node.expression.expression.escapedText !== 'Precise'
+            || !JAVA_PRECISE_BOOLEAN_STATICS.has(node.expression.name.escapedText)) {
+            return false;
+        }
+        const declaration: any = this.getChecker().getResolvedSignature(node)?.declaration;
+        if (declaration === undefined
+            || declaration.kind !== ts.SyntaxKind.MethodDeclaration
+            || declaration.parent?.kind !== ts.SyntaxKind.ClassDeclaration
+            || declaration.parent.name?.escapedText !== 'Precise'
+            || !declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)) {
+            return false;
+        }
+        // the relational statics answer a plain boolean (never null), which is what
+        // Helpers.isTrue(Boolean) returns unchanged; a union (boolean | undefined) keeps the helper
+        return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
+    }
+
     // the printer already emits these conditions as Java `boolean` (the comparison helpers,
     // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
     // Helpers.isTrue would only re-test a value the checker proves is boolean
     javaConditionPrintsBoolean(node) {
-        if (!this.javaBooleanCondition(node)) {
-            return false;
+        if (this.javaBooleanCondition(node)) {
+            // TS models `boolean` as the true|false union: the Boolean bit is set on plain
+            // boolean and cleared on `boolean | undefined`-style unions, which keep the helper
+            return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
         }
-        // TS models `boolean` as the true|false union: the Boolean bit is set on plain
-        // boolean and cleared on `boolean | undefined`-style unions, which keep the helper
-        return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
+        return this.javaPreciseBooleanCall(node);
     }
 
     printCondition(node, identation) {

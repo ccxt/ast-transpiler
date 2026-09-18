@@ -2538,6 +2538,89 @@ describe('java boolean conditions emitted without the Helpers.isTrue wrapper', (
     });
 });
 
+describe('java isTrue around Precise relational statics (proven boolean)', () => {
+    // the base class' relational statics are declared `public static boolean` in Precise.java;
+    // the String-returning statics and a same-named method elsewhere keep the helper
+    const conditionOf = (classBody: string, body: string, signature = 'test(a: any, b: any): void') => {
+        const input =
+        "class Precise {\n" +
+        classBody +
+        "}\n" +
+        "class T {\n" +
+        "    " + signature + " {\n" +
+        body +
+        "    }\n" +
+        "}\n"
+        return transpiler.transpileJava(input).content;
+    };
+    const boolStatics =
+        "    static stringEq (a: any, b: any): boolean { return false; }\n" +
+        "    static stringEquals (a: any, b: any): boolean { return false; }\n" +
+        "    static stringGt (a: any, b: any): boolean { return false; }\n" +
+        "    static stringGe (a: any, b: any): boolean { return false; }\n" +
+        "    static stringLt (a: any, b: any): boolean { return false; }\n" +
+        "    static stringLe (a: any, b: any): boolean { return false; }\n";
+
+    test('a relational Precise static condition prints without the wrapper', () => {
+        const output = conditionOf(boolStatics, "        if (Precise.stringLt(a, b)) { return; }\n");
+        expect(output).toContain("if (Precise.stringLt(a, b))");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('every relational static is unwrapped, parenthesised and negated too', () => {
+        for (const name of ['stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe']) {
+            const plain = conditionOf(boolStatics, `        if (Precise.${name}(a, b)) { return; }\n`);
+            expect(plain).toContain(`if (Precise.${name}(a, b))`);
+            const negated = conditionOf(boolStatics, `        if (!Precise.${name}(a, b)) { return; }\n`);
+            expect(negated).toContain(`if (!Precise.${name}(a, b))`);
+            const parenthesised = conditionOf(boolStatics, `        if ((Precise.${name}(a, b))) { return; }\n`);
+            expect(parenthesised).not.toContain("Helpers.isTrue(");
+        }
+    });
+
+    test('while and ternary conditions drop the wrapper as well', () => {
+        const loop = conditionOf(boolStatics, "        while (Precise.stringGe(a, b)) { a = 1; }\n");
+        expect(loop).toContain("while (Precise.stringGe(a, b))");
+        const ternary = conditionOf(boolStatics, "        return Precise.stringEquals(a, b) ? \"y\" : \"n\";\n", 'test(a: any, b: any): string');
+        expect(ternary).toContain("(Precise.stringEquals(a, b))");
+        expect(ternary).not.toContain("Helpers.isTrue(");
+    });
+
+    test('a Precise call inside a logical expression is unwrapped on its own', () => {
+        const output = conditionOf(boolStatics, "        if (a && Precise.stringEq(a, b)) { return; }\n", 'test(a: string, b: any): void');
+        // the non-boolean `a` operand keeps its isTrue; the Precise call does not
+        expect(output).toContain("Helpers.isTrue(a) && Precise.stringEq(a, b)");
+        expect(output).not.toContain("Helpers.isTrue(Precise");
+    });
+
+    test('a negated Precise call is boolean as well (real okx shape)', () => {
+        const output = conditionOf(boolStatics, "        if ((a !== null) && (!Precise.stringEq(a, \"0\"))) { return; }\n");
+        expect(output).toContain('&& (!Precise.stringEq(a, "0"))');
+        expect(output).not.toContain("Helpers.isTrue(Precise");
+    });
+
+    test('non-boolean Precise statics and unproven receivers keep the helper', () => {
+        const stringStatic =
+            "    static stringAdd (a: any, b: any): string { return \"\"; }\n" +
+            "    static stringLt (a: any, b: any): boolean | undefined { return undefined; }\n";
+        expect(conditionOf(stringStatic, "        if (Precise.stringAdd(a, b)) { return; }\n"))
+            .toContain("if (Helpers.isTrue(Precise.stringAdd(a, b)))");
+        // `boolean | undefined` is not proven boolean - the union keeps the runtime truthiness test
+        expect(conditionOf(stringStatic, "        if (Precise.stringLt(a, b)) { return; }\n"))
+            .toContain("Helpers.isTrue(Precise.stringLt(a, b))");
+        // another class with the same static name is not the base Precise
+        const otherClass =
+            "class Other {\n" +
+            "    static stringLt (a: any, b: any): boolean { return false; }\n" +
+            "}\n";
+        const output = transpiler.transpileJava(otherClass + "class T {\n    test(a: any, b: any): void {\n        if (Other.stringLt(a, b)) { return; }\n    }\n}\n").content;
+        expect(output).toContain("Helpers.isTrue(Other.stringLt(a, b))");
+        // an unresolved `Precise` prints the same text but proves nothing
+        const unresolved = transpiler.transpileJava("class T {\n    test(a: any, b: any): void {\n        if (Precise.stringLt(a, b)) { return; }\n    }\n}\n").content;
+        expect(unresolved).toContain("Helpers.isTrue(Precise.stringLt(a, b))");
+    });
+});
+
 describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
     test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
         const input =
