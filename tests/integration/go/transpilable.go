@@ -53,7 +53,7 @@ func  (this *Test) GetValue(x any) any  {
     return x
 }
 func  (this *Test) TestJavaScope()  {
-    var newObject map[string]any = map[string]any {
+    var newObject map[string]any = map[string]any{
         "a": this.GetValue(5),
         "b": this.GetValue(this.GetValue(this.GetValue(2))),
     }
@@ -88,7 +88,7 @@ func  (this *Test) Test()  {
     fmt.Println(GetArrayLength(arr)) // should print 4
     var first any = GetValue(arr, 0)
     fmt.Println(first) // should print 1
-    var dict map[string]any = map[string]any {
+    var dict map[string]any = map[string]any{
         "a": "b",
     }
     fmt.Println(GetValue(dict, "a")) // should print "b"
@@ -101,7 +101,7 @@ func  (this *Test) Test()  {
     Reverse(list2)
     fmt.Println(GetValue(list2, 0)) // should print 5
     //should delete key from dict
-    var dict2 map[string]any = map[string]any {
+    var dict2 map[string]any = map[string]any{
         "a": 1,
         "b": 2,
     }
@@ -123,7 +123,7 @@ func  (this *Test) Test()  {
     var list3 []any = []any{"empty"}
     AddElementToObject(list3, 0, "first")
     fmt.Println(GetValue(list3, 0)) // should print "first"
-    var dict3 map[string]any = map[string]any {}
+    var dict3 map[string]any = map[string]any{}
     AddElementToObject(dict3, "key", "value")
     fmt.Println(GetValue(dict3, "key")) // should print "value"
     this.TestJavaScope()
@@ -139,7 +139,7 @@ func  (this *Test) Test()  {
     second2 = GetValue(first2second2Variable,1)
     fmt.Println(first2) // should print 1
     fmt.Println(second2) // should print "a"
-    this.FuncWithParams([]any{1, 2, 3}, map[string]any {
+    this.FuncWithParams([]any{1, 2, 3}, map[string]any{
         "a": "value of a",
     })
     this.TestStringMethods()
@@ -173,7 +173,7 @@ func  (this *Test) HandleOptionAndParamsTest() any  {
 func  (this *Test) FuncWithParams(optionalArgs ...any)  {
     a := GetArg(optionalArgs, 0, nil)
     _ = a
-    params := GetArg(optionalArgs, 1, map[string]any {})
+    params := GetArg(optionalArgs, 1, map[string]any{})
     _ = params
     if IsArray(a) {
         fmt.Println(GetArrayLength(a))

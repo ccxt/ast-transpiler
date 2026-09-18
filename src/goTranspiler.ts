@@ -5,7 +5,7 @@ const SyntaxKind = ts.SyntaxKind;
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
-    'OBJECT_OPENING': 'map[string]any {',
+    'OBJECT_OPENING': 'map[string]any{',
     'ARRAY_OPENING_TOKEN': '[]any{',
     'ARRAY_CLOSING_TOKEN': '}',
     'PROPERTY_ASSIGNMENT_TOKEN': ':',
@@ -168,6 +168,193 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
+// ---------------------------------------------------------------------------------------------
+// Trailing `//` comment alignment (gofmt's tabwriter cells).
+//
+// go/printer separates a trailing comment from the code with a hard tab (`writeCommentPrefix`),
+// so the code text is the last tab-terminated cell of the line. text/tabwriter pads that cell to
+// the widest cell of its column block plus `padding = 1` (gofmt runs with `minwidth = 0`,
+// `padding = 1`, `padchar = ' '`), which is why adjacent statements get their comments aligned
+// and a lone one gets exactly one space. A column block is the run of adjacent lines whose code
+// cell sits in the same column (same indentation); formfeeds terminate all columns, and
+// go/printer emits them between sections: blank and comment-only lines, a change of indentation,
+// each line of a multi-line expression (`binaryExpr` breaks with `newSection = true`) and every
+// statement that follows a multi-line one (`stmtList` breaks with `newSection = true`).
+//
+// The pass below reproduces that padding on the printed text. It is a no-op on text gofmt has
+// already aligned (verified over the whole go/v4 tree) and it never reflows or re-wraps a line.
+// ---------------------------------------------------------------------------------------------
+
+// a line whose code ends like this does not end its statement: the line below it belongs to the
+// same multi-line expression, and go/printer puts a formfeed before it (a new column block)
+const GO_COMMENT_BREAK_END = /(?:[({\[:]|[+\-*/%&|^<>=!])$/;
+
+// (opens - closes) of ()[]{} outside strings, so `foo(` (statement continues) and `}` (statement
+// ended before this line) are not mistaken for complete single-line statements
+function goBracketBalance (code: string): number {
+    let depth = 0;
+    let i = 0;
+    while (i < code.length) {
+        const ch = code[i];
+        if ((ch === '"') || (ch === '\'')) {
+            const quote = ch;
+            i += 1;
+            while (i < code.length) {
+                if (code[i] === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (code[i] === quote) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if (ch === '`') {
+            i += 1;
+            while ((i < code.length) && (code[i] !== '`')) {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if ((ch === '(') || (ch === '[') || (ch === '{')) {
+            depth += 1;
+        } else if ((ch === ')') || (ch === ']') || (ch === '}')) {
+            depth -= 1;
+        }
+        i += 1;
+    }
+    return depth;
+}
+
+// index of the first `//` outside strings and comments, or -1. The state is carried across lines
+// because `/* */` comments and `-quoted strings can span them (a `//` inside a string literal is
+// data, e.g. the `https://` of an endpoint, and must not be taken for a comment)
+function goTrailingCommentIndex (line: string, state: { block: boolean, raw: boolean }): number {
+    let i = 0;
+    while (i < line.length) {
+        const ch = line[i];
+        if (state.block) {
+            if ((ch === '*') && (line[i + 1] === '/')) {
+                state.block = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if (state.raw) {
+            if (ch === '`') {
+                state.raw = false;
+            }
+            i += 1;
+            continue;
+        }
+        if (ch === '`') {
+            state.raw = true;
+            i += 1;
+            continue;
+        }
+        if ((ch === '"') || (ch === '\'')) {
+            const quote = ch;
+            i += 1;
+            while (i < line.length) {
+                if (line[i] === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (line[i] === quote) {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if ((ch === '/') && (line[i + 1] === '/')) {
+            return i;
+        }
+        if ((ch === '/') && (line[i + 1] === '*')) {
+            state.block = true;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    return -1;
+}
+
+// tabwriter counts runes, not bytes (a multi-byte identifier is one column wide)
+function goRuneWidth (text: string): number {
+    let width = 0;
+    for (const _rune of text) { // eslint-disable-line @typescript-eslint/no-unused-vars
+        width += 1;
+    }
+    return width;
+}
+
+function alignGoTrailingComments (content: string): string {
+    const lines = content.split ('\n');
+    const entries: { index: number, indent: string, code: string, comment: string }[] = [];
+    const state = { 'block': false, 'raw': false };
+    for (let index = 0; index < lines.length; index++) {
+        const commentIndex = goTrailingCommentIndex (lines[index], state);
+        if (commentIndex < 0) {
+            continue;
+        }
+        // the code cell: everything before the comment, without the padding already inside it
+        const code = lines[index].slice (0, commentIndex).replace (/[ \t]+$/, '');
+        if (!code.trim ()) {
+            continue; // a comment-only line is a section break, it is never a cell
+        }
+        const indent = code.match (/^[ \t]*/)[0];
+        entries.push ({ 'index': index, indent, code, 'comment': lines[index].slice (commentIndex) });
+    }
+    // group the lines that share a code column: adjacent, same indentation, and no section break
+    // in between (the previous line must end its own statement, and that statement must be a
+    // single-line one, or the next statement starts a new section)
+    const groups: typeof entries[] = [];
+    let group: typeof entries = [];
+    for (const entry of entries) {
+        const previous = group[group.length - 1];
+        const continues = previous
+            && (entry.index === previous.index + 1)
+            && (entry.indent === previous.indent)
+            && (goBracketBalance (previous.code) === 0)
+            && !GO_COMMENT_BREAK_END.test (previous.code);
+        if (continues) {
+            group.push (entry);
+        } else {
+            if (group.length) {
+                groups.push (group);
+            }
+            group = [ entry ];
+        }
+    }
+    if (group.length) {
+        groups.push (group);
+    }
+    for (const members of groups) {
+        let width = 0;
+        for (const member of members) {
+            width = Math.max (width, goRuneWidth (member.code));
+        }
+        width += 1; // tabwriter padding
+        for (const member of members) {
+            const pad = width - goRuneWidth (member.code);
+            lines[member.index] = member.code + ' '.repeat (pad) + member.comment;
+        }
+    }
+    return lines.join ('\n');
+}
+
+export {
+    alignGoTrailingComments,
+};
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -180,6 +367,9 @@ export class GoTranspiler extends BaseTranspiler {
     DEFAULT_RETURN_TYPE = 'any';
     // suffix of the sibling body method an async trampoline hands its work to
     ASYNC_BODY_SUFFIX = 'Body';
+    // gofmt indents every nesting level with exactly one tab; the printer emits the
+    // same bytes so the generated tree needs no `gofmt` pass (campaign go-gofmt F01)
+    DEFAULT_IDENTATION = "\t";
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -300,9 +490,11 @@ export class GoTranspiler extends BaseTranspiler {
     }
 
 
-    printPropertyDeclaration(node, identation) {
-        // let modifiers = this.printModifiers(node);
-        // modifiers = modifiers ? modifiers + " " : modifiers;
+    // The cells of one struct field in the shape gofmt's fieldList() prints them: a named
+    // field is `Name Type [Tag]` (the name cell — and, when the field carries a tag, the type
+    // cell too — is a tab-terminated column cell) and an embedded field is a single cell.
+    // printStruct() lays those cells out; printPropertyDeclaration() joins them with spaces.
+    getStructFieldCells(node) {
         const name = this.capitalize(this.printNode(node.name, 0));
         let type = 'any';
         if (node.type === undefined) {
@@ -316,20 +508,25 @@ export class GoTranspiler extends BaseTranspiler {
         } else if (node.type.kind === SyntaxKind.ArrayType) {
             type = '[]any';
         }
+        const cells = [ name, type ];
         if (node.initializer) {
             // we have to save the value and initialize it later
             let initializer = this.printNode(node.initializer, 0);
             // quick fix
             initializer = initializer.replaceAll('"', '');
-            return this.getIden(identation) + name + ' ' + type + ' ' + `\`default:"${initializer}"\`` + this.LINE_TERMINATOR;
+            cells.push(`\`default:"${initializer}"\``);
         }
-        return this.getIden(identation) + name + ' ' + type + this.LINE_TERMINATOR;
+        return cells;
+    }
+
+    printPropertyDeclaration(node, identation) {
+        return this.getIden(identation) + this.getStructFieldCells(node).join(' ') + this.LINE_TERMINATOR;
     }
 
     printStruct(node, indentation) {
 
+        const rows: string[][] = [];
         // check if we have heritage
-        let heritageName = '';
         if (node?.heritageClauses?.length > 0) {
             const heritage = node.heritageClauses[0];
             const heritageType = heritage.types[0];
@@ -337,19 +534,45 @@ export class GoTranspiler extends BaseTranspiler {
             if (this.classNameMap[heritageEscapedText]) {
                 heritageEscapedText = this.classNameMap[heritageEscapedText];
             }
-            heritageName = this.getIden(indentation+1) + heritageEscapedText + '\n';
+            // an embedded field has no type cell: it is a single, unterminated cell
+            rows.push([ heritageEscapedText ]);
         }
 
         const propDeclarations = node.members.filter(member => member.kind === SyntaxKind.PropertyDeclaration);
-        return `type ${this.className} struct {\n${heritageName}${propDeclarations.map(member => this.printNode(member, indentation+1)).join("\n")}\n}`;
+        propDeclarations.forEach(member => rows.push(this.getStructFieldCells(member)));
+
+        // gofmt lays the fields out with text/tabwriter (go/printer's fieldList): a column
+        // block is a run of consecutive fields whose cell in that column is tab-terminated,
+        // and every cell of the block is padded with spaces to the widest cell of the block
+        // plus one. An embedded field (a single cell) and a field without a tag (its type is
+        // the trailing cell) end the block of every column they have no cell in, which is
+        // what keeps `Exchange` from widening the `exchangeTyped *ExchangeTyped` column.
+        const lines = rows.map((cells, row) => {
+            let line = cells[0];
+            for (let column = 0; column < cells.length - 1; column++) {
+                let width = 0;
+                for (let previous = row; previous >= 0 && rows[previous].length > column + 1; previous--) {
+                    width = Math.max(width, rows[previous][column].length);
+                }
+                for (let next = row + 1; next < rows.length && rows[next].length > column + 1; next++) {
+                    width = Math.max(width, rows[next][column].length);
+                }
+                line += ' '.repeat(width + 1 - cells[column].length) + cells[column + 1];
+            }
+            return this.getIden(indentation + 1) + line;
+        });
+
+        // a struct with no fields is `type X struct {\n}`: no stray blank line before the brace
+        const body = lines.length ? '\n' + lines.join('\n') + '\n' : '\n';
+        return `type ${this.className} struct {${body}}`;
     }
 
     printNewStructMethod(node){
         return `
 func New${this.capitalize(this.className)}() *${(this.className)} {
-    p := &${this.className}{}
-    setDefaults(p)
-    return p
+\tp := &${this.className}{}
+\tsetDefaults(p)
+\treturn p
 }\n`;
         // TO remove `return copies lock value: github.com/ccxt/ccxt/go/v4.bitvavoWs contains github.com/ccxt/ccxt/go/v4.bitvavo contains github.com/ccxt/ccxt/go/v4.Exchange contains sync.Mutex`
         // change the return value to
@@ -374,7 +597,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const newMethod = this.printNewStructMethod(node);
 
         const methods = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
-        const classMethods = methods.map(method => this.printMethodDeclaration(method, identation)).join("\n");
+        const classMethods = this.joinTopLevelDecls(methods.map(method => this.printMethodDeclaration(method, identation)));
         // const classDefinition = this.printClassDefinition(node, identation);
 
         // const classBody = this.printClassBody(node, identation);
@@ -383,6 +606,41 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
         // return classDefinition + classBody + classClosing;
         return struct + "\n" + newMethod  + "\n" + classMethods;
+    }
+
+    /**
+     * gofmt's declaration-list rule (go/printer nodes.go `declList`): a top-level
+     * declaration that carries a doc comment is separated from the previous declaration
+     * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
+     * keeps the source's own separation (the printer emits members adjacent to the
+     * closing brace above them). `printClass` used to join every member with a bare
+     * "\n", so a method whose leading `/** ... *​/` comment follows the previous
+     * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
+     */
+    joinTopLevelDecls (decls: string[]): string {
+        return decls.map((decl, index) => {
+            if (index === 0 || !this.startsWithComment(decl)) {
+                return (index === 0 ? "" : "\n") + decl;
+            }
+            return "\n\n" + decl;
+        }).join("");
+    }
+
+    /**
+     * True when the emitted declaration text opens with its doc comment - the comment
+     * group gofmt attaches to the declaration (`getDoc(d) != nil` in go/printer).
+     */
+    startsWithComment (decl: string): boolean {
+        return this.isComment(decl.split("\n")[0]);
+    }
+
+    /**
+     * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
+     * whitespace, so an indented *blank* line (only the indentation of a blank source
+     * line) must stay empty instead of becoming whitespace-only text.
+     */
+    indentLines (lines: string[], identation: number): string[] {
+        return lines.map((line) => line.trim().length === 0 ? "" : this.getIden(identation) + line);
     }
 
     printPropertyAccessModifiers (node) {
@@ -426,9 +684,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let functionDef = this.printFunctionDefinition(node, identation);
         const funcBody = this.printFunctionBody(node, identation, isAsync);
 
+        // printFunctionDefinition already carries the leading comment
         if (!isAsync) {
-            functionDef += funcBody;
-            return this.printNodeCommentsIfAny(node, identation, functionDef);
+            return functionDef + funcBody;
         }
 
         // module-scope `async function` has no receiver: the body is a package-level
@@ -438,7 +696,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const trampoline = functionDef + this.printAsyncTrampolineBlock(node, identation, bodyName);
         const bodyDef = `${this.getIden(identation)}func ${bodyName}(${this.printAsyncBodyParameters(node)}) ${this.DEFAULT_RETURN_TYPE} `;
 
-        return this.printNodeCommentsIfAny(node, identation, trampoline) + "\n" + bodyDef + funcBody;
+        return trampoline + "\n" + bodyDef + funcBody;
     }
 
     /**
@@ -525,7 +783,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     /**
      * The trampoline: an async core hands back a *hot handle*.
      *
-     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
      *         ch := make(chan any, 1)
      *         go this.fetchTickerBody(ch, symbol)
      *         return ch
@@ -538,7 +796,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
      *     with work already in flight. That is what makes
      *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
      *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
      *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
      *     lives on the body, not here.
      */
@@ -546,7 +804,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const args = this.printAsyncTrampolineArgs(node);
         const argList = args ? `, ${args}` : "";
         return [
-            "{",
+            // F04: the signature above ends WITHOUT a trailing space, so the block opener
+            // carries the one space before `{` (same contract as getBlockOpen)
+            " {",
             `${this.getIden(identation + 1)}ch := make(chan ${this.DEFAULT_RETURN_TYPE}, 1)`,
             `${this.getIden(identation + 1)}go ${callee}(ch${argList})`,
             `${this.getIden(identation + 1)}return ch`,
@@ -599,17 +859,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let name = node.name.escapedText;
         name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
 
-        let returnType = this.printFunctionType(node);
+        const returnType = this.printFunctionType(node).trim();
 
         const parsedArgs = this.printMethodParameters(node);
 
-        returnType = returnType ? returnType + " " : returnType;
-
-        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-        // const methodDef = this.getIden(identation) + returnType + methodToken + name
-        //     + "(" + parsedArgs + ")";
+        // F04: `func`, the receiver, the name and the return type are separated by exactly one
+        // space, and the signature carries NO trailing space — the block opener (`getBlockOpen`,
+        // or `printAsyncTrampolineBlock` below) contributes the single space before `{`.
+        // gofmt rejects both `func  (this *X)` and `) any  {`.
+        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
         const structReceiver = `(${this.THIS_TOKEN} *${this.className})`;
-        const methodDef = this.getIden(identation) + methodToken + " " + structReceiver + " " + name + "(" + parsedArgs + ") " + returnType;
+        const returnSignature = returnType ? " " + returnType : "";
+        const methodDef = this.getIden(identation) + methodToken + structReceiver + " " + name + "(" + parsedArgs + ")" + returnSignature;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
     }
@@ -619,16 +880,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let name = node.name.escapedText;
         name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(name));
 
-        let returnType = this.printFunctionType(node);
+        const returnType = this.printFunctionType(node).trim();
 
         const parsedArgs = this.printMethodParameters(node);
 
-        returnType = returnType ? returnType + " " : returnType;
-
-        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
-        // const methodDef = this.getIden(identation) + returnType + methodToken + name
-        //     + "(" + parsedArgs + ")";
-        const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ") " + returnType;
+        // F04: single spaces only, no trailing space before the block (see printMethodDefinition)
+        const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
+        const returnSignature = returnType ? " " + returnType : "";
+        const methodDef = this.getIden(identation) + methodToken + name + "(" + parsedArgs + ")" + returnSignature;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
     }
@@ -701,9 +960,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (typeText === 'void') {
             // // If the function is async (returns a Promise in TS) but declared void, emit a typed channel
             // if (this.isAsyncFunction(node)) {
-            //     // Ensure element type is present; some edge cases yield '<- chan' only
+            //     // Ensure element type is present; some edge cases yield '<-chan' only
             //     const elementType = this.DEFAULT_RETURN_TYPE || 'any';
-            //     return `<- chan ${elementType}`;
+            //     return `<-chan ${elementType}`;
             // }
             return "";
         }
@@ -711,7 +970,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // throw new FunctionReturnTypeError("Function return type is not supported");
             let res = "";
             if (this.isAsyncFunction(node)) {
-                res = `<- chan ${this.DEFAULT_RETURN_TYPE}`;
+                res = `<-chan ${this.DEFAULT_RETURN_TYPE}`;
             } else {
                 res = this.DEFAULT_RETURN_TYPE;
             }
@@ -719,7 +978,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return res;
         }
         if (typeText === this.PROMISE_TYPE_KEYWORD) {
-            return `<- chan any`;
+            return `<-chan any`;
         }
 
         // move any trailing array brackets "[]" to directly precede the element type
@@ -932,16 +1191,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
-            let arrayBindingStatement =  `${this.getIden(identation)}${syntheticName} := ${this.printNode(declaration.initializer, 0)};\n`;
+            // gofmt drops every redundant statement terminator: Go statements are
+            // newline-separated, so the joins below must not emit ';'
+            let arrayBindingStatement =  `${this.getIden(identation)}${syntheticName} := ${this.printNode(declaration.initializer, 0)}\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
                 // const parsedType = this.getTypeFromRawType(type);
-                const statement = this.getIden(identation) + `${e} := GetValue(${syntheticName},${index})`;
+                const statement = this.getIden(identation) + `${e} := GetValue(${syntheticName}, ${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
+                    arrayBindingStatement += statement + "\n";
                 } else {
-                    // printStatement adds the last ;
                     arrayBindingStatement += statement;
                 }
             });
@@ -951,9 +1211,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
         if (declaration?.initializer?.kind=== ts.SyntaxKind.AwaitExpression) {
             const parsedName = this.printNode(declaration.name, 0);
-            const parsedInitializer = this.printNode(declaration.initializer, 0);
+            // the awaited call can carry a multi-line literal argument: printing it at the
+            // declaration's own level keeps that literal one level deeper
+            const parsedInitializer = this.printNode(declaration.initializer, identation);
             return `
-${this.getIden(identation)}${parsedName}:= ${parsedInitializer}
+${this.getIden(identation)}${parsedName} := ${parsedInitializer}
 ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         }
@@ -972,7 +1234,9 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             }
             const varName = this.printNode(declaration.name);
             const declaredType = this.getGoLocalType(declaration, parsedValue);
-            const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue;
+            // an initializer printed at the declaration's own level (parenthesized expression,
+            // helper call) carries that indentation; gofmt puts one space after `=`
+            const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue.trimStart();
             if (parsedValue.startsWith("<-this.callInternal(")) {
                 return `
 ${stm}
@@ -1003,6 +1267,212 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     //     const body =  node.properties.map((p) => `${this.getIden(identation)}${objectName}["${node.properties[0].name.text}"] = ${p.initializer.text}` ).join("\n");
     //     return body;
     // }
+
+    // F09 — gofmt aligns the key/value columns inside multi-line composite literals.
+    //
+    // go/printer's exprList prints a single-line `key: value` entry as `key:` + vtab, so
+    // every consecutive single-line entry of a literal body lands in one text/tabwriter
+    // column block: the value starts after the widest key cell of that block (`"key":`,
+    // the key plus its colon) and one space of padding. An entry whose value spans lines
+    // carries no vtab cell, so it ends the block on both sides, exactly like a blank line
+    // does. exprList also writes a formfeed — turned into a plain newline by the trimmer,
+    // so it never shows up in the output — before an entry that opens a new alignment
+    // section: that happens when the entry or its predecessor does not fit on a single
+    // line, and when the key size ratio against the geometric mean of the previous key
+    // sizes of the section reaches r = 2.5 (or drops to 1/r) while at least one of the
+    // two keys is larger than smallSize = 40 bytes; keys of at most 40 bytes always keep
+    // the section aligned. A trailing comment is one more tabwriter cell, so comments
+    // line up after the widest `value,` cell of the run of consecutive commented entries.
+    printObjectLiteralBody(node, identation) {
+        // composite literal elements are printed at depth 1 again (go/printer exprList(..., 1, ...));
+        // a literal nested in an entry's value is laid out relative to that entry
+        const previousLevel = this.goStatementLevel;
+        this.goStatementLevel = identation + 1;
+        try {
+            const entries = node.properties.map((p) => this.goWithExprDepth(1, () => this.printNode(p, identation + 1)));
+            return this.alignGoCompositeEntries(entries).join("\n");
+        } finally {
+            this.goStatementLevel = previousLevel;
+        }
+    }
+
+    // Applies the gofmt column alignment to already-printed `key: value` entries (the
+    // entries must not carry the separating comma). Reused by the hand-written composite
+    // literals in ccxt's build/goTranspiler.ts, which do not go through this printer.
+    alignGoCompositeEntries(entries) {
+        const parsedEntries = entries.map((entry) => this.parseGoCompositeEntry(entry));
+        const paddings = this.getGoCompositePaddings(parsedEntries);
+        return entries.map((entry, index) => this.renderGoCompositeEntry(entry, parsedEntries[index], paddings[index]));
+    }
+
+    // `        "key": value, // comment` -> the pieces gofmt's tabwriter aligns.
+    // Returns undefined for anything that is not a plain `key: value` entry (a spread, a
+    // method, a computed key): the caller then leaves that entry alone and ends the block.
+    parseGoCompositeEntry(entry) {
+        const newlineIndex = entry.indexOf("\n");
+        const firstLine = newlineIndex === -1 ? entry : entry.slice(0, newlineIndex);
+        const keyMatch = /^([ \t]*)("(?:[^"\\]|\\.)*"): /.exec(firstLine);
+        if (keyMatch === null) {
+            return undefined;
+        }
+        const singleLine = newlineIndex === -1;
+        // for a multi-line entry only the trailing comment of its last line matters here
+        const tail = singleLine ? entry.slice(keyMatch[0].length) : entry.slice(entry.lastIndexOf("\n") + 1);
+        const commentIndex = this.findGoTrailingCommentStart(tail);
+        return {
+            'indent': keyMatch[1],
+            'key': keyMatch[2],
+            // nodeSize() measures the printed key; a value that spans lines gets size 0
+            'size': singleLine ? this.getGoByteLength(keyMatch[2]) : 0,
+            'singleLine': singleLine,
+            'value': singleLine ? (commentIndex === -1 ? tail : tail.slice(0, commentIndex)).trimEnd() : undefined,
+            'comment': commentIndex === -1 ? undefined : tail.slice(commentIndex).trimEnd(),
+        };
+    }
+
+    // Index of the trailing comment of a printed line, or -1. `//` or `/*` inside a string
+    // or a rune literal (e.g. a "https://…" value) is not a comment.
+    findGoTrailingCommentStart(line) {
+        let quote;
+        for (let index = 0; index < line.length; ++index) {
+            const character = line[index];
+            if (quote !== undefined) {
+                if (character === "\\" && quote !== "`") {
+                    index += 1;
+                } else if (character === quote) {
+                    quote = undefined;
+                }
+                continue;
+            }
+            if (character === "\"" || character === "`" || character === "'") {
+                quote = character;
+            } else if (character === "/" && (line[index + 1] === "/" || line[index + 1] === "*")) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    // {key, comment} space counts per entry, i.e. the padding gofmt's tabwriter inserts.
+    // Only entries that are part of a block get a padding; every other entry is rendered
+    // as printed (gofmt leaves single-line and multi-line sections untouched).
+    getGoCompositePaddings(parsedEntries) {
+        // the sectioning below mirrors go/printer's exprList
+        const smallSize = 40;
+        const ratio = 2.5;
+        const paddings = parsedEntries.map(() => undefined);
+        let block = [];
+        let previousSize = 0;
+        let size = 0;
+        let lnSum = 0;
+        let count = 0;
+        const flushBlock = () => {
+            if (block.length === 0) {
+                return;
+            }
+            let keyWidth = 1; // widest key cell of the block + one space of padding
+            for (const index of block) {
+                keyWidth = Math.max(keyWidth, this.getGoRuneLength(parsedEntries[index].key) + 2);
+            }
+            for (const index of block) {
+                paddings[index] = { 'key': keyWidth - this.getGoRuneLength(parsedEntries[index].key) - 1, 'comment': 1 };
+            }
+            // the comment column only spans the runs of consecutive commented entries
+            let run = [];
+            const flushRun = () => {
+                if (run.length === 0) {
+                    return;
+                }
+                let runWidth = 1; // widest `value,` cell of the run + one space of padding
+                for (const index of run) {
+                    runWidth = Math.max(runWidth, this.getGoRuneLength(parsedEntries[index].value) + 2);
+                }
+                for (const index of run) {
+                    paddings[index].comment = runWidth - this.getGoRuneLength(parsedEntries[index].value) - 1;
+                }
+                run = [];
+            };
+            for (const index of block) {
+                if (parsedEntries[index].comment !== undefined) {
+                    run.push(index);
+                } else {
+                    flushRun();
+                }
+            }
+            flushRun();
+            block = [];
+        };
+        for (let index = 0; index < parsedEntries.length; ++index) {
+            const entry = parsedEntries[index];
+            previousSize = size;
+            size = entry !== undefined ? entry.size : 0;
+            let sectionBreak = true; // exprList's useFF
+            if (previousSize > 0 && size > 0) {
+                if (count === 0 || (previousSize <= smallSize && size <= smallSize)) {
+                    sectionBreak = false;
+                } else {
+                    const geomean = Math.exp(lnSum / count);
+                    const sizeRatio = size / geomean;
+                    sectionBreak = ratio * sizeRatio <= 1 || ratio <= sizeRatio;
+                }
+            }
+            const alignable = entry !== undefined && entry.singleLine;
+            if (index > 0 && sectionBreak) {
+                // exprList resets the geometric mean accumulation whenever it starts a
+                // new section (a formfeed break is two line breaks, nbreaks > 1), so the
+                // ratio below is measured against the current section only
+                lnSum = 0;
+                count = 0;
+            }
+            if (!alignable || sectionBreak) {
+                flushBlock();
+            }
+            if (alignable) {
+                block.push(index);
+            }
+            if (size > 0) {
+                lnSum += Math.log(size);
+                count += 1;
+            }
+        }
+        flushBlock();
+        return paddings;
+    }
+
+    renderGoCompositeEntry(entry, parsed, padding) {
+        if (parsed === undefined || !parsed.singleLine || padding === undefined) {
+            return this.appendGoTrailingComma(entry);
+        }
+        const comment = parsed.comment === undefined ? "" : " ".repeat(padding.comment) + parsed.comment;
+        return parsed.indent + parsed.key + ":" + " ".repeat(padding.key) + parsed.value + "," + comment;
+    }
+
+    // gofmt prints the comma of an entry before its trailing comment (`value, // comment`),
+    // the entry text carries the comment last, so move the comma in front of it
+    appendGoTrailingComma(entry) {
+        const newlineIndex = entry.lastIndexOf("\n");
+        const lastLine = newlineIndex === -1 ? entry : entry.slice(newlineIndex + 1);
+        const commentIndex = this.findGoTrailingCommentStart(lastLine);
+        if (commentIndex === -1) {
+            return entry + ",";
+        }
+        const offset = entry.length - lastLine.length + commentIndex;
+        return entry.slice(0, offset).trimEnd() + ", " + entry.slice(offset).trimEnd();
+    }
+
+    // text/tabwriter sizes cells in runes, go/printer's nodeSize counts bytes
+    getGoRuneLength(text) {
+        return [...text].length;
+    }
+
+    getGoByteLength(text) {
+        let length = 0;
+        for (const character of text) {
+            const codePoint = character.codePointAt(0);
+            length += codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+        }
+        return length;
+    }
 
     printConstructorDeclaration (node, identation) {
         const classNode = node.parent;
@@ -1064,9 +1534,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // const isAsync = true; // setting to true for now, because there are some scenarios where we don't know
         const elementAccess = node.expression;
         if (elementAccess?.kind === ts.SyntaxKind.ElementAccessExpression) {
-            const parsedArg = node.arguments?.length > 0 ? node.arguments.map(n => this.printNode(n, identation).trimStart()).join(", ") : "";
+            // the emitted call also carries the property name as its first
+            // argument, so a call with arguments is a call with more than one
+            // argument and prints them one level deeper
+            const argumentDepth = this.goExprDepth + ((node.arguments?.length > 0) ? 1 : 0);
+            const parsedArg = node.arguments?.length > 0 ? node.arguments.map(n => this.goWithExprDepth(argumentDepth, () => this.printNode(n, identation).trimStart())).join(", ") : "";
             // const target = this.printNode(elementAccess.expression, 0);
-            const propName = this.printNode(elementAccess.argumentExpression, 0);
+            const propName = this.goWithExprDepth(argumentDepth, () => this.printNode(elementAccess.argumentExpression, 0));
             const argsArray = `${parsedArg}`;
             const open = this.DYNAMIC_CALL_OPEN;
             const statement = `${open}${propName}, ${argsArray})`;
@@ -1098,10 +1572,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    printWrappedUnknownThisProperty(node) {
+    printWrappedUnknownThisProperty(node, identation = 0) {
         const type = this.getChecker().getResolvedSignature(node);
         if (type?.declaration === undefined) {
-            let parsedArguments = node.arguments?.map((a) => this.printNode(a, 0)).join(", ");
+            // the emitted call carries the property name as its first argument; arguments
+            // print at the call's level so a multi-line literal keeps its nesting
+            const argumentDepth = this.goExprDepth + ((node.arguments?.length > 0) ? 1 : 0);
+            let parsedArguments = node.arguments?.map((a) => this.goWithExprDepth(argumentDepth, () => this.printNode(a, identation).trimStart())).join(", ");
             parsedArguments = parsedArguments ? parsedArguments : "";
             const propName = node.expression?.name.escapedText;
             // const isAsyncDecl = true;
@@ -1174,7 +1651,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             // wrap unknown property this.X calls
             if (leftSideText === this.THIS_TOKEN || leftSide.getFullText().indexOf("(this as any)") > -1) { // double check this
-                const res = this.printWrappedUnknownThisProperty(node);
+                const res = this.printWrappedUnknownThisProperty(node, identation);
                 if (res) {
                     return res;
                 }
@@ -1254,15 +1731,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
+            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
 
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName},${index})`;
+                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
+                    arrayBindingStatement += statement + "\n";
                 } else {
-                    // printStatement adds the last ;
                     arrayBindingStatement += statement;
                 }
             });
@@ -1299,7 +1775,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
 
             const lastKey = keyStrs[keyStrs.length - 1];
-            const rhs     = this.printNode(right, 0);
+            // the value is printed at the statement's own level so a multi-line object
+            // literal (bare, or nested inside a call argument) lands one level deeper with
+            // its closing brace at the statement level; the leading indentation is dropped
+            const rhs     = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
 
             return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -1356,8 +1835,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // the base printBinaryExpression prints them, and doing it eagerly means
         // every unhandled binary expression gets its subtrees printed twice
         if (op === ts.SyntaxKind.PlusEqualsToken || op === ts.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
-            const leftText = this.printNode(left, 0);
-            const rightText = this.printNode(right, 0);
+            // both operands end up in the two-argument helper call below (or in the
+            // `Add(x, y)` on the right of the compound assignment), i.e. one level
+            // deeper than the expression itself
+            const operandDepth = this.goExprDepth + 1;
+            const leftText = this.goWithExprDepth(operandDepth, () => this.printNode(left, 0));
+            const rightText = this.goWithExprDepth(operandDepth, () => this.printNode(right, 0));
 
             if (op === ts.SyntaxKind.PlusEqualsToken) {
                 return `${leftText} = Add(${leftText}, ${rightText})`;
@@ -1571,13 +2054,223 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // gofmt prints the condition of every `if`/`for`/`switch` through
+    // go/printer/nodes.go controlClause() -> stripParens(): the single outermost,
+    // fully enclosing parentheses pair is dropped, and the rule applies again to the
+    // enclosed expression while that one is parenthesized as well
+    // (`if (x == 1) {` -> `if x == 1 {`, `if ((x == 1)) {` -> `if x == 1 {`).
+    // Parentheses survive when the enclosed expression holds an unparenthesized
+    // composite literal whose type is a type name, because `if T{} == x {` does not
+    // parse. The printer emits text instead of an ast.Expr, so stripParens runs over
+    // the printed condition text here.
+    goControlClauseParens(node, expression: string): string {
+        if (!this.goIsControlClauseCondition(node)) {
+            return expression;
+        }
+        let text = expression;
+        for (;;) {
+            const inner = this.goEnclosedExpression(text);
+            if (inner === undefined) {
+                return text;
+            }
+            text = inner;
+        }
+    }
+
+    // the expression inside the outermost parentheses pair of `text`, or undefined
+    // when `text` is not one fully enclosing pair or gofmt keeps that pair
+    goEnclosedExpression(text: string): string | undefined {
+        const trimmed = text.trim();
+        if (!trimmed.startsWith('(') || !trimmed.endsWith(')')) {
+            return undefined;
+        }
+        // `(a) && (b)` opens and closes with a parenthesis, but not the same pair
+        if (this.goSkipBalanced(trimmed, 0, '(', ')') !== trimmed.length) {
+            return undefined;
+        }
+        const inner = trimmed.substring(1, trimmed.length - 1).trim();
+        if (this.goHasTypeNameCompositeLiteral(inner)) {
+            return undefined; // stripParens keeps parentheses protecting a literal
+        }
+        return inner;
+    }
+
+    // the expression a Go `if`/`for`/`switch` statement tests, the only positions
+    // gofmt's controlClause() rewrites
+    goIsControlClauseCondition(node): boolean {
+        const parent = node?.parent;
+        switch (parent?.kind) {
+        case ts.SyntaxKind.IfStatement:
+        case ts.SyntaxKind.WhileStatement:
+        case ts.SyntaxKind.SwitchStatement:
+            return parent.expression === node;
+        case ts.SyntaxKind.ForStatement:
+            return parent.condition === node;
+        }
+        return false;
+    }
+
+    // stripParens' ast.Inspect stops at nested parentheses, which protect whatever
+    // they enclose, and reports a composite literal whenever its type is a type name
+    goHasTypeNameCompositeLiteral(text: string): boolean {
+        let index = 0;
+        while (index < text.length) {
+            const char = text[index];
+            if ((char === '"') || (char === '`') || (char === '\'')) {
+                index = this.goSkipQuoted(text, index);
+                continue;
+            }
+            if (char === '(') {
+                const next = this.goSkipBalanced(text, index, '(', ')');
+                if (next < 0) {
+                    return false; // unbalanced text cannot be inspected any further
+                }
+                index = next;
+                continue;
+            }
+            if (char === '{') {
+                if (this.goCompositeLitHasTypeName(text, index)) {
+                    return true;
+                }
+                const next = this.goSkipBalanced(text, index, '{', '}');
+                if (next < 0) {
+                    return false;
+                }
+                index = next;
+                continue;
+            }
+            index += 1;
+        }
+        return false;
+    }
+
+    // `{` opens a composite literal whose type is a type name when the text in front
+    // of it is an ident or a selector chain of idents; `map[string]any{` and `[]any{`
+    // are type literals and do not count (isTypeName in go/printer/nodes.go)
+    goCompositeLitHasTypeName(text: string, braceIndex: number): boolean {
+        let start = braceIndex;
+        while (start > 0 && /[A-Za-z0-9_.\[\]]/.test(text[start - 1])) {
+            start -= 1;
+        }
+        const typeText = text.substring(start, braceIndex).trim();
+        if (['map', 'struct', 'interface', 'func', 'chan'].indexOf(typeText) >= 0) {
+            return false;
+        }
+        return /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$/.test(typeText);
+    }
+
+    // the index right after the bracket closing the one at `start`, or -1 when the
+    // brackets are unbalanced (the printer sees statement fragments, not whole files)
+    goSkipBalanced(text: string, start: number, open: string, close: string): number {
+        let depth = 0;
+        let index = start;
+        while (index < text.length) {
+            const char = text[index];
+            if ((char === '"') || (char === '`') || (char === '\'')) {
+                index = this.goSkipQuoted(text, index);
+                continue;
+            }
+            if (char === open) {
+                depth += 1;
+            } else if (char === close) {
+                depth -= 1;
+                if (depth === 0) {
+                    return index + 1;
+                }
+            }
+            index += 1;
+        }
+        return -1;
+    }
+
+    // the index right after the string, rune or raw string literal opening at `start`
+    goSkipQuoted(text: string, start: number): number {
+        const quote = text[start];
+        let index = start + 1;
+        while (index < text.length) {
+            const char = text[index];
+            if ((char === '\\') && (quote !== '`')) {
+                index += 2;
+                continue;
+            }
+            if (char === quote) {
+                return index + 1;
+            }
+            index += 1;
+        }
+        return text.length;
+    }
+
+    // gofmt keeps a comment group that the source separates from the following
+    // declaration by a blank line as a free-standing comment; joined to it, it becomes
+    // the declaration's doc comment and its indented lines are re-laid out as a code
+    // block. The blank line is preserved so the emitted text keeps the source's shape.
+    printLeadingComments(node, identation) {
+        const printed = super.printLeadingComments(node, identation);
+        if (printed.length === 0) {
+            return printed;
+        }
+        const fullText = this.getSrc().getFullText();
+        const ranges = ts.getLeadingCommentRanges(fullText, node.pos) ?? [];
+        const last = ranges[ranges.length - 1];
+        if (last === undefined) {
+            return printed;
+        }
+        const gap = fullText.slice(last.end, node.getStart());
+        const detached = (gap.match(/\n/g) ?? []).length > 1;
+        return detached ? printed + "\n" : printed;
+    }
+
+    // level of the statement being printed: a multi-line composite literal is laid out
+    // relative to it (go/printer), whatever level the expression printers hand down
+    goStatementLevel = 0;
+
+    // gofmt separates a top-level declaration that carries a comment from the previous
+    // declaration by a blank line (go/printer declList: min = 2 when the decl has a doc
+    // comment); the file members are joined with a bare newline otherwise
+    printSourceFileStatements(node, identation): string {
+        const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
+        return printed.map((st, index) => (index > 0 && /^\s*(\/\/|\/\*)/.test(st)) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
+    }
+
+    printNode(node, identation = 0): string {
+        if (node !== undefined && ts.isSourceFile(node)) {
+            this.className = "undefined";
+            return this.printSourceFileStatements(node, identation);
+        }
+        const isStatement = node !== undefined && ts.isStatement(node) && node.kind !== ts.SyntaxKind.Block;
+        const previousLevel = this.goStatementLevel;
+        if (isStatement) {
+            this.goStatementLevel = identation;
+        }
+        try {
+            const printed = super.printNode(node, identation);
+            // the if/for/switch conditions go through here (printCondition resolves the
+            // bool and the falsy/truthy paths before printing the node's text)
+            return this.goControlClauseParens(node, printed);
+        } finally {
+            this.goStatementLevel = previousLevel;
+        }
+    }
+
+    // composite literal body one level deeper than the statement, closing brace at the
+    // statement's level; the leading indentation belongs to the enclosing printer
+    printObjectLiteralExpression(node, identation) {
+        const level = this.goStatementLevel;
+        const objectBody = this.printObjectLiteralBody(node, level);
+        const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(level) : objectBody;
+        return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
+    }
+
     printCondition(node, identation) {
         // `!x` is handled by printPrefixUnaryExpression, which calls back into this
         // method with the operand; let the base class keep that recursion intact
         if (node?.kind === ts.SyntaxKind.Identifier) {
             const inlined = this.printInlineTruthy(node);
             if (inlined !== undefined) {
-                return `${this.getIden(identation)}${inlined}`;
+                // printInlineTruthy prints the operand itself, so the control-clause
+                // parens of printNode do not see the parentheses it wraps it in
+                return `${this.getIden(identation)}${this.goControlClauseParens(node, inlined)}`;
             }
             return super.printCondition(node, identation);
         }
@@ -1671,6 +2364,89 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // Go's printer never wraps an already parenthesised expression: gofmt prints a
+    // ParenExpr whose child is itself a ParenExpr without its own parentheses
+    // (`((x))` prints as `(x)`), because the text it is handed is re-parsed that way.
+    // Our output is re-parsed exactly like that, so a source parenthesis around an
+    // expression that already prints parenthesised -- an inlined comparison, a nested
+    // parenthesised expression, an EvalTruthy(...) arm -- must emit the single pair
+    // gofmt keeps instead of doubling it.
+    printParenthesizedExpression(node, identation) {
+        const expression = node.expression;
+        if (expression?.kind === ts.SyntaxKind.AsExpression) {
+            // transform (this as any) into this, () and as any are not necessary
+            return this.getIden(identation) + this.printNode(expression, 0);
+        }
+        if (expression?.kind === ts.SyntaxKind.ArrowFunction) {
+            // ignore arrowFunctions inside parenthesis
+            return "";
+        }
+        // parentheses undo one level of depth (go/printer reduceDepth())
+        const printed = this.goWithExprDepth(this.goExprDepth - 1, () => this.printNode(expression, 0));
+        if (this.goIsParenthesizedExpression(printed)) {
+            return this.getIden(identation) + printed;
+        }
+        return this.getIden(identation) + this.LEFT_PARENTHESIS + printed + this.RIGHT_PARENTHESIS;
+    }
+
+    // true when the printed text is exactly one parenthesised expression: its first
+    // `(` closes on the last non-space character. Literals and comments are skipped
+    // so a parenthesis inside them cannot unbalance the scan.
+    goIsParenthesizedExpression(printed: string): boolean {
+        const text = printed.trimStart();
+        if (text[0] !== '(') {
+            return false;
+        }
+        let depth = 0;
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if ((c === '/') && (text[i + 1] === '/')) {
+                // a trailing line comment belongs to the statement, not to the expression
+                return false;
+            }
+            if ((c === '/') && (text[i + 1] === '*')) {
+                const end = text.indexOf('*/', i + 2);
+                if (end < 0) {
+                    return false;
+                }
+                i = end + 1;
+                continue;
+            }
+            if ((c === '"') || (c === '\'') || (c === '`')) {
+                i = this.goSkipGoLiteral(text, i);
+                if (i < 0) {
+                    return false;
+                }
+                continue;
+            }
+            if (c === '(') {
+                depth += 1;
+            } else if (c === ')') {
+                depth -= 1;
+                if (depth === 0) {
+                    return text.substring(i + 1).trim().length === 0;
+                }
+            }
+        }
+        return false;
+    }
+
+    // index of the quote closing the Go string/rune literal that starts at `start`, -1 when unterminated
+    goSkipGoLiteral(text: string, start: number): number {
+        const quote = text[start];
+        for (let i = start + 1; i < text.length; i++) {
+            const c = text[i];
+            if (c === '\\') {
+                i += 1;
+                continue;
+            }
+            if (c === quote) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     // castVariableAssignmentIfNeeded(left, right, identation) {
     //     const leftType = this.getChecker().getTypeAtLocation(left);
     //     const rightType = this.getChecker().getTypeAtLocation(right);
@@ -1746,7 +2522,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const commentPart = bodyParts.filter(line => this.isComment(line));
                 const isComment = commentPart.length > 0;
                 if (isComment) {
-                    const commentPartString = commentPart.map((c) => this.getIden(identation+1) + c.trim()).join("\n");
+                    // the statement's leading comment must keep the ' * ' continuation-alignment
+                    // of printLeadingComments: gofmt re-indents a /* */ block to
+                    // `<indent> * text` (printer.stripCommonPrefix + the tab indent), so a bare
+                    // trim() here would emit `* text` under the '/**'.
+                    const commentPartString = commentPart.map((c) => {
+                        const line = c.trim();
+                        return this.getIden(identation+1) + (line.startsWith("*") ? " " + line : line);
+                    }).join("\n");
                     const firstStmNoComment = bodyParts.filter(line => !this.isComment(line)).join("\n");
                     firstStatement = commentPartString + "\n" + defaultInitializers + firstStmNoComment;
                 } else {
@@ -1771,7 +2554,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     //         return this.getIden(identation) + "ch <-" + this.printNode(statement.expression) + '\n' + this.getIden(identation) + "return " + this.printNode(statement.expression);
                     //     }
                     // }
-                    return this.printNode(statement, identation);
+                    return this.printNode(statement, identation + 1);
                 }).join("\n");
 
             }
@@ -1780,9 +2563,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // return statement might be inside ifs or other complex statements so we still have to replace them manually :(
             // functionBody = functionBody.replace(/(\s*)return\s+([^\n]+\n?)/g, '$1ch <- $2$1');
             const functionBodySplit = functionBody.split("\n");
-            const bodyWithIndentationExtraAndNoReturn = functionBodySplit.map((line) => {
-                return this.getIden(identation+1) + line;
-            }).join("\n");
+            // the body half of the trampoline pair is a flat function body: the statements
+            // are already printed at their own level (the `defer` lines below sit at the
+            // same level), so no extra indentation level is added here
+            const bodyWithIndentationExtraAndNoReturn = functionBodySplit.join("\n");
             let shouldAddLastReturn = true;
 
             // const bodySplit = bodyWithIndentationExtraAndNoReturn.split("\n");
@@ -1864,7 +2648,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             node = node.expression;
         }
         if (node.expression.kind !== ts.SyntaxKind.AwaitExpression) {
-            return super.printExpressionStatement(node, identation);
+            return this.stripWhitespaceOnlyLines (super.printExpressionStatement(node, identation));
         }
 
         const exprStm = this.printNode(node.expression, identation);
@@ -1940,13 +2724,18 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         if (node?.expression?.kind === ts.SyntaxKind.AwaitExpression) {
             // const returnRandName = "retRes" + this.getRandomNameSuffix();
             const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
-            rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+            // the template's `:= ` already supplies the separator; keep the printed expression
+            // flush so the receive reads `retResNNN := (<-this.X())` (gofmt spacing)
+            rightPart = rightPart ? rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
             // return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+            // printLeadingComments returns the comment lines with their own indentation and a
+            // trailing newline, so the comment is emitted as its own line(s) and the `ch <-`
+            // line carries the indentation the comment would otherwise have swallowed.
             return `
-    ${this.getIden(identation)}${returnRandName} := ${rightPart}
-    ${this.getIden(identation)}PanicOnError(${returnRandName})
-    ${this.getIden(identation)}${leadingComment}ch <- ${returnRandName}${trailingComment}
-    ${this.getIden(identation)}${returnStatement}`;
+${this.getIden(identation)}${returnRandName} := ${rightPart}
+${this.getIden(identation)}PanicOnError(${returnRandName})
+${leadingComment}${this.getIden(identation)}ch <- ${returnRandName}${trailingComment}
+${this.getIden(identation)}${returnStatement}`;
             // ${this.getIden(identation)}return ${returnRandName}`;
         }
 
@@ -1955,7 +2744,7 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
         }
 
         return `
-${this.getIden(identation)}${leadingComment}ch <- ${rightPart}${trailingComment}
+${leadingComment}${this.getIden(identation)}ch <- ${rightPart}${trailingComment}
 ${this.getIden(identation)}${returnStatement}`;
         // ${this.getIden(identation)}return ${rightPart}`;
         // ${this.getIden(identation)}return ${rightPart}`;
@@ -1985,12 +2774,15 @@ ${this.getIden(identation)}${returnStatement}`;
         return this.printNode(node.expression, identation);
     }
 
-    printArrayLiteralExpression(node) {
+    printArrayLiteralExpression(node, identation = 0) {
 
         let arrayOpen = this.ARRAY_OPENING_TOKEN;
         const elems = node.elements;
 
-        const elements = node.elements.map((e) => this.printNode(e)).join(", ");
+        // elements that span lines (object literals, calls carrying one) need the
+        // statement's own level so their bodies land one level deeper
+        // …but an element is inline after `{`, so any leading indent a printer prepends is trimmed
+        const elements = node.elements.map((e) => this.printNode(e, identation).trim()).join(", ");
 
         // take into consideration list of promises
         if (elems.length > 0) {
@@ -2042,6 +2834,11 @@ ${this.getIden(identation)}${returnStatement}`;
             });
             parsedArgs = tmpArgs.join(",");
             return parsedArgs;
+        }
+        // go/printer prints the arguments of a call with more than one argument
+        // one level deeper than the call itself (nodes.go, CallExpr)
+        if (node.arguments && node.arguments.length > 1) {
+            return this.goWithExprDepth(this.goExprDepth + 1, () => super.printArgsForCallExpression(node, identation));
         }
         return super.printArgsForCallExpression(node, identation);
     }
@@ -2103,7 +2900,7 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `Contains(${name},${parsedArg})`;
+        return `Contains(${name}, ${parsedArg})`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -2269,12 +3066,14 @@ ${this.getIden(identation)}${returnStatement}`;
                     if (isClassDeclaration){
                         // return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
                     } else {
-                        return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg});return nil;`;
+                        // Go has no statement terminator: the two statements go on
+                        // their own lines (gofmt splits `a; b` exactly like this)
+                        return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg})\n${this.getIden(identation)}return nil`;
                     }
                 }
                 return this.getIden(identation) + `panic(${id.escapedText}(${parsedArg}))${this.LINE_TERMINATOR}`;
             } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
-                return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg});`;
+                return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg})`;
             }
             return super.printThrowStatement(node, identation);
         }
@@ -2284,6 +3083,125 @@ ${this.getIden(identation)}${returnStatement}`;
         // // const args = node.expression?.arguments.map(n => this.printNode(n, 0)).join(",");
         // // const throwExpression = ` ${newToken}${newExpression}${this.LEFT_PARENTHESIS}((string)${args})${this.RIGHT_PARENTHESIS}`;
         // return this.getIden(identation) + this.THROW_TOKEN + throwExpression + this.LINE_TERMINATOR;
+    }
+
+    // -----------------------------------------------------------------------
+    // gofmt-compatible spacing of the binary expressions this printer emits
+    // -----------------------------------------------------------------------
+    // go/printer (nodes.go) prints a binary expression with blanks around the
+    // operator unless the expression sits deeper than the top level of a
+    // statement: binaryExpr() asks cutoff() - which inspects the operator tree
+    // through walkBinary() - and drops *both* blanks when the operator
+    // precedence is below that cutoff. Level 4/5 operators (`+ - * / % & | ^
+    // << >>`) therefore print as `a + b` at the top level but as `a+b`, `a[i+1]`
+    // one level down; comparisons and `&&`/`||` (level 3 and below) always keep
+    // their blanks.
+    //
+    // goExprDepth mirrors the depth go/printer tracks over the Go AST it is
+    // about to emit: 1 at the start of every statement, +1 for an argument list
+    // with more than one argument, +1 for an index expression, +1 for the right
+    // operand of a binary expression, -1 inside parentheses (never below 1), and
+    // back to 1 for composite literal elements.
+    goExprDepth = 1;
+
+    goWithExprDepth<T>(depth: number, callback: () => T): T {
+        const previous = this.goExprDepth;
+        this.goExprDepth = depth < 1 ? 1 : depth;
+        try {
+            return callback();
+        } finally {
+            this.goExprDepth = previous;
+        }
+    }
+
+    // go/token precedence of the operators this printer can print natively
+    // (5 `* / % << >> & &^`, 4 `+ - | ^`, 3 comparisons, 2 `&&`, 1 `||`)
+    goOperatorPrecedence(operator: string): number {
+        switch (operator) {
+        case '*': case '/': case '%': case '<<': case '>>': case '&': case '&^':
+            return 5;
+        case '+': case '-': case '|': case '^':
+            return 4;
+        case '==': case '!=': case '<': case '<=': case '>': case '>=':
+            return 3;
+        case '&&':
+            return 2;
+        case '||':
+            return 1;
+        }
+        return 0;
+    }
+
+    // the operator string a node is printed as when it stays a Go binary
+    // expression, or undefined when the node becomes a helper call or is not
+    // binary at all - a primary expression, which walkBinary() never looks into
+    goNativeBinaryOperator(node): string | undefined {
+        if (!node || !ts.isBinaryExpression(node)) {
+            return undefined;
+        }
+        const kind = node.operatorToken.kind;
+        if (kind === ts.SyntaxKind.EqualsToken || kind === ts.SyntaxKind.PlusEqualsToken ||
+            kind === ts.SyntaxKind.MinusEqualsToken || kind === ts.SyntaxKind.InKeyword ||
+            kind === ts.SyntaxKind.InstanceOfKeyword || kind in this.binaryExpressionsWrappers) {
+            return undefined;
+        }
+        const operator = this.SupportedKindNames[kind];
+        return this.goOperatorPrecedence(operator) > 0 ? operator : undefined;
+    }
+
+    // walkBinary(): has4 / has5 / maxProblem of the operator tree that is about
+    // to be printed. Operands that stay binary expressions are walked, every
+    // other operand is a primary expression and stops the walk - the same
+    // boundary go/printer draws for parens and calls.
+    goWalkBinary(operator: string, left, right, rightText: string) {
+        const precedence = this.goOperatorPrecedence(operator);
+        let has4 = precedence === 4;
+        let has5 = precedence === 5;
+        let maxProblem = 0;
+        const leftOperator = this.goNativeBinaryOperator(left);
+        if (leftOperator !== undefined && this.goOperatorPrecedence(leftOperator) >= precedence) {
+            const info = this.goWalkBinary(leftOperator, left.left, left.right, '');
+            has4 = has4 || info.has4;
+            has5 = has5 || info.has5;
+            maxProblem = Math.max(maxProblem, info.maxProblem);
+        }
+        const rightOperator = this.goNativeBinaryOperator(right);
+        if (rightOperator !== undefined && this.goOperatorPrecedence(rightOperator) > precedence) {
+            const info = this.goWalkBinary(rightOperator, right.left, right.right, '');
+            has4 = has4 || info.has4;
+            has5 = has5 || info.has5;
+            maxProblem = Math.max(maxProblem, info.maxProblem);
+        } else if (rightOperator === undefined) {
+            // `/*`, `&&`, `&^` and the `+ +` / `- -` pairs must keep a blank so
+            // that the two tokens cannot glue into a different operator
+            const pair = operator + rightText.replace(/^[ \t]+/, '').slice(0, 1);
+            if (pair === '/*' || pair === '&&' || pair === '&^') {
+                maxProblem = 5;
+            } else if (pair === '++' || pair === '--') {
+                maxProblem = Math.max(maxProblem, 4);
+            }
+        }
+        return { has4, has5, maxProblem };
+    }
+
+    // the separator gofmt puts around a natively printed operator: `' '` keeps
+    // the blanks, `''` drops them (go/printer cutoff())
+    goBinarySeparator(operator: string, rightText: string, left, right): string {
+        const precedence = this.goOperatorPrecedence(operator);
+        if (precedence < 4) {
+            // level 3 and below always keep both blanks
+            return ' ';
+        }
+        const { has4, has5, maxProblem } = this.goWalkBinary(operator, left, right, rightText);
+        let cutoff;
+        if (maxProblem > 0) {
+            cutoff = maxProblem + 1;
+        } else if (has4 && has5) {
+            cutoff = this.goExprDepth === 1 ? 5 : 4;
+        } else {
+            cutoff = this.goExprDepth === 1 ? 6 : 4;
+        }
+        return precedence < cutoff ? ' ' : '';
     }
 
     printBinaryExpression(node, identation) {
@@ -2302,18 +3220,28 @@ ${this.getIden(identation)}${returnStatement}`;
         if (operatorToken.kind === ts.SyntaxKind.EqualsToken) {
             // handle test['a'] = 1;
             const elementAccess = left;
-            const rightSide = this.printNode(right, 0);
+            const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
             if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
-                return `AddElementToObject(${leftSide}, ${propName}, ${rightSide})`;
+                // the value is printed at the statement's own level so a multi-line object
+                // literal (bare, or nested inside a call argument) lands one level deeper with
+                // its closing brace at the statement level; the leading indentation a call
+                // printer adds is dropped, since the value sits after the `(`
+                const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
+                return `AddElementToObject(${leftSide}, ${propName}, ${value})`;
             }
 
             if (right?.kind === ts.SyntaxKind.AwaitExpression || rightSide.startsWith('<-this.callInternal')) {
                 const leftParsed = this.printNode(left, 0);
+                // the awaited call can carry a multi-line object literal argument: printing it
+                // at the statement's own level keeps that literal one level deeper
+                const awaited = (right?.kind === ts.SyntaxKind.AwaitExpression)
+                    ? this.printNode(right, identation)
+                    : rightSide;
                 return `
-    ${leftParsed} = ${rightSide}
-    ${this.getIden(identation)}PanicOnError(${leftParsed})`;
+${this.getIden(identation)}${leftParsed} = ${awaited}
+${this.getIden(identation)}PanicOnError(${leftParsed})`;
             }
         }
 
@@ -2324,7 +3252,7 @@ ${this.getIden(identation)}${returnStatement}`;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
-            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)};\n`;
+            let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
@@ -2336,11 +3264,10 @@ ${this.getIden(identation)}${returnStatement}`;
                 const castExp = parsedType ? `(${parsedType})` : "";
 
                 // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}),${index})`;
+                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
                 if (index < parsedArrayBindingElements.length - 1) {
-                    arrayBindingStatement += statement + ";\n";
+                    arrayBindingStatement += statement + "\n";
                 } else {
-                    // printStatement adds the last ;
                     arrayBindingStatement += statement;
                 }
             });
@@ -2378,15 +3305,31 @@ ${this.getIden(identation)}${returnStatement}`;
                 }
             }
         }  else {
-            leftVar = this.printNode(left, 0);
-            rightVar = this.printNode(right, identation);
+            // go/printer prints the left operand of a binary expression at the
+            // depth of the parent plus diffPrec() - 0 only when it is a binary
+            // expression of the very same precedence - and the right operand one
+            // level deeper. An operator that is not binary in Go (the assignment
+            // `=`, or a compound assignment) prints both sides at their own level.
+            const precedence = this.goOperatorPrecedence(operator);
+            if (precedence > 0) {
+                const leftOperator = this.goNativeBinaryOperator(left);
+                const samePrecedence = leftOperator !== undefined && this.goOperatorPrecedence(leftOperator) === precedence;
+                const leftDepth = samePrecedence ? this.goExprDepth : this.goExprDepth + 1;
+                leftVar = this.goWithExprDepth(leftDepth, () => this.printNode(left, 0));
+                rightVar = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation));
+            } else {
+                leftVar = this.printNode(left, 0);
+                rightVar = this.printNode(right, identation);
+            }
         }
 
         const customOperator = this.getCustomOperatorIfAny(left, right, operatorToken);
 
         operator = customOperator ? customOperator : operator;
 
-        return leftVar +" "+ operator + " " + rightVar.trim();
+        const separator = this.goBinarySeparator(operator, rightVar.trim(), left, right);
+
+        return leftVar + separator + operator + separator + rightVar.trim();
     }
 
     // `(x != nil) && (x != nil && …)` -> `(x != nil && …)`. Only fires when the
@@ -2435,38 +3378,82 @@ ${this.getIden(identation)}${returnStatement}`;
         const errorName = node.catchClause.variableDeclaration.name.escapedText;
         const classPrefix = this.className !== 'undefined' ? `(this *${this.className})` : "()";
         const thisWord = this.className !== 'undefined' ? "this" : "";
+        // the printer indents statements with getIden(); the bodies embedded below are
+        // re-placed at their own explicit level so the template only carries the levels
+        // *inside* the block (the enclosing getIden(identation) lands on every line)
+        const catchBodyBlock = this.indentBlock (catchBody, "					");
+        const tryBodyBlock = this.indentBlock (tryBody, "		");
         const catchBlock =`
-    {
-        ${nodeEndsWithReturn ? 'ret__ :=' : ''} func${classPrefix} (ret_ any) {
-		    defer func() {
-                if ${errorName} := recover(); ${errorName} != nil {
-                    if ${errorName} == "break" {
-                        return
-                    }
-                    ret_ = func${classPrefix} any {
-                        // catch block:
-                        ${catchBody}
-                        ${catchBodyEndsWithReturn ? "" : returNil}
-                    }(${thisWord})
-                }
-            }()
-		    // try block:
-            ${tryBody}
-		    ${tryBodyEndsWithReturn ? "" : returNil}
-	    }(${thisWord})
-    ${nodeEndsWithReturn
-        ? `
-            if ret__ != nil {
-                return ret__
-            }
-            return nil`
+{
+	${nodeEndsWithReturn ? 'ret__ := ' : ''}func${classPrefix} (ret_ any) {
+		defer func() {
+			if ${errorName} := recover(); ${errorName} != nil {
+				if ${errorName} == "break" {
+					return
+				}
+				ret_ = func${classPrefix} any {
+					// catch block:
+${catchBodyBlock}
+					${catchBodyEndsWithReturn ? "" : returNil}
+				}(${thisWord})
+			}
+		}()
+		// try block:
+${tryBodyBlock}
+		${tryBodyEndsWithReturn ? "" : returNil}
+	}(${thisWord})
+	${nodeEndsWithReturn
+        ? `if ret__ != nil {
+		return ret__
+	}
+	return nil`
         : ''}
-        }`;
-        // add identation
-        const indentedBlock = catchBlock.split("\n").map((line) => this.getIden(identation) + line).join("\n");
+}`;
+        // add identation to every line; a line that is left blank (the conditional
+        // entries above emit nothing, and the block opens on a fresh line) stays
+        // empty because gofmt trims trailing whitespace
+        const indentedBlock = catchBlock.split("\n")
+            .map((line) => line.trim().length ? this.getIden(identation) + line : "")
+            .join("\n");
         // const catchCondOpen = this.CONDITION_OPENING ? this.CONDITION_OPENING : " ";
 
         return indentedBlock;
+    }
+
+    /**
+     * Strip the printer's own leading indentation from every line of a printed
+     * statement block so the caller can re-place it at an explicit level. Only the
+     * common prefix goes away: relative nesting (one tab per level) is preserved.
+     */
+    dedentBlock (block: string) {
+        const lines = block.split("\n");
+        const indents = lines
+            .filter((line) => line.trim().length > 0)
+            .map((line) => (line.match(/^[	 ]*/) as RegExpMatchArray)[0].length);
+        const common = indents.length ? Math.min(...indents) : 0;
+        return lines.map((line) => line.slice(common)).join("\n");
+    }
+
+    /**
+     * Re-place a printed statement block at `level` (a run of tabs): the block's own
+     * leading indentation is dropped and every non-blank line is prefixed with `level`,
+     * so relative nesting (one tab per level) survives the move.
+     */
+    indentBlock (block: string, level: string) {
+        return this.dedentBlock (block)
+            .split("\n")
+            .map((line) => line.trim().length ? level + line : "")
+            .join("\n");
+    }
+
+    /**
+     * gofmt writes blank lines with no whitespace at all. A multi-line statement template
+     * opens on a fresh line, so the inherited `getIden(identation) + <statement>` prefix
+     * lands on a line that carries nothing else: drop that prefix instead of leaving a
+     * whitespace-only line behind. Only blank lines are touched, never printed content.
+     */
+    stripWhitespaceOnlyLines (block: string) {
+        return block.split("\n").map((line) => line.trim().length ? line : "").join("\n");
     }
 
     printPrefixUnaryExpression(node, identation) {
@@ -2487,7 +3474,9 @@ ${this.getIden(identation)}${returnStatement}`;
         if (node.arguments.length === 0) {
             return `New${this.capitalize(expression)}()`;
         }
-        const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
+        // an argument printer may prepend the statement indent (parenthesised casts do);
+        // inside the call the argument is inline, so trim it like printArgsForCallExpression
+        const args = node.arguments.map(n => this.printNode(n, identation).trim()).join(", ");
         if (expression.endsWith('Error')) {
             return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
         }
@@ -2526,8 +3515,12 @@ ${this.getIden(identation)}${returnStatement}`;
             current = expr;
         }
 
-        const containerStr = this.printNode(baseExpr, 0);
-        const keyStrs = keys.map(k => this.printNode(k, 0));
+        // go/printer prints the base of an index expression at depth 1 and the
+        // index itself one level deeper; GetValue(base, key) is a two-argument
+        // call, so both operands sit one level below the current expression
+        const indexDepth = this.goExprDepth + 1;
+        const containerStr = this.goWithExprDepth(indexDepth, () => this.printNode(baseExpr, 0));
+        const keyStrs = keys.map(k => this.goWithExprDepth(indexDepth, () => this.printNode(k, 0)));
 
         // Now build nested helpers.
         let acc = containerStr;
