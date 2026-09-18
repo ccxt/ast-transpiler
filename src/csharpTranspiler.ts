@@ -245,6 +245,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // prefix is final, so every later read of the local is statically that type and its
     // members may replace inOp/getArrayLength
     csharpTypedLocals = new WeakMap<ts.Node, string>();
+    // parameter node -> the type the printed signature gives it (printParameterType, e.g.
+    // `Dict` -> Dictionary<string, object>), recorded as the signature is printed. Read-only:
+    // no printer rule consults it, see csharpPrintedParamType
+    csharpParamTypes = new WeakMap<ts.Node, string>();
     // declaration node -> C# type of the local ('' = the printer prints `object`); see
     // csharpStringReceiverType -- the ccxt classifier asks once per string-method receiver
     stringReceiverTypes = new WeakMap<ts.Node, string>();
@@ -509,6 +513,31 @@ export class CSharpTranspiler extends BaseTranspiler {
         return undefined; // stub to override
     }
 
+    // The C# type the printed SIGNATURE gives the parameter a receiver binds to (the type
+    // printParameterType emitted for it: `Dictionary<string, object>` for a `Dict`
+    // annotation, `object` when the printer names nothing). Recorded while the signature is
+    // printed, so a body use can ask for it. Read-only: no printer rule consults this map, and
+    // the consumer's csharpDeclaredReceiverType override is what turns the answer into an
+    // emission change — a run without that override prints byte-identically
+    csharpPrintedParamType(receiver): string | undefined {
+        const declaration = this.csharpReceiverBinding(receiver);
+        if (declaration?.kind !== ts.SyntaxKind.Parameter) {
+            return undefined;
+        }
+        const recorded = this.csharpParamTypes.get(declaration);
+        return ((recorded === undefined) || (recorded === '') || (recorded === 'object')) ? undefined : recorded;
+    }
+
+    // A receiver whose declared C# type the consumer's classifier names as a concrete
+    // dictionary: every `((IDictionary<string,object>)x)` the printer wraps around its element
+    // access (read, write, .Keys, .Values, .Remove) only renames the box the declaration
+    // already carries, so the cast is an identity conversion. Gated entirely on the consumer's
+    // hook, so an object receiver — and every untyped run — keeps the upstream cast
+    csharpReceiverIsDeclaredDictionary(expression): boolean {
+        const declared = this.csharpDeclaredReceiverType(expression);
+        return (declared === 'Dictionary<string, object>') || (declared === 'IDictionary<string, object>');
+    }
+
     // A dict element WRITE (`request["k"] = v`) on a receiver whose *declared* C# type already
     // is a dictionary needs no `((IDictionary<string,object>)…)` cast: the cast only named the
     // box the declaration carries, and both indexers are the same setter. Gated entirely on
@@ -618,6 +647,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         const printedKey = this.printNode(argumentExpression, 0);
         if (isNumberKey) {
             return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
+        }
+        // a receiver the classifier already declared a concrete dictionary keeps its own
+        // indexer: the interface cast named the box, never a conversion
+        if (this.csharpReceiverIsDeclaredDictionary(expression)) {
+            return `${receiver}[${printedKey}]`;
         }
         return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
     }
@@ -2274,6 +2308,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
         let type = this.printParameterType(node);
         type = type ? type : "";
+        this.csharpParamTypes.set(node, type); // see csharpPrintedParamType
 
         if (defaultValue) {
             if (initializer) {
@@ -2482,10 +2517,18 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
+        // `Object.keys(x)` on a receiver the classifier declared a concrete dictionary: the
+        // cast only named the box; `.Keys` is the same collection either way
+        if ((node?.arguments?.length === 1) && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
+            return `new List<object>(${parsedArg}.Keys)`;
+        }
         return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
+        if ((node?.arguments?.length === 1) && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
+            return `new List<object>(${parsedArg}.Values)`;
+        }
         return `new List<object>(((IDictionary<string,object>)${parsedArg}).Values)`;
     }
 
@@ -2979,8 +3022,14 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        const object = this.printNode (node.expression.expression, 0);
+        const receiver = node.expression.expression;
+        const object = this.printNode (receiver, 0);
         const key = this.printNode (node.expression.argumentExpression, 0);
+        // same identity as the element write: `Remove` on the declared dictionary is the
+        // interface method the cast would bind to
+        if (this.csharpReceiverIsDeclaredDictionary(receiver)) {
+            return `${object}.Remove((string)${key})`;
+        }
         return `((IDictionary<string,object>)${object}).Remove((string)${key})`;
     }
 
