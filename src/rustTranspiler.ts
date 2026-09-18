@@ -1270,6 +1270,11 @@ export class RustTranspiler extends BaseTranspiler {
         const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
         if (outOfOrder) return outOfOrder;
 
+        // `parseInt`/`parseFloat` on a checker-proven string: native `str::parse`
+        // instead of the runtime helper the ccxt post-pass would emit.
+        const nativeParse = this.printNativeParseCall(node);
+        if (nativeParse !== undefined) return nativeParse;
+
         return super.printCallExpression(node, identation);
     }
 
@@ -1343,6 +1348,13 @@ export class RustTranspiler extends BaseTranspiler {
         'client', 'spawn', 'delay', 'fetch_tickers', 'extend', 'fetch',
         'send_evm_transaction',
     ]);
+
+    /** Global parse helpers that go native (`str::parse`) on a proven string arg,
+     *  keyed to the rust integer/float type their runtime helper parses into. */
+    static readonly RUST_PARSE_HELPERS: Record<string, string> = {
+        parseInt: 'i64',
+        parseFloat: 'f64',
+    };
 
     toSnakeCaseName(name: string): string {
         return name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2').replace(/([a-z\d])([A-Z])/g, '$1_$2').toLowerCase();
@@ -1450,6 +1462,51 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.isProvenMapExpression(receiverNode)) return undefined;
         const key = this.escapeRustStringLiteral(keyText);
         return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
+     *  `str::parse` would; undefined when the fold is not obviously exact. */
+    foldParsedStringLiteral(name: string, text: string): string | undefined {
+        const t = text.trim();
+        if (name === 'parseInt') {
+            if (!/^[+-]?[0-9]+$/.test(t)) return undefined;
+            const value = BigInt(t.replace(/^\+/, '') || '0');
+            if (value < -9223372036854775808n || value > 9223372036854775807n) return undefined;
+            return `Value::Int(${value.toString()})`;
+        }
+        if (!/^[+-]?[0-9]+(?:\.[0-9]+)?$/.test(t)) return undefined;
+        const value = Number(t);
+        // `String(value)` must re-read as a rust float literal holding the same f64;
+        // `-0` prints as `0`, which would drop the sign the runtime keeps.
+        if (!Number.isFinite(value) || Object.is(value, -0)) return undefined;
+        if (!/^-?[0-9]+(?:\.[0-9]+)?$/.test(String(value))) return undefined;
+        return `Value::Float(${String(value)})`;
+    }
+
+    /** `parseInt(x)` / `parseFloat(x)` with a single checker-proven string argument
+     *  become the runtime helper's own match with native `str::parse`; every other
+     *  argument shape keeps the helper call the ccxt post-pass rewrites. */
+    printNativeParseCall(node: ts.CallExpression): string | undefined {
+        const callee = node.expression;
+        if (!ts.isIdentifier(callee)) return undefined;
+        const name = String(callee.escapedText);
+        const helper = RustTranspiler.RUST_PARSE_HELPERS[name];
+        if (helper === undefined) return undefined;
+        if (node.arguments.length !== 1) return undefined; // radix / unknown arity
+        const arg = node.arguments[0];
+        const type = this.getCheckedTypeOf(arg);
+        if (type === undefined || !this.isStringType(type.flags)) return undefined;
+        if (ts.isStringLiteralLike(arg)) {
+            const folded = this.foldParsedStringLiteral(name, arg.text);
+            if (folded !== undefined) return folded;
+        }
+        const argText = this.printNode(arg, 0).trim();
+        // The post-pass adds the `&`; a text that already carries one is not a place.
+        if (!argText || argText.startsWith('&')) return undefined;
+        if (helper === 'i64') {
+            return `(match &${argText} { Value::Str(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), Value::Int(__parse_n) => Value::Int(*__parse_n), Value::Float(__parse_f) => Value::Int(*__parse_f as i64), _ => Value::Null })`;
+        }
+        return `(match &${argText} { Value::Str(__parse_s) => __parse_s.trim().parse::<f64>().map(Value::Float).unwrap_or(Value::Null), Value::Float(__parse_f) => Value::Float(*__parse_f), Value::Int(__parse_n) => Value::Float(*__parse_n as f64), _ => Value::Null })`;
     }
 
     isNodeInsideNode(node: ts.Node, container: ts.Node): boolean {

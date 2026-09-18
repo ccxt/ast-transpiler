@@ -1189,6 +1189,9 @@ declare class RustTranspiler extends BaseTranspiler {
     /** Methods whose Rust counterpart takes `&mut self`: a `self.<field>` read in
      *  their args must keep the `get_value(...)` shape the ccxt post-pass hoists. */
     static readonly MUT_SELF_METHODS: Set<string>;
+    /** Global parse helpers that go native (`str::parse`) on a proven string arg,
+     *  keyed to the rust integer/float type their runtime helper parses into. */
+    static readonly RUST_PARSE_HELPERS: Record<string, string>;
     toSnakeCaseName(name: string): string;
     escapeRustStringLiteral(text: string): string;
     getCheckedTypeOf(node: any): ts.Type | undefined;
@@ -1209,6 +1212,13 @@ declare class RustTranspiler extends BaseTranspiler {
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
+    /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
+     *  `str::parse` would; undefined when the fold is not obviously exact. */
+    foldParsedStringLiteral(name: string, text: string): string | undefined;
+    /** `parseInt(x)` / `parseFloat(x)` with a single checker-proven string argument
+     *  become the runtime helper's own match with native `str::parse`; every other
+     *  argument shape keeps the helper call the ccxt post-pass rewrites. */
+    printNativeParseCall(node: ts.CallExpression): string | undefined;
     isNodeInsideNode(node: ts.Node, container: ts.Node): boolean;
     /** Root place of an access chain (`x` for `x['a']['b']`, `this.balance` for
      *  `this.balance['usdt']`), or undefined for a temporary. */
