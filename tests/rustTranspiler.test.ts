@@ -1335,3 +1335,97 @@ describe('rust numeric literals', () => {
         expect(output).not.toContain('Value::Int(1e-7)');
     });
 });
+
+describe('rust declared-Dict locals', () => {
+    const NATIVE = (name: string, key: string) =>
+        `${name}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+
+    // A default-valued bag param is lowered to `let x = get_arg(optionalArgs,
+    // k, Value::Map({...}))` — a fresh dict whenever the caller passes none,
+    // and any caller dict otherwise: a literal-key read needs no helper.
+    test('default-valued bag param reads natively', () => {
+        const ts =
+            "function f(optionalArgs: any = [], config: any = {}) {\n" +
+            "    return config['noCoin'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('config', 'noCoin'));
+        expect(output).not.toContain('get_value_k(&config');
+    });
+
+    test('default-valued bag param reads a property natively', () => {
+        const ts =
+            "function f(optionalArgs: any = [], config: any = {}) {\n" +
+            "    return config.noSymbol;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('config', 'noSymbol'));
+        expect(output).not.toContain('get_value(&config, &Value::Str("noSymbol"');
+    });
+
+    test('extend onto an object literal reads natively', () => {
+        const ts =
+            "class A {\n" +
+            "    extend(a: any, b: any): any { return a; }\n" +
+            "    f(market: any) {\n" +
+            "        const cleanStructure = { 'spot': undefined, 'swap': undefined };\n" +
+            "        const result = this.extend(cleanStructure, market);\n" +
+            "        return result['spot'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('result', 'spot'));
+        expect(output).not.toContain('get_value_k(&result');
+    });
+
+    test('element of a Dictionary container reads natively', () => {
+        const ts =
+            "type Str = string | undefined;\n" +
+            "interface Market { id: string; }\n" +
+            "interface Markets { [key: string]: Market; }\n" +
+            "class A {\n" +
+            "    markets: Markets = {};\n" +
+            "    f(symbol: Str) {\n" +
+            "        const market = this.markets[symbol];\n" +
+            "        return market['id'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('market', 'id'));
+        expect(output).not.toContain('get_value_k(&market');
+    });
+
+    // D2: any later write may replace the dict, so the proof is dropped.
+    test('reassigned local keeps the helper', () => {
+        const ts =
+            "function f(other: any = {}, config: any = {}) {\n" +
+            "    config = other;\n" +
+            "    return config['noCoin'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::value::get_value_k(&config, "noCoin")');
+    });
+
+    // D5: these keys are served from the book store / a live snapshot by the
+    // runtime helper, which a plain map read cannot see.
+    test('runtime-routed keys keep the helper', () => {
+        const ts =
+            "function f(config: any = {}) {\n" +
+            "    const a = config['symbol'];\n" +
+            "    const b = config['cache'];\n" +
+            "    return [a, b];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::value::get_value_k(&config, "symbol")');
+        expect(output).toContain('crate::value::get_value_k(&config, "cache")');
+    });
+
+    test('param without a dict default keeps the helper', () => {
+        const ts =
+            "function f(config: any) {\n" +
+            "    return config['noCoin'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::value::get_value_k(&config, "noCoin")');
+    });
+});
