@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4778,8 +4778,6 @@ var GO_ANY_BOX_CALLS = [
   "this.SafeNumber"
 ];
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
-var GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
-var GO_SAFE_DICT_READ_HELPERS = ["GetValue", "InOp", "ObjectKeys", "IsDictionary"];
 var GO_NUMERIC_KINDS = ["int", "int64", "float64"];
 var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.GreaterThanToken]: ">",
@@ -4956,12 +4954,6 @@ var GoTranspiler = class extends BaseTranspiler {
     // gofmt indents every nesting level with exactly one tab; the printer emits the
     // same bytes so the generated tree needs no `gofmt` pass (campaign go-gofmt F01)
     this.DEFAULT_IDENTATION = "	";
-    // `var x any = this.SafeDict(container, key)` -> `var x map[string]any = SafeMapTyped(container, key)`.
-    // The value the accessor returned is the same member SafeMapTyped reads, and every later
-    // use of the local reads it: with the absent case left as a nil map, each read observes
-    // what the nil interface used to (GetValue/InOp/ObjectKeys/IsDictionary and the Safe*
-    // accessors all normalise a nil receiver). Anything else keeps the box.
-    this.goSafeDictLocalUnboxCache = /* @__PURE__ */ new Map();
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
@@ -5847,146 +5839,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     ts5.forEachChild(scope, visit);
     return safe;
   }
-  // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or
-  // undefined when the initializer is another shape. A third argument is only droppable
-  // when it is the empty map literal the TS call sites pass (`safeDict(x, k, {})`), which
-  // contributes nothing any whitelisted read could observe.
-  goSafeDictLocalArgs(initializer) {
-    if (initializer?.kind !== ts5.SyntaxKind.CallExpression) {
-      return void 0;
-    }
-    const callee = initializer.expression;
-    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.name?.escapedText !== "safeDict") {
-      return void 0;
-    }
-    if (callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
-      return void 0;
-    }
-    const args = initializer.arguments;
-    if (args.length === 3) {
-      const fallback = args[2];
-      if (fallback?.kind !== ts5.SyntaxKind.ObjectLiteralExpression || fallback.properties.length !== 0) {
-        return void 0;
-      }
-    } else if (args.length !== 2) {
-      return void 0;
-    }
-    return { container: args[0], key: args[1] };
-  }
-  // one later use of a dict local: it must read the value as a dictionary, never hand the
-  // box out. Only the receiver position of the deref-aware read helpers, the `this.Safe*`
-  // accessors and a plain `x[k]` element read qualify.
-  goSafeDictUseReadsTheMap(node) {
-    const parent = node.parent;
-    if (parent === void 0) {
-      return false;
-    }
-    switch (parent.kind) {
-      case ts5.SyntaxKind.ElementAccessExpression: {
-        if (parent.expression !== node) {
-          return false;
-        }
-        const grandparent = parent.parent;
-        if (grandparent?.kind === ts5.SyntaxKind.BinaryExpression && grandparent.left === parent) {
-          return false;
-        }
-        if (grandparent?.kind === ts5.SyntaxKind.PostfixUnaryExpression || grandparent?.kind === ts5.SyntaxKind.PrefixUnaryExpression) {
-          return false;
-        }
-        if (grandparent?.kind === ts5.SyntaxKind.DeleteExpression) {
-          return false;
-        }
-        return true;
-      }
-      case ts5.SyntaxKind.BinaryExpression: {
-        return parent.operatorToken?.kind === ts5.SyntaxKind.InKeyword && parent.right === node;
-      }
-      case ts5.SyntaxKind.CallExpression: {
-        if (parent.expression === node) {
-          return false;
-        }
-        if (parent.arguments.indexOf(node) !== 0) {
-          return false;
-        }
-        const callee = this.goPrintedCallee(this.printNode(parent, 0));
-        if (callee === void 0) {
-          return false;
-        }
-        if (GO_SAFE_DICT_READ_HELPERS.indexOf(callee) >= 0) {
-          return true;
-        }
-        return /^(?:this\.)?Safe[A-Z]/.test(callee) || callee === "this.IsDictionary";
-      }
-      default:
-        return false;
-    }
-  }
-  goSafeDictLocalUnbox(declaration) {
-    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts5.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (declaration.parent?.parent?.kind !== ts5.SyntaxKind.FirstStatement) {
-      return void 0;
-    }
-    if (this.goSafeDictLocalUnboxCache.has(declaration)) {
-      return this.goSafeDictLocalUnboxCache.get(declaration);
-    }
-    this.goSafeDictLocalUnboxCache.set(declaration, void 0);
-    let result;
-    try {
-      result = this.goSafeDictLocalUnboxUncached(declaration);
-    } finally {
-      this.goSafeDictLocalUnboxCache.set(declaration, result);
-    }
-    return result;
-  }
-  goSafeDictLocalUnboxUncached(declaration) {
-    if (this.goSafeDictLocalArgs(declaration.initializer) === void 0) {
-      return void 0;
-    }
-    const sourceName = declaration.name.escapedText;
-    const scope = this.goEnclosingFunction(declaration);
-    if (scope === void 0) {
-      return void 0;
-    }
-    let safe = true;
-    const visit = (n) => {
-      if (!safe) {
-        return;
-      }
-      if ((n.kind === ts5.SyntaxKind.VariableDeclaration || n.kind === ts5.SyntaxKind.Parameter) && n !== declaration && n.name?.kind === ts5.SyntaxKind.Identifier && n.name.escapedText === sourceName) {
-        safe = false;
-        return;
-      }
-      if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
-        if (!this.goSafeDictUseReadsTheMap(n)) {
-          safe = false;
-          return;
-        }
-      }
-      ts5.forEachChild(n, visit);
-    };
-    ts5.forEachChild(scope, visit);
-    if (!safe || this.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)) {
-      return void 0;
-    }
-    return GO_SAFE_DICT_LOCAL_TYPE;
-  }
-  // the initializer a typed dict local is declared with: the accessor call is replaced by the
-  // typed reader, which reads the same member (and converts a sync.Map) but names the result
-  goSafeDictUnboxValue(declaration, identation) {
-    if (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE) {
-      return void 0;
-    }
-    const args = this.goSafeDictLocalArgs(declaration.initializer);
-    const container = this.printNode(args.container, identation);
-    const key = this.printNode(args.key, 0);
-    return `SafeMapTyped(${container}, ${key})`;
-  }
   getGoLocalType(declaration, parsedValue) {
     const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
     if (goType === void 0) {
-      return this.goSafeDictLocalUnbox(declaration) ?? "any";
+      return "any";
     }
     const sourceName = declaration.name?.escapedText;
     if (sourceName === void 0) {
@@ -6035,8 +5891,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
       }
       const varName = this.printNode(declaration.name);
       const declaredType = this.getGoLocalType(declaration, parsedValue);
-      const declaredValue = declaredType === GO_SAFE_DICT_LOCAL_TYPE ? this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart() : parsedValue.trimStart();
-      const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
+      const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue.trimStart();
       if (parsedValue.startsWith("<-this.callInternal(")) {
         return `
 ${stm}
