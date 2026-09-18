@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10671,6 +10671,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig6, config["parser"] ?? {});
     super(config);
+    this.rustStringLocalDecisions = /* @__PURE__ */ new Map();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -10913,7 +10914,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return void 0;
       }
       const otherKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(other));
+      const typedStringLocal = this.rustStringLocalIdentifierIsTyped(other);
       if (literalKind === "null") {
+        if (typedStringLocal) {
+          return `${this.printNode(other, 0)}.${operator === "==" ? "is_none" : "is_some"}()`;
+        }
         return `${this.printNode(other, 0)} ${operator} Value::Null`;
       }
       if (literalKind === "string") {
@@ -10923,7 +10928,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         if (this.stringLiteralCoercesToNumber(literal) && otherKind !== "string") {
           return void 0;
         }
-        return `${this.printNode(other, 0)}.as_str() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
+        const accessor2 = typedStringLocal ? "as_deref" : "as_str";
+        return `${this.printNode(other, 0)}.${accessor2}() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
       }
       if (literalKind === "number") {
         if (otherKind !== "number") {
@@ -11334,6 +11340,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (boolValue !== void 0) {
       return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
     }
+    if (this.rustSafeStringLocalIsTyped(declaration)) {
+      return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}.as_str().map(str::to_owned)`;
+    }
     return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
   }
   // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
@@ -11519,6 +11528,123 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     };
     ts7.forEachChild(scope, visit);
     return safe;
+  }
+  // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer.
+  rustSafeStringLocalInitializer(declaration) {
+    const initializer = declaration.initializer;
+    if (declaration.name?.kind !== SyntaxKind4.Identifier || initializer?.kind !== SyntaxKind4.CallExpression) {
+      return false;
+    }
+    const callee = initializer.expression;
+    if (callee?.kind === SyntaxKind4.PropertyAccessExpression) {
+      return callee.expression?.kind === SyntaxKind4.ThisKeyword && _RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(callee.name.escapedText);
+    }
+    if (callee?.kind === SyntaxKind4.Identifier) {
+      return _RustTranspiler.RUST_STRING_LOCAL_HELPERS.has(callee.escapedText);
+    }
+    return false;
+  }
+  // The two uses that compile against an `Option<String>` local and print
+  // natively: `x ==/!= null|undefined` and `x ==/!= "lit"`.
+  rustStringLocalUseIsNative(node) {
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    if (parent.kind !== SyntaxKind4.BinaryExpression) {
+      return false;
+    }
+    const op = parent.operatorToken.kind;
+    if (op !== SyntaxKind4.EqualsEqualsToken && op !== SyntaxKind4.EqualsEqualsEqualsToken && op !== SyntaxKind4.ExclamationEqualsToken && op !== SyntaxKind4.ExclamationEqualsEqualsToken) {
+      return false;
+    }
+    const other = parent.left === node ? parent.right : parent.right === node ? parent.left : void 0;
+    if (other === void 0) {
+      return false;
+    }
+    const otherLiteral = this.literalKindOfNode(other);
+    if (otherLiteral === "null") {
+      return true;
+    }
+    return otherLiteral === "string" && !(other.text in this.StringLiteralReplacements);
+  }
+  // Every use compiles against `Option<String>`, and at least one native sink
+  // consumes it (otherwise the retype buys nothing).
+  rustSafeStringLocalIsTyped(declaration) {
+    const cached = this.rustStringLocalDecisions.get(declaration);
+    if (cached !== void 0) {
+      return cached;
+    }
+    this.rustStringLocalDecisions.set(declaration, false);
+    const decision = this.rustSafeStringLocalIsTypedUncached(declaration);
+    this.rustStringLocalDecisions.set(declaration, decision);
+    return decision;
+  }
+  rustSafeStringLocalIsTypedUncached(declaration) {
+    if (!this.rustSafeStringLocalInitializer(declaration)) {
+      return false;
+    }
+    if (this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) !== "string") {
+      return false;
+    }
+    const name = declaration.name.escapedText;
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return false;
+    }
+    let nativeUses = 0;
+    let safe = true;
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (n !== declaration && this.rustBindsName(n, name)) {
+        safe = false;
+        return;
+      }
+      if (n.kind === SyntaxKind4.Identifier && n.escapedText === name && n !== declaration.name && !this.rustIdentifierIsPropertyName(n)) {
+        if (!this.rustStringLocalUseIsNative(n)) {
+          safe = false;
+          return;
+        }
+        nativeUses++;
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(scope, visit);
+    return safe && nativeUses > 0;
+  }
+  // `x.foo` / `{ foo: 1 }` — a property name is not a use of the local.
+  rustIdentifierIsPropertyName(node) {
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    switch (parent.kind) {
+      case SyntaxKind4.PropertyAccessExpression:
+      case SyntaxKind4.PropertyAssignment:
+      case SyntaxKind4.PropertySignature:
+      case SyntaxKind4.ShorthandPropertyAssignment:
+        return parent.name === node;
+    }
+    return false;
+  }
+  // Is this identifier occurrence bound to a typed string local?
+  rustStringLocalIdentifierIsTyped(node) {
+    if (node?.kind !== SyntaxKind4.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration) {
+      return false;
+    }
+    return this.rustSafeStringLocalIsTyped(declaration);
   }
   // `let x = <bool expr>` → the printed bool expression, or undefined.
   getRustBoolLocalInitializer(declaration, printedValue) {
@@ -12443,6 +12569,29 @@ _RustTranspiler.RUST_BOOL_RESULT_HELPERS = /* @__PURE__ */ new Set([
   "ends_with",
   "in_op",
   "contains"
+]);
+// ── typed string locals ──────────────────────────────────────────────────
+//
+// `let x: Value = self.safeString(..)` is declared `Option<String>` when the
+// checker proves the local holds a string and every use in the enclosing
+// function is a native sink: a null test (`x === undefined` prints as
+// `x.is_none()`) or a string-literal compare (`x === "lit"` prints as
+// `x.as_deref() == Some("lit")`). The initializer keeps the helper call and
+// unwraps its Value with `.as_str()` — the helper already returns either
+// `Value::Str` (never an empty one, the `_k` form maps "" to the default) or
+// the default, so the `Option<String>` carries exactly the same payload.
+// Every other sink (`&Value` argument, truthiness, return, write) keeps the
+// box, as does a second binding of the name.
+_RustTranspiler.RUST_STRING_LOCAL_HELPERS = /* @__PURE__ */ new Set([
+  "safeString",
+  "safeString2",
+  "safeStringN",
+  "safeStringLower",
+  "safeStringLower2",
+  "safeStringLowerN",
+  "safeStringUpper",
+  "safeStringUpper2",
+  "safeStringUpperN"
 ]);
 // ── native container access (`get_value(...)` -> `.get(...)`) ─────────────
 // When the TypeScript checker proves the receiver is a plain Map/List value

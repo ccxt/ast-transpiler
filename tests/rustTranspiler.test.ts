@@ -1136,6 +1136,129 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('match_val');
     });
 
+    // ── typed string locals ──────────────────────────────────────────────────
+    // A local holding a `safeString*` result is declared `Option<String>` when
+    // the checker proves the string and every use is a native sink (null test,
+    // string-literal compare); the helper call stays as its producer.
+
+    describe('typed string locals', () => {
+        const withHelper = (helper: string, body: string) =>
+            `class A {\n    ${helper}(o: any, k: any): string { return undefined as any; }\n    run(o: any) {\n${body}\n    }\n}`;
+
+        test('string-literal compare retypes the local and compares as_deref', () => {
+            const ts = withHelper('safeString',
+                "        const side = this.safeString(o, 'side');\n        if (side === 'buy') { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut side: Option<String> = self.safeString(o, Value::Str("side".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (side.as_deref() == Some("buy")) {');
+            expect(output).not.toContain('side: Value');
+        });
+
+        test('null test retypes the local and prints is_none', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s === null) { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (s.is_none()) {');
+            expect(output).not.toContain('s == Value::Null');
+        });
+
+        test('undefined test retypes the local and prints is_some', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s !== undefined) { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (s.is_some()) {');
+            expect(output).not.toContain('s != Value::Null');
+        });
+
+        test('mixed native sinks stay typed together', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s === undefined) { return 0; }\n        return s === 'x';");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (s.is_none()) {');
+            expect(output).toContain('s.as_deref() == Some("x")');
+        });
+
+        test('safeStringLower / safeString2 results are typed too', () => {
+            const lower = transpiler.transpileRust(withHelper('safeStringLower',
+                "        const side = this.safeStringLower(o, 'side');\n        return side === 'buy';")).content;
+            expect(lower).toContain('let mut side: Option<String> = self.safeStringLower(o, Value::Str("side".to_string())).as_str().map(str::to_owned);');
+            expect(lower).toContain('side.as_deref() == Some("buy")');
+            const two = transpiler.transpileRust(withHelper('safeString2',
+                "        const id = this.safeString2(o, 'a', 'b');\n        return id !== undefined;")).content;
+            expect(two).toContain('let mut id: Option<String> = self.safeString2(o, Value::Str("a".to_string()), Value::Str("b".to_string())).as_str().map(str::to_owned);');
+            expect(two).toContain('id.is_some()');
+        });
+
+        test('a property name equal to the local does not block the retype', () => {
+            const ts = withHelper('safeString',
+                "        const status = this.safeString(o, 'status');\n        return status === 'ok' && o.status === 1;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut status: Option<String> = self.safeString(o, Value::Str("status".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('status.as_deref() == Some("ok")');
+        });
+
+        // Rejected shapes: any `&Value` sink keeps the local boxed.
+
+        test('a Value sink keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        m.insert('k', s);");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).not.toContain('Option<String>');
+        });
+
+        test('truthiness keeps Value (is_true has no Option impl)', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s) { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('if is_true(&s) {');
+        });
+
+        test('reassignment keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        let s = this.safeString(o, 's');\n        s = this.safeString(o, 't');\n        return s === 'x';");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).not.toContain('Option<String>');
+        });
+
+        test('a second binding of the name keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        const f = (s) => s === 'x';\n        return f(s);");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).not.toContain('Option<String>');
+        });
+
+        test('no native use keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return 1;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+        });
+
+        test('string concat and other payload compares keep Value', () => {
+            const concat = transpiler.transpileRust(withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return s + 'x';")).content;
+            expect(concat).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            const againstLocal = transpiler.transpileRust(withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return s === o.other;")).content;
+            expect(againstLocal).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+        });
+
+        test('a non-string helper result keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return s === 'x';")
+                .replace('safeString(o: any, k: any): string', 'safeString(o: any, k: any): any');
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+        });
+    });
+
     // Native equality on unwrapped payloads (is_equal removal) — typed operands
     describe('native equality', () => {
         const typed = (body: string) => `class A {\n    run(a: string, b: string, n: number, m: number, flag: boolean, other: boolean, anything: any) {\n${body}\n    }\n}`;

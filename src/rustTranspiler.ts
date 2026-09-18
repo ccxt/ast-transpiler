@@ -618,9 +618,13 @@ export class RustTranspiler extends BaseTranspiler {
             }
             const otherType = this.getChecker().getTypeAtLocation(other);
             const otherKind = this.primitiveKindOfType(otherType);
+            const typedStringLocal = this.rustStringLocalIdentifierIsTyped(other);
             if (literalKind === 'null') {
                 // Exact for every runtime value: is_equal(x, null) is true only
                 // when x is Null, and the derived PartialEq says the same.
+                if (typedStringLocal) {
+                    return `${this.printNode(other, 0)}.${operator === '==' ? 'is_none' : 'is_some'}()`;
+                }
                 return `${this.printNode(other, 0)} ${operator} Value::Null`;
             }
             if (literalKind === 'string') {
@@ -630,7 +634,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (this.stringLiteralCoercesToNumber(literal) && otherKind !== 'string') {
                     return undefined;
                 }
-                return `${this.printNode(other, 0)}.as_str() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
+                const accessor = typedStringLocal ? 'as_deref' : 'as_str';
+                return `${this.printNode(other, 0)}.${accessor}() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
             }
             if (literalKind === 'number') {
                 if (otherKind !== 'number') {
@@ -1501,6 +1506,10 @@ export class RustTranspiler extends BaseTranspiler {
             return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
         }
 
+        if (this.rustSafeStringLocalIsTyped(declaration)) {
+            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}.as_str().map(str::to_owned)`;
+        }
+
         return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
     }
 
@@ -1756,6 +1765,156 @@ export class RustTranspiler extends BaseTranspiler {
         };
         ts.forEachChild(scope, visit);
         return safe;
+    }
+
+    // ── typed string locals ──────────────────────────────────────────────────
+    //
+    // `let x: Value = self.safeString(..)` is declared `Option<String>` when the
+    // checker proves the local holds a string and every use in the enclosing
+    // function is a native sink: a null test (`x === undefined` prints as
+    // `x.is_none()`) or a string-literal compare (`x === "lit"` prints as
+    // `x.as_deref() == Some("lit")`). The initializer keeps the helper call and
+    // unwraps its Value with `.as_str()` — the helper already returns either
+    // `Value::Str` (never an empty one, the `_k` form maps "" to the default) or
+    // the default, so the `Option<String>` carries exactly the same payload.
+    // Every other sink (`&Value` argument, truthiness, return, write) keeps the
+    // box, as does a second binding of the name.
+
+    private static readonly RUST_STRING_LOCAL_HELPERS = new Set([
+        'safeString', 'safeString2', 'safeStringN',
+        'safeStringLower', 'safeStringLower2', 'safeStringLowerN',
+        'safeStringUpper', 'safeStringUpper2', 'safeStringUpperN',
+    ]);
+
+    private rustStringLocalDecisions = new Map<any, boolean>();
+
+    // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer.
+    rustSafeStringLocalInitializer(declaration): boolean {
+        const initializer = declaration.initializer;
+        if (declaration.name?.kind !== SyntaxKind.Identifier
+            || initializer?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = initializer.expression;
+        if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
+            return callee.expression?.kind === SyntaxKind.ThisKeyword
+                && (RustTranspiler as any).RUST_STRING_LOCAL_HELPERS.has(callee.name.escapedText);
+        }
+        if (callee?.kind === SyntaxKind.Identifier) {
+            return (RustTranspiler as any).RUST_STRING_LOCAL_HELPERS.has(callee.escapedText);
+        }
+        return false;
+    }
+
+    // The two uses that compile against an `Option<String>` local and print
+    // natively: `x ==/!= null|undefined` and `x ==/!= "lit"`.
+    rustStringLocalUseIsNative(node): boolean {
+        const parent = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        if (parent.kind !== SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const op = parent.operatorToken.kind;
+        if (op !== SyntaxKind.EqualsEqualsToken && op !== SyntaxKind.EqualsEqualsEqualsToken
+            && op !== SyntaxKind.ExclamationEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) {
+            return false;
+        }
+        const other = parent.left === node ? parent.right : (parent.right === node ? parent.left : undefined);
+        if (other === undefined) {
+            return false;
+        }
+        const otherLiteral = this.literalKindOfNode(other);
+        if (otherLiteral === 'null') {
+            return true;
+        }
+        // The string-literal compare prints as `<x>.as_deref() == Some("lit")`;
+        // the printer's own rejections (replacement tokens) must match.
+        return otherLiteral === 'string' && !(other.text in this.StringLiteralReplacements);
+    }
+
+    // Every use compiles against `Option<String>`, and at least one native sink
+    // consumes it (otherwise the retype buys nothing).
+    rustSafeStringLocalIsTyped(declaration): boolean {
+        const cached = this.rustStringLocalDecisions.get(declaration);
+        if (cached !== undefined) {
+            return cached;
+        }
+        this.rustStringLocalDecisions.set(declaration, false); // re-entrancy guard
+        const decision = this.rustSafeStringLocalIsTypedUncached(declaration);
+        this.rustStringLocalDecisions.set(declaration, decision);
+        return decision;
+    }
+
+    rustSafeStringLocalIsTypedUncached(declaration): boolean {
+        if (!this.rustSafeStringLocalInitializer(declaration)) {
+            return false;
+        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) !== 'string') {
+            return false;
+        }
+        const name = declaration.name.escapedText;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        let nativeUses = 0;
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) {
+                return;
+            }
+            if (n !== declaration && this.rustBindsName(n, name)) {
+                safe = false; // a second binding of the name in scope
+                return;
+            }
+            if (n.kind === SyntaxKind.Identifier && n.escapedText === name && n !== declaration.name
+                && !this.rustIdentifierIsPropertyName(n)) {
+                if (!this.rustStringLocalUseIsNative(n)) {
+                    safe = false;
+                    return;
+                }
+                nativeUses++;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe && nativeUses > 0;
+    }
+
+    // `x.foo` / `{ foo: 1 }` — a property name is not a use of the local.
+    rustIdentifierIsPropertyName(node): boolean {
+        const parent = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        switch (parent.kind) {
+        case SyntaxKind.PropertyAccessExpression:
+        case SyntaxKind.PropertyAssignment:
+        case SyntaxKind.PropertySignature:
+        case SyntaxKind.ShorthandPropertyAssignment:
+            return parent.name === node;
+        }
+        return false;
+    }
+
+    // Is this identifier occurrence bound to a typed string local?
+    rustStringLocalIdentifierIsTyped(node): boolean {
+        if (node?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        return this.rustSafeStringLocalIsTyped(declaration);
     }
 
     // `let x = <bool expr>` → the printed bool expression, or undefined.
