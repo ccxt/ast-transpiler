@@ -195,6 +195,11 @@ const CSHARP_NATIVE_FIELDS: { [name: string]: string } = {
 // `(IDictionary<string, object>)` cast the transpiled helper body itself applies
 const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks', 'ohlcvs', 'trades', 'markets', 'currencies', 'currencies_by_id' ];
 
+// hand-written BaseExchange fields whose reads print natively although the key may be absent:
+// `has`/`options` are concrete dictionaries in cs/ccxt/base/Exchange.Options.cs, `urls` an
+// object that always boxes one. The native read tests the key, so a missing key still reads null
+const CSHARP_MISSING_KEY_FIELDS_NATIVE = [ 'has', 'options', 'urls' ];
+
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
@@ -514,7 +519,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
         const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
         if (!builtFromLiteral && !guarded) {
-            return undefined;
+            return this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey);
         }
         const receiver = this.printNode(expression, 0);
         const printedKey = this.printNode(argumentExpression, 0);
@@ -522,6 +527,27 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
         }
         return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
+    }
+
+    // a read of a hand-written BaseExchange dictionary field whose key may be absent: the key
+    // test plus the indexer print what the helper computes, so a missing key still reads null
+    // (a bare indexer would throw). Any other receiver or a numeric key keeps the helper
+    csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey): string | undefined {
+        if (!isStringKey) {
+            return undefined;
+        }
+        if (!ts.isPropertyAccessExpression(expression) || expression.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const name = expression.name?.escapedText as string;
+        if (CSHARP_MISSING_KEY_FIELDS_NATIVE.indexOf(name) < 0) {
+            return undefined;
+        }
+        const field = this.printNode(expression, 0);
+        const printedKey = this.printNode(argumentExpression, 0);
+        // `urls` is declared `object`: the same cast the transpiled helper body applies
+        const receiver = CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0 ? `((IDictionary<string, object>)${field})` : field;
+        return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
     }
 
     // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
