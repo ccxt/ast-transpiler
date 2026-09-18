@@ -33,7 +33,7 @@ describe('go ternary -> func literal', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('var b any = func() any { if EvalTruthy(a) { return "x" }; return "y" }()');
+        expect(output).toContain('var b any = func() any {\n\t\tif EvalTruthy(a) {\n\t\t\treturn "x"\n\t\t}\n\t\treturn "y"\n\t}()');
         expect(output).not.toContain('Ternary(');
     });
     test('a bool-typed condition is inlined bare', () => {
@@ -46,7 +46,7 @@ describe('go ternary -> func literal', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('if cond { return 1 }; return 2 }()');
+        expect(output).toContain('if cond {\n\t\t\treturn 1\n\t\t}\n\t\treturn 2\n\t}()');
         expect(output).not.toContain('Ternary(');
     });
 });
