@@ -1,4 +1,6 @@
 import { Transpiler } from '../src/transpiler';
+import ts from 'typescript';
+import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
 
 jest.mock('module',()=>({
     __esModule: true,
@@ -50,7 +52,7 @@ describe('rust transpiling tests', () => {
         "    break;\n" +
         "}"
         const rust =
-        "while is_true(&Value::Bool(true)) {\n" +
+        "while is_true(&(true)) {\n" +
         "    let mut x: Value = Value::Int(1);\n" +
         "    break;\n" +
         "}";
@@ -115,10 +117,32 @@ describe('rust transpiling tests', () => {
     test('array literal', () => {
         const ts = "const x = [1,2,3];"
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::List(vec![');
+        expect(output).toContain('Value::from(vec![');
+        expect(output).not.toContain('Value::List(');
         expect(output).toContain('Value::Int(1)');
         expect(output).toContain('Value::Int(2)');
         expect(output).toContain('Value::Int(3)');
+    });
+
+    test('empty array literal', () => {
+        const ts = "const x = [];"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::from(vec![])');
+        expect(output).not.toContain('Value::List(');
+    });
+
+    test('nested array literal', () => {
+        const ts = "const x = [[1],[]];"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::from(vec![Value::from(vec![Value::Int(1)]), Value::from(vec![])])');
+        expect(output).not.toContain('Value::List(');
+    });
+
+    test('array literal as a call argument', () => {
+        const ts = "const x = this.foo([1,2]);"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.foo(Value::from(vec![Value::Int(1), Value::Int(2)]))');
+        expect(output).not.toContain('Value::List(');
     });
 
     test('array length', () => {
@@ -297,6 +321,132 @@ describe('rust transpiling tests', () => {
         "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('is_less_than(&a, &b)');
+    });
+
+    // One number at runtime already pins `<`/`>` to the helper's f64 compare
+    // (its lexical branch needs two strings), so an `any` other side folds too.
+    test('less than with a single typed number operand is native', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x < y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) < y.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_less_than(');
+    });
+
+    test('greater than with a single typed number operand is native', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x > y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) > y.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_greater_than(');
+    });
+
+    // `>=`/`<=` also OR `is_equal` in, which is TRUE for two Nulls — an `any`
+    // operand can be Null, so a nullable number is not enough for them.
+    test('greater or equal with a single typed number operand keeps the helper', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x >= y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_greater_than_or_equal(&x, &y)');
+    });
+
+    test('less or equal with a single typed number operand keeps the helper', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x <= y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_less_than_or_equal(&x, &y)');
+    });
+
+    // A numeric literal / `.length` / `indexOf` is Int or Float at runtime,
+    // never Null, so it satisfies even the is_equal-folding operators.
+    test('greater or equal against a numeric literal is native', () => {
+        const ts =
+        "function f(x: any) {\n" +
+        "    if (x >= 0) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) >= Value::Int(0).as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_greater_than_or_equal(');
+    });
+
+    test('less or equal with the literal on the left is native', () => {
+        const ts =
+        "function f(x: any) {\n" +
+        "    if (0 <= x) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if Value::Int(0).as_f64().unwrap_or(f64::NAN) <= x.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_less_than_or_equal(');
+    });
+
+    test('less or equal on two lengths is native', () => {
+        const ts =
+        "function f(xs: any, ys: any) {\n" +
+        "    if (xs.length <= ys.length) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_array_length(&xs).as_f64().unwrap_or(f64::NAN) <= get_array_length(&ys).as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_less_than_or_equal(');
+    });
+
+    test('greater or equal on an indexOf result is native', () => {
+        const ts =
+        "function f(s: any, n: any) {\n" +
+        "    if (s.indexOf('a') >= n) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_index_of(&s, &Value::Str("a".to_string())).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_greater_than_or_equal(');
+    });
+
+    // `x as T` prints as `x`, so the assertion must not hide the operand's shape.
+    test('as-asserted number operand compares natively', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if ((x as number) > y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) > y.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_greater_than(');
+    });
+
+    // Two strings are the helper's lexical branch — a numeric-string literal
+    // goes through the same path, so it must keep the helper.
+    test('string against a numeric-string literal keeps the helper', () => {
+        const ts =
+        "function f(hex: string) {\n" +
+        "    if (hex >= '80') {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_greater_than_or_equal(&hex, &Value::Str("80".to_string()))');
     });
 
     test('object keys', () => {
@@ -587,6 +737,50 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('in_op(&a,');
     });
 
+    // A `Dict` alias / generic dictionary is a Reference to its index-signature
+    // interface — still a plain Value::Dict at runtime, so the key test is native.
+    test('in operator native for a dictionary alias receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\nconst o: Dict = {};\nconst r = "key" in o;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&o, Value::Dict(__d) if __d.contains_key("key"))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator native for a generic dictionary receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nconst o: Dictionary<any> = {};\nconst r = "key" in o;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&o, Value::Dict(__d) if __d.contains_key("key"))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator native for a dictionary parameter', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (params: Dictionary<any>) {\n    return "key" in params;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&params, Value::Dict(__d) if __d.contains_key("key"))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    // A class instance is not a Dict at runtime: the helper stays.
+    test('in operator keeps the helper for a class instance receiver', () => {
+        const ts = 'class OrderBook { bids = 1; }\nconst b = new OrderBook();\nconst r = "key" in b;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&b,');
+    });
+
+    // Lib-declared types (Map, …) are not backed by a plain Value map.
+    test('in operator keeps the helper for a lib-declared receiver', () => {
+        const ts = 'const m = new Map<string, any>();\nconst r = "key" in m;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&m,');
+    });
+
+    // `any` proves nothing: an array element search stays the helper's job.
+    test('in operator keeps the helper for an any-typed receiver', () => {
+        const ts = 'function f (params: any) {\n    return "key" in params;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&params,');
+    });
+
     // Checker-proven helper removal: negate of a numeric literal folds
     test('negate literal folds to a literal', () => {
         const intOutput = transpiler.transpileRust('const x = -1;').content;
@@ -649,7 +843,7 @@ describe('rust transpiling tests', () => {
     test('Array.isArray call', () => {
         const ts = 'const r = Array.isArray(x);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_array(&x)');
+        expect(output).toContain('is_array(&x)'); // an undeclared x keeps the helper
     });
 
     test('Object.values call', () => {
@@ -940,6 +1134,129 @@ describe('rust transpiling tests', () => {
         const ts = 'const match = 1;'
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('match_val');
+    });
+
+    // ── typed string locals ──────────────────────────────────────────────────
+    // A local holding a `safeString*` result is declared `Option<String>` when
+    // the checker proves the string and every use is a native sink (null test,
+    // string-literal compare); the helper call stays as its producer.
+
+    describe('typed string locals', () => {
+        const withHelper = (helper: string, body: string) =>
+            `class A {\n    ${helper}(o: any, k: any): string { return undefined as any; }\n    run(o: any) {\n${body}\n    }\n}`;
+
+        test('string-literal compare retypes the local and compares as_deref', () => {
+            const ts = withHelper('safeString',
+                "        const side = this.safeString(o, 'side');\n        if (side === 'buy') { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut side: Option<String> = self.safeString(o, Value::Str("side".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (side.as_deref() == Some("buy")) {');
+            expect(output).not.toContain('side: Value');
+        });
+
+        test('null test retypes the local and prints is_none', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s === null) { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (s.is_none()) {');
+            expect(output).not.toContain('s == Value::Null');
+        });
+
+        test('undefined test retypes the local and prints is_some', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s !== undefined) { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (s.is_some()) {');
+            expect(output).not.toContain('s != Value::Null');
+        });
+
+        test('mixed native sinks stay typed together', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s === undefined) { return 0; }\n        return s === 'x';");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('if (s.is_none()) {');
+            expect(output).toContain('s.as_deref() == Some("x")');
+        });
+
+        test('safeStringLower / safeString2 results are typed too', () => {
+            const lower = transpiler.transpileRust(withHelper('safeStringLower',
+                "        const side = this.safeStringLower(o, 'side');\n        return side === 'buy';")).content;
+            expect(lower).toContain('let mut side: Option<String> = self.safeStringLower(o, Value::Str("side".to_string())).as_str().map(str::to_owned);');
+            expect(lower).toContain('side.as_deref() == Some("buy")');
+            const two = transpiler.transpileRust(withHelper('safeString2',
+                "        const id = this.safeString2(o, 'a', 'b');\n        return id !== undefined;")).content;
+            expect(two).toContain('let mut id: Option<String> = self.safeString2(o, Value::Str("a".to_string()), Value::Str("b".to_string())).as_str().map(str::to_owned);');
+            expect(two).toContain('id.is_some()');
+        });
+
+        test('a property name equal to the local does not block the retype', () => {
+            const ts = withHelper('safeString',
+                "        const status = this.safeString(o, 'status');\n        return status === 'ok' && o.status === 1;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut status: Option<String> = self.safeString(o, Value::Str("status".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('status.as_deref() == Some("ok")');
+        });
+
+        // Rejected shapes: any `&Value` sink keeps the local boxed.
+
+        test('a Value sink keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        m.insert('k', s);");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).not.toContain('Option<String>');
+        });
+
+        test('truthiness keeps Value (is_true has no Option impl)', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        if (s) { return 1; }\n        return 2;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('if is_true(&s) {');
+        });
+
+        test('reassignment keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        let s = this.safeString(o, 's');\n        s = this.safeString(o, 't');\n        return s === 'x';");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).not.toContain('Option<String>');
+        });
+
+        test('a second binding of the name keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        const f = (s) => s === 'x';\n        return f(s);");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).not.toContain('Option<String>');
+        });
+
+        test('no native use keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return 1;");
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+        });
+
+        test('string concat and other payload compares keep Value', () => {
+            const concat = transpiler.transpileRust(withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return s + 'x';")).content;
+            expect(concat).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            const againstLocal = transpiler.transpileRust(withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return s === o.other;")).content;
+            expect(againstLocal).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+        });
+
+        test('a non-string helper result keeps Value', () => {
+            const ts = withHelper('safeString',
+                "        const s = this.safeString(o, 's');\n        return s === 'x';")
+                .replace('safeString(o: any, k: any): string', 'safeString(o: any, k: any): any');
+            const output = transpiler.transpileRust(ts).content;
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+        });
     });
 
     // Native equality on unwrapped payloads (is_equal removal) — typed operands
@@ -1241,14 +1558,89 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &s)');
     });
 
-    test('string | undefined operand keeps the add helper', () => {
+    // phase-2 rust-19: a `Str` (`string | undefined`) operand holds only a
+    // string or the `Value::Null` the helper stringifies as "null" — the same
+    // text `Display` produces — so it concatenates natively against an operand
+    // the checker proves is ALWAYS a string.
+    test('string | undefined operand + proven string emits native concat', () => {
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'const a = g();\n' +
+        'const b: string = "y";\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('optional string parameter + proven string emits native concat', () => {
         const ts =
         'function f(x?: string) {\n' +
         '    const s: string = "y";\n' +
         '    return x + s;\n' +
         '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&x, &s)');
+        expect(output).toContain('return Value::Str(format!("{}{}", x, s));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string | undefined operand + string literal emits native concat', () => {
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'const a = g();\n' +
+        'const c = a + "y";';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str(format!("{}{}", a, Value::Str("y".to_string())))');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string | undefined += string literal emits native concat', () => {
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'let s = g();\n' +
+        's += "b";';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".to_string())));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string | undefined on both sides keeps the add helper', () => {
+        // No side is always a string: the helper's Null+Null case returns
+        // Value::Null, where format! would build "nullnull".
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'const a = g();\n' +
+        'const b = g();\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
+    });
+
+    test('string | undefined + number keeps the add helper', () => {
+        // Null + number is Value::Null through the helper, "null5" through format!.
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'function n(): number { return 5; }\n' +
+        'const a = g();\n' +
+        'const b = n();\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
+    });
+
+    test('string + any keeps the add helper', () => {
+        const ts =
+        'function h(): any { return 2; }\n' +
+        'const a: string = "x";\n' +
+        'const b = h();\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
     });
 
     test('x++ / x-- on a number emit native increment', () => {
@@ -1325,6 +1717,203 @@ describe('rust checker-typed native container access', () => {
     });
 });
 
+describe('rust error constructor message arguments', () => {
+    test('a literal message prints as a bare str', () => {
+        const ts = "function f() {\n    throw new NotSupported('demo trading is not supported');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported("demo trading is not supported")');
+        expect(output).not.toContain('Value::Str("demo trading is not supported"');
+    });
+
+    test('escapes in a literal message are preserved', () => {
+        const ts = "function f() {\n    throw new NotSupported('it\\'s \"quoted\"');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported("it\'s \\"quoted\\"")');
+    });
+
+    test('a string concat message drops its Value::Str box', () => {
+        const ts = "function f(id: string) {\n    throw new NotSupported(id + ' handleDelta not supported yet');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" handleDelta not supported yet".to_string())))');
+        expect(output).not.toContain('not_supported(Value::Str(');
+    });
+
+    test('a parenthesised concat message drops its Value::Str box', () => {
+        const ts = "function f(id: string) {\n    throw new NotSupported((id + ' msg'));\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".to_string())))');
+    });
+
+    test('a concat message of a post-pass error class also drops its box', () => {
+        const ts = "function f(id: string) {\n    throw new BadRequest (id + ' msg');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('BadRequest::new(format!("{}{}", id, Value::Str(" msg".to_string())))');
+        expect(output).not.toContain('BadRequest::new(Value::Str(');
+    });
+
+    test('an unproven message keeps its box', () => {
+        const ts = "function f(msg: any) {\n    throw new NotSupported(msg);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported(msg)');
+    });
+
+    test('a non-error class constructor is untouched', () => {
+        const ts = "function f(id: string) {\n    const p = new Precise (id + ' msg');\n    return p;\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Precise::new(Value::Str(format!(');
+    });
+});
+
+describe('rust native dict inserts', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".to_string(), ${value}); }`;
+
+    test('string-literal write on a typed dict local inserts natively', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('result', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('a Dictionary-typed receiver counts as a dict', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T; }\nconst account: Dictionary<any> = {};\naccount["free"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('account', 'free', 'Value::Int(1)'));
+    });
+
+    test('a bare identifier value is cloned like the helper call would', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst v = 1;\nresult["k"] = v;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('result', 'k', 'v.clone()'));
+    });
+
+    test('a value operand reading the receiver is hoisted into a temp', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = result["j"];';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('{ let __be_tmp = ');
+        expect(output).toContain('&mut result { std::sync::Arc::make_mut(__d).insert("k".to_string(), __be_tmp); }');
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('a call passing the receiver as an arg is hoisted too', () => {
+        const ts = 'const params: { [key: string]: any } = {};\nparams["auth"] = this.createAuth(params);';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('{ let __be_tmp = self.createAuth(params); if let Value::Dict(__d) = &mut params { std::sync::Arc::make_mut(__d).insert("auth".to_string(), __be_tmp); } }');
+    });
+
+    test('a bool-typed value operand is boxed in Value::Bool', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst a: any = 1;\nresult["k"] = (a === 1);';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('insert("k".to_string(), Value::Bool(');
+    });
+
+    test('this.<field> receivers insert natively', () => {
+        const ts = 'class A { options: { [key: string]: any } = {};\n    f() { this.options["k"] = 1; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('self.options', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut self.options');
+    });
+
+    test('array-typed receivers keep the helper', () => {
+        const ts = 'const result: any[] = [];\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('class-typed receivers keep the helper', () => {
+        const ts = 'class Book { bids: any[] = []; }\nfunction f(book: Book) { book["k"] = 1; }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut book');
+    });
+
+    test('receivers bound from an element read keep the helper', () => {
+        const ts = 'const rows: any[] = [];\nconst result = rows[0];\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('book-meta keys keep the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult["timestamp"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('computed keys keep the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst k = "x";\nresult[k] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result, &k,');
+    });
+
+    test('a later write of another shape keeps the helper', () => {
+        const ts = 'let result: { [key: string]: any } = {};\nresult = [] as any;\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('the request receiver keeps the helper', () => {
+        const ts = 'const request: { [key: string]: any } = {};\nrequest["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut request');
+    });
+});
+
+describe('rust truthiness sinks take the bare bool', () => {
+    // `is_true` is the one sink whose signature takes a native `bool`
+    // (`impl IsTruthy for bool`, and `IsTruthy for Value` unboxes a
+    // `Value::Bool(b)` back to `b`), so the printer's box around a bool in a
+    // truthiness position is a round-trip and prints as the bare expression.
+
+    test('a boxed condition loses the Value::Bool box', () => {
+        const ts = 'class A { f(x) { if (Array.isArray (x)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(matches!(&x, Value::Arr(_)))) {');
+        expect(output).not.toContain('Value::Bool(matches!(&x, Value::Arr(_)))');
+    });
+
+    test('a negated boxed condition keeps the is_true marker', () => {
+        const ts = 'class A { f(x) { if (!Array.isArray (x)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !is_true(&(matches!(&x, Value::Arr(_)))) {');
+    });
+
+    test('every &&/|| operand is unboxed on its own', () => {
+        const ts = 'class A { f(x, y) { if (Array.isArray (x) || y) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(matches!(&x, Value::Arr(_)))) || is_true(&y) {');
+    });
+
+    test('a boxed `in` condition loses the box', () => {
+        const ts = 'class A { f(x) { if ("k" in x) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(in_op(&x, &Value::Str("k".to_string())))) {');
+    });
+
+    test('assert() takes the bare bool as well', () => {
+        const ts = 'class A { f(x) { assert (Array.isArray (x), "msg"); } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('assert((matches!(&x, Value::Arr(_))), Value::Str("msg".to_string()));');
+    });
+
+    // negatives — every other sink takes a `Value` and keeps its box.
+    test('a Value-argument box is untouched', () => {
+        const ts = 'class A { f(x) { return g (Array.isArray (x)); } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('return g(Value::Bool(matches!(&x, Value::Arr(_))));');
+    });
+
+    test('a Value-local initializer box is untouched', () => {
+        const ts = 'class A { f(x) { const y = Array.isArray (x); return y; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut y: Value = Value::Bool(matches!(&x, Value::Arr(_)));');
+    });
+
+    test('is_equal keeps its &Value operand box', () => {
+        const ts = 'class A { f(x) { if (x === true) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_equal(&x, &Value::Bool(true)) {');
+    });
+});
+
 describe('rust numeric literals', () => {
     test('an exponent literal is a float, negated or not', () => {
         const input = "class A { f(x) { const a = x.g(1e-7); const b = x.g(-1e-7); const c = -5; return [a, b, c]; } }";
@@ -1333,5 +1922,839 @@ describe('rust numeric literals', () => {
         expect(output).toContain('x.g(Value::Float(-1e-7))');
         expect(output).toContain('Value::Int(-5)');
         expect(output).not.toContain('Value::Int(1e-7)');
+    });
+});
+
+// `is_true(&<call>)` is the identity when the callee's Rust signature is
+// `-> bool`; those callees are listed in RUST_BOOL_RESULT_CALLEES and proven
+// boolean by the checker, so the printer emits the call bare.
+describe('rust hand-written bool-returning calls', () => {
+    const typed = (body: string) =>
+        'function tickerExceptionNeedsOhlcv(ex: any, exchange: any, ticker: any): boolean {\n' +
+        '    return true;\n' +
+        '}\n' +
+        'function isTemporaryFailure(e: any): boolean {\n' +
+        '    return false;\n' +
+        '}\n' +
+        'class A {\n' +
+        '    run(ex: any, exchange: any, ticker: any) {\n' +
+        body + '\n' +
+        '    }\n' +
+        '}';
+
+    test('condition over a `-> bool` callee prints bare', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if (tickerExceptionNeedsOhlcv(ex, exchange, ticker)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('if tickerExceptionNeedsOhlcv(ex, exchange, ticker) {');
+        expect(output).not.toContain('is_true(&tickerExceptionNeedsOhlcv');
+    });
+
+    test('logical operand over a `-> bool` callee prints bare', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if ((ticker !== undefined) && tickerExceptionNeedsOhlcv(ex, exchange, ticker)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('&& tickerExceptionNeedsOhlcv(ex, exchange, ticker) {');
+        expect(output).not.toContain('is_true(&tickerExceptionNeedsOhlcv');
+    });
+
+    test('negated `-> bool` callee prints bare', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if (!tickerExceptionNeedsOhlcv(ex, exchange, ticker)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('if !tickerExceptionNeedsOhlcv(ex, exchange, ticker) {');
+    });
+
+    test('a boolean-typed callee outside the table keeps is_true', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if (isTemporaryFailure(ex)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('if is_true(&isTemporaryFailure(ex)) {');
+    });
+});
+
+// ── is_true over a checker-proved boolean Value ─────────────────────────────
+// `safeBool(...)` and element accesses whose checker type is boolean|undefined
+// can only be `Value::Bool(..)` or `Value::Null` at runtime, where the truthy
+// helper is exactly `matches!(.., Value::Bool(true))`.
+describe('rust is_true over a proven boolean Value', () => {
+    const boolClass = (body: string) =>
+        'class A {\n' +
+        '    safeBool(obj: any, key: any, defaultValue?: boolean): boolean | undefined { return undefined; }\n' +
+        '    safeBool2(obj: any, k1: any, k2: any, defaultValue?: boolean): boolean | undefined { return undefined; }\n' +
+        '    isLinear(market: any): boolean { return true; }\n' +
+        '    run() {\n' + body + '\n    }\n' +
+        '}';
+
+    test('safeBool in a condition emits the native matches!', () => {
+        const ts = boolClass("        if (this.safeBool(this.options, 'foo', false)) { return 1; }");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("foo".to_string()), &[Value::Bool(false)]), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&self.safeBool');
+    });
+
+    test('negated safeBool keeps the negation around the matches!', () => {
+        const ts = boolClass("        if (!this.safeBool(this.options, 'foo')) { return 1; }");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !matches!(self.safeBool(self.options, Value::Str("foo".to_string()), &[]), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&self.safeBool');
+    });
+
+    test('safeBool2 and a ternary condition emit the native matches!', () => {
+        const ts = boolClass("        return this.safeBool2(this.options, 'a', 'b', false) ? 1 : 2;");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(if matches!(self.safeBool2(self.options, Value::Str("a".to_string()), Value::Str("b".to_string()), &[Value::Bool(false)]), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&self.safeBool2');
+    });
+
+    test('a boolean-returning method keeps the helper', () => {
+        const ts = boolClass('        if (this.isLinear(this.options)) { return 1; }');
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&self.isLinear(self.options))');
+        expect(output).not.toContain('matches!(self.isLinear');
+    });
+
+    test('a logical stored in a Value local keeps the helper', () => {
+        const ts = boolClass("        const x = this.safeBool(this.options, 'a') || this.safeBool(this.options, 'b');\n        return x;");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&self.safeBool(self.options, Value::Str("a".to_string()), &[])) || is_true(&self.safeBool');
+        expect(output).not.toContain('matches!(self.safeBool');
+    });
+
+    test('a logical inside a condition emits the native matches! operand', () => {
+        const ts = boolClass("        if (this.safeBool(this.options, 'a') && this.safeBool(this.options, 'b')) { return 1; }");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("a".to_string()), &[]), Value::Bool(true)) && matches!(self.safeBool');
+    });
+
+    test('a boolean-typed element access emits the native matches!', () => {
+        const ts =
+            'class B {\n' +
+            '    run(options: { foo?: boolean }) {\n' +
+            "        if (options['foo']) { return 1; }\n" +
+            '        return 2;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&options');
+    });
+
+    test('a non-boolean element access keeps the helper', () => {
+        const ts =
+            'class C {\n' +
+            '    run(options: { foo?: string }, i: number) {\n' +
+            "        if (options['foo']) { return 1; }\n" +
+            '        if (options[i]) { return 2; }\n' +
+            '        return 3;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null))');
+        expect(output).toContain('is_true(&get_value(&options, &i))');
+        expect(output).not.toContain('matches!(options');
+    });
+});
+
+describe('rust declared-Dict locals', () => {
+    const NATIVE = (name: string, key: string) =>
+        `${name}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+
+    // A default-valued bag param is lowered to `let x = get_arg(optionalArgs,
+    // k, Value::Map({...}))` — a fresh dict whenever the caller passes none,
+    // and any caller dict otherwise: a literal-key read needs no helper.
+    test('default-valued bag param reads natively', () => {
+        const ts =
+            "function f(optionalArgs: any = [], config: any = {}) {\n" +
+            "    return config['noCoin'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('config', 'noCoin'));
+        expect(output).not.toContain('get_value_k(&config');
+    });
+
+    test('default-valued bag param reads a property natively', () => {
+        const ts =
+            "function f(optionalArgs: any = [], config: any = {}) {\n" +
+            "    return config.noSymbol;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('config', 'noSymbol'));
+        expect(output).not.toContain('get_value(&config, &Value::Str("noSymbol"');
+    });
+
+    test('extend onto an object literal reads natively', () => {
+        const ts =
+            "class A {\n" +
+            "    extend(a: any, b: any): any { return a; }\n" +
+            "    f(market: any) {\n" +
+            "        const cleanStructure = { 'spot': undefined, 'swap': undefined };\n" +
+            "        const result = this.extend(cleanStructure, market);\n" +
+            "        return result['spot'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('result', 'spot'));
+        expect(output).not.toContain('get_value_k(&result');
+    });
+
+    test('element of a Dictionary container reads natively', () => {
+        const ts =
+            "type Str = string | undefined;\n" +
+            "interface Market { id: string; }\n" +
+            "interface Markets { [key: string]: Market; }\n" +
+            "class A {\n" +
+            "    markets: Markets = {};\n" +
+            "    f(symbol: Str) {\n" +
+            "        const market = this.markets[symbol];\n" +
+            "        return market['id'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(NATIVE('market', 'id'));
+        expect(output).not.toContain('get_value_k(&market');
+    });
+
+    // D2: any later write may replace the dict, so the proof is dropped.
+    test('reassigned local keeps the helper', () => {
+        const ts =
+            "function f(other: any = {}, config: any = {}) {\n" +
+            "    config = other;\n" +
+            "    return config['noCoin'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::value::get_value_k(&config, "noCoin")');
+    });
+
+    // D5: these keys are served from the book store / a live snapshot by the
+    // runtime helper, which a plain map read cannot see.
+    test('runtime-routed keys keep the helper', () => {
+        const ts =
+            "function f(config: any = {}) {\n" +
+            "    const a = config['symbol'];\n" +
+            "    const b = config['cache'];\n" +
+            "    return [a, b];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::value::get_value_k(&config, "symbol")');
+        expect(output).toContain('crate::value::get_value_k(&config, "cache")');
+    });
+
+    test('param without a dict default keeps the helper', () => {
+        const ts =
+            "function f(config: any) {\n" +
+            "    return config['noCoin'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::value::get_value_k(&config, "noCoin")');
+    });
+});
+
+describe('rust native string search and slicing', () => {
+    const stringMethod = (body: string, params = 'a: string') =>
+        `class A {\n    run(${params}) {\n${body}\n    }\n}`;
+
+    test('indexOf with a literal needle on a proven string is native', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');")).content;
+        expect(output).toContain('return Value::Int(a.as_str().and_then(|__s| __s.find("/")).map(|__i| __i as i64).unwrap_or(-1));');
+        expect(output).not.toContain('get_index_of');
+    });
+
+    test('a nullable string receiver keeps the -1 branch through as_str', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf(':');", 'a: string | undefined')).content;
+        expect(output).toContain('Value::Int(a.as_str().and_then(|__s| __s.find(":")).map(|__i| __i as i64).unwrap_or(-1))');
+        expect(output).not.toContain('get_index_of');
+    });
+
+    test('an unproven receiver keeps the helper', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: any')).content;
+        expect(output).toContain('get_index_of(&a, &Value::Str("/".to_string()))');
+    });
+
+    test('an array receiver keeps the helper (the helper scans it)', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: string[]')).content;
+        expect(output).toContain('get_index_of(&a, &Value::Str("/".to_string()))');
+    });
+
+    test('a non-literal needle keeps the helper', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: string')).content;
+        expect(output).toContain('get_index_of(&a, &b)');
+    });
+
+    test('an escaped literal needle keeps its escapes', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.indexOf("\\n");')).content;
+        expect(output).toContain('__s.find("\\n")');
+    });
+
+    test('slice with a single negative literal bound is native', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(-64);', 'a: string')).content;
+        expect(output).toContain('let __i = (__l - 64).max(0); let __j = __l;');
+        expect(output).not.toContain('slice(&');
+    });
+
+    test('slice with two literal bounds clamps both ends', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(2, 4);')).content;
+        expect(output).toContain('let __i = __l.min(2); let __j = __l.min(4);');
+        expect(output).not.toContain('slice(&');
+    });
+
+    test('slice with a negative end counts from the end', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(2, -1);')).content;
+        expect(output).toContain('let __i = __l.min(2); let __j = (__l - 1).max(0);');
+    });
+
+    test('slice keeps the helper for an expression bound', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(0, b);', 'a: string, b: number')).content;
+        expect(output).toContain('slice(&a, &Value::Int(0), &b)');
+    });
+
+    test('slice keeps the helper for an unproven receiver', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(0, 2);', 'a: any')).content;
+        expect(output).toContain('slice(&a, &Value::Int(0), &Value::Int(2))');
+    });
+
+    test('length on a nullable array or string is native', () => {
+        const arrayOutput = transpiler.transpileRust(stringMethod('        return a.length;', 'a: string[] | undefined')).content;
+        expect(arrayOutput).toContain('return Value::Int(a.len() as i64);');
+        const stringOutput = transpiler.transpileRust(stringMethod('        return a.length;', 'a: string | undefined')).content;
+        expect(stringOutput).toContain('return Value::Int(a.len() as i64);');
+    });
+
+    test('length on an unproven receiver keeps the helper', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.length;', 'a: any')).content;
+        expect(output).toContain('get_array_length(&a)');
+    });
+});
+
+// Native equality for plain reads whose checker type is a class instance
+// (struct field / local / param — all printed `Value`) and for operands the
+// checker confines to Bool/Null/non-numeric strings.
+describe('rust native equality on declared reads', () => {
+    const CACHE_FIELD = 'class Cache {}\nclass A {\n    orders: Cache | undefined = undefined;\n';
+
+    test('a class-typed field compares to null natively', () => {
+        const ts = CACHE_FIELD +
+            '    run(u: any) {\n' +
+            '        if (this.orders === undefined) {\n' +
+            '            return u;\n' +
+            '        }\n' +
+            '        return this.orders;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (self.orders == Value::Null) {');
+        expect(output).not.toContain('is_equal(&self.orders');
+    });
+
+    test('a class-typed parameter compares to null natively', () => {
+        const ts = 'class Cache {}\nclass A {\n' +
+            '    run(orders: Cache | undefined, u: any) {\n' +
+            '        if (orders === undefined) {\n' +
+            '            return u;\n' +
+            '        }\n' +
+            '        return orders;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (orders == Value::Null) {');
+        expect(output).not.toContain('is_equal(&orders');
+    });
+
+    test('a local initialised from a field compares to null natively', () => {
+        const ts = CACHE_FIELD +
+            '    run(u: any) {\n' +
+            '        const cached = this.orders;\n' +
+            '        if (cached === undefined) {\n' +
+            '            return u;\n' +
+            '        }\n' +
+            '        return cached;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (cached == Value::Null) {');
+        expect(output).not.toContain('is_equal(&cached');
+    });
+
+    test('a local holding a constructed struct stays on the helper', () => {
+        const ts = 'class B {}\nclass A {\n' +
+            '    run(u: any) {\n' +
+            '        const created = new B();\n' +
+            '        return created === undefined;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_equal(&created, &Value::Null)');
+    });
+
+    const HAS_UNION = 'class A {\n    has!: { [key: string]: boolean | \'emulated\' | undefined };\n';
+
+    test('a bool-literal union compares the unwrapped bool', () => {
+        const output = transpiler.transpileRust(HAS_UNION +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('.unwrap_or(Value::Null).as_bool() == Some(true)');
+        expect(output).not.toContain('is_equal(');
+    });
+
+    test('a negated bool-literal union compares the unwrapped bool', () => {
+        const output = transpiler.transpileRust(HAS_UNION +
+            '    run() {\n' +
+            '        if (this.has[\'fetchOrders\'] !== false) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 2;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('.unwrap_or(Value::Null).as_bool() != Some(false)');
+        expect(output).not.toContain('is_equal(');
+    });
+
+    test('a numeric string member keeps the helper', () => {
+        const output = transpiler.transpileRust(
+            'class A {\n    has!: { [key: string]: boolean | \'1\' | undefined };\n' +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('is_equal(&self.has');
+    });
+
+    test('a number member keeps the helper', () => {
+        const output = transpiler.transpileRust(
+            'class A {\n    has!: { [key: string]: boolean | number | undefined };\n' +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('is_equal(&self.has');
+    });
+
+    test('a plain string member keeps the helper', () => {
+        const output = transpiler.transpileRust(
+            'class A {\n    has!: { [key: string]: string };\n' +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('is_equal(&self.has');
+    });
+});
+
+describe('rust declared-Dict locals (rust-25)', () => {
+    // The declared-Dict table answers `rustDeclaredLocalTypeResolver(node)` for a
+    // local the printer itself can prove holds a `Value::Dict` at every use: the
+    // initialiser is a `safe_dict*` call whose default is itself Dict-proven, or
+    // a `Value::Map(..)` object literal, and no later write changes the kind.
+    // The declaration stays `Value`; consumers (get_value / in_op /
+    // add_element_to_object families) read the hook.
+
+    const rustPrinter = () => (transpiler as any).rustTranspiler;
+
+    const identifierUses = (name: string) => {
+        const sourceFile = rustPrinter().getSrc();
+        const found: any[] = [];
+        const walk = (node: any) => {
+            if (ts.isIdentifier(node) && node.text === name) found.push(node);
+            ts.forEachChild(node, walk);
+        };
+        walk(sourceFile);
+        return found;
+    };
+
+    const resolveNamed = (snippet: string, name: string, predicate: (node: any) => boolean = () => true) => {
+        transpiler.transpileRust(snippet);
+        const rust = rustPrinter();
+        const node = identifierUses(name).find(predicate);
+        expect(node).toBeDefined();
+        return { rust, answer: rust.rustDeclaredLocalTypeResolver(node), node };
+    };
+
+    const isElementReceiver = (node: any) => node.parent !== undefined && ts.isElementAccessExpression(node.parent) && node.parent.expression === node;
+
+    test('safe_dict with an object default is proven Dict', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        data['a'] = 1;\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('the declaration stays Value (no native HashMap retype)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(snippet).content;
+        expect(output).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".to_string()), Value::Map({');
+        expect(output).not.toContain('HashMap<String, Value> = self.safeDict');
+    });
+
+    test('safe_dict without a default may be Value::Null, so no proof', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data');\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('an object literal initialiser is proven Dict', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(params) {\n' +
+            '        const request = { symbol: params, type: 1 };\n' +
+            "        request['limit'] = 10;\n" +
+            "        return request['symbol'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'request', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('a safe_dict2 default proves Dict too', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const row = this.safeDict2(response, 'a', 'b', {});\n" +
+            "        return row['x'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'row', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('a default that is itself a proven local proves Dict', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const fallback = this.safeDict(response, 'fallback', {});\n" +
+            "        const row = this.safeDict(response, 'row', fallback);\n" +
+            "        return row['x'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'row', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('reassignment of a non-proven value drops the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, other) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            '        data = other;\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('reassignment of another proven Dict keeps the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            "        data = this.safeDict(response, 'other', {});\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('a destructuring write drops the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, params) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            "        [ data, params ] = this.handleUntilOption('endTime', data, params);\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('a for-of rebind of the local drops the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, list) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            '        for (data of list) {}\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('an element write into the local stays kind-preserving', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        data['a'] = data['b'];\n" +
+            "        return data['c'];\n" +
+            '    }\n' +
+            '}';
+        const { rust, answer, node } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+        expect(rust.rustDeclaredLocalEntry(node).uses.elementAccess).toBe(3);
+    });
+
+    test('a different binding of the name in a nested block does not invalidate', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            '        { const data = 1; m.insert("k", data); }\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', (node) => isElementReceiver(node) && node.getStart() > snippet.indexOf('return'));
+        expect(answer).toBe('dict');
+    });
+
+    test('a use of a shadowing binding is not answered for the outer local', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            '        { const other = 1; m.insert("k", other); }\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('an unrelated Value local is not in the table', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const value = this.safeValue(response, 'data');\n" +
+            "        return value['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'value', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('the census counts proven and unproven declarators', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, other) {\n' +
+            "        const proven = this.safeDict(response, 'a', {});\n" +
+            "        const mayBeNull = this.safeDict(response, 'b');\n" +
+            "        let reassigned = this.safeDict(response, 'c', {});\n" +
+            '        reassigned = other;\n' +
+            "        return [ proven['x'], mayBeNull['y'], reassigned['z'] ];\n" +
+            '    }\n' +
+            '}';
+        transpiler.transpileRust(snippet);
+        const census = rustPrinter().rustDeclaredDictLocalCensus();
+        expect(census).toEqual({ declarators: 3, dict: 1, alwaysDict: 2, kindUnstable: 1, retypeEligible: 1 });
+    });
+
+    test('the table is keyed by local name and skips non-dict initialisers', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        const list = this.safeList(response, 'data');\n" +
+            '        return data;\n' +
+            '    }\n' +
+            '}';
+        transpiler.transpileRust(snippet);
+        const table = rustPrinter().rustDeclaredDictLocals();
+        expect(Array.from(table.keys())).toEqual(['data']);
+    });
+
+    test('RUST_DECLARED_DICT_LOCALS exposes the vocabulary and callee table', () => {
+        expect(RUST_DECLARED_DICT_LOCALS.DICT).toBe('dict');
+        expect(RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES['safe_dict_k']).toBe(2);
+        expect(RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES['safe_dict2']).toBe(3);
+        expect(RUST_DECLARED_DICT_LOCALS.KIND_PRESERVING_MUTATORS.has('add_element_to_object')).toBe(true);
+    });
+});
+
+// `parseInt`/`parseFloat` print the runtime helpers; a checker-proven string
+// argument needs no Value-kind dispatch, so the helper's own match with native
+// `str::parse` is emitted (every helper branch kept).
+describe('rust native parseInt/parseFloat', () => {
+    const nativeInt = '(match &x { Value::Str(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), Value::Int(__parse_n) => Value::Int(*__parse_n), Value::Float(__parse_f) => Value::Int(*__parse_f as i64), _ => Value::Null })';
+    const nativeFloat = '(match &x { Value::Str(__parse_s) => __parse_s.trim().parse::<f64>().map(Value::Float).unwrap_or(Value::Null), Value::Float(__parse_f) => Value::Float(*__parse_f), Value::Int(__parse_n) => Value::Float(*__parse_n as f64), _ => Value::Null })';
+
+    test('parseInt on a string param goes native', () => {
+        const input = "class A {\n    f (x: string) {\n        const n = parseInt (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`let mut n: Value = ${nativeInt};`);
+        expect(output).not.toContain('parseInt(');
+    });
+
+    test('parseFloat on a string local goes native', () => {
+        const input = "class A {\n    f (x: string) {\n        const n = parseFloat (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`let mut n: Value = ${nativeFloat};`);
+        expect(output).not.toContain('parseFloat(');
+    });
+
+    test('a cast-to-string argument is a proven string', () => {
+        const input = "class A {\n    f (x: string | undefined) {\n        const n = parseInt (x as string);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`let mut n: Value = ${nativeInt};`);
+        expect(output).not.toContain('parseInt(');
+    });
+
+    test('an any-typed argument keeps the helper', () => {
+        const input = "class A {\n    f (x: any) {\n        const n = parseInt (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = parseInt(x);');
+    });
+
+    test('a numeric argument keeps the helper', () => {
+        const input = "class A {\n    f (x: number) {\n        const n = parseFloat (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = parseFloat(x);');
+    });
+
+    test('the radix form keeps the helper', () => {
+        const input = "class A {\n    f (x: string) {\n        const n = parseInt (x, 10);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = parseInt(x, Value::Int(10));');
+    });
+
+    test('an integer string literal folds to Value::Int', () => {
+        const input = "class A {\n    f () {\n        const n = parseInt ('4');\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = Value::Int(4);');
+    });
+
+    test('a decimal string literal folds to Value::Float', () => {
+        const input = "class A {\n    f () {\n        const n = parseFloat ('1.5');\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = Value::Float(1.5);');
+    });
+
+    test('a literal rust cannot parse keeps the native match', () => {
+        const input = "class A {\n    f () {\n        const n = parseInt ('x9');\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('.trim().parse::<i64>()');
+        expect(output).not.toContain('parseInt(');
+    });
+
+    test('a native parse stays native in an argument position', () => {
+        const input = "class A {\n    f (x: string) {\n        return this.g (parseInt (x), 2);\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`return self.g(${nativeInt}, Value::Int(2));`);
+    });
+});
+
+describe('rust native value predicates and json', () => {
+    // `Array.isArray` / `typeof … === '…'` over a declared `Value` place inline
+    // the runtime helper's own `matches!`; other operands keep the helper.
+    test('Array.isArray on a declared local emits the native match', () => {
+        const ts = "function f(response: any) {\n    if (Array.isArray(response)) {\n        return response;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&(matches!(&response, Value::Arr(_))))');
+        expect(output).not.toContain('is_array(');
+    });
+
+    test('Array.isArray on a declared field emits the native match', () => {
+        const ts = "class A {\n    x: any;\n    f() {\n        if (Array.isArray(this.x)) {\n            return 1;\n        }\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&(matches!(&self.x, Value::Arr(_))))');
+        expect(output).not.toContain('is_array(');
+    });
+
+    test('Array.isArray on a call result keeps the helper', () => {
+        const ts = "function g(): any { return []; }\nfunction f() {\n    if (Array.isArray(g())) {\n        return 1;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_array(&g())');
+        expect(output).not.toContain('matches!(&g()');
+    });
+
+    test('typeof string in a condition emits the native match', () => {
+        const ts = "function f(code: any) {\n    if (typeof code === 'string') {\n        return code;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(&code, Value::Str(_))');
+        expect(output).not.toContain('is_string(');
+    });
+
+    test('negated typeof string emits the negated native match', () => {
+        const ts = "function f(value: any) {\n    if (typeof value !== 'string') {\n        return 1;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !matches!(&value, Value::Str(_))');
+        expect(output).not.toContain('is_string(');
+    });
+
+    test('typeof boolean / number / object emit their native matches', () => {
+        const ts = "function f(value: any) {\n    if (typeof value === 'boolean') { return 1; }\n    if (typeof value === 'number') { return 2; }\n    if (typeof value === 'object') { return 3; }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&value, Value::Bool(_))');
+        expect(output).toContain('matches!(&value, Value::Int(_) | Value::Float(_))');
+        expect(output).toContain('matches!(&value, Value::Dict(_))');
+        expect(output).not.toContain('is_bool(');
+        expect(output).not.toContain('is_number(');
+        expect(output).not.toContain('is_object(');
+    });
+
+    test('typeof string in a Value position boxes the native match', () => {
+        const ts = "function f(code: any) {\n    let flag = typeof code === 'string';\n    return flag;\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut flag: Value = Value::Bool(matches!(&code, Value::Str(_)));');
+    });
+
+    test('typeof string on a call result keeps the helper', () => {
+        const ts = "function g(): any { return 1; }\nfunction f() {\n    if (typeof g() === 'string') {\n        return 1;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_string(&g())');
+        expect(output).not.toContain('matches!(&g()');
+    });
+
+    test('this.json on a local calls the free json_stringify', () => {
+        const ts = "class A {\n    id: any;\n    f(params: any) {\n        return this.json(params);\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('return json_stringify(&params);');
+        expect(output).not.toContain('self.json(');
+    });
+
+    test('this.json drops the argument clone the method signature forced', () => {
+        const ts = "class A {\n    id: any;\n    f(query: any) {\n        let body = this.json(query.clone());\n        return body;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut body: Value = json_stringify(&query);');
+        expect(output).not.toContain('query.clone()');
+    });
+
+    test('this.json on a self field keeps the method call', () => {
+        const ts = "class A {\n    id: any;\n    params: any;\n    f() {\n        return this.json(this.params);\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.json(self.params');
+        expect(output).not.toContain('json_stringify');
     });
 });
