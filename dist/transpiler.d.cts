@@ -752,8 +752,6 @@ declare class GoTranspiler extends BaseTranspiler {
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
-    goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
-    goNativeAppendReceiver(pushNode: any): string | undefined;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
@@ -797,12 +795,11 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsPointerIdentifier(node: any): boolean;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
     goElementAssignmentContainerType(node: any, printedText: string): string | undefined;
-    goFieldContainerTypeNative(node: any): string | undefined;
     goIsStringKeyExpression(node: any): boolean;
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
     goRebindingTargetOf(identifier: any): any;
-    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean): string | undefined;
+    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string): string | undefined;
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
     sliceLengthTypes: string[];
     printInlineArrayLength(expression: any, printedText: string): string | undefined;
