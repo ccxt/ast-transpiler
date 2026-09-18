@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10304,55 +10304,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   printIncludesCall(_node, _identation, name = void 0, parsedArg = void 0) {
     return `${name}.contains(${parsedArg})`;
   }
-  // Helpers.getIndexOf(str, target) is List.indexOf(target) for a List receiver and
-  // String.indexOf(target) for a String receiver with a String target, -1 otherwise. The
-  // printer declares every local a `Object`/`var`, so the native call carries the same
-  // checkcast the `.length()` / `containsKey` families emit; the target takes one too when
-  // it is not already a printed String (String.indexOf takes a String, List takes Object).
-  javaNativeIndexOfCall(node, name, parsedArg) {
-    if (node === void 0 || name === void 0 || parsedArg === void 0) {
-      return void 0;
-    }
-    const receiver = node?.expression?.expression;
-    if (receiver === void 0) {
-      return void 0;
-    }
-    const checker = this.getChecker();
-    let receiverType;
-    try {
-      receiverType = checker.getTypeAtLocation(receiver);
-    } catch (e) {
-      return void 0;
-    }
-    if (this.isJavaListType(receiverType) && !this.isVarargsArrayReference(receiver)) {
-      return `((java.util.List<?>)${name}).indexOf(${parsedArg})`;
-    }
-    if (receiverType.aliasSymbol !== void 0 || !this.isStringType(receiverType.flags)) {
-      return void 0;
-    }
-    const arg = node.arguments?.[0];
-    if (arg === void 0) {
-      return void 0;
-    }
-    if (this.javaProvableString(arg)) {
-      return `((String)${name}).indexOf(${parsedArg})`;
-    }
-    let argType;
-    try {
-      argType = checker.getTypeAtLocation(arg);
-    } catch (e) {
-      return void 0;
-    }
-    if (argType.aliasSymbol === void 0 && this.isStringType(argType.flags) && (ts6.isIdentifier(arg) || ts6.isPropertyAccessExpression(arg))) {
-      return `((String)${name}).indexOf(((String)${parsedArg}))`;
-    }
-    return void 0;
-  }
-  printIndexOfCall(node, _identation, name = void 0, parsedArg = void 0) {
-    const native = this.javaNativeIndexOfCall(node, name, parsedArg);
-    if (native !== void 0) {
-      return native;
-    }
+  printIndexOfCall(_node, _identation, name = void 0, parsedArg = void 0) {
     return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
   }
   printSearchCall(_node, _identation, name = void 0, parsedArg = void 0) {
