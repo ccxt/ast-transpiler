@@ -1493,6 +1493,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             }
             return true;
         }
+        case ts.SyntaxKind.BinaryExpression: {
+            // `key in x` prints `InOp(x, key)`: the helper reads the map and answers false for
+            // an absent (nil) map, exactly like the nil interface it used to hold
+            return (parent.operatorToken?.kind === ts.SyntaxKind.InKeyword) && (parent.right === node);
+        }
         case ts.SyntaxKind.CallExpression: {
             if (parent.expression === node) {
                 return false; // the local called as a function

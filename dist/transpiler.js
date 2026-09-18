@@ -5898,6 +5898,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
         }
         return true;
       }
+      case ts5.SyntaxKind.BinaryExpression: {
+        return parent.operatorToken?.kind === ts5.SyntaxKind.InKeyword && parent.right === node;
+      }
       case ts5.SyntaxKind.CallExpression: {
         if (parent.expression === node) {
           return false;

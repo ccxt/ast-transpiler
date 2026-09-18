@@ -716,6 +716,19 @@ describe('go pointer-typed Safe* body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var info map[string]any = SafeMapTyped(item, \"info\")");
     });
+    test('a SafeDict local read through the `in` operator stays typed', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item, code) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        return (code in info);\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info map[string]any = SafeMapTyped(item, \"info\")");
+        expect(output).toContain("InOp(info, code)");
+    });
     test('a SafeDict local handed to another Safe* accessor as its receiver stays typed', () => {
         const input =
         "class Exchange {\n" +
