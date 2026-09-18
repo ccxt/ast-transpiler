@@ -990,12 +990,6 @@ declare class JavaTranspiler extends BaseTranspiler {
     isNullishLiteral(node: any): boolean;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
-    elementWriteKeyText(key: any, keyText: string): string;
-    isPlainHashMapReceiver(container: any, keys: any[]): boolean;
-    unwrapPrintTransparentExpression(node: any): any;
-    javaLocalIsReassigned(node: any): boolean;
-    callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;
-    returnTypePrintsAsHashMap(declaration: any): boolean;
     isDictionaryType(node: any): boolean;
     isDictionaryTsType(type: any, checker: any, depth: number): boolean;
     javaIntegerLiteralKind(node: any): "int" | "long";
