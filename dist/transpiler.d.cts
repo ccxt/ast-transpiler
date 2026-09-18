@@ -953,7 +953,6 @@ declare class GoTranspiler extends BaseTranspiler {
 }
 
 declare class JavaTranspiler extends BaseTranspiler {
-    javaExpressionTypeResolver?: (node: any) => string | undefined;
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): string;
     binaryExpressionsWrappers: any;
@@ -1012,12 +1011,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaScalarFamily(node: any): string | undefined;
     javaProvableString(node: any): boolean;
     javaNativeConcat(node: any): boolean;
-    javaProvableNumericKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
-    javaDeclaredNumericLocalKind(node: any): string | undefined;
-    javaIdentifierKeepsDeclaredName(node: any): boolean;
-    javaOperandIsNonNullNumber(node: any): boolean;
-    javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
-    javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
+    javaProvableNumericKind(node: any): string | undefined;
+    javaNativeArithmeticKind(node: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
