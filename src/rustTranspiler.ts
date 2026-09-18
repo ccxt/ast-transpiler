@@ -565,7 +565,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
     // When the checker proves both operands are numbers (`Int`/`Float` at
-    // runtime) or, for `+`, both are strings, the helper call is replaced by
+    // runtime) or that one is always a string and the other a string or the
+    // null the helper stringifies the same way, the helper call is replaced by
     // the arithmetic itself: a 4-arm `Value` match reproducing the helper's
     // Int/Float dispatch, `as_f64()` division, or a `format!` string concat.
     // Anything the checker cannot prove keeps the runtime helper.
@@ -596,6 +597,43 @@ export class RustTranspiler extends BaseTranspiler {
         return false;
     }
 
+    // Types whose runtime value the `add` helper stringifies exactly as
+    // `format!` does: a string, or the `undefined`/`null` the printer boxes as
+    // `Value::Null` (helper `stringify_simple(Value::Null)` is "null", and so
+    // is `Display`). `any` is deliberately absent — the helper's Precise-dict
+    // branch has no `Display` equivalent.
+    private static readonly RUST_CONCAT_SAFE_FLAGS = new Set<number>([
+        ts.TypeFlags.String,
+        ts.TypeFlags.StringLiteral,
+        ts.TypeFlags.Undefined,
+        ts.TypeFlags.Null,
+    ]);
+
+    isStringOrNullishType(type: any): boolean {
+        if (!type) {
+            return false;
+        }
+        if (RustTranspiler.RUST_CONCAT_SAFE_FLAGS.has(type.flags)) {
+            return true;
+        }
+        if (type.flags === ts.TypeFlags.Union && Array.isArray(type.types)) {
+            return type.types.length > 0 && type.types.every((member: any) => this.isStringOrNullishType(member));
+        }
+        return false;
+    }
+
+    // `Str` (`string | undefined`) operands are safe to concatenate natively
+    // only against an operand the checker proves is ALWAYS a string: the
+    // helper then takes its string branch, whose result `format!` reproduces.
+    // Without that anchor (`Str + Str`) the helper's both-null case returns
+    // `Value::Null` where `format!` would build "nullnull".
+    isNativeStringConcatPair(leftType: any, rightType: any): boolean {
+        if (!this.isStringOrNullishType(leftType) || !this.isStringOrNullishType(rightType)) {
+            return false;
+        }
+        return this.isStringLikeType(leftType) || this.isStringLikeType(rightType);
+    }
+
     // `(+|-)` with the left operand of `+=`/`-=`: assignment plus the same
     // native emission as the plain binary form.
     printNativeAssignmentArithmetic(op, left, right, leftText, rightText): string | undefined {
@@ -607,7 +645,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
-        if (op === SyntaxKind.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+        if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
             return `${leftText} = ${this.printNativeStringConcat(leftText, rightText)}`;
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -629,7 +667,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
-        if (op === SyntaxKind.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+        if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
             return this.printNativeStringConcat(leftText, rightText);
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {

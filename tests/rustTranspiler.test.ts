@@ -1241,14 +1241,89 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &s)');
     });
 
-    test('string | undefined operand keeps the add helper', () => {
+    // phase-2 rust-19: a `Str` (`string | undefined`) operand holds only a
+    // string or the `Value::Null` the helper stringifies as "null" — the same
+    // text `Display` produces — so it concatenates natively against an operand
+    // the checker proves is ALWAYS a string.
+    test('string | undefined operand + proven string emits native concat', () => {
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'const a = g();\n' +
+        'const b: string = "y";\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('optional string parameter + proven string emits native concat', () => {
         const ts =
         'function f(x?: string) {\n' +
         '    const s: string = "y";\n' +
         '    return x + s;\n' +
         '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&x, &s)');
+        expect(output).toContain('return Value::Str(format!("{}{}", x, s));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string | undefined operand + string literal emits native concat', () => {
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'const a = g();\n' +
+        'const c = a + "y";';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str(format!("{}{}", a, Value::Str("y".to_string())))');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string | undefined += string literal emits native concat', () => {
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'let s = g();\n' +
+        's += "b";';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".to_string())));');
+        expect(output).not.toContain('add(');
+    });
+
+    test('string | undefined on both sides keeps the add helper', () => {
+        // No side is always a string: the helper's Null+Null case returns
+        // Value::Null, where format! would build "nullnull".
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'const a = g();\n' +
+        'const b = g();\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
+    });
+
+    test('string | undefined + number keeps the add helper', () => {
+        // Null + number is Value::Null through the helper, "null5" through format!.
+        const ts =
+        'type Str = string | undefined;\n' +
+        'function g(): Str { return "x"; }\n' +
+        'function n(): number { return 5; }\n' +
+        'const a = g();\n' +
+        'const b = n();\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
+    });
+
+    test('string + any keeps the add helper', () => {
+        const ts =
+        'function h(): any { return 2; }\n' +
+        'const a: string = "x";\n' +
+        'const b = h();\n' +
+        'const c = a + b;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add(&a, &b)');
     });
 
     test('x++ / x-- on a number emit native increment', () => {
