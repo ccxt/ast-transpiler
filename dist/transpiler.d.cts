@@ -825,7 +825,6 @@ declare class GoTranspiler extends BaseTranspiler {
     printObjectLiteralExpression(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
-    goIsStringLiteralNode(node: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
     goOperandNumericKind(node: any, printedText: string): string | undefined;
     goLiteralTypedLocalKind(node: any): string | undefined;
