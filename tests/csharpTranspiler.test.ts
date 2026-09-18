@@ -1065,7 +1065,9 @@ describe('csharp typed body locals', () => {
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("string upper = ((string)market).ToUpper()");
         expect(output).toContain("List<object> parts = ((string)market).Split(");
-        expect(output).toContain("int count = getArrayLength(parts)");
+        // `parts` is declared `List<object>` here, so its own Count replaces the helper
+        expect(output).toContain("int count = (parts?.Count ?? 0);");
+        expect(output).not.toContain("getArrayLength(parts)");
         expect(output).toContain("bool same = (isEqual(upper, market))");
         expect(output).toContain("Dictionary<string, object> merged = this.extend(");
         expect(output).toContain("Int64 now = this.milliseconds()");
@@ -1214,7 +1216,8 @@ describe('csharp typed body locals', () => {
         "}";
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("public virtual bool isDictionary(object value)");
-        expect(output).toContain("return ((bool)((object)((!isEqual(value, null)) && ((value is IDictionary<string, object>))))!);");
+        // the `value !== undefined` guard is a null test on the `object value` parameter
+        expect(output).toContain("return ((bool)((object)(((value != null)) && ((value is IDictionary<string, object>))))!);");
     });
     test('a method declared `: boolean | undefined` (or an alias) returns bool? and keeps null', () => {
         const input =
@@ -1280,8 +1283,9 @@ describe('csharp typed body locals', () => {
         "    return undefined;\n" +
         "}";
         const guardedOutput = transpiler.transpileCSharp(guarded).content;
-        // the `in` guard prints a C# bool of its own (`inOp` returns bool): no isTrue round-trip
-        expect(guardedOutput).toContain('if (inOp(parameters, "x"))');
+        // the `in` guard prints a C# bool of its own (ContainsKey returns bool): no isTrue
+        // round-trip; the receiver is still object, so the cast and the helper's null test stay
+        expect(guardedOutput).toContain('if ((parameters != null && ((IDictionary<string, object>)parameters).ContainsKey("x")))');
         expect(guardedOutput).toContain('object y = ((IDictionary<string,object>)parameters)["x"];');
         // the else-branch of a negated guard runs only when the key is there
         const negatedElse =
@@ -1333,6 +1337,77 @@ describe('csharp typed body locals', () => {
         const arrayOutput = transpiler.transpileCSharp(arrayLiteral).content;
         expect(arrayOutput).toContain('object x = new List<object>() {1, 2};');
         expect(arrayOutput).toContain('object y = ((List<object>)x)[0];');
+    });
+    test('a market-row local the declared table proves is a dictionary prints the null-safe native read', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const market = this.extend(a, b);\n" +
+        "        const id = market['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('Dictionary<string, object> market = this.extend(a, b);');
+        // getValue yields null for a missing key, a C# indexer throws: the native read keeps the
+        // ContainsKey test
+        expect(output).toContain('object id = (market.ContainsKey("id") ? market["id"] : null);');
+        expect(output).not.toContain('getValue(market, "id")');
+    });
+    test('market-row reads outside the declared table keep getValue', () => {
+        // the receiver local is not typed: no proof, the helper stays
+        const untyped =
+        "class Exchange {\n" +
+        "    getMarketFromSymbols(symbols: any): any { return symbols; }\n" +
+        "    main(symbols: any) {\n" +
+        "        const market = this.getMarketFromSymbols(symbols);\n" +
+        "        const id = market['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const untypedOutput = transpiler.transpileCSharp(untyped).content;
+        expect(untypedOutput).toContain('object market = this.getMarketFromSymbols(symbols);');
+        expect(untypedOutput).toContain('object id = getValue(market, "id");');
+        // another receiver name belongs to its own family
+        const otherReceiver =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const response = this.extend(a, b);\n" +
+        "        const id = response['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const otherOutput = transpiler.transpileCSharp(otherReceiver).content;
+        expect(otherOutput).toContain('Dictionary<string, object> response = this.extend(a, b);');
+        expect(otherOutput).toContain('object id = (response != null && response.ContainsKey("id") ? response["id"] : null);');
+        // a numeric key is a list index, not a market key
+        const numberKey =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const market = this.extend(a, b);\n" +
+        "        const first = market[0];\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "}";
+        expect(transpiler.transpileCSharp(numberKey).content).toContain('object first = getValue(market, 0);');
+    });
+    test('a market-row local later written a different type stays a box', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        let market = this.extend(a, b);\n" +
+        "        market = a;\n" +
+        "        const id = market['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object market = this.extend(a, b);');
+        expect(output).toContain('object id = getValue(market, "id");');
     });
     test('reads the checker cannot prove present keep getValue', () => {
         // no guard at all
@@ -1508,6 +1583,181 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
     });
 });
 
+// cs-14: a call whose own C# signature is a non-nullable `bool` needs no isTrue round-trip either —
+// the wrapper is the identity on a bool. The C# signature is proven either by the TS declaration
+// the generator prints itself (`this.<name>(...)`, same csharpBooleanReturnType as the definition)
+// or by the hand-written-callee table (callees cs/ccxt/base declares with a bool signature and no
+// TS annotation to read: Precise's comparisons, the imported isEmpty/isJsonEncodedObject props).
+describe('isTrue is dropped for a call whose C# signature is a non-nullable bool (cs-14)', () => {
+    test('a `this.` method declared `: boolean` goes bare, including under ! and ||', () => {
+        const input =
+        "class T {\n" +
+        "    isLinear (type: string): boolean { return type === 'linear'; }\n" +
+        "    isInverse (type: string): boolean { return type === 'inverse'; }\n" +
+        "    f (type: string, p) {\n" +
+        "        if (this.isLinear(type)) { return 1; }\n" +
+        "        if (!this.isInverse(type)) { return 2; }\n" +
+        "        if (this.isLinear(type) || this.isInverse(type)) { return 3; }\n" +
+        "        if (this.isLinear(type) && p) { return 4; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (this.isLinear(type))");
+        expect(output).toContain("if (!this.isInverse(type))");
+        expect(output).toContain("if (this.isLinear(type) || this.isInverse(type))");
+        expect(output).toContain("if (this.isLinear(type) && isTrue(p))");
+    });
+    test('an un-annotated override of a `: boolean` method inherits the parent type', () => {
+        const input =
+        "class B {\n" +
+        "    flag (a: any): boolean { return true; }\n" +
+        "}\n" +
+        "class T extends B {\n" +
+        "    flag (a) { return false; }\n" +
+        "    f (a) { if (this.flag(a)) { return 1; } }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public override bool flag(object a)");
+        expect(output).toContain("if (this.flag(a))");
+    });
+    test('the table covers hand-written static callees (Precise comparisons)', () => {
+        const input =
+        "class Precise {\n" +
+        "    static stringGt (a: any, b: any): boolean { return true; }\n" +
+        "    static stringAdd (a: any, b: any): any { return a; }\n" +
+        "}\n" +
+        "class T {\n" +
+        "    f (a, b) {\n" +
+        "        if (Precise.stringGt(a, b)) { return 1; }\n" +
+        "        if (!Precise.stringGt(a, b)) { return 2; }\n" +
+        "        return Precise.stringAdd(a, b);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (Precise.stringGt(a, b))");
+        expect(output).toContain("if (!Precise.stringGt(a, b))");
+        expect(output).toContain("Precise.stringAdd(a, b)");
+    });
+    test('the table covers a `bool isEmpty(...)` reached through a this property', () => {
+        const input =
+        "const isEmpty = (a: any[]) => { return a.length === 0; };\n" +
+        "class T {\n" +
+        "    isEmpty = isEmpty;\n" +
+        "    f (a) { if (this.isEmpty(a)) { return 1; } }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (this.isEmpty(a))");
+        expect(output).not.toContain("isTrue");
+    });
+    test('a bodiless (interface-merged) declaration keeps the wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    isInverse (type: string): boolean { return true; }\n" +
+        "    f (type) {\n" +
+        "        if (this.isInverse(type)) { return 1; }\n" +
+        "        if (this.isLinear(type)) { return 2; }\n" +
+        "    }\n" +
+        "}\n" +
+        "interface T {\n" +
+        "    isLinear (type: string): boolean;\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (this.isInverse(type))");
+        expect(output).toContain("if (isTrue(this.isLinear(type)))");
+    });
+    test('a hand-written C# shadow and other receivers keep the wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    isDictionary (value: any): boolean { return true; }\n" +
+        "    check (a: any): boolean { return true; }\n" +
+        "    f (v, o) {\n" +
+        "        if (this.isDictionary(v)) { return 1; }\n" +
+        "        if (this.check(v)) { return 2; }\n" +
+        "        if (o.check(v)) { return 3; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isTrue(this.isDictionary(v)))");
+        expect(output).toContain("if (this.check(v))");
+        expect(output).toContain("if (isTrue(o.check(v)))");
+    });
+    test('a this-property call the printer cannot resolve keeps the wrapper', () => {
+        const input =
+        "const isEmpty = (a: any[]) => { return a.length === 0; };\n" +
+        "class T {\n" +
+        "    isEmpty = isEmpty;\n" +
+        "    f (a) { if (this.filterClosed(a)) { return 1; } }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (isTrue(callDynamically(this, "filterClosed", new object[] { a })))');
+    });
+});
+
+// `isTrue (x)` on a `bool?` read is `x == true`: both answer false for a null box. The
+// declaration type is the proof, so a local the printer leaves `object` keeps the helper.
+describe('a nullable bool local prints an explicit `== true` instead of isTrue', () => {
+    const boolProgram = (body: string, second = false) =>
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    f(a, b) {\n" +
+        "        const v = this.safeBool(a, 'k');\n" +
+        (second ? "        const w = this.safeBool(b, 'k');\n" : "") +
+        body +
+        "    }\n" +
+        "}";
+    test('if / ! / ternary conditions on a bool? local', () => {
+        const ifOutput = transpiler.transpileCSharp(boolProgram("        if (v) { return 1; }\n")).content;
+        expect(ifOutput).toContain("bool? v = this.safeBool(a, \"k\");");
+        expect(ifOutput).toContain("if ((v == true))");
+        expect(ifOutput).not.toContain("isTrue");
+        const notOutput = transpiler.transpileCSharp(boolProgram("        if (!v) { return 1; }\n")).content;
+        expect(notOutput).toContain("if (!(v == true))");
+        const ternaryOutput = transpiler.transpileCSharp(boolProgram("        const s = v ? 'yes' : 'no';\n        return s;\n")).content;
+        expect(ternaryOutput).toContain("((bool) (v == true)) ? \"yes\" : \"no\"");
+    });
+    test('logical conditions and a wrapped read keep their operands native', () => {
+        const output = transpiler.transpileCSharp(boolProgram("        if (v || w) { return 1; }\n        if (v && w) { return 2; }\n        if ((v)) { return 3; }\n        return 4;\n", true)).content;
+        expect(output).toContain("if ((v == true) || (w == true))");
+        expect(output).toContain("if ((v == true) && (w == true))");
+        expect(output).toContain("if ((v == true))");
+        expect(output).not.toContain("isTrue");
+    });
+    test('an object box, a call result and a demoted bool? local keep the wrapper', () => {
+        const objectOutput = transpiler.transpileCSharp(boolProgram("        const o = a['k'];\n        if (o) { return 1; }\n")).content;
+        expect(objectOutput).toContain("if (isTrue(o))");
+        const callOutput = transpiler.transpileCSharp(boolProgram("        if (this.safeBool(a, 'k')) { return 1; }\n")).content;
+        expect(callOutput).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+        const demotedOutput = transpiler.transpileCSharp(
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    f(a, p) {\n" +
+        "        let v = this.safeBool(a, 'k');\n" +
+        "        v = p;\n" +
+        "        if (v) { return 1; }\n" +
+        "    }\n" +
+        "}").content;
+        expect(demotedOutput).toContain("object v = this.safeBool(a, \"k\");");
+        expect(demotedOutput).toContain("if (isTrue(v))");
+    });
+    test('the embedding layer\'s declaration proof also drives the condition', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpExpressionTypeResolver;
+        // a local the printer itself leaves `object` but the ccxt classifier prints `bool?`
+        printer.csharpExpressionTypeResolver = (node: any) => (node?.escapedText === 'v' ? 'bool?' : undefined);
+        const output = transpiler.transpileCSharp(
+        "class T {\n" +
+        "    f(a) {\n" +
+        "        let v = a['k'];\n" +
+        "        if (v) { return 1; }\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpExpressionTypeResolver = previous;
+        expect(output).toContain("object v = getValue(a, \"k\");");
+        expect(output).toContain("if ((v == true))");
+        expect(output).not.toContain("isTrue");
+    });
+});
+
 // `a === b` / `a !== b` print the native operator instead of isEqual whenever both
 // operands are C# values of one scalar family, or one side is null/undefined and the
 // other is a type `== null` compiles for.
@@ -1614,8 +1864,292 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         "function f (x: string | number) {\n" +
         "    const missing = x === undefined;\n" +
         "    return missing;\n" +
-        "}");
+        "}\n");
         expect(output).toContain("isEqual(x, null)");
+    });
+    test('a local the embedding build layer declares a string compares natively to a literal', () => {
+        // the embedding build layer (ccxt: build/csharp-local-types.js) prints some locals
+        // with a concrete C# type of its own; its answer comes back through
+        // csharpExpressionTypeResolver, so a read of such a local IS that declared type
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (params: object): boolean {\n" +
+        "    const x = this.safeString(params, 'k');\n" +
+        "    const isAbc = x === 'abc';\n" +
+        "    const notAbc = x !== 'abc';\n" +
+        "    const reversed = 'abc' === x;\n" +
+        "    return isAbc || notAbc || reversed;\n" +
+        "}\n";
+        for (const declared of ['string', 'string?']) {
+            const output = withDeclaredTypes({ x: declared }, input);
+            expect(output).toContain("bool isAbc = (x == \"abc\");");
+            expect(output).toContain("bool notAbc = (x != \"abc\");");
+            expect(output).toContain("bool reversed = (\"abc\" == x);");
+            expect(output).not.toContain("isEqual(x, \"abc\")");
+        }
+    });
+    test('a declared type that is not a string keeps isEqual', () => {
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (params: object): boolean {\n" +
+        "    const x = this.safeString(params, 'k');\n" +
+        "    return x === 'abc';\n" +
+        "}\n";
+        // a list/dict/box answer is not a string, and no answer at all is the printer's
+        // `object`: `==` would compare references instead of the helper's string branch
+        for (const declared of ['List<object>', 'Dictionary<string, object>', 'object', 'Int64', 'bool']) {
+            expect(withDeclaredTypes({ x: declared }, input)).toContain("isEqual(x, \"abc\")");
+        }
+        expect(withDeclaredTypes({}, input)).toContain("isEqual(x, \"abc\")");
+    });
+    test('a string local against another literal kind or another read keeps isEqual', () => {
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (params: object): boolean {\n" +
+        "    const x = this.safeString(params, 'k');\n" +
+        "    const y = this.safeString(params, 'k2');\n" +
+        "    const numeric = x === 5;\n" +
+        "    const both = x === y;\n" +
+        "    return numeric || both;\n" +
+        "}\n";
+        const output = withDeclaredTypes({ x: 'string?', y: 'string?' }, input);
+        expect(output).toContain("isEqual(x, 5)");
+        expect(output).toContain("(x == y)"); // two declared string? locals compare natively
+    });
+    test('a parameter keeps isEqual: it prints `object` and the resolver declines it', () => {
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (type: string): boolean {\n" +
+        "    return type === 'market';\n" +
+        "}\n";
+        const output = withDeclaredTypes({}, input);
+        expect(output).toContain("public object f(object type)");
+        expect(output).toContain("isEqual(type, \"market\")");
+    });
+});
+
+describe('csharp helper removal: isEqual on a numeric call result', () => {
+    const outputOf = (input: string) => transpiler.transpileCSharp(input).content;
+    test('a string indexOf against a negative literal prints the native operator', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    main(s: any) {\n" +
+        "        if (s.indexOf(' ') !== -1) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('if ((getIndexOf(s, " ") != -1))');
+        expect(output).not.toContain('isEqual(');
+    });
+    test('the literal may be on either side of the call', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    main(s: any) {\n" +
+        "        const first = -1 === s.indexOf(' ');\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('bool first = (-1 == getIndexOf(s, " "));');
+        expect(output).not.toContain('isEqual(');
+    });
+    test('a this.<name>() method whose C# signature is numeric compares natively', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    precisionFromString(v) { return 1; }\n" +
+        "    parseToInt(v) { return 1; }\n" +
+        "    main(x) {\n" +
+        "        if (this.precisionFromString(x) !== 0) { return 1; }\n" +
+        "        if (this.parseToInt(x) === 3) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('if ((this.precisionFromString(x) != 0))');
+        expect(output).toContain('if ((this.parseToInt(x) == 3))');
+        expect(output).not.toContain('isEqual(');
+    });
+    test('a literal that kind cannot hold keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    precisionFromString(v) { return 1; }\n" +
+        "    main(x) {\n" +
+        "        const unsafe_ = this.precisionFromString(x) === 9007199254740993;\n" +
+        "        const fractional = this.precisionFromString(x) === 0.5;\n" +
+        "        return [unsafe_, fractional];\n" +
+        "    }\n" +
+        "}");
+        // the integer literal does not survive isEqual's Convert.ToInt64 round-trip, and the
+        // fractional one would be truncated by its `(int)a == (int)b` branch
+        expect(output).toContain('isEqual(this.precisionFromString(x), 9007199254740992)');
+        expect(output).toContain('isEqual(this.precisionFromString(x), 0.5)');
+    });
+    test('an object-returning call keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    main(position: any, ms: any) {\n" +
+        "        if (position['contracts'] === 0) { return 1; }\n" +
+        "        if (mod(ms, 2) === 0) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(position, "contracts"), 0)');
+        expect(output).toContain('isEqual(mod(ms, 2), 0)');
+    });
+});
+
+// The null test on a hand-written BaseExchange field (a reference box in C#) and on a
+// method parameter (printed `object`, or `string` where the build layer narrows a string
+// position) is native; a value-typed operand keeps the helper.
+describe('csharp null comparisons on hand-written fields and parameters', () => {
+    const nullTests = (input: string) => transpiler.transpileCSharp(input).content;
+    test('a reference-typed hand-written field prints the null test', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    markets: any = undefined;\n" +
+        "    test(): void {\n" +
+        "        const noMarkets = this.markets === undefined;\n" +
+        "        console.log(noMarkets);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool noMarkets = (this.markets == null);");
+    });
+    test('a field the table does not list keeps isEqual', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    foo: any = undefined;\n" +
+        "    test(): void {\n" +
+        "        const noFoo = this.foo === undefined;\n" +
+        "        console.log(noFoo);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool noFoo = isEqual(this.foo, null);");
+    });
+    test('a value-typed hand-written field keeps isEqual — rateLimit is a C# double', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    rateLimit: number = 2000;\n" +
+        "    test(): void {\n" +
+        "        const noRateLimit = this.rateLimit === undefined;\n" +
+        "        console.log(noRateLimit);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool noRateLimit = isEqual(this.rateLimit, null);");
+    });
+    test('a field never takes the value-equality branches', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    apiKey: string = undefined;\n" +
+        "    test(): void {\n" +
+        "        const empty = this.apiKey === '';\n" +
+        "        console.log(empty);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool empty = isEqual(this.apiKey, \"\");");
+    });
+    test('an object-typed parameter prints the null test', () => {
+        const output = nullTests(
+        "function f (parameters = {}) {\n" +
+        "    const noParams = parameters === undefined;\n" +
+        "    return noParams;\n" +
+        "}");
+        expect(output).toContain("bool noParams = (parameters == null);");
+    });
+    test('a string-typed parameter prints the null test', () => {
+        const output = nullTests(
+        "function f (symbol: string) {\n" +
+        "    const noSymbol = symbol === undefined;\n" +
+        "    return noSymbol;\n" +
+        "}");
+        expect(output).toContain("bool noSymbol = (symbol == null);");
+    });
+    test('a rest parameter keeps isEqual — it prints a params object[]', () => {
+        const output = nullTests(
+        "function f (...args: string[]) {\n" +
+        "    const noArgs = args === undefined;\n" +
+        "    return noArgs;\n" +
+        "}");
+        expect(output).toContain("isEqual(args, null)");
+    });
+});
+
+describe('csharp equality of two reads the embedding build layer typed', () => {
+    // the ccxt build layer retypes the `object` declarations it proves (string?, Int64?,
+    // bool?, ...) and records each one through csharpExpressionTypeResolver; a pair of reads
+    // it typed compares like the two boxes isEqual compares. These tests stub that resolver.
+    const withReadKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const twoReads =
+        "function f () {\n" +
+        "    const alpha = this.safeValue({}, 'a');\n" +
+        "    const beta = this.safeValue({}, 'b');\n" +
+        "    const same = alpha === beta;\n" +
+        "    const different = alpha !== beta;\n" +
+        "    return [same, different];\n" +
+        "}";
+    test('two reads of one value kind print the native operator', () => {
+        const output = withReadKinds({ alpha: 'string?', beta: 'string?' }, twoReads);
+        expect(output).toContain("bool same = (alpha == beta);");
+        expect(output).toContain("bool different = (alpha != beta);");
+        expect(output).not.toContain("isEqual(alpha, beta)");
+    });
+    test('bool and Int64 reads use the same rule', () => {
+        const bools = withReadKinds({ alpha: 'bool?', beta: 'bool' }, twoReads);
+        expect(bools).toContain("bool same = (alpha == beta);");
+        const numbers = withReadKinds({ alpha: 'Int64?', beta: 'Int64' }, twoReads);
+        expect(numbers).toContain("bool same = (alpha == beta);");
+    });
+    test('reads the resolver does not name keep isEqual', () => {
+        expect(withReadKinds({}, twoReads)).toContain("isEqual(alpha, beta)");
+    });
+    test('collection-typed and mixed-kind reads keep isEqual', () => {
+        const collections = withReadKinds({ alpha: 'List<object>', beta: 'List<object>' }, twoReads);
+        expect(collections).toContain("isEqual(alpha, beta)");
+        expect(collections).not.toContain("(alpha == beta)");
+        const mixed = withReadKinds({ alpha: 'string?', beta: 'Int64?' }, twoReads);
+        expect(mixed).toContain("isEqual(alpha, beta)");
+    });
+    test('a literal against a declared string? read compares natively', () => {
+        const input =
+        "function f () {\n" +
+        "    const alpha = this.safeValue({}, 'a');\n" +
+        "    const isA = alpha === 'a';\n" +
+        "    return isA;\n" +
+        "}";
+        const output = withReadKinds({ alpha: 'string?' }, input);
+        expect(output).toContain("(alpha == \"a\")");
     });
 });
 
@@ -1650,7 +2184,7 @@ describe('csharp native numeric comparisons', () => {
         expect(output).not.toContain("isLessThan(");
         expect(output).not.toContain("isGreaterThan");
     });
-    test('an unproven or mismatched kind keeps the runtime helper', () => {
+    test('an unproven or double-mixed kind keeps the runtime helper', () => {
         const unproven =
         "class Exchange {\n" +
         "    main(gamma: number, delta: number) {\n" +
@@ -1661,20 +2195,54 @@ describe('csharp native numeric comparisons', () => {
         const mismatched =
         "class Exchange {\n" +
         "    main(epsilon: number, zeta: number) {\n" +
-        "        return epsilon < zeta;\n" +
+        "        return [epsilon < zeta, epsilon > zeta];\n" +
         "    }\n" +
         "}";
-        expect(withKinds({ epsilon: 'int', zeta: 'Int64' }, mismatched)).toContain("isLessThan(epsilon, zeta)");
+        // isEqual reads an integral double as an integer, so a double never mixes kinds
+        const output = withKinds({ epsilon: 'int', zeta: 'double' }, mismatched);
+        expect(output).toContain("isLessThan(epsilon, zeta)");
+        expect(output).toContain("isGreaterThan(epsilon, zeta)");
     });
-    test('an operand the checker does not see as a plain number keeps the helper', () => {
+    test('an int/Int64 pair prints the native operator', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number, gamma: number) {\n" +
+        "        return [alpha < beta, alpha >= beta, alpha > 5, gamma <= 5];\n" +
+        "    }\n" +
+        "}";
+        // the helper normalises int to Int64, the widening the C# operator applies too
+        const output = withKinds({ alpha: 'Int64', beta: 'int', gamma: 'int' }, input);
+        expect(output).toContain("alpha < beta");
+        expect(output).toContain("alpha >= beta");
+        expect(output).toContain("alpha > 5");
+        expect(output).toContain("gamma <= 5");
+        expect(output).not.toContain("isLessThan(");
+        expect(output).not.toContain("isGreaterThan");
+    });
+    test('a double next to an integer kind keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(mu: number, nu: number) {\n" +
+        "        return [mu >= nu, mu > nu, mu <= nu, mu < nu];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ mu: 'Int64', nu: 'double' }, input);
+        expect(output).toContain("isGreaterThanOrEqual(mu, nu)");
+        expect(output).toContain("isGreaterThan(mu, nu)");
+        expect(output).toContain("isLessThanOrEqual(mu, nu)");
+        expect(output).toContain("isLessThan(mu, nu)");
+    });
+    test('a declared kind prints natively even when the checker sees `any`', () => {
         const input =
         "class Exchange {\n" +
         "    main(eta: any, theta: number) {\n" +
         "        return eta < theta;\n" +
         "    }\n" +
         "}";
-        // the resolver claims int for both, the checker sees `any` on the left
-        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("isLessThan(eta, theta)");
+        // the resolver names both C# declarations: a declared number is that box at runtime
+        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("eta < theta");
+        // an operand the resolver leaves unproven keeps the helper
+        expect(withKinds({ theta: 'int' }, input)).toContain("isLessThan(eta, theta)");
     });
     test('two doubles print `>`/`>=` but keep `<`/`<=` (NaN)', () => {
         const input =
@@ -1802,5 +2370,1525 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         // C# (its narrowing happens in a later pass), so the helper must stay
         expect(output).toContain('public virtual object main(object key)');
         expect(output).toContain('if (inOp(this.options, key))');
+    });
+    test('length of a local this printer typed as a list emits the null-conditional Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const xs = this.safeList({}, 'k');\n" +
+        "        const n = xs.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('List<object> xs = this.safeList(new Dictionary<string, object>() {}, "k");');
+        // `x?.Count ?? 0` is exactly getArrayLength on a list: null -> 0, else Count
+        expect(output).toContain('int n = (xs?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength(xs)');
+    });
+    test('length of a local this printer typed as a dictionary emits Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const d = this.safeDict({}, 'k');\n" +
+        "        const n = d.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('IDictionary<string, object> d = this.safeDict(new Dictionary<string, object>() {}, "k");');
+        expect(output).toContain('int n = (d?.Count ?? 0);');
+    });
+    test('length of a local this printer typed as a nullable string emits Length', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const s = this.safeString({}, 'k');\n" +
+        "        const n = s.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('string? s = this.safeString(new Dictionary<string, object>() {}, "k");');
+        expect(output).toContain('int n = (s?.Length ?? 0);');
+        expect(output).not.toContain('getArrayLength(s)');
+    });
+    test('length of a local the printer leaves object keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const boxed = this.safeValue({}, 'k');\n" +
+        "        const n = boxed.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object boxed = this.safeValue(new Dictionary<string, object>() {}, "k");');
+        expect(output).toContain('int n = getArrayLength(boxed);');
+    });
+    test('a declared type with no Count/Length member keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const xs = this.box();\n" +
+        "        const n = xs.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const withType = (type) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'xs') ? type : undefined;
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        // the embedding build layer's proof for a local it retypes: only a collection or a
+        // string carries the member the helper measures
+        expect(withType(undefined)).toContain('int n = getArrayLength(xs);');
+        expect(withType('double')).toContain('int n = getArrayLength(xs);');
+        expect(withType('Int64')).toContain('int n = getArrayLength(xs);');
+        expect(withType('List<object>')).toContain('int n = (xs?.Count ?? 0);');
+        expect(withType('Dictionary<string, object>')).toContain('int n = (xs?.Count ?? 0);');
+        expect(withType('string?')).toContain('int n = (xs?.Length ?? 0);');
+    });
+    test('length behind an elided `as` assertion emits Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a: any, b: any, c: any): any { return a; }\n" +
+        "    main(parameters: any) {\n" +
+        "        const data = this.safeDict(parameters, 'data', {});\n" +
+        "        const n = (data as List).length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the printer drops the assertion, so the read is the declared `data` local
+        expect(output).toContain('IDictionary<string, object> data = this.safeDict(');
+        expect(output).toContain('int n = (data?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength');
+    });
+    test('an `as` assertion over an unproven local keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a: any, b: any): any { return a; }\n" +
+        "    main(parameters: any) {\n" +
+        "        const boxed = this.safeValue(parameters, 'data');\n" +
+        "        const n = (boxed as List).length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object boxed = this.safeValue(');
+        expect(output).toContain('int n = getArrayLength(boxed);');
+    });
+});
+
+// `const x = this.<name>(...)` where the enclosing class itself declares <name> with a plain
+// `boolean` return: that method prints a C# `bool`, so the local holding the call is declared
+// `bool` and its condition reads drop the isTrue round-trip. The scope is the class's own
+// methods — a base helper's C# signature lives in the base tree, not in this declaration.
+describe('csharp helper removal: own bool-returning calls type their locals', () => {
+    test('a plain boolean method types the local and drops isTrue at its conditions', () => {
+        const input =
+        "class T {\n" +
+        "    isLinear(type: string, subType: string = undefined): boolean {\n" +
+        "        return (subType === undefined) ? (type === 'swap') : (subType === 'linear');\n" +
+        "    }\n" +
+        "    isInverse(type: string): boolean {\n" +
+        "        return type === 'delivery';\n" +
+        "    }\n" +
+        "    main(type: string, subType: string, market: any) {\n" +
+        "        const isLinearType = this.isLinear(type, subType);\n" +
+        "        const isInverseType = this.isInverse(type);\n" +
+        "        const isLinearSwapConditional = isLinearType && (market !== undefined);\n" +
+        "        if (isLinearSwapConditional) { return 1; }\n" +
+        "        if (isLinearType) { return 2; }\n" +
+        "        if (!isInverseType) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('bool isLinearType = this.isLinear(type, subType);');
+        expect(output).toContain('bool isInverseType = this.isInverse(type);');
+        expect(output).toContain("bool isLinearSwapConditional = isLinearType && ((market != null));");
+        expect(output).toContain('if (isLinearSwapConditional)');
+        expect(output).toContain('if (isLinearType)');
+        expect(output).toContain('if (!isInverseType)');
+        // the call is still evaluated exactly once, at the declaration
+        expect((output.match(/this\.isLinear\(/g) ?? []).length).toBe(1);
+        expect(output).not.toContain('isTrue');
+    });
+    test('a nullable boolean method keeps the object box and the isTrue wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    safeFlag(d: any): boolean | undefined {\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    main(d: any) {\n" +
+        "        const flag = this.safeFlag(d);\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object flag = this.safeFlag(d);');
+        expect(output).toContain('if (isTrue(flag))');
+    });
+    test('a method declared by another class keeps the object box', () => {
+        const input =
+        "class Base {\n" +
+        "    flag(): boolean {\n" +
+        "        return true;\n" +
+        "    }\n" +
+        "}\n" +
+        "class T extends Base {\n" +
+        "    main() {\n" +
+        "        const flag = this.flag();\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object flag = this.flag();');
+        expect(output).toContain('if (isTrue(flag))');
+    });
+    test('a later write of another type demotes the local back to object', () => {
+        const input =
+        "class T {\n" +
+        "    flag(): boolean {\n" +
+        "        return true;\n" +
+        "    }\n" +
+        "    main(a: any) {\n" +
+        "        let flag = this.flag();\n" +
+        "        flag = a;\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object flag = this.flag();');
+        expect(output).toContain('if (isTrue(flag))');
+    });
+    test('a boolean method result used as a ternary condition goes bare too', () => {
+        const input =
+        "class T {\n" +
+        "    usesPrivateKey(): boolean {\n" +
+        "        return true;\n" +
+        "    }\n" +
+        "    main(privateKey: string, secret: string) {\n" +
+        "        const usesPrivKey = this.usesPrivateKey();\n" +
+        "        const value = usesPrivKey ? privateKey : secret;\n" +
+        "        return value;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('bool usesPrivKey = this.usesPrivateKey();');
+        expect(output).toContain('((bool) usesPrivKey) ? privateKey : secret');
+        expect(output).not.toContain('isTrue');
+    });
+});
+
+describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', () => {
+    // the receiver's C# declaration comes from the embedding build layer (the resolver the
+    // numeric-comparison installer sets), the element's type from the checker
+    const withReceiverTypes = (types, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('a bool-proven dictionary element compared with a bool literal', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }) {\n" +
+        "    const isLinear = market['linear'] === true;\n" +
+        "    const notInverse = market['inverse'] !== false;\n" +
+        "    return [isLinear, notInverse];\n" +
+        "}");
+        expect(output).toContain('bool isLinear = (((market.ContainsKey("linear") ? market["linear"] : null) as bool?) == true);');
+        expect(output).toContain('bool notInverse = (((market.ContainsKey("inverse") ? market["inverse"] : null) as bool?) != false);');
+        expect(output).not.toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), true)');
+        expect(output).not.toContain('isEqual(getValue(market, "inverse"), false)');
+    });
+    test('a string-proven dictionary element compared with a string literal', () => {
+        const output = withReceiverTypes({ entry: 'Dictionary<string, object>' },
+        "function f (entry: { [key: string]: string | undefined }) {\n" +
+        "    const isPrimary = entry['default'] === 'primary';\n" +
+        "    return isPrimary;\n" +
+        "}");
+        expect(output).toContain('bool isPrimary = ((getValue(entry, "default") as string) == "primary");');
+        expect(output).not.toContain('isEqual(getValue(entry, "default"), "primary")');
+    });
+    test('the hand-written has field keeps the emulated string member comparable', () => {
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    has: { [key: string]: boolean | 'emulated' | undefined } = {};\n" +
+        "    main() {\n" +
+        "        const enabled = this.has['fetchTrades'] !== false;\n" +
+        "        const emulated = this.has['fetchCurrencies'] === 'emulated';\n" +
+        "        return [enabled, emulated];\n" +
+        "    }\n" +
+        "}").content;
+        // a hard (bool?) cast would throw on the 'emulated' box, `as` reads it as null, where
+        // isEqual answers false for the bool branch and true only for the string one
+        expect(output).toContain('bool enabled = (((this.has.ContainsKey("fetchTrades") ? this.has["fetchTrades"] : null) as bool?) != false);');
+        expect(output).toContain('bool emulated = (((this.has.ContainsKey("fetchCurrencies") ? this.has["fetchCurrencies"] : null) as string) == "emulated");');
+    });
+    test('an untyped dictionary element keeps isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: any }) {\n" +
+        "    const isLinear = market['linear'] === true;\n" +
+        "    return isLinear;\n" +
+        "}");
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), true)');
+    });
+    test('an unproven receiver keeps isEqual', () => {
+        const output = transpiler.transpileCSharp(
+        "function f (market: { [key: string]: boolean | undefined }) {\n" +
+        "    const isLinear = market['linear'] === true;\n" +
+        "    return isLinear;\n" +
+        "}").content;
+        expect(output).toContain('isEqual(getValue(market, "linear"), true)');
+    });
+    test('a literal of the other family keeps isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }) {\n" +
+        "    const isLinear = market['linear'] === 'true';\n" +
+        "    return isLinear;\n" +
+        "}");
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), "true")');
+    });
+    test('an identifier, a null and a numeric literal keep isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }, flag) {\n" +
+        "    const a = market['linear'] === flag;\n" +
+        "    const b = market['linear'] === undefined;\n" +
+        "    const c = market['linear'] === 1;\n" +
+        "    return [a, b, c];\n" +
+        "}");
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), flag)');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), null)');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), 1)');
+    });
+    test('a non-literal key keeps isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }, key: string) {\n" +
+        "    const isLinear = market[key] === true;\n" +
+        "    const first = market[0] === true;\n" +
+        "    return [isLinear, first];\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(market, key), true)');
+        expect(output).toContain('isEqual(getValue(market, 0), true)');
+    });
+    test('a numeric-looking string literal keeps isEqual', () => {
+        const output = withReceiverTypes({ code: 'Dictionary<string, object>' },
+        "function f (code: { [key: string]: string | undefined }) {\n" +
+        "    const one = code['value'] === '1';\n" +
+        "    const primary = code['value'] === 'primary';\n" +
+        "    return [one, primary];\n" +
+        "}");
+        // isEqual converts a boxed number and a numeric string on its double/decimal
+        // branches, which the string cast cannot reproduce
+        expect(output).toContain('isEqual(getValue(code, "value"), "1")');
+        expect(output).toContain('bool primary = ((getValue(code, "value") as string) == "primary");');
+    });
+});
+
+describe('csharp helper removal: a for-header counter prints the native ++ / --', () => {
+    // the counter's printed `int` type comes back through csharpExpressionTypeResolver (the
+    // embedding build layer proves it — build/csharp-local-types.js in ccxt retypes the
+    // declaration `int i = 0` itself); these tests stub that resolver with a name map
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const forLoop = (incrementor, declaration = 'let i = 0') =>
+        "class Exchange {\n" +
+        "    main(markets: any[]): void {\n" +
+        "        for (" + declaration + "; i < 10; " + incrementor + ") {\n" +
+        "            const x = markets[i];\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n";
+    test('an int counter prints i++ and drops the ref helper', () => {
+        const output = withKinds({ i: 'int' }, forLoop('i++'));
+        expect(output).toContain('; i++)');
+        expect(output).not.toContain('postFixIncrement');
+    });
+    test('an int counter prints i-- (same ref-helper family)', () => {
+        const output = withKinds({ i: 'int' }, forLoop('i--'));
+        expect(output).toContain('; i--)');
+        expect(output).not.toContain('postFixDecrement');
+    });
+    test('a counter the printer cannot name as int keeps the helper', () => {
+        expect(withKinds({}, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+        expect(withKinds({ i: 'object' }, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+        expect(withKinds({ i: 'Int64' }, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+    });
+    test('a postfix whose value is read keeps the helper (twin returns the new value)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(): void {\n" +
+        "        let j = 0;\n" +
+        "        const y = j++;\n" +
+        "        console.log(y);\n" +
+        "    }\n" +
+        "}\n";
+        expect(withKinds({ j: 'int' }, input)).toContain('postFixIncrement(ref j)');
+    });
+    test('a statement-position postfix keeps the helper (family is for headers only)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(): void {\n" +
+        "        let k = 0;\n" +
+        "        k++;\n" +
+        "        console.log(k);\n" +
+        "    }\n" +
+        "}\n";
+        expect(withKinds({ k: 'int' }, input)).toContain('postFixIncrement(ref k)');
+    });
+    test('a member-expression operand keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    count: number = 0;\n" +
+        "    main(): void {\n" +
+        "        for (let i = 0; i < 10; this.count++) {\n" +
+        "            const x = i;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ i: 'int', count: 'int' }, input);
+        expect(output).toContain('postFixIncrement(ref this.count)');
+    });
+    test('a dictionary parameter prints the cast and the null test the helper applies', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parseTrade (trade: { [key: string]: any }) {\n" +
+        "        if ('isDust' in trade) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // a parameter is still `object`, so the receiver needs the same
+        // (IDictionary<string, object>) cast the helper body applies, and the null test
+        // because inOp answers false for a null receiver
+        expect(output).toContain('public virtual object parseTrade(object trade)');
+        expect(output).toContain('if ((trade != null && ((IDictionary<string, object>)trade).ContainsKey("isDust")))');
+    });
+    test('the params bag prints the cast without the null test', () => {
+        const input =
+        "function f (params: { [key: string]: any } = {}): any {\n" +
+        "    if ('x' in params) { return params['x']; }\n" +
+        "    return undefined;\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // printFunctionBody already emitted `parameters ??= new Dictionary<string, object>()`,
+        // so the box is a dictionary and can never be null at this point
+        expect(output).toContain('parameters ??= new Dictionary<string, object>();');
+        expect(output).toContain('if (((IDictionary<string, object>)parameters).ContainsKey("x"))');
+    });
+    test('a nullable dictionary receiver keeps the null test', () => {
+        const input =
+        "class Exchange {\n" +
+        "    indexBy (a: any, b: any): { [key: string]: any } | undefined { return undefined; }\n" +
+        "    main (a: any): any {\n" +
+        "        const merged = this.indexBy(a, a);\n" +
+        "        return ('k' in merged);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('Dictionary<string, object> merged = this.indexBy(a, a);');
+        // inOp answers false for the nullish arm, not a throw
+        expect(output).toContain('return ((merged != null && merged.ContainsKey("k")));');
+    });
+    test('a dictionary parameter of another value type keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (futures: { [key: string]: Promise<any> }): any {\n" +
+        "        return ('k' in futures);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the C# box of a Dictionary<Future> is IDictionary<string, Future>: the invariant
+        // cast to IDictionary<string, object> would throw, so the helper stays
+        expect(output).toContain('return (inOp(futures, "k"));');
+    });
+    test('an object local keeps the helper: only parameters are cast', () => {
+        const input =
+        "function f (d: { [key: string]: any }): any {\n" +
+        "    const other = d;\n" +
+        "    return ('k' in other);\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the hand-written base may box its own instantiation (client.futures), and the
+        // printer prints both locals as `object`
+        expect(output).toContain('object other = d;');
+        expect(output).toContain('return (inOp(other, "k"));');
+    });
+    test('a parameter rewritten before the read keeps the helper', () => {
+        const input =
+        "function f (params: { [key: string]: any } = {}): any {\n" +
+        "    params = {};\n" +
+        "    return ('x' in params);\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // D2: the box at the read is whatever the assignment stored
+        expect(output).toContain('return (inOp(parameters, "x"));');
+    });
+    test('a native receiver still needs a printed string key', () => {
+        const input =
+        "function f (params: { [key: string]: any } = {}, key: any): any {\n" +
+        "    return (key in params);\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the C# parameter is `object`, so ContainsKey has no string to bind
+        expect(output).toContain('return (inOp(parameters, key));');
+    });
+    test('a this-call on a delegate-valued base member prints the direct invocation', () => {
+        // httpProxyCallback is `Func<object, object, object, object, object>` in
+        // cs/ccxt/base/Exchange.Options.cs (4 parameters), so a 4-argument call is the
+        // delegate invocation; ResolveMethod only finds methods, so the helper cannot
+        // invoke it (callDynamically throws there)
+        const input =
+        "class Exchange {\n" +
+        "    httpProxyCallback: any;\n" +
+        "    main(url, method, headers, body) {\n" +
+        "        const a = this.httpProxyCallback(url, method, headers, body);\n" +
+        "        const b = this.https_proxy_callback(url, method, headers, body);\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = this.httpProxyCallback(url, method, headers, body);');
+        expect(output).toContain('object b = this.https_proxy_callback(url, method, headers, body);');
+        expect(output).not.toContain('callDynamically(this, "httpProxyCallback"');
+        expect(output).not.toContain('callDynamically(this, "https_proxy_callback"');
+    });
+    test('a 3-parameter delegate member takes exactly three arguments', () => {
+        // proxyUrlCallback is `Func<object, object, object, object>` (3 parameters):
+        // the matching call goes native, the 4-argument one the TS corpus writes keeps
+        // the helper (a 4-argument call of a 3-parameter delegate does not compile)
+        const input =
+        "class Exchange {\n" +
+        "    proxyUrlCallback: any;\n" +
+        "    main(url, method, headers, body) {\n" +
+        "        const three = this.proxyUrlCallback(url, method, headers);\n" +
+        "        const four = this.proxyUrlCallback(url, method, headers, body);\n" +
+        "        return [three, four];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object three = this.proxyUrlCallback(url, method, headers);');
+        expect(output).toContain('object four = callDynamically(this, "proxyUrlCallback", new object[] { url, method, headers, body })');
+    });
+    test('an awaited delegate-member call or a non-delegate name keeps callDynamically', () => {
+        // the delegates return object, not a Task, so an awaited call cannot go native;
+        // `proxy` is a `string` member there and `someAnyFn` is not in the table at all
+        const input =
+        "class Exchange {\n" +
+        "    httpProxyCallback: any;\n" +
+        "    proxy: any;\n" +
+        "    someAnyFn: any;\n" +
+        "    async main(url, method, headers, body) {\n" +
+        "        const a = await this.httpProxyCallback(url, method, headers, body);\n" +
+        "        const b = this.proxy(url, method, headers, body);\n" +
+        "        const c = this.someAnyFn(url, method, headers, body);\n" +
+        "        return [a, b, c];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = await ((Task<object>)callDynamically(this, "httpProxyCallback", new object[] { url, method, headers, body }));');
+        expect(output).toContain('object b = callDynamically(this, "proxy", new object[] { url, method, headers, body })');
+        expect(output).toContain('object c = callDynamically(this, "someAnyFn", new object[] { url, method, headers, body })');
+    });
+});
+
+describe('csharp helper removal: getIndexOf becomes the receiver IndexOf', () => {
+    // the printed C# type of a local the embedding build layer retypes comes back through
+    // csharpExpressionTypeResolver — these tests stub that resolver with a name map
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('a non-optional string parameter scans natively, ordinally', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(symbol: string) {\n" +
+        "        const hasSlash = symbol.indexOf ('/') > -1;\n" +
+        "        return hasSlash;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((string)symbol).IndexOf("/", StringComparison.Ordinal) > -1');
+        expect(output).not.toContain('getIndexOf(');
+    });
+    test('a `string?` local without a non-null test keeps the -1 answer for null', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(flags: string) {\n" +
+        "        const hasPost = flags.indexOf ('post') > -1;\n" +
+        "        return hasPost;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ flags: 'string?' }, input);
+        expect(output).toContain('getIndexOf(flags, "post")');
+        expect(output).not.toContain('StringComparison.Ordinal');
+    });
+    test('an early-exiting `x === undefined` guard admits the read', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(type: string) {\n" +
+        "        if (type === undefined) {\n" +
+        "            throw new Error ('missing type');\n" +
+        "        }\n" +
+        "        const isFee = type.indexOf ('fee') >= 0;\n" +
+        "        return isFee;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((string)type).IndexOf("fee", StringComparison.Ordinal) >= 0');
+        expect(output).not.toContain('getIndexOf(');
+    });
+    test('a `&&` conjunct and a then-branch null test admit the read too', () => {
+        const conjunct =
+        "class Exchange {\n" +
+        "    main(method: string) {\n" +
+        "        const isHistorical = (method !== undefined) && (method.indexOf ('GetHistoricalTrades') >= 0);\n" +
+        "        return isHistorical;\n" +
+        "    }\n" +
+        "}\n";
+        const conjunctOutput = withKinds({ method: 'string?' }, conjunct);
+        expect(conjunctOutput).toContain('((string)method).IndexOf("GetHistoricalTrades", StringComparison.Ordinal) >= 0');
+        expect(conjunctOutput).not.toContain('getIndexOf(');
+        const branch =
+        "class Exchange {\n" +
+        "    main(orderType: string) {\n" +
+        "        let side = undefined;\n" +
+        "        if (orderType !== undefined) {\n" +
+        "            if (orderType.indexOf ('Bid') >= 0) {\n" +
+        "                side = 'buy';\n" +
+        "            }\n" +
+        "        }\n" +
+        "        return side;\n" +
+        "    }\n" +
+        "}\n";
+        const branchOutput = withKinds({ orderType: 'string?' }, branch);
+        expect(branchOutput).toContain('((string)orderType).IndexOf("Bid", StringComparison.Ordinal) >= 0');
+        expect(branchOutput).not.toContain('getIndexOf(');
+    });
+    test('a write between the guard and the read voids the proof', () => {
+        const guarded =
+        "class Exchange {\n" +
+        "    main(type: Str) {\n" +
+        "        if (type === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        const isFee = type.indexOf ('fee') >= 0;\n" +
+        "        return isFee;\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        const guardedOutput = withKinds({ type: 'string?' }, guarded);
+        expect(guardedOutput).toContain('((string)type).IndexOf("fee", StringComparison.Ordinal) >= 0');
+        const written =
+        "class Exchange {\n" +
+        "    main(type: Str) {\n" +
+        "        if (type === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        type = 'fee';\n" +
+        "        const isFee = type.indexOf ('fee') >= 0;\n" +
+        "        return isFee;\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        // the guard inspected the value the parameter held, not what the branch bound afterwards
+        expect(withKinds({ type: 'string?' }, written)).toContain('getIndexOf(type, "fee")');
+    });
+    test('a `Str` parameter and an `any` receiver keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(symbol: Str, value: any) {\n" +
+        "        const hasSlash = symbol.indexOf ('/') > -1;\n" +
+        "        const hasDot = value.indexOf ('.') > -1;\n" +
+        "        return [hasSlash, hasDot];\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('getIndexOf(symbol, "/")');
+        expect(output).toContain('getIndexOf(value, ".")');
+    });
+    test('an `as string` assertion and a `this.field: string` are strings', () => {
+        const input =
+        "class Exchange {\n" +
+        "    secret: string = undefined;\n" +
+        "    apiKey: string;\n" +
+        "    main(id: Str) {\n" +
+        "        const casted = (id as string).indexOf ('F0') >= 0;\n" +
+        "        const hasKey = this.apiKey.indexOf ('account') < 0;\n" +
+        "        const hasSecret = this.secret.indexOf ('PRIVATE KEY') > -1;\n" +
+        "        return [casted, hasKey, hasSecret];\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((string)id).IndexOf("F0", StringComparison.Ordinal) >= 0');
+        expect(output).toContain('((string)this.apiKey).IndexOf("account", StringComparison.Ordinal) < 0');
+        // `secret: string = undefined` holds undefined until the credentials are set
+        expect(output).toContain('getIndexOf(this.secret, "PRIVATE KEY")');
+    });
+    test('a `List<object>` local takes its own IndexOf', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(keys: any) {\n" +
+        "        const at = keys.indexOf ('ticker');\n" +
+        "        return at;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ keys: 'List<object>' }, input);
+        expect(output).toContain('((List<object>)keys).IndexOf("ticker")');
+        expect(output).not.toContain('getIndexOf(');
+    });
+    test('a needle of unknown C# type takes the helper\'s own (string) cast; a numeric one keeps the helper', () => {
+        const unknown =
+        "class Exchange {\n" +
+        "    main(symbol: string, key: any) {\n" +
+        "        const at = symbol.indexOf (key);\n" +
+        "        return at;\n" +
+        "    }\n" +
+        "}\n";
+        const unknownOutput = transpiler.transpileCSharp(unknown).content;
+        expect(unknownOutput).toContain('((string)symbol).IndexOf(((string)key), StringComparison.Ordinal)');
+        const numeric =
+        "class Exchange {\n" +
+        "    main(symbol: string) {\n" +
+        "        const at = symbol.indexOf (5);\n" +
+        "        return at;\n" +
+        "    }\n" +
+        "}\n";
+        expect(transpiler.transpileCSharp(numeric).content).toContain('getIndexOf(symbol, 5)');
+    });
+});
+
+describe('csharp Math.min/Math.max native emission', () => {
+    // the printer names the C# kind of int-range literals and `.length` itself; the locals the
+    // embedding build layer retypes come back through csharpExpressionTypeResolver — these
+    // tests stub that resolver with a name map, like the numeric-comparison block above
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('two operands of one integer kind print the native calls', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number) {\n" +
+        "        const smaller = Math.min (alpha, beta);\n" +
+        "        const larger = Math.max (alpha, beta);\n" +
+        "        return [ smaller, larger ];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ alpha: 'Int64', beta: 'Int64' }, input);
+        expect(output).toContain("object smaller = Math.Min(alpha, beta);");
+        expect(output).toContain("object larger = Math.Max(alpha, beta);");
+        expect(output).not.toContain("mathMin(");
+        expect(output).not.toContain("mathMax(");
+    });
+    test('a literal and a printer-named .length print Math.Max on the same kind', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(integerPart: string) {\n" +
+        "        const significantDigits = Math.max (5, integerPart.length);\n" +
+        "        return significantDigits;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Math.Max(5, ((string)integerPart).Length)");
+        expect(output).not.toContain("mathMax(");
+    });
+    test('the result value still boxes into a dictionary value like the helper box', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number) {\n" +
+        "        const params = {};\n" +
+        "        params['limit'] = Math.min (alpha, beta);\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ alpha: 'int', beta: 'int' }, input);
+        expect(output).toContain("Math.Min(alpha, beta)");
+        expect(output).not.toContain("mathMin(");
+    });
+    test('two doubles keep the helper: Math.Min propagates a NaN operand', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(gamma: number, delta: number) {\n" +
+        "        return [ Math.min (gamma, delta), Math.max (gamma, delta) ];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ gamma: 'double', delta: 'double' }, input);
+        expect(output).toContain("mathMin(gamma, delta)");
+        expect(output).toContain("mathMax(gamma, delta)");
+    });
+    test('mixed kinds keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(epsilon: number, zeta: number) {\n" +
+        "        return Math.min (epsilon, zeta);\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ epsilon: 'int', zeta: 'Int64' }, input);
+        expect(output).toContain("mathMin(epsilon, zeta)");
+    });
+    test('an operand the checker does not see as a plain number keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(eta: any, theta: number) {\n" +
+        "        return Math.min (eta, theta);\n" +
+        "    }\n" +
+        "}";
+        // the resolver claims int for both, the checker sees `any` on the left
+        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("mathMin(eta, theta)");
+        const nullable =
+        "class Exchange {\n" +
+        "    main(iota: number | undefined, kappa: number) {\n" +
+        "        return Math.min (iota, kappa);\n" +
+        "    }\n" +
+        "}";
+        // the helper returns null when either side is null
+        expect(withKinds({ iota: 'Int64', kappa: 'Int64' }, nullable)).toContain("mathMin(iota, kappa)");
+    });
+    test('a receiver position keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(lambda: number, mu: number) {\n" +
+        "        return Math.min (lambda, mu).toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ lambda: 'Int64', mu: 'Int64' }, input);
+        expect(output).toContain("((object)mathMin(lambda, mu)).ToString()");
+    });
+    test('an `as` wrapper keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(nu: number, xi: number) {\n" +
+        "        return (Math.min (nu, xi) as any as string);\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ nu: 'Int64', xi: 'Int64' }, input);
+        expect(output).toContain("mathMin(nu, xi)");
+    });
+});
+
+describe('slice -> Substring / GetRange with the literal bounds clamped', () => {
+    // `x.slice (a, b)` prints natively only when the checker proves x is a C# string (or the
+    // printer declared it a `List<object>`) AND every bound is an integer literal. JS clamps a
+    // negative / overflowing bound where C#'s Substring / GetRange throw, so the literals are
+    // clamped with Math.Min / Math.Max and the receiver keeps the helper's null -> null guard.
+    test('a string receiver with two literal bounds prints Substring', () => {
+        const input =
+        "class Exchange {\n" +
+        "    convertExpireDate(date: string): string {\n" +
+        "        const year = date.slice(0, 2);\n" +
+        "        const month = date.slice(2, 4);\n" +
+        "        return year + month;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((date == null) ? null : ((string)date).Substring(0, Math.Min(2, ((string)date).Length)))");
+        expect(output).toContain("((date == null) ? null : ((string)date).Substring(Math.Min(2, ((string)date).Length), Math.Min(4, ((string)date).Length) - Math.Min(2, ((string)date).Length)))");
+        expect(output).not.toContain("slice(date");
+    });
+    test('a `Str`-like union receiver is a proven string: `string | undefined`', () => {
+        const input =
+        "class Exchange {\n" +
+        "    convertExpireDate(date: string | undefined): string {\n" +
+        "        const year = date.slice(0, 2);\n" +
+        "        return year;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((date == null) ? null : ((string)date).Substring(0, Math.Min(2, ((string)date).Length)))");
+        expect(output).not.toContain("slice(date");
+    });
+    test('a negative start counts from the end: the one-argument Substring', () => {
+        const input =
+        "class Exchange {\n" +
+        "    sign(privateKey: string) {\n" +
+        "        const tail = privateKey.slice(-64);\n" +
+        "        return tail;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((privateKey == null) ? null : ((string)privateKey).Substring(Math.Max(((string)privateKey).Length - 64, 0)))");
+        expect(output).not.toContain("slice(privateKey");
+    });
+    test('a negative end counts from the end', () => {
+        const input =
+        "class Exchange {\n" +
+        "    strip(encodedString: string) {\n" +
+        "        return encodedString.slice(0, -1);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((encodedString == null) ? null : ((string)encodedString).Substring(0, Math.Max(((string)encodedString).Length - 1, 0)))");
+    });
+    test('two negative bounds keep their order after the clamp', () => {
+        const input =
+        "class Exchange {\n" +
+        "    cut(id: string) {\n" +
+        "        return id.slice(-9, -3);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Substring(Math.Max(((string)id).Length - 9, 0), Math.Max(((string)id).Length - 3, 0) - Math.Max(((string)id).Length - 9, 0))");
+    });
+    test('an inverted pair yields the JS empty slice: the count never goes below 0', () => {
+        const input =
+        "class Exchange {\n" +
+        "    cut(id: string) {\n" +
+        "        return id.slice(3, 1);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Substring(Math.Min(3, ((string)id).Length), Math.Max(Math.Min(1, ((string)id).Length) - Math.Min(3, ((string)id).Length), 0))");
+    });
+    test('a `(x as string)` receiver reuses its own cast and null test', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parse(id: any) {\n" +
+        "        const baseId = (id as string).slice(0, 3);\n" +
+        "        return baseId;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((((string)id) == null) ? null : ((string)id).Substring(0, Math.Min(3, ((string)id).Length)))");
+        expect(output).not.toContain("((((string)id))");
+    });
+    test('a declared List<object> receiver prints GetRange', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market) {\n" +
+        "        const parts = market.split('/');\n" +
+        "        return parts.slice(0, 2);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("List<object> parts = ");
+        expect(output).toContain("((parts == null) ? null : ((List<object>)parts).GetRange(0, Math.Min(2, ((List<object>)parts).Count)))");
+        expect(output).not.toContain("slice(parts");
+    });
+    test('a string local and a this-field receiver are side-effect-free receivers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    secret = 'abc';\n" +
+        "    main(source: string) {\n" +
+        "        const s: string = source;\n" +
+        "        const head = s.slice(1, 3);\n" +
+        "        return head + this.secret.slice(0, 2);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((s == null) ? null : ((string)s).Substring(Math.Min(1, ((string)s).Length), Math.Min(3, ((string)s).Length) - Math.Min(1, ((string)s).Length)))");
+        expect(output).toContain("((this.secret == null) ? null : ((string)this.secret).Substring(0, Math.Min(2, ((string)this.secret).Length)))");
+    });
+    test('an `any` receiver, an expression bound, a call receiver and a mixed union keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(item, x: string, i: number, both: string | number, types, args) {\n" +
+        "        const one = item.slice(0, 2);\n" +
+        "        const two = x.slice(0, i);\n" +
+        "        const three = both.slice(0, 2);\n" +
+        "        const four = abiEncode(types, args).slice(2);\n" +
+        "        return [one, two, three, four];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("slice(item, 0, 2)");
+        expect(output).toContain("slice(x, 0, i)");
+        expect(output).toContain("slice(both, 0, 2)");
+        expect(output).toContain("slice(abiEncode(types, args), 2, null)");
+    });
+    test('a fractional or out-of-range literal bound keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(x: string) {\n" +
+        "        const a = x.slice(0, 2.5);\n" +
+        "        const b = x.slice(0, 1e30);\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("slice(x, 0, 2.5)");
+        expect(output).toContain("slice(x, 0, 1e+30)");
+    });
+});
+
+describe('csharp helper removal: parseInt / parseFloat / mod / prefix `-x`', () => {
+    // the printer names the C# kind of int-range literals, `.length` and a few call results
+    // itself; the locals the embedding build layer retypes come back through
+    // csharpExpressionTypeResolver — these tests stub that resolver with a name map
+    // (same pattern as the numeric-comparison block above)
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('parseInt of an integer string literal folds to the Int64 box it returns', () => {
+        const input =
+        "const a = parseInt('8');\n" +
+        "const b = parseInt('12');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = 8L;');
+        expect(output).toContain('object b = 12L;');
+        expect(output).not.toContain('parseInt(');
+    });
+    test('parseInt floors a numeric literal into the same Int64 box', () => {
+        const input =
+        "const a = parseInt(2.7);\n" +
+        "const b = parseInt(-3.7);";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = 2L;');
+        expect(output).toContain('object b = (-4L);');
+    });
+    test('parseFloat of a literal folds to the double box it returns', () => {
+        const input =
+        "const a = parseFloat(1);\n" +
+        "const b = parseFloat('1.5');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = 1.0;');
+        expect(output).toContain('object b = 1.5;');
+        expect(output).not.toContain('parseFloat(');
+    });
+    test('a literal the helper does not read as that number keeps the helper', () => {
+        const input =
+        "const a = parseInt('1.5');\n" + // a point reads with the CURRENT culture
+        "const b = parseInt('99999999999999999999');\n" + // round - overflow answers null
+        "const c = parseFloat('abc');\n" +
+        "const d = parseFloat('1e3');\n" + // not the plain decimal spelling
+        "const e = parseInt('');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = parseInt("1.5");');
+        expect(output).toContain('object b = parseInt("99999999999999999999");');
+        expect(output).toContain('object c = parseFloat("abc");');
+        expect(output).toContain('object d = parseFloat("1e3");');
+        expect(output).toContain('object e = parseInt("");');
+    });
+    test('parseInt / parseFloat of a declared numeric local convert in place', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(items: any[], ms: number) {\n" +
+        "        const len = items.length;\n" +
+        "        const p = parseInt(len);\n" +
+        "        const f = parseFloat(ms);\n" +
+        "        return [p, f];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ len: 'int', ms: 'Int64' }, input);
+        expect(output).toContain('int len = getArrayLength(items);');
+        expect(output).toContain('object p = ((Int64)len);');
+        expect(output).toContain('object f = ((double)ms);');
+        expect(output).not.toContain('parseInt(');
+        expect(output).not.toContain('parseFloat(');
+    });
+    test('a declared double passes through parseFloat unchanged', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(fl: number) {\n" +
+        "        const p = parseFloat(fl);\n" +
+        "        return p;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ fl: 'double' }, input);
+        expect(output).toContain('object p = fl;');
+        expect(output).not.toContain('parseFloat(');
+    });
+    test('an object / nullable / double operand keeps the parse helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(box: any, n64: number, d: number) {\n" +
+        "        const a = parseFloat(box);\n" +
+        "        const b = parseInt(box);\n" +
+        "        const c = parseFloat(n64);\n" +
+        "        const e = parseInt(d);\n" +
+        "        return [a, b, c, e];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ box: 'object', n64: 'Int64?', d: 'double' }, input);
+        expect(output).toContain('object a = parseFloat(box);');
+        expect(output).toContain('object b = parseInt(box);');
+        expect(output).toContain('object c = parseFloat(n64);'); // a null box converts to 0
+        expect(output).toContain('object e = parseInt(d);'); // NaN / overflow answer null
+    });
+    test('a declared function named parseInt is not the runtime helper', () => {
+        const input =
+        "function parseInt(s) {\n" +
+        "    return 2;\n" +
+        "}\n" +
+        "const a = parseInt('8');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('parseInt("8")');
+    });
+    test('mod of an int dividend and a nonzero literal divisor prints the native remainder', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(items: any[]) {\n" +
+        "        for (let i = 0; i < items.length; i++) {\n" +
+        "            const r = i % 2;\n" +
+        "        }\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ i: 'int' }, input);
+        expect(output).toContain('object r = ((Int64)i % 2L);');
+        expect(output).not.toContain('mod(');
+    });
+    test('an unprovable dividend or divisor keeps mod', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a: number, b: number, box: any, big: number, dbl: number) {\n" +
+        "        const w = a % b;\n" + // a local divisor can be 0
+        "        const x = box % 2;\n" + // object dividend
+        "        const y = big % 2;\n" + // Int64 rounds through double above 2^53
+        "        const z = a % 0;\n" + // a zero divisor changes the thrown exception
+        "        const u = dbl % 2;\n" + // double remainder converts back with rounding
+        "        return [w, x, y, z, u];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ a: 'int', b: 'int', box: 'object', big: 'Int64', dbl: 'double' }, input);
+        expect(output).toContain('object w = mod(a, b);');
+        expect(output).toContain('object x = mod(box, 2);');
+        expect(output).toContain('object y = mod(big, 2);');
+        expect(output).toContain('object z = mod(a, 0);');
+        expect(output).toContain('object u = mod(dbl, 2);');
+    });
+    test('prefix `-` on a declared numeric local negates it in place', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a: number) {\n" +
+        "        const b = -a;\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ a: 'Int64' }, input);
+        // the typed prefixUnaryNeg overload is `a = -a; return a;`
+        expect(output).toContain('object b = (a = -a);');
+        expect(output).not.toContain('prefixUnaryNeg');
+    });
+    test('an object / nullable operand keeps prefixUnaryNeg', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(box: any, n64: number) {\n" +
+        "        const a = -box;\n" +
+        "        const b = -n64;\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ box: 'object', n64: 'Int64?' }, input);
+        expect(output).toContain('object a = prefixUnaryNeg(ref box);');
+        expect(output).toContain('object b = prefixUnaryNeg(ref n64);');
+    });
+    test('a literal operand prints the plain unary minus', () => {
+        const output = transpiler.transpileCSharp("const a = -1;").content;
+        expect(output).toContain('object a = -1;');
+    });
+});
+
+describe('csharp loop-index element reads', () => {
+    // the printed C# type of both the receiver and the counter is what decides whether the List
+    // indexer binds; a local the printer leaves `object` (or that the embedding build layer
+    // retypes) comes back through csharpExpressionTypeResolver — these tests stub that resolver
+    // with a name map, exactly like the numeric-comparison block above
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const loop = (body: string, bound = 'list.length') =>
+        "class Exchange {\n" +
+        "    main(d: { [key: string]: any }) {\n" +
+        "        const list = Object.keys(d);\n" +
+        "        for (let i = 0; i < " + bound + "; i++) {\n" +
+        "            " + body + "\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+    test('a list receiver and an int counter print the indexer', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const symbol = list[i];"));
+        expect(output).toContain('object symbol = list[i];');
+        expect(output).not.toContain('getValue(list, i)');
+    });
+    test('a read inside an object literal prints the indexer too', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const row = { \"id\": list[i] };"));
+        expect(output).toContain('{ "id", list[i] }');
+        expect(output).not.toContain('getValue(list, i)');
+    });
+    test('a counter the build layer cannot retype keeps the helper', () => {
+        // `object i` does not bind the List indexer (the ccxt layer refuses the retype whenever
+        // the counter has a use it cannot vet)
+        const output = withKinds({ list: 'List<object>', i: 'object' }, loop("const symbol = list[i];"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('an object receiver keeps the helper', () => {
+        const output = withKinds({ list: 'object', i: 'int' }, loop("const symbol = list[i];"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('no resolver keeps the helper: the printer alone never names the counter', () => {
+        const output = transpiler.transpileCSharp(loop("const symbol = list[i];")).content;
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a bound that is not this receiver\'s length keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const symbol = list[i];", '10'));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a mutated receiver keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const symbol = list[i]; list.pop();"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a counter written inside the body keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("i = i + 1; const symbol = list[i];"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a read inside a closure keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("this.foo (() => list[i]);"));
+        expect(output).toContain('() => getValue(list, i)');
+    });
+    test('a decrementing header keeps the helper', () => {
+        const input =
+        "class Exchange { main(d: { [key: string]: any }) { const list = Object.keys(d);" +
+        " for (let i = 1; i < list.length; i--) { const symbol = list[i]; } } }";
+        const output = withKinds({ list: 'List<object>', i: 'int' }, input);
+        expect(output).toContain('getValue(list, i)');
+    });
+});
+
+// the embedding build layer (ccxt: build/csharp-local-types.js) prints the declaration of some
+// locals itself and reports that same type through csharpExpressionTypeResolver; a `bool` there
+// is the declaration the emitted code carries, so the condition can use the read bare
+describe('isTrue drops for a declared bool the printer did not type itself', () => {
+    // Identifier nodes only, the way installCsharpNumericComparisons installs the resolver
+    const withKind = (kind, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.kind === 80) ? kind : undefined;
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const input = `
+class T {
+    f(leverage: number, helper: { isRoundNumber: (x: number) => boolean }) {
+        const rational = helper.isRoundNumber(leverage);
+        if (!rational) { return 1; }
+        const band = rational ? 'a' : 'b';
+        return band;
+    }
+}`;
+    test('a resolver-declared bool local prints bare under ! and in a ternary condition', () => {
+        const output = withKind('bool', input);
+        expect(output).toContain('if (!rational)');
+        expect(output).toContain('((bool) rational) ? "a" : "b"');
+        expect(output).not.toContain('isTrue');
+    });
+    test('without that declaration the local keeps the wrapper', () => {
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (!isTrue(rational))');
+        expect(output).toContain('((bool) isTrue(rational)) ? "a" : "b"');
+    });
+    test('a nullable or non-bool declaration keeps the wrapper', () => {
+        // `bool?` is no condition in C#: it lifts to `== true` (what isTrue answers for a null box)
+        expect(withKind('bool?', input)).toContain('if (!(rational == true))');
+        expect(withKind('object', input)).toContain('if (!isTrue(rational))');
+    });
+});
+
+// hand-written BaseExchange fields declared `bool` (cs/ccxt/base/Exchange.Options.cs, see
+// CSHARP_NATIVE_BOOL_FIELDS): the read is a C# bool, so the wrapper around it goes
+describe('isTrue drops for hand-written bool fields', () => {
+    const input = `
+class Exchange {
+    newUpdates: boolean = true;
+    verbose: boolean = true;
+    f() {
+        if (this.newUpdates) { return 1; }
+        if (!this.verbose) { return 2; }
+        const label = this.newUpdates ? 'a' : 'b';
+        return label;
+    }
+}`;
+    test('a checker-typed plain boolean field read prints bare', () => {
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (this.newUpdates)');
+        expect(output).toContain('if (!this.verbose)');
+        expect(output).toContain('((bool) this.newUpdates) ? "a" : "b"');
+        expect(output).not.toContain('isTrue');
+    });
+    test('a nullable or unlisted member keeps the wrapper', () => {
+        const output = transpiler.transpileCSharp(`
+class Exchange {
+    maybe: boolean | undefined = undefined;
+    f() {
+        if (this.maybe) { return 1; }
+    }
+}`).content;
+        expect(output).toContain('if (isTrue(this.maybe))');
+    });
+});
+
+// `x instanceof T` prints the C# type test `<x> is <T>`, a bool of its own: the wrapper goes,
+// with parentheses where `!` / the ternary's `(bool)` cast would otherwise rebind the text
+describe('instanceof conditions print bare', () => {
+    test('if, ! and a ternary condition', () => {
+        const output = transpiler.transpileCSharp(`
+class CustomError {}
+class Exchange {
+    f(e: any, x: any) {
+        if (e instanceof CustomError) { return 1; }
+        if (!(x instanceof CustomError)) { return 2; }
+        const fix = e instanceof CustomError ? 'a' : 'b';
+        return fix;
+    }
+}`).content;
+        expect(output).toContain('if (e is CustomError)');
+        expect(output).toContain('if (!(x is CustomError))');
+        expect(output).toContain('((bool) (e is CustomError)) ? "a" : "b"');
+        expect(output).not.toContain('isTrue');
+    });
+    test('a negated test without source parentheses adds its own', () => {
+        const output = transpiler.transpileCSharp(`
+class CustomError {}
+class Exchange {
+    f(e: any) {
+        if (!(e instanceof CustomError)) { return 1; }
+    }
+}`).content;
+        expect(output).toContain('if (!(e is CustomError))');
+    });
+});
+
+
+describe('csharp helper removal: reads of the hand-written has/options/urls dictionaries', () => {
+    test('a literal-key read of has/options tests the key and keeps the null a missing key reads', () => {
+        const input =
+        "class Exchange {\n" +
+        "    has: Dictionary<boolean> = {};\n" +
+        "    options: Dict = {};\n" +
+        "    main() {\n" +
+        "        if (this.has['fetchTrades'] !== undefined) { return 1; }\n" +
+        "        return this.options['timeDifference'];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // both fields are declared concrete dictionaries in Exchange.Options.cs, so their own
+        // members print what the helper computes: the indexer only runs when the key is there
+        expect(output).toContain('(this.has.ContainsKey("fetchTrades") ? this.has["fetchTrades"] : null)');
+        expect(output).toContain('(this.options.ContainsKey("timeDifference") ? this.options["timeDifference"] : null)');
+        expect(output).not.toContain('getValue(this.has,');
+        expect(output).not.toContain('getValue(this.options,');
+    });
+    test('a literal-key read of the object-typed urls field carries the helper\'s dictionary cast', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        return this.urls['demo'];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // `urls` is declared `object`: the same (IDictionary<string, object>) cast the helper
+        // body applies to its box, on both the key test and the indexer
+        expect(output).toContain('(((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
+        expect(output).not.toContain('getValue(this.urls,');
+    });
+    test('a non-literal key and a numeric key keep the helper on these fields', () => {
+        const input =
+        "class Exchange {\n" +
+        "    has: Dictionary<boolean> = {};\n" +
+        "    options: Dict = {};\n" +
+        "    main(key) {\n" +
+        "        const a = this.has[key];\n" +
+        "        const b = this.options[3];\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // only a literal key can be proven a C# string / is comparable to ContainsKey
+        expect(output).toContain('getValue(this.has, key)');
+        expect(output).toContain('getValue(this.options, 3)');
+    });
+    test('other hand-written fields of the same class keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    markets: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        return this.markets['BTC/USDT'];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // `markets`/`tickers`/... are other units: this rule names has/options/urls only
+        expect(output).toContain('getValue(this.markets, "BTC/USDT")');
+    });
+    test('a guard-proven read of urls still prints the bare indexer', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        if ('apiBackup' in this.urls) { return this.urls['apiBackup']; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the guard proves the key is there: no key test is needed, the read stays as it was
+        expect(output).toContain('return ((IDictionary<string,object>)this.urls)["apiBackup"];');
+        expect(output).not.toContain('ContainsKey("apiBackup") ?');
+    });
+    test('a nested read keeps the helper on the outer access and reads the inner one natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main(endpoint) {\n" +
+        "        return this.urls['api'][endpoint];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the inner 'api' read is a field read; the outer key is an identifier, so the helper
+        // still picks the endpoint the way the runtime helper does
+        expect(output).toContain('getValue((((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
+    });
+});
+
+describe('cs-10: literal-key reads on declared collection locals go native', () => {
+    test('a dictionary local reads its key natively, answering null where GetValue does', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market) {\n" +
+        "        const result = this.extend({}, market);\n" +
+        "        const spot = result['spot'];\n" +
+        "        return spot;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Dictionary<string, object> result = this.extend(");
+        expect(output).toContain('object spot = (result != null && result.ContainsKey("spot") ? result["spot"] : null);');
+    });
+    test('a list local reads its index natively with the helper` own bounds test', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const rows = this.safeList(item, 'rows');\n" +
+        "        const first = rows[0];\n" +
+        "        const second = rows[1];\n" +
+        "        return [first, second];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("List<object> rows = this.safeList(");
+        expect(output).toContain('object first = (rows != null && 0 < rows.Count ? rows[0] : null);');
+        expect(output).toContain('object second = (rows != null && 1 < rows.Count ? rows[1] : null);');
+    });
+    test('the element-write container chain reads natively too', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market) {\n" +
+        "        const result = this.extend({}, market);\n" +
+        "        result['a']['b'] = 1;\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((IDictionary<string,object>)(result != null && result.ContainsKey("a") ? result["a"] : null))["b"] = 1;');
+    });
+    test('readers without a declared collection type keep getValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
+        "    main(market, item) {\n" +
+        "        const result = this.extend({}, market);\n" +
+        "        const rows = this.safeList(item, 'rows');\n" +
+        "        const untyped = this.safeValue(item, 'x');\n" +
+        "        const a = untyped['k'];\n" +
+        "        const b = result[0];\n" +
+        "        const c = rows['a'];\n" +
+        "        const d = rows[0];\n" +
+        "        const e = rows[1.5];\n" +
+        "        return [a, b, c, d, e];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        // an `object` local is not a declared collection
+        expect(output).toContain('object a = getValue(untyped, "k");');
+        // a dictionary index and a list key have no native twin
+        expect(output).toContain('object b = getValue(result, 0);');
+        expect(output).toContain('object c = getValue(rows, "a");');
+        // a declared list does read natively
+        expect(output).toContain('object d = (rows != null && 0 < rows.Count ? rows[0] : null);');
+        // ...but not through a non-integer index
+        expect(output).toContain('object e = getValue(rows, 1.5);');
+    });
+    test('a receiver reassigned in the function keeps getValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market, other) {\n" +
+        "        let result = this.extend({}, market);\n" +
+        "        result = other;\n" +
+        "        const spot = result['spot'];\n" +
+        "        return spot;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object spot = getValue(result, "spot");');
+    });
+    test('a declaration type recorded by the embedding layer feeds the same rule', () => {
+        // the printed declaration stays `object`; the resolver names the type it was emitted with,
+        // so the read only goes native while that proof is installed
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const untyped = this.safeValue(item, 'x');\n" +
+        "        const y = untyped['k'];\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}\n";
+        transpiler.csharpTranspiler.csharpDeclaredLocalTypeResolver = (declaration) => (declaration.name?.escapedText === 'untyped') ? 'Dictionary<string, object>' : undefined;
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("object untyped = this.safeValue(item, \"x\");");
+            expect(output).toContain('object y = (untyped != null && untyped.ContainsKey("k") ? untyped["k"] : null);');
+        } finally {
+            transpiler.csharpTranspiler.csharpDeclaredLocalTypeResolver = undefined;
+        }
+        const fallback = transpiler.transpileCSharp(input).content;
+        expect(fallback).toContain('object y = getValue(untyped, "k");');
     });
 });
