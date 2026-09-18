@@ -2578,11 +2578,103 @@ export class JavaTranspiler extends BaseTranspiler {
         return `assert(${parsedArgs})`;
     }
 
-    printSliceCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+    printSliceCall(node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        const nativeCall = this.nativeSliceCallIfProvable(node, name);
+        if (nativeCall !== undefined) {
+            return nativeCall;
+        }
         if (parsedArg2 === undefined) {
             parsedArg2 = "null";
         }
         return `Helpers.slice(${name}, ${parsedArg}, ${parsedArg2})`;
+    }
+
+    // Integer value of a slice bound that is an integer literal (`18`, `-64`); anything
+    // else (expression, float, exponent, out of int range) keeps the helper — the Java
+    // helper converts its bounds with toInt, and a double cannot be clamped with the
+    // integer Math.min/Math.max of the native form.
+    javaSliceLiteralBound(node) {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (ts.isNumericLiteral(node)) {
+            const text = String(node.text);
+            if (text.indexOf('.') !== -1 || text.indexOf('e') !== -1 || text.indexOf('E') !== -1) {
+                return undefined;
+            }
+            const value = Number(text);
+            return value <= 2147483647 ? value : undefined;
+        }
+        if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+            const inner = this.javaSliceLiteralBound(node.operand);
+            return inner === undefined ? undefined : -inner;
+        }
+        return undefined;
+    }
+
+    // JS slice clamps a literal bound into [0, length]: a non-negative bound is min
+    // (bound, length), a negative one counts from the end (max (length - |bound|, 0)).
+    // `0` stays `0` because the length of a String/List is never negative.
+    javaSliceBoundExpression(value, length) {
+        if (value === 0) {
+            return '0';
+        }
+        return value > 0 ? `Math.min(${value}, ${length})` : `Math.max(${length} - ${-value}, 0)`;
+    }
+
+    // `x.slice (a, b)` -> substring/subList when the checker proves the receiver prints
+    // as a String/List AND every bound is an integer literal: Java's substring/subList
+    // throw where JS clamps, so only the literal bounds can be clamped with Math.min /
+    // Math.max before the call. The null guard keeps the helper's null -> null result,
+    // and it is only emitted for a side-effect-free receiver (identifier or property
+    // access), which may be read two or three times.
+    nativeSliceCallIfProvable(node, name) {
+        const args = node?.arguments ?? [];
+        if (args.length < 1 || args.length > 2) {
+            return undefined;
+        }
+        const start = this.javaSliceLiteralBound(args[0]);
+        if (start === undefined) {
+            return undefined;
+        }
+        const hasEnd = args.length === 2;
+        const end = hasEnd ? this.javaSliceLiteralBound(args[1]) : undefined;
+        if (hasEnd && end === undefined) {
+            return undefined;
+        }
+        const receiverExpression = ts.isPropertyAccessExpression(node?.expression) ? node.expression.expression : undefined;
+        if (!this.sideEffectFreeReceiver(receiverExpression)) {
+            return undefined;
+        }
+        let kind: string;
+        try {
+            const type = this.getChecker().getTypeAtLocation(receiverExpression);
+            if (this.isStringType(type.flags)) {
+                kind = 'String';
+            } else if (this.isJavaListType(type) && !this.isVarargsArrayReference(receiverExpression)) {
+                kind = 'List';
+            } else {
+                return undefined;
+            }
+        } catch (e) {
+            return undefined;
+        }
+        const cast = kind === 'String' ? `((String)${name})` : `((java.util.List<Object>)${name})`;
+        const length = kind === 'String' ? `${cast}.length()` : `${cast}.size()`;
+        const startText = this.javaSliceBoundExpression(start, length);
+        const endText = hasEnd ? this.javaSliceBoundExpression(end, length) : length;
+        // from <= to is proven per case: 0 is never above a clamp, an open end is the
+        // length, and two literals clamp monotonically once they keep their order
+        // (non-negative, or both counting from the end with |start| >= |end|).
+        const ordered = start === 0 || !hasEnd
+            || (start >= 0 && end >= 0 && start <= end)
+            || (start < 0 && end < 0 && start <= end);
+        const fromText = ordered ? startText : `Math.min(${startText}, ${endText})`;
+        // an inverted pair yields an empty slice in JS, so the substrings collapse to
+        // substring (to, to); a one-argument String slice drops the end entirely
+        const argumentsText = hasEnd || kind === 'List' ? `${fromText}, ${endText}` : fromText;
+        const method = kind === 'String' ? 'substring' : 'subList';
+        return `(${name} == null ? null : ${cast}.${method}(${argumentsText}))`;
     }
 
     printReplaceCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
