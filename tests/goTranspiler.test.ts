@@ -2861,7 +2861,7 @@ describe('go control-clause parens (gofmt stripParens)', () => {
         "}";
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("if a != \"\" {");
-        expect(output).toContain("} else if !IsEqual(a, \"y\") {");
+        expect(output).toContain("} else if a != \"y\" {");
     });
     test('while and the condition of a three-clause for follow the same rule', () => {
         const whileInput =
@@ -3402,8 +3402,9 @@ describe('go gofmt-clean native shapes', () => {
         const output = transpiler.transpileGo(input).content;
         // the helper's type switch has no []any case (it answers -1), so a []any receiver
         // must not be inlined; its []string case scans the slice
-        expect(output).not.toContain("import \"strings\"");
+        // `strings.Split` is native, so the import is present; the []any receiver still keeps the helper
         expect(output).toContain("GetIndexOf(codes, code)");
+        expect(output).not.toContain("strings.Index(codes");
     });
     test('indexOf on a GetValue box keeps the helper', () => {
         const input =

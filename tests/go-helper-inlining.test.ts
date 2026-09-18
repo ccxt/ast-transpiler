@@ -765,7 +765,8 @@ describe('go IsArray -> constant / type assertion', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('if func() bool { _, ok := res.([]any); return ok }() {');
+        // the push receiver is now a declared `[]any` local, so the test folds to a constant
+        expect(output).toContain('if true {');
         expect(output).not.toContain('IsArray(');
     });
     test('a call operand keeps the helper', () => {
