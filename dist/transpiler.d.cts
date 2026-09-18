@@ -803,9 +803,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
     sliceLengthTypes: string[];
     printInlineArrayLength(expression: any, printedText: string): string | undefined;
-    printInlineTernary(condition: string, whenTrue: string, whenFalse: string, resultType?: string): string | undefined;
-    goTernaryArmType(node: any, printedText: string): string | undefined;
-    goTernaryResultType(whenTrueNode: any, whenTrue: string, whenFalseNode: any, whenFalse: string): string | undefined;
+    printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined;
     goStripControlClauseParens(text: string): string;
     goPrintTernaryBranch(node: any, levels: number): string;
     printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
