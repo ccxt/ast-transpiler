@@ -151,7 +151,12 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'this.SafeFloat': '*float64',
     'this.SafeFloat2': '*float64',
     'this.SafeFloatN': '*float64',
-    // SafeBool*/SafeDict*/SafeList* stay untyped: the Go accessors still return `any`
+    // absent flag → nil pointer, present flag → its value, mirroring the string/number accessors
+    'this.SafeBool': '*bool',
+    'this.SafeBool2': '*bool',
+    'this.SafeBoolN': '*bool',
+    // SafeDict*/SafeList* stay untyped: the Go accessors return `any` because the value
+    // may be a *sync.Map, a Dict or an order-book side, none of which is a map[string]any / []any
     // Precise arithmetic returns a numeric string, or nil when an operand is
     // absent, so it carries the same *string shape as the Safe* string accessors
     'Precise.StringMul': '*string',
@@ -189,7 +194,6 @@ const GO_ANY_BOX_CALLS = [
     'SafeValue', 'this.SafeValue',
     'SafeDict', 'this.SafeDict',
     'SafeList', 'this.SafeList',
-    'SafeBool', 'this.SafeBool',
     'SafeNumber', 'this.SafeNumber',
 ];
 
