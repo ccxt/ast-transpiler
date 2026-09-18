@@ -1127,10 +1127,6 @@ declare class RustTranspiler extends BaseTranspiler {
     printNullKeyword(node: any, identation: any): string;
     private static readonly BOOL_PRODUCING_OPERATORS;
     private static readonly BOOL_PRODUCING_CALLS;
-    private static readonly RUST_NATIVE_INSERT_RECEIVERS;
-    private static readonly RUST_BOOK_META_KEYS;
-    private static readonly RUST_TAGGED_HANDLE_FIELDS;
-    private static readonly RUST_BOOL_VALUE_HELPERS;
     private static readonly PAYLOAD_ACCESSORS;
     primitiveKindOfType(type: any): string;
     literalKindOfNode(node: any): string;
@@ -1144,16 +1140,6 @@ declare class RustTranspiler extends BaseTranspiler {
     printArrayLength(node: any, identation: any, leftExpr?: any): string;
     isDictShapedType(type: ts.Type | undefined): boolean;
     printNativeInOperator(key: any, obj: any): string;
-    printNativeDictInsert(baseExpr: any, keyNode: any, keyText: any, valueText: any): string | undefined;
-    rustNativeInsertReceiver(expr: any): {
-        text: string;
-        isField: boolean;
-        nameNode: any;
-    } | undefined;
-    rustWriteDictShape(type: any): boolean;
-    rustReceiverStaysDict(baseExpr: any, receiver: any): boolean;
-    rustFieldStaysDict(baseExpr: any, fieldName: string): boolean;
-    rustPrintedBoolArg(raw: string): boolean;
     foldNegateLiteral(operandText: string): string | undefined;
     ensureRef(expr: string): string;
     isNumberTyped(node: any): boolean;
