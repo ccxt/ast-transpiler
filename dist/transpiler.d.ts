@@ -599,6 +599,13 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPopCall(node: any, identation: any, name?: any): string;
     printAssertCall(node: any, identation: any, parsedArgs: any): string;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    csharpNativeSliceCall(node: any, name: any): string;
+    csharpSliceLiteralBound(node: any): any;
+    csharpSliceBoundExpression(value: any, length: any): string;
+    csharpSliceReceiverKind(expression: any): "string" | "list";
+    csharpSliceStringType(type: any): boolean;
+    csharpSliceNullishType(flags: ts.TypeFlags): boolean;
+    csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;

@@ -3078,3 +3078,147 @@ describe('csharp Math.min/Math.max native emission', () => {
         expect(output).toContain("mathMin(nu, xi)");
     });
 });
+
+describe('slice -> Substring / GetRange with the literal bounds clamped', () => {
+    // `x.slice (a, b)` prints natively only when the checker proves x is a C# string (or the
+    // printer declared it a `List<object>`) AND every bound is an integer literal. JS clamps a
+    // negative / overflowing bound where C#'s Substring / GetRange throw, so the literals are
+    // clamped with Math.Min / Math.Max and the receiver keeps the helper's null -> null guard.
+    test('a string receiver with two literal bounds prints Substring', () => {
+        const input =
+        "class Exchange {\n" +
+        "    convertExpireDate(date: string): string {\n" +
+        "        const year = date.slice(0, 2);\n" +
+        "        const month = date.slice(2, 4);\n" +
+        "        return year + month;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((date == null) ? null : ((string)date).Substring(0, Math.Min(2, ((string)date).Length)))");
+        expect(output).toContain("((date == null) ? null : ((string)date).Substring(Math.Min(2, ((string)date).Length), Math.Min(4, ((string)date).Length) - Math.Min(2, ((string)date).Length)))");
+        expect(output).not.toContain("slice(date");
+    });
+    test('a `Str`-like union receiver is a proven string: `string | undefined`', () => {
+        const input =
+        "class Exchange {\n" +
+        "    convertExpireDate(date: string | undefined): string {\n" +
+        "        const year = date.slice(0, 2);\n" +
+        "        return year;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((date == null) ? null : ((string)date).Substring(0, Math.Min(2, ((string)date).Length)))");
+        expect(output).not.toContain("slice(date");
+    });
+    test('a negative start counts from the end: the one-argument Substring', () => {
+        const input =
+        "class Exchange {\n" +
+        "    sign(privateKey: string) {\n" +
+        "        const tail = privateKey.slice(-64);\n" +
+        "        return tail;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((privateKey == null) ? null : ((string)privateKey).Substring(Math.Max(((string)privateKey).Length - 64, 0)))");
+        expect(output).not.toContain("slice(privateKey");
+    });
+    test('a negative end counts from the end', () => {
+        const input =
+        "class Exchange {\n" +
+        "    strip(encodedString: string) {\n" +
+        "        return encodedString.slice(0, -1);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((encodedString == null) ? null : ((string)encodedString).Substring(0, Math.Max(((string)encodedString).Length - 1, 0)))");
+    });
+    test('two negative bounds keep their order after the clamp', () => {
+        const input =
+        "class Exchange {\n" +
+        "    cut(id: string) {\n" +
+        "        return id.slice(-9, -3);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Substring(Math.Max(((string)id).Length - 9, 0), Math.Max(((string)id).Length - 3, 0) - Math.Max(((string)id).Length - 9, 0))");
+    });
+    test('an inverted pair yields the JS empty slice: the count never goes below 0', () => {
+        const input =
+        "class Exchange {\n" +
+        "    cut(id: string) {\n" +
+        "        return id.slice(3, 1);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Substring(Math.Min(3, ((string)id).Length), Math.Max(Math.Min(1, ((string)id).Length) - Math.Min(3, ((string)id).Length), 0))");
+    });
+    test('a `(x as string)` receiver reuses its own cast and null test', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parse(id: any) {\n" +
+        "        const baseId = (id as string).slice(0, 3);\n" +
+        "        return baseId;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((((string)id) == null) ? null : ((string)id).Substring(0, Math.Min(3, ((string)id).Length)))");
+        expect(output).not.toContain("((((string)id))");
+    });
+    test('a declared List<object> receiver prints GetRange', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market) {\n" +
+        "        const parts = market.split('/');\n" +
+        "        return parts.slice(0, 2);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("List<object> parts = ");
+        expect(output).toContain("((parts == null) ? null : ((List<object>)parts).GetRange(0, Math.Min(2, ((List<object>)parts).Count)))");
+        expect(output).not.toContain("slice(parts");
+    });
+    test('a string local and a this-field receiver are side-effect-free receivers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    secret = 'abc';\n" +
+        "    main(source: string) {\n" +
+        "        const s: string = source;\n" +
+        "        const head = s.slice(1, 3);\n" +
+        "        return head + this.secret.slice(0, 2);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((s == null) ? null : ((string)s).Substring(Math.Min(1, ((string)s).Length), Math.Min(3, ((string)s).Length) - Math.Min(1, ((string)s).Length)))");
+        expect(output).toContain("((this.secret == null) ? null : ((string)this.secret).Substring(0, Math.Min(2, ((string)this.secret).Length)))");
+    });
+    test('an `any` receiver, an expression bound, a call receiver and a mixed union keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(item, x: string, i: number, both: string | number, types, args) {\n" +
+        "        const one = item.slice(0, 2);\n" +
+        "        const two = x.slice(0, i);\n" +
+        "        const three = both.slice(0, 2);\n" +
+        "        const four = abiEncode(types, args).slice(2);\n" +
+        "        return [one, two, three, four];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("slice(item, 0, 2)");
+        expect(output).toContain("slice(x, 0, i)");
+        expect(output).toContain("slice(both, 0, 2)");
+        expect(output).toContain("slice(abiEncode(types, args), 2, null)");
+    });
+    test('a fractional or out-of-range literal bound keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(x: string) {\n" +
+        "        const a = x.slice(0, 2.5);\n" +
+        "        const b = x.slice(0, 1e30);\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("slice(x, 0, 2.5)");
+        expect(output).toContain("slice(x, 0, 1e+30)");
+    });
+});
