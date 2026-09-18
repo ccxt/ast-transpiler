@@ -2533,9 +2533,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         // a rest parameter is a Java array, not a List: the helper's `instanceof List`
-        // test fails there and so must the native call
+        // test fails there and so must the native call. The wildcard receiver cast is the
+        // `.length()` family's, and it accepts a List of any element type (a
+        // `List<Object>` cast is a compile error on a `List<String>`-static receiver).
         if (this.isJavaListType(receiverType) && !this.isVarargsArrayReference(receiver)) {
-            return `((java.util.List<Object>)${name}).indexOf(${parsedArg})`;
+            return `((java.util.List<?>)${name}).indexOf(${parsedArg})`;
         }
         // plain `string` only: the nullable aliases (`Str`) and every union can hold
         // undefined, which the helper absorbs as -1 but String.indexOf has no receiver for

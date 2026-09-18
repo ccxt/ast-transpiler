@@ -10319,7 +10319,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     if (this.isJavaListType(receiverType) && !this.isVarargsArrayReference(receiver)) {
-      return `((java.util.List<Object>)${name}).indexOf(${parsedArg})`;
+      return `((java.util.List<?>)${name}).indexOf(${parsedArg})`;
     }
     if (receiverType.aliasSymbol !== void 0 || !this.isStringType(receiverType.flags)) {
       return void 0;

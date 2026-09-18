@@ -3343,7 +3343,7 @@ describe('java native indexOf (Helpers.getIndexOf -> String/List.indexOf)', () =
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("((java.util.List<Object>)xs).indexOf(y)");
+        expect(output).toContain("((java.util.List<?>)xs).indexOf(y)");
         expect(output).not.toContain("Helpers.getIndexOf");
     });
 
