@@ -784,8 +784,6 @@ declare class GoTranspiler extends BaseTranspiler {
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     goScalarFamily(node: any): string | undefined;
     goScalarFamilyWithNil(node: any): string | undefined;
-    goObjectBoxParameter(node: any): boolean;
-    goTypeIsNilComparableObject(type: any): boolean;
     goPrintedCallee(printedValue: string): string | undefined;
     goIsAnyBoxExpression(node: any, printedText: string): boolean;
     goAnyLocalHoldsPointerCache: Map<any, boolean>;
