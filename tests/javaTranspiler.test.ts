@@ -3305,3 +3305,141 @@ describe('java replaceAll native emission', () => {
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 });
+
+describe('java parseInt/parseFloat/toString/padStart native emission', () => {
+    test('parseInt/parseFloat of a string literal the native parser accepts print the native parse', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const a = parseInt(\"8\");\n" +
+        "        const b = parseInt(\"+7\");\n" +
+        "        const c = parseInt(\"-3\");\n" +
+        "        const d = parseFloat(\"1.5\");\n" +
+        "        const e = parseFloat(\"1e3\");\n" +
+        "        const g = parseFloat(\"NaN\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object a = Long.parseLong("8");');
+        expect(output).toContain('Object b = Long.parseLong("+7");');
+        expect(output).toContain('Object c = Long.parseLong("-3");');
+        expect(output).toContain('Object d = Double.parseDouble("1.5");');
+        expect(output).toContain('Object e = Double.parseDouble("1e3");');
+        expect(output).toContain('Object g = Double.parseDouble("NaN");');
+        expect(output).not.toContain("Helpers.parseInt(");
+        expect(output).not.toContain("Helpers.parseFloat(");
+    });
+
+    test('parseInt/parseFloat of a literal the native parser rejects keep the helper', () => {
+        // the helper catches the NumberFormatException (null / 0.0); the native call throws
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const a = parseInt(\"1.5\");\n" +
+        "        const b = parseInt(\" 8\");\n" +
+        "        const c = parseInt(\"0x10\");\n" +
+        "        const d = parseInt(\"99999999999999999999\");\n" +
+        "        const e = parseFloat(\"abc\");\n" +
+        "        const g = parseFloat(\" 1.5\");\n" +
+        "        const h = parseFloat(\"1.5f\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object a = Helpers.parseInt("1.5");');
+        expect(output).toContain('Object b = Helpers.parseInt(" 8");');
+        expect(output).toContain('Object c = Helpers.parseInt("0x10");');
+        expect(output).toContain('Object d = Helpers.parseInt("99999999999999999999");');
+        expect(output).toContain('Object e = Helpers.parseFloat("abc");');
+        expect(output).toContain('Object g = Helpers.parseFloat(" 1.5");');
+        expect(output).toContain('Object h = Helpers.parseFloat("1.5f");');
+        expect(output).not.toContain("Long.parseLong(");
+        expect(output).not.toContain("Double.parseDouble(");
+    });
+
+    test('parseInt/parseFloat of a non-literal keep the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const a = parseInt(s);\n" +
+        "        const b = parseFloat(s);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object a = Helpers.parseInt(s);");
+        expect(output).toContain("Object b = Helpers.parseFloat(s);");
+    });
+
+    test('Math.* Helpers.toString -> String.valueOf when the argument cannot be null', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const a = Math.floor(10);\n" +
+        "        const b = Math.round(1.5);\n" +
+        "        const c = Math.ceil((2 * 3) * 4);\n" +
+        "        const d = Math.pow(2, 8);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(Math.floor(Double.parseDouble(String.valueOf(10))))");
+        expect(output).toContain("Math.round(Double.parseDouble(String.valueOf(1.5)))");
+        expect(output).toContain("Math.ceil(Double.parseDouble(String.valueOf((((2L * 3L)) * 4L))))");
+        expect(output).toContain("Helpers.mathPow(Double.parseDouble(String.valueOf(2)), Double.parseDouble(String.valueOf(8)))");
+        expect(output).not.toContain("Helpers.toString(");
+    });
+
+    test('Math.* Helpers.toString stays when the argument is not provably non-null', () => {
+        const input =
+        "class T {\n" +
+        "    f(o: any): void {\n" +
+        "        const a = Math.floor(o);\n" +
+        "        const b = Math.pow(10, o);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(Math.floor(Double.parseDouble(Helpers.toString(o))))");
+        expect(output).toContain("Helpers.mathPow(Double.parseDouble(String.valueOf(10)), Double.parseDouble(Helpers.toString(o)))");
+        expect(output).not.toContain("String.valueOf(o)");
+    });
+
+    test('padStart with a literal length and pad prints the native pad+truncate form', () => {
+        const input =
+        "class T {\n" +
+        "    f(value: string): void {\n" +
+        "        const a = value.padStart(8, '0');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)value).length() >= 8 ? ((String)value).substring(((String)value).length() - 8)");
+        expect(output).toContain('String.format("%" + (8 - ((String)value).length()) + "s", "").replace(\' \', \'0\') + ((String)value)');
+        expect(output).not.toContain("Helpers.padStart(");
+    });
+
+    test('padStart keeps the helper without a literal length, literal pad, or proven String receiver', () => {
+        const input =
+        "class T {\n" +
+        "    f(value: string, n: number, pad: string, o: any): void {\n" +
+        "        const a = value.padStart(n, '0');\n" +
+        "        const b = value.padStart(8, pad);\n" +
+        "        const c = o.padStart(8, '0');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.padStart((String)value, ((Number)n).intValue(), ((String)\"0\").charAt(0))");
+        expect(output).toContain("Helpers.padStart((String)value, ((Number)8).intValue(), ((String)pad).charAt(0))");
+        expect(output).toContain("Helpers.padStart((String)o, ((Number)8).intValue(), ((String)\"0\").charAt(0))");
+        expect(output).not.toContain("String.format(");
+    });
+
+    test('padStart keeps the helper for a receiver that is a call (evaluate once)', () => {
+        const input =
+        "class T {\n" +
+        "    g(): string { return \"x\"; }\n" +
+        "    f(): void {\n" +
+        "        const a = this.g().padStart(4, '0');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.padStart((String)this.g(), ((Number)4).intValue(), ((String)\"0\").charAt(0))");
+        expect(output).not.toContain("String.format(");
+    });
+});
