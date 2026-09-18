@@ -231,6 +231,32 @@ const GO_ANY_BOX_CALLS = [
     'SafeNumber', 'this.SafeNumber',
 ];
 
+// Pointer types the Go nil test of the runtime helpers reproduces exactly: derefScalar
+// unwraps them to an untyped nil, IsEqual has its own *sync.Map case. Other pointers
+// (*sync.Mutex), map/slice fields and `any` fields flip meaning, so they keep the helper.
+const GO_NIL_EQUIVALENT_POINTER_TYPES_Native = new Set([
+    '*sync.Map', '*string', '*int64', '*float64', '*bool', '*int', '*[]string', '*[]any', '*map[string]any',
+]);
+
+// Hand-written BaseExchange fields (go/v4/exchange.go, embedded by every exchange
+// class) declared with one of those pointer types, keyed by the printed Go field name;
+// the Go type lives in the hand-written base, not in the TypeScript class.
+const GO_NILABLE_FIELDS_Typed: { [name: string]: string } = {
+    'this.Options'          : '*sync.Map',
+    'this.Markets'          : '*sync.Map',
+    'this.Markets_by_id'    : '*sync.Map',
+    'this.MarketsById'      : '*sync.Map',
+    'this.Currencies'       : '*sync.Map',
+    'this.Currencies_by_id' : '*sync.Map',
+    'this.CurrenciesById'   : '*sync.Map',
+    'this.BaseCurrencies'   : '*sync.Map',
+    'this.QuoteCurrencies'  : '*sync.Map',
+    'this.Tickers'          : '*sync.Map',
+    'this.Orderbooks'       : '*sync.Map',
+    'this.Bidsasks'         : '*sync.Map',
+    'this.Transactions'     : '*sync.Map',
+};
+
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
 // `var x any = this.SafeDict(container, key)` may carry the map type even though the Go
@@ -3185,6 +3211,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const declared = this.goDeclaredTypeOfIdentifier(node);
         if ((typeof declared === 'string') && declared.startsWith('*')) {
             return declared;
+        }
+        // a hand-written BaseExchange field, e.g. `this.Markets`: its Go type is the one
+        // go/v4/exchange.go declares, and the helpers turn a nil one into a nil
+        if (node?.kind === ts.SyntaxKind.PropertyAccessExpression) {
+            const fieldType = GO_NILABLE_FIELDS_Typed[printedText];
+            if ((typeof fieldType === 'string') && GO_NIL_EQUIVALENT_POINTER_TYPES_Native.has(fieldType)) {
+                return fieldType;
+            }
         }
         if (node?.kind === ts.SyntaxKind.CallExpression) {
             const goType = this.goTypeOfInitializer(node, printedText);
