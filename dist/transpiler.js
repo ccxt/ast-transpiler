@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10262,35 +10262,17 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // Route through Helpers so consumers control semantics (thread-safety,
   // null-handling, type coercion) in one place — same pattern as
-  // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json.
+  // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
+  // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
+  // forced any downstream that needed different semantics (e.g. synchronized
+  // map access in concurrent code) to post-process the generated Java with
+  // regex — which only catches the bare-identifier argument shape and misses
+  // property-access (`this.x`) and element-access (`obj[k]`) arguments.
   printArrayIsArrayCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.isArray(${parsedArg})`;
   }
-  // A checker-proven dict prints a Map on every path, so the key copy is native;
-  // every other target keeps the helper — shared field maps need its synchronized
-  // snapshot, the rest need its instanceof/null fallbacks.
-  printObjectKeysCall(node, _identation, parsedArg = void 0) {
-    const native = this.printNativeObjectKeysCall(node);
-    if (native !== void 0) {
-      return native;
-    }
+  printObjectKeysCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.objectKeys(${parsedArg})`;
-  }
-  printNativeObjectKeysCall(node) {
-    const argument = node?.arguments?.[0];
-    if (argument === void 0 || ts6.isPropertyAccessExpression(argument)) {
-      return void 0;
-    }
-    let type;
-    try {
-      type = this.getChecker().getTypeAtLocation(argument);
-    } catch (e) {
-      return void 0;
-    }
-    if (!this.isJavaMapStructureType(type)) {
-      return void 0;
-    }
-    return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).keySet())`;
   }
   printObjectValuesCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.objectValues(${parsedArg})`;
