@@ -843,7 +843,7 @@ describe('rust transpiling tests', () => {
     test('Array.isArray call', () => {
         const ts = 'const r = Array.isArray(x);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_array(&x)');
+        expect(output).toContain('is_array(&x)'); // an undeclared x keeps the helper
     });
 
     test('Object.values call', () => {
@@ -1866,20 +1866,20 @@ describe('rust truthiness sinks take the bare bool', () => {
     test('a boxed condition loses the Value::Bool box', () => {
         const ts = 'class A { f(x) { if (Array.isArray (x)) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if is_true(&(is_array(&x))) {');
-        expect(output).not.toContain('Value::Bool(is_array(&x))');
+        expect(output).toContain('if is_true(&(matches!(&x, Value::Arr(_)))) {');
+        expect(output).not.toContain('Value::Bool(matches!(&x, Value::Arr(_)))');
     });
 
     test('a negated boxed condition keeps the is_true marker', () => {
         const ts = 'class A { f(x) { if (!Array.isArray (x)) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if !is_true(&(is_array(&x))) {');
+        expect(output).toContain('if !is_true(&(matches!(&x, Value::Arr(_)))) {');
     });
 
     test('every &&/|| operand is unboxed on its own', () => {
         const ts = 'class A { f(x, y) { if (Array.isArray (x) || y) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if is_true(&(is_array(&x))) || is_true(&y) {');
+        expect(output).toContain('if is_true(&(matches!(&x, Value::Arr(_)))) || is_true(&y) {');
     });
 
     test('a boxed `in` condition loses the box', () => {
@@ -1891,20 +1891,20 @@ describe('rust truthiness sinks take the bare bool', () => {
     test('assert() takes the bare bool as well', () => {
         const ts = 'class A { f(x) { assert (Array.isArray (x), "msg"); } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('assert((is_array(&x)), Value::Str("msg".to_string()));');
+        expect(output).toContain('assert((matches!(&x, Value::Arr(_))), Value::Str("msg".to_string()));');
     });
 
     // negatives — every other sink takes a `Value` and keeps its box.
     test('a Value-argument box is untouched', () => {
         const ts = 'class A { f(x) { return g (Array.isArray (x)); } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('return g(Value::Bool(is_array(&x)));');
+        expect(output).toContain('return g(Value::Bool(matches!(&x, Value::Arr(_))));');
     });
 
     test('a Value-local initializer box is untouched', () => {
         const ts = 'class A { f(x) { const y = Array.isArray (x); return y; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut y: Value = Value::Bool(is_array(&x));');
+        expect(output).toContain('let mut y: Value = Value::Bool(matches!(&x, Value::Arr(_)));');
     });
 
     test('is_equal keeps its &Value operand box', () => {
@@ -2681,14 +2681,14 @@ describe('rust native value predicates and json', () => {
     test('Array.isArray on a declared local emits the native match', () => {
         const ts = "function f(response: any) {\n    if (Array.isArray(response)) {\n        return response;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Bool(matches!(&response, Value::Arr(_)))');
+        expect(output).toContain('is_true(&(matches!(&response, Value::Arr(_))))');
         expect(output).not.toContain('is_array(');
     });
 
     test('Array.isArray on a declared field emits the native match', () => {
         const ts = "class A {\n    x: any;\n    f() {\n        if (Array.isArray(this.x)) {\n            return 1;\n        }\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Bool(matches!(&self.x, Value::Arr(_)))');
+        expect(output).toContain('is_true(&(matches!(&self.x, Value::Arr(_))))');
         expect(output).not.toContain('is_array(');
     });
 
