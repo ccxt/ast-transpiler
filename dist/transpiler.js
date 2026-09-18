@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2762,47 +2762,6 @@ var CSHARP_NATIVE_FIELDS = {
   "ids": "List<object>"
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
-var CSHARP_REFERENCE_FIELDS_NATIVE = [
-  "id",
-  "hostname",
-  "apiKey",
-  "secret",
-  "password",
-  "uid",
-  "accountId",
-  "login",
-  "privateKey",
-  "walletAddress",
-  "twofa",
-  "proxy",
-  "proxyUrl",
-  "proxy_url",
-  "proxyUrlCallback",
-  "proxy_url_callback",
-  "last_http_response",
-  "markets",
-  "markets_by_id",
-  "features",
-  "tickers",
-  "bidsasks",
-  "ohlcvs",
-  "trades",
-  "orders",
-  "myTrades",
-  "positions",
-  "liquidations",
-  "balance",
-  "accounts",
-  "currencies",
-  "currencies_by_id",
-  "outcomes",
-  "outcomes_by_id",
-  "events",
-  "events_by_slug",
-  "clients",
-  "ids",
-  "tokenBucket"
-];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
@@ -3350,55 +3309,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
       case ts4.SyntaxKind.ParenthesizedExpression:
         return this.csharpEqualityOperandType(node.expression);
       case ts4.SyntaxKind.Identifier:
-        if (node.escapedText === "undefined") {
-          return "null";
-        }
-        return this.csharpDeclaredTypeOfBinding(node) ?? this.csharpParameterOperandType(node);
-      case ts4.SyntaxKind.PropertyAccessExpression: {
-        const fieldType = this.csharpReferenceFieldType(node);
-        return fieldType === void 0 ? this.csharpTypeOfInitializer(node) : fieldType;
-      }
+        return node.escapedText === "undefined" ? "null" : this.csharpDeclaredTypeOfBinding(node);
     }
     if (ts4.isStringLiteralLike(node)) {
       return "string";
     }
     return this.csharpTypeOfInitializer(node);
-  }
-  // 'object' for a `this.<field>` read of a hand-written field the table proves a reference
-  // box; undefined for everything else. Only the null branch of printInlineEquality accepts
-  // 'object', so the exact field type is never claimed and the value-equality branches
-  // (string literals, bools) keep the helper
-  csharpReferenceFieldType(node) {
-    if (!ts4.isPropertyAccessExpression(node) || node.expression?.kind !== ts4.SyntaxKind.ThisKeyword) {
-      return void 0;
-    }
-    const name = node.name?.escapedText;
-    if (CSHARP_REFERENCE_FIELDS_NATIVE.indexOf(name) < 0) {
-      return void 0;
-    }
-    return this.csharpOperandIsValueTyped(node) ? void 0 : "object";
-  }
-  // `object` for a parameter operand a null comparison compiles on, else undefined. A
-  // generated parameter prints `object <name>`; the ccxt build layer narrows only string
-  // positions to `string` (a reference type) and numeric positions to `Int64?` / `double?` /
-  // `double`, so a parameter whose checker type holds no number/boolean member is a reference
-  // or a nullable value and `name == null` is its isEqual null branch. `createOrder`'s
-  // `double amount` and every other number/boolean parameter keep the helper.
-  csharpParameterOperandType(node) {
-    let symbol;
-    try {
-      symbol = this.getChecker().getSymbolAtLocation(node);
-    } catch (e) {
-      return void 0;
-    }
-    const declaration = symbol?.valueDeclaration;
-    if (declaration === void 0 || !ts4.isParameter(declaration)) {
-      return void 0;
-    }
-    if (!ts4.isIdentifier(declaration.name) || declaration.name.escapedText !== node.escapedText || declaration.dotDotDotToken !== void 0) {
-      return void 0;
-    }
-    return this.csharpOperandIsValueTyped(node) ? void 0 : "object";
   }
   // A numeric literal prints as an untyped C# constant that adapts to the operand on the
   // other side. isEqual's integer branches round-trip through Convert.ToInt64, which an
