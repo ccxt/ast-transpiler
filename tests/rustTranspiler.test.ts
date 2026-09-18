@@ -1335,3 +1335,63 @@ describe('rust numeric literals', () => {
         expect(output).not.toContain('Value::Int(1e-7)');
     });
 });
+
+// `is_true(&<call>)` is the identity when the callee's Rust signature is
+// `-> bool`; those callees are listed in RUST_BOOL_RESULT_CALLEES and proven
+// boolean by the checker, so the printer emits the call bare.
+describe('rust hand-written bool-returning calls', () => {
+    const typed = (body: string) =>
+        'function tickerExceptionNeedsOhlcv(ex: any, exchange: any, ticker: any): boolean {\n' +
+        '    return true;\n' +
+        '}\n' +
+        'function isTemporaryFailure(e: any): boolean {\n' +
+        '    return false;\n' +
+        '}\n' +
+        'class A {\n' +
+        '    run(ex: any, exchange: any, ticker: any) {\n' +
+        body + '\n' +
+        '    }\n' +
+        '}';
+
+    test('condition over a `-> bool` callee prints bare', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if (tickerExceptionNeedsOhlcv(ex, exchange, ticker)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('if tickerExceptionNeedsOhlcv(ex, exchange, ticker) {');
+        expect(output).not.toContain('is_true(&tickerExceptionNeedsOhlcv');
+    });
+
+    test('logical operand over a `-> bool` callee prints bare', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if ((ticker !== undefined) && tickerExceptionNeedsOhlcv(ex, exchange, ticker)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('&& tickerExceptionNeedsOhlcv(ex, exchange, ticker) {');
+        expect(output).not.toContain('is_true(&tickerExceptionNeedsOhlcv');
+    });
+
+    test('negated `-> bool` callee prints bare', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if (!tickerExceptionNeedsOhlcv(ex, exchange, ticker)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('if !tickerExceptionNeedsOhlcv(ex, exchange, ticker) {');
+    });
+
+    test('a boolean-typed callee outside the table keeps is_true', () => {
+        const output = transpiler.transpileRust(typed(
+            '        if (isTemporaryFailure(ex)) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 0;',
+        )).content;
+        expect(output).toContain('if is_true(&isTemporaryFailure(ex)) {');
+    });
+});
