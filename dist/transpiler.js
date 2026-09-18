@@ -5600,16 +5600,16 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return this.getChecker().getTypeAtLocation(node).flags === ts5.TypeFlags.String ? "string" : void 0;
   }
-  // Go static type of an operand's printed form: 'string', 'int', 'int64',
-  // 'float64', or 'const-int' / 'const-float' (an untyped literal). undefined when
-  // the printer cannot name it — a nilable/`any` operand keeps the helper call.
+  // Go static type of an operand's printed form: 'string', 'int', 'int64' or
+  // 'const-int' (untyped integer literal). undefined when the printer cannot name
+  // it — a nilable/`any` operand keeps the helper call.
   goOperandStaticType(node, printedText) {
     switch (node?.kind) {
       case ts5.SyntaxKind.StringLiteral:
       case ts5.SyntaxKind.NoSubstitutionTemplateLiteral:
         return "string";
       case ts5.SyntaxKind.NumericLiteral:
-        return /^[0-9]+$/.test(node.text) ? "const-int" : this.goConstFloatStaticType(node);
+        return /^[0-9]+$/.test(node.text) ? "const-int" : void 0;
       case ts5.SyntaxKind.ParenthesizedExpression:
         return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
       case ts5.SyntaxKind.BinaryExpression:
@@ -5628,16 +5628,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return void 0;
     }
     const goType = this.goTypeOfInitializer(node, printedText);
-    return "string" === goType || "int" === goType || "int64" === goType || "float64" === goType ? goType : void 0;
-  }
-  // an untyped Go floating-point constant: the helper boxes it as float64 and the
-  // compiler converts the operand to float64 the same way
-  goConstFloatStaticType(node) {
-    const text = node?.text;
-    if (typeof text !== "string" || !/^[0-9][.eE]/.test(text)) {
-      return void 0;
-    }
-    return Number.isFinite(Number(text.replaceAll("_", ""))) ? "const-float" : void 0;
+    return "string" === goType || "int" === goType || "int64" === goType ? goType : void 0;
   }
   isNonZeroIntegerLiteral(node) {
     if (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
@@ -5645,116 +5636,31 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return node?.kind === ts5.SyntaxKind.NumericLiteral && /^[1-9][0-9]*$/.test(node.text);
   }
-  isNonZeroFloatLiteral(node) {
-    if (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
-      return this.isNonZeroFloatLiteral(node.expression);
-    }
-    return this.goConstFloatStaticType(node) !== void 0 && Number(node.text.replaceAll("_", "")) !== 0;
-  }
-  // the exact value of a constant-only integer expression, undefined for anything
-  // else. An emitted `a * b` over two literals is folded by the Go compiler in
-  // arbitrary precision and must both fit `int` and stay exact for the helper's
-  // float64 path, which is what the bound in the caller checks.
-  goConstantIntValue(node) {
-    if (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
-      return this.goConstantIntValue(node.expression);
-    }
-    if (node?.kind === ts5.SyntaxKind.NumericLiteral) {
-      return /^[0-9]+$/.test(node.text) ? Number(node.text) : void 0;
-    }
-    if (node?.kind !== ts5.SyntaxKind.BinaryExpression || this.goConstantIntValue(node.left) === void 0 || this.goConstantIntValue(node.right) === void 0) {
-      return void 0;
-    }
-    const left = this.goConstantIntValue(node.left);
-    const right = this.goConstantIntValue(node.right);
-    switch (node.operatorToken.kind) {
-      case ts5.SyntaxKind.PlusToken:
-        return left + right;
-      case ts5.SyntaxKind.MinusToken:
-        return left - right;
-      case ts5.SyntaxKind.AsteriskToken:
-        return left * right;
-      case ts5.SyntaxKind.SlashToken:
-        return right === 0 ? void 0 : Math.trunc(left / right);
-      case ts5.SyntaxKind.PercentToken:
-        return right === 0 ? void 0 : left % right;
-    }
-    return void 0;
-  }
-  // an arithmetic expression that is the whole initializer of a printed
-  // `var x T = ...` declaration: the declared-local table owns that position (it
-  // names the local int64 when its own int-kind proof holds, with the unbox the
-  // type forces), so the operator rule leaves the call to it.
-  goInsideTypedDeclarationInitializer(node) {
-    let current = node;
-    while (current !== void 0) {
-      const parent = current.parent;
-      if (parent?.kind === ts5.SyntaxKind.ParenthesizedExpression && parent.expression === current) {
-        current = parent;
-        continue;
-      }
-      if (parent?.kind === ts5.SyntaxKind.BinaryExpression && (parent.left === current || parent.right === current) && GO_ARITHMETIC_KINDS.indexOf(parent.operatorToken.kind) >= 0) {
-        current = parent;
-        continue;
-      }
-      break;
-    }
-    const declaration = current?.parent;
-    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.initializer !== current) {
-      return false;
-    }
-    return declaration.parent?.parent?.kind === ts5.SyntaxKind.FirstStatement;
-  }
-  // The bare Go operator must yield the same value the runtime helper returns for
+  // The bare Go operator must yield the same type the runtime helper returns for
   // the same operands (go/v4/exchange_helpers.go): Add keeps int/int64, while
-  // Subtract/Multiply/Divide/Mod take an exact int path (int64 in, int64 out) or a
-  // float64 path, so only the rows below are equivalent.
-  goNativeNumericResultType(op, leftType, rightType, node) {
-    const isIntKind = (kind) => kind === "int" || kind === "int64" || kind === "const-int";
-    const isFloatKind = (kind) => kind === "float64" || kind === "const-float";
-    const leftNode = node.left;
-    const rightNode = node.right;
-    if (isFloatKind(leftType) !== isFloatKind(rightType)) {
+  // Subtract/Multiply/Divide collapse every integer result to int64 and Mod is
+  // float-based, so only the rows below are equivalent.
+  goNativeIntResultType(op, leftType, rightType, rightNode) {
+    let operands = void 0;
+    if (leftType === "int64" && (rightType === "int64" || rightType === "const-int")) {
+      operands = "int64";
+    } else if (leftType === "const-int" && rightType === "int64") {
+      operands = "int64";
+    } else if (leftType === "int" && (rightType === "int" || rightType === "const-int")) {
+      operands = "int";
+    } else if (leftType === "const-int" && (rightType === "int" || rightType === "const-int")) {
+      operands = "int";
+    }
+    if (operands === void 0 || op === ts5.SyntaxKind.PercentToken) {
       return void 0;
-    }
-    if (isFloatKind(leftType) && isFloatKind(rightType)) {
-      if (op === ts5.SyntaxKind.PlusToken || op === ts5.SyntaxKind.PercentToken) {
-        return void 0;
-      }
-      if (leftType === "const-float" && rightType === "const-float") {
-        return void 0;
-      }
-      if (op === ts5.SyntaxKind.SlashToken && !this.isNonZeroFloatLiteral(rightNode)) {
-        return void 0;
-      }
-      return "float64";
-    }
-    if (!isIntKind(leftType) || !isIntKind(rightType)) {
-      return void 0;
-    }
-    if (leftType === "int64" && rightType === "int" || leftType === "int" && rightType === "int64") {
-      return void 0;
-    }
-    if (leftType === "const-int" && rightType === "const-int") {
-      const value = this.goConstantIntValue(node);
-      if (value === void 0 || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
-        return void 0;
-      }
-    }
-    const operands = leftType === "int64" || rightType === "int64" ? "int64" : "int";
-    if (op === ts5.SyntaxKind.PlusToken) {
-      return operands;
-    }
-    if (operands === "int" && this.goInsideTypedDeclarationInitializer(node)) {
-      return void 0;
-    }
-    if (op === ts5.SyntaxKind.PercentToken) {
-      return this.isNonZeroIntegerLiteral(rightNode) ? operands : void 0;
     }
     if (op === ts5.SyntaxKind.SlashToken && !this.isNonZeroIntegerLiteral(rightNode)) {
       return void 0;
     }
-    return operands;
+    if (op === ts5.SyntaxKind.PlusToken) {
+      return operands === "int64" ? "int64" : "int";
+    }
+    return operands === "int64" ? "int64" : void 0;
   }
   // an operand that is itself a bare operator expression needs parens under a
   // tighter parent operator; a whole helper call is already delimited
@@ -5790,7 +5696,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       }
       return { "goType": "string", "text": this.goNativeBinaryText(node, "+", leftText, rightText) };
     }
-    const goType = this.goNativeNumericResultType(op, leftType, rightType, node);
+    const goType = this.goNativeIntResultType(op, leftType, rightType, node.right);
     if (goType === void 0) {
       return void 0;
     }
