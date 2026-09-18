@@ -213,3 +213,107 @@ describe('go len() keeps the int classification', () => {
         expect(output).toContain('var n int = ');
     });
 });
+
+// `x === 'lit'` on an identifier the printer itself declares `string`: the checker
+// type of the initializer is `any` (an untyped helper result), but the emitted Go
+// value is a plain string, so the comparison needs no IsEqual round-trip
+describe('go IsEqual on a table-typed string local -> ==', () => {
+    test('a string-declared local compared to a literal prints ==', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (fromAccount: any): boolean {\n" +
+        "        const fromId = fromAccount.toUpperCase ()\n" +
+        "        if (fromId === 'ISOLATED') {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        return false\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('var fromId string = ToUpper(fromAccount)');
+        expect(output).toContain('if fromId == "ISOLATED" {');
+        expect(output).not.toContain('IsEqual(fromId');
+    });
+    test('!== prints != on the same declaration', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (fromAccount: any): boolean {\n" +
+        "        const fromId = fromAccount.toUpperCase ()\n" +
+        "        if (fromId !== 'ISOLATED') {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        return false\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if fromId != "ISOLATED" {');
+        expect(output).not.toContain('IsEqual(fromId');
+    });
+    test('a literal on the left prints the same comparison', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (fromAccount: any): boolean {\n" +
+        "        const fromId = fromAccount.toUpperCase ()\n" +
+        "        if ('ISOLATED' === fromId) {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        return false\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if "ISOLATED" == fromId {');
+        expect(output).not.toContain('IsEqual(');
+    });
+    test('a later string write keeps the declaration typed and the comparison native', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any): boolean {\n" +
+        "        let fromId = a.toUpperCase ()\n" +
+        "        fromId = 'X'\n" +
+        "        if (fromId === 'ISOLATED') {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        if (fromId !== 'Y') {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        return false\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('var fromId string = ToUpper(a)');
+        expect(output).toContain('fromId = "X"');
+        expect(output).toContain('if fromId == "ISOLATED" {');
+        expect(output).toContain('if fromId != "Y" {');
+        expect(output).not.toContain('IsEqual(fromId');
+    });
+    test('a later write of another type demotes the declaration back to any', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any, b: any): boolean {\n" +
+        "        let fromId = a.toUpperCase ()\n" +
+        "        fromId = b\n" +
+        "        if (fromId === 'ISOLATED') {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        return false\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('var fromId any = ToUpper(a)');
+    });
+    test('two any-typed identifiers keep IsEqual', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (params: any): boolean {\n" +
+        "        const x = GetValue(params, 'k')\n" +
+        "        const y = GetValue(params, 'j')\n" +
+        "        if (x === y) {\n" +
+        "            return true\n" +
+        "        }\n" +
+        "        return false\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('IsEqual(x, y)');
+    });
+});

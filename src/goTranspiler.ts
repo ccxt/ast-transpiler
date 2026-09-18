@@ -3282,6 +3282,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return otherType === pointee;
     }
 
+    // a node the printer prints as a Go string constant: both literal forms are
+    // emitted with the printer's string quote token, so the comparison is a plain
+    // Go string comparison
+    goIsStringLiteralNode(node): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        return (node.kind === ts.SyntaxKind.StringLiteral) || (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral);
+    }
+
     printInlineEquality(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined {
         const lPtr = this.goPointerTypeOfExpression(left, leftText) !== undefined;
         const rPtr = this.goPointerTypeOfExpression(right, rightText) !== undefined;
@@ -3330,6 +3340,21 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!lPtr && !rPtr && lFam !== undefined && rFam !== undefined
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        // the printer's own declared-local table names `string` for this identifier:
+        // the emitted Go value is a plain string (a `var x string` local can hold
+        // neither a pointer nor nil), so a string-literal comparison is the same
+        // predicate as the helper whatever the TS type of the initializer says.
+        // The table runs the same later-write scan the declaration print uses, so a
+        // local that is ever written another type is reported as `any` and lands in
+        // the box arms below instead.
+        if (!lPtr && !rPtr) {
+            if ((this.goDeclaredTypeOfIdentifier(left) === 'string') && this.goIsStringLiteralNode(right)) {
+                return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+            }
+            if ((this.goDeclaredTypeOfIdentifier(right) === 'string') && this.goIsStringLiteralNode(left)) {
+                return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+            }
         }
         // an operand the printer boxes into `any` whose TypeScript type proves the box
         // holds a scalar or nil: `x === undefined` and `x === 'lit'` are then the same

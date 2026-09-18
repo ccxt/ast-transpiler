@@ -7152,6 +7152,15 @@ ${this.getIden(level)}}()`;
     const otherType = this.goDeclaredTypeOfIdentifier(otherNode);
     return otherType === pointee;
   }
+  // a node the printer prints as a Go string constant: both literal forms are
+  // emitted with the printer's string quote token, so the comparison is a plain
+  // Go string comparison
+  goIsStringLiteralNode(node) {
+    if (node === void 0) {
+      return false;
+    }
+    return node.kind === ts5.SyntaxKind.StringLiteral || node.kind === ts5.SyntaxKind.NoSubstitutionTemplateLiteral;
+  }
   printInlineEquality(left, right, leftText, rightText, isEq) {
     const lPtr = this.goPointerTypeOfExpression(left, leftText) !== void 0;
     const rPtr = this.goPointerTypeOfExpression(right, rightText) !== void 0;
@@ -7189,6 +7198,14 @@ ${this.getIden(level)}}()`;
     }
     if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+    if (!lPtr && !rPtr) {
+      if (this.goDeclaredTypeOfIdentifier(left) === "string" && this.goIsStringLiteralNode(right)) {
+        return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+      }
+      if (this.goDeclaredTypeOfIdentifier(right) === "string" && this.goIsStringLiteralNode(left)) {
+        return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+      }
     }
     const lNilFam = this.goScalarFamilyWithNil(left);
     const rNilFam = this.goScalarFamilyWithNil(right);
