@@ -609,6 +609,50 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('in_op(&a,');
     });
 
+    // A `Dict` alias / generic dictionary is a Reference to its index-signature
+    // interface — still a plain Value::Dict at runtime, so the key test is native.
+    test('in operator native for a dictionary alias receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\ntype Dict = Dictionary<any>;\nconst o: Dict = {};\nconst r = "key" in o;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&o, Value::Dict(__d) if __d.contains_key("key"))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator native for a generic dictionary receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nconst o: Dictionary<any> = {};\nconst r = "key" in o;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&o, Value::Dict(__d) if __d.contains_key("key"))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator native for a dictionary parameter', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (params: Dictionary<any>) {\n    return "key" in params;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&params, Value::Dict(__d) if __d.contains_key("key"))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    // A class instance is not a Dict at runtime: the helper stays.
+    test('in operator keeps the helper for a class instance receiver', () => {
+        const ts = 'class OrderBook { bids = 1; }\nconst b = new OrderBook();\nconst r = "key" in b;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&b,');
+    });
+
+    // Lib-declared types (Map, …) are not backed by a plain Value map.
+    test('in operator keeps the helper for a lib-declared receiver', () => {
+        const ts = 'const m = new Map<string, any>();\nconst r = "key" in m;'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&m,');
+    });
+
+    // `any` proves nothing: an array element search stays the helper's job.
+    test('in operator keeps the helper for an any-typed receiver', () => {
+        const ts = 'function f (params: any) {\n    return "key" in params;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&params,');
+    });
+
     // Checker-proven helper removal: negate of a numeric literal folds
     test('negate literal folds to a literal', () => {
         const intOutput = transpiler.transpileRust('const x = -1;').content;
