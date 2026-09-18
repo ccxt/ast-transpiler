@@ -183,6 +183,11 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
 // those locals stay `any`. A Safe* entry presupposes the matching Go accessor
 // returns that shape (as the hand-written base already does for Str/Int/Float).
 
+// printed calls whose Go result is a JSON decode: map/slice/scalar or nil, never a
+// typed pointer. `this.parseJson` / `this.json` are the hand-written base decoders,
+// `JsonParse` / `ParseJSON` their runtime twins.
+const GO_JSON_PARSE_CALLS = [ 'Json', 'JsonParse', 'ParseJson', 'ParseJSON' ];
+
 // Hand-written CCXT fields whose Go type is a plain `bool` (go/v4/exchange.go,
 // struct BaseExchange, embedded by every derived exchange). Reading one already
 // yields a Go bool, so a condition on it needs no truthiness helper at all.
@@ -2674,6 +2679,150 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return holds;
     }
 
+    // the callee name of a call, read from the AST and capitalised the way the
+    // printer names Go functions (`this.parseJson` -> `this.ParseJson`). Printing the
+    // callee would re-enter the equality classifier that asks this question.
+    goAstCalleeName(call): string | undefined {
+        const callee = call?.expression;
+        if (callee?.kind === ts.SyntaxKind.Identifier) {
+            const name = callee.escapedText;
+            return (typeof name === 'string' && name.length > 0) ? name.charAt(0).toUpperCase() + name.substring(1) : undefined;
+        }
+        if (callee?.kind === ts.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts.SyntaxKind.ThisKeyword) {
+            const name = callee.name?.escapedText;
+            return (typeof name === 'string' && name.length > 0) ? 'this.' + name.charAt(0).toUpperCase() + name.substring(1) : undefined;
+        }
+        return undefined;
+    }
+
+    // true when every declaration of the awaited callee is a bodyless method signature:
+    // TS never implements it, the endpoint generator does, and the Go body is the
+    // `<-chan any` wrapper over callEndpointAsync (decoded JSON / "panic: " / nil)
+    goAwaitedCallIsImplicitEndpoint(expression): boolean {
+        let call = expression;
+        while (call?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            call = call.expression;
+        }
+        if (call?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = call.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const nameNode = callee.name;
+        if (nameNode?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(nameNode);
+        } catch (e) {
+            return false;
+        }
+        const declarations = symbol?.declarations;
+        if (!declarations || declarations.length === 0) {
+            return false;
+        }
+        return declarations.every((d) => (d.kind === ts.SyntaxKind.MethodSignature)
+            && (d.body === undefined)
+            && (d.parent?.kind === ts.SyntaxKind.InterfaceDeclaration));
+    }
+
+    // true when the printed value of this expression is never a *T whose nil
+    // derefScalar folds to nil (nor a *sync.Map): null/undefined, an object/array
+    // literal, an endpoint await or a JSON decode. Everything else stays unproven.
+    goIsNonPointerValueSource(expr): boolean {
+        while (expr?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            expr = expr.expression;
+        }
+        if (expr === undefined) {
+            return true; // `var x any` never written holds nil
+        }
+        switch (expr.kind) {
+        case ts.SyntaxKind.NullKeyword:
+            return true;
+        case ts.SyntaxKind.Identifier:
+            return expr.escapedText === 'undefined';
+        case ts.SyntaxKind.ObjectLiteralExpression:
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return true;
+        case ts.SyntaxKind.AwaitExpression:
+            return this.goAwaitedCallIsImplicitEndpoint(expr.expression);
+        case ts.SyntaxKind.CallExpression: {
+            const name = this.goAstCalleeName(expr);
+            if (name === undefined) {
+                return false;
+            }
+            return GO_JSON_PARSE_CALLS.indexOf(name.replace(/^this\./, '')) >= 0;
+        }
+        }
+        return false;
+    }
+
+    // true when every value written into an `any` local is a non-pointer source: the
+    // box holds a container, a scalar or nil, so IsEqual(x, nil) is exactly `x == nil`.
+    // A write of any other shape in the enclosing function (D2 scan) keeps the helper
+    goAnyLocalHoldsNonPointerCache = new Map<any, boolean>();
+    goAnyLocalHoldsNonPointer(decl): boolean {
+        if (decl?.kind !== ts.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        if (this.goAnyLocalHoldsNonPointerCache.has(decl)) {
+            return this.goAnyLocalHoldsNonPointerCache.get(decl);
+        }
+        let holds = !this.goAnyLocalHoldsPointer(decl) && this.goIsNonPointerValueSource(decl.initializer);
+        if (holds) {
+            const name = decl.name.escapedText;
+            const scope = this.goEnclosingFunction(decl);
+            if (scope === undefined) {
+                holds = false;
+            } else {
+                const visit = (n) => {
+                    if (!holds) { return; }
+                    // `[ a, b ] = …` writes a and b through GetValue(<tuple>, i), so its
+                    // source is the right-hand side as well
+                    if (n.kind === ts.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts.SyntaxKind.EqualsToken
+                        && this.goAssignmentWritesName(n.left, name)
+                        && !this.goIsNonPointerValueSource(n.right)) {
+                        holds = false;
+                        return;
+                    }
+                    ts.forEachChild(n, visit);
+                };
+                ts.forEachChild(scope, visit);
+            }
+        }
+        this.goAnyLocalHoldsNonPointerCache.set(decl, holds);
+        return holds;
+    }
+
+    // true when this assignment target binds the named local: a plain identifier, or a
+    // destructuring element (`[ a, b ] = …` prints GetValue(<tuple>, i) writes)
+    goAssignmentWritesName(left, name): boolean {
+        if (left?.kind === ts.SyntaxKind.Identifier) {
+            return left.escapedText === name;
+        }
+        if (left?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            return left.elements.some((e) => (e?.kind === ts.SyntaxKind.Identifier) && (e.escapedText === name));
+        }
+        return false;
+    }
+
+    // the variable declaration an identifier resolves to, when it is one
+    goAnyBoxLocalDeclaration(node): any {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return symbol?.valueDeclaration;
+    }
+
     goScalarFamilyOfType(type, allowNil = false): string | undefined {
         if (type === undefined) {
             return undefined;
@@ -3625,6 +3774,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
         }
         if (rObjParam && (lFam === 'nil')) {
+            return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+        }
+        // an `any` local the printer cannot type whose every write is a non-pointer
+        // source (endpoint await / JSON decode / literal / nil): its box is never a
+        // nil *T, so the interface test is the same predicate as the helper
+        if (lBox && (rFam === 'nil') && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(left))) {
+            return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        if (rBox && (lFam === 'nil') && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(right))) {
             return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
         }
         // a string or bool literal: only a value of that very type is equal in both
