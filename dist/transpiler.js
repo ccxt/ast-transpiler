@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10977,7 +10977,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const parts = type.types ?? [];
       return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
     }
-    return (type.flags & (ts7.TypeFlags.Undefined | ts7.TypeFlags.Null | ts7.TypeFlags.Void)) !== 0 || this.getChecker().isArrayType(type) || this.getChecker().isTupleType(type) || this.isStringType(type.flags);
+    return this.getChecker().isArrayType(type) || this.getChecker().isTupleType(type) || this.isStringType(type.flags);
   }
   printArrayLength(node, identation, leftExpr = void 0) {
     const receiver = leftExpr ?? this.printNode(node.expression, 0);
@@ -10985,83 +10985,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `Value::Int(${receiver}.len() as i64)`;
     }
     return `get_array_length(&${receiver})`;
-  }
-  // ── native string search / slicing ───────────────────────────────────────
-  // `x.indexOf(y)` and `x.slice(a, b)` on a receiver the checker proves is a
-  // string print native `str` code instead of the runtime helper. The printed
-  // receiver is a `Value`, so the payload is reached through the same
-  // `as_str()` the native equality rules use; a `Value::Null` receiver takes
-  // the helper's `-1` / `Value::Null` branch through the same `Option`.
-  /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
-  rustSliceLiteralBound(node) {
-    if (node === void 0) {
-      return void 0;
-    }
-    if (ts7.isNumericLiteral(node)) {
-      const value = Number(node.text);
-      return Number.isSafeInteger(value) ? value : void 0;
-    }
-    if (ts7.isPrefixUnaryExpression(node) && node.operator === SyntaxKind4.MinusToken && ts7.isNumericLiteral(node.operand)) {
-      const value = Number(node.operand.text);
-      return Number.isSafeInteger(value) ? -value : void 0;
-    }
-    return void 0;
-  }
-  // `slice` clamps like JS: a non-negative bound is capped at the length, a
-  // negative one counts from the end and is floored at 0.
-  rustSliceClampedIndex(value) {
-    return value < 0 ? `(__l - ${-value}).max(0)` : `__l.min(${value})`;
-  }
-  // `x.indexOf("lit")` on a proven string receiver: `str::find` is exactly
-  // the helper's `Value::Str` arm (byte index, `-1` when absent).
-  printNativeStringIndexOf(node, receiverText) {
-    if (node === void 0 || !ts7.isCallExpression(node) || !ts7.isPropertyAccessExpression(node.expression) || node.arguments?.length !== 1) {
-      return void 0;
-    }
-    if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== "string") {
-      return void 0;
-    }
-    const needle = node.arguments[0];
-    if (!ts7.isStringLiteral(needle) && !ts7.isNoSubstitutionTemplateLiteral(needle)) {
-      return void 0;
-    }
-    if (typeof receiverText !== "string" || receiverText.includes("\n")) {
-      return void 0;
-    }
-    const literal = this.escapeRustStringLiteral(needle.text);
-    return `Value::Int(${receiverText}.as_str().and_then(|__s| __s.find("${literal}")).map(|__i| __i as i64).unwrap_or(-1))`;
-  }
-  // `x.slice(a)` / `x.slice(a, b)` with literal bounds on a proven string
-  // receiver: the helper's char-vector clamps are inlined, so the emission
-  // returns the same string (and `Value::Null` for a null receiver).
-  printNativeStringSlice(node, receiverText) {
-    if (node === void 0 || !ts7.isCallExpression(node) || !ts7.isPropertyAccessExpression(node.expression)) {
-      return void 0;
-    }
-    const args = node.arguments ?? [];
-    if (args.length === 0 || args.length > 2) {
-      return void 0;
-    }
-    if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== "string") {
-      return void 0;
-    }
-    if (typeof receiverText !== "string" || receiverText.includes("\n")) {
-      return void 0;
-    }
-    const start = this.rustSliceLiteralBound(args[0]);
-    if (start === void 0) {
-      return void 0;
-    }
-    let end = "__l";
-    if (args[1] !== void 0 && args[1].kind !== SyntaxKind4.NullKeyword && args[1].kind !== SyntaxKind4.UndefinedKeyword) {
-      const bound = this.rustSliceLiteralBound(args[1]);
-      if (bound === void 0) {
-        return void 0;
-      }
-      end = this.rustSliceClampedIndex(bound);
-    }
-    const begin = this.rustSliceClampedIndex(start);
-    return `${receiverText}.as_str().map(|__s| { let __c: Vec<char> = __s.chars().collect(); let __l = __c.len() as i64; let __i = ${begin}; let __j = ${end}; if __i <= __j { __c[__i as usize..__j as usize].iter().collect::<String>() } else { String::new() } }).map(Value::Str).unwrap_or(Value::Null)`;
   }
   // Object-typed values are Dicts at runtime, so `key in obj` is a plain
   // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
@@ -12368,10 +12291,6 @@ ${this.getIden(identation)}})`;
     return `Value::Bool(contains(&${name}, ${pRef}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
-    const native = this.printNativeStringIndexOf(node, name);
-    if (native !== void 0) {
-      return native;
-    }
     return `get_index_of(&${name}, &${parsedArg})`;
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
@@ -12414,10 +12333,6 @@ ${this.getIden(identation)}})`;
     return `pop(${name}.clone())`;
   }
   printSliceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    const native = this.printNativeStringSlice(node, name);
-    if (native !== void 0) {
-      return native;
-    }
     const arg2 = parsedArg2 ?? "Value::Null";
     return `slice(&${name}, &${parsedArg}, &${arg2})`;
   }
