@@ -1553,7 +1553,7 @@ describe('go native element assignment', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("AddElementToObject(request, key, 1)");
     });
-    test('a nested element chain stays on the helper: GetValue is any', () => {
+    test('a nested element chain indexes a declared map receiver natively', () => {
         const input =
         "class Exchange {\n" +
         "    main() {\n" +
@@ -1563,7 +1563,82 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(request[\"a\"], \"b\", 1)");
+        expect(output).not.toContain("GetValue(request,");
+    });
+    test('a nested element chain over an any box keeps the helper: GetValue is any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params) {\n" +
+        "        const request = params;\n" +
+        "        request['a']['b'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("AddElementToObject(GetValue(request, \"a\"), \"b\", 1)");
+    });
+    test('only the first step of a nested chain inlines; the steps above stay GetValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['a']['b']['c'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(GetValue(request[\"a\"], \"b\"), \"c\", 1)");
+    });
+    test('+= through a nested chain re-reads the same native index', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['a']['b'] += 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(request[\"a\"], \"b\", Add(GetValue(request[\"a\"], \"b\"), 1))");
+    });
+    test('a nested chain over a string-typed local key indexes natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        const k = 'a';\n" +
+        "        request[k]['b'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var k string = \"a\"");
+        expect(output).toContain("AddElementToObject(request[k], \"b\", 1)");
+    });
+    test('a non-string first key keeps the whole chain on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params) {\n" +
+        "        const request = {};\n" +
+        "        request[params]['b'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(GetValue(request, params), \"b\", 1)");
+    });
+    test('a nested chain over an as-cast receiver indexes natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        (request as Dict)['a']['b'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(request[\"a\"], \"b\", 1)");
     });
     test('an any receiver stays on the helper: Go cannot index an interface', () => {
         const input =
@@ -1724,6 +1799,38 @@ describe('go native element assignment', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain('GetValue(m["a"], "b")');
+    });
+    test('an as-cast receiver is typed like the bare expression it wraps', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    return (m as Dict)['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var m map[string]any =");
+        expect(output).toContain('return m["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('an as-cast receiver over an any box keeps GetValue', () => {
+        const input =
+        "function f(params) {\n" +
+        "    const m = params;\n" +
+        "    return (m as Dict)['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var m any = params");
+        expect(output).toContain('return GetValue(m, "a")');
+    });
+    test('an as-cast key still counts as a Go string', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    const k = 'a';\n" +
+        "    return m[k as string];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('return m[k]');
+        expect(output).not.toContain('GetValue(');
     });
     test('GetValue stays when the container is boxed in any', () => {
         const input =
