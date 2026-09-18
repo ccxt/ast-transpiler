@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8180,7 +8180,6 @@ ${tryBodyBlock}
     }
     switch (node.kind) {
       case ts5.SyntaxKind.ParenthesizedExpression:
-      case ts5.SyntaxKind.AsExpression:
         return this.goIndexableTypeOf(node.expression, printed);
       case ts5.SyntaxKind.ObjectLiteralExpression:
         return "map[string]any";
