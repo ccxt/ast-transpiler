@@ -2674,3 +2674,87 @@ describe('rust native parseInt/parseFloat', () => {
         expect(output).toContain(`return self.g(${nativeInt}, Value::Int(2));`);
     });
 });
+
+describe('rust native value predicates and json', () => {
+    // `Array.isArray` / `typeof … === '…'` over a declared `Value` place inline
+    // the runtime helper's own `matches!`; other operands keep the helper.
+    test('Array.isArray on a declared local emits the native match', () => {
+        const ts = "function f(response: any) {\n    if (Array.isArray(response)) {\n        return response;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Bool(matches!(&response, Value::Arr(_)))');
+        expect(output).not.toContain('is_array(');
+    });
+
+    test('Array.isArray on a declared field emits the native match', () => {
+        const ts = "class A {\n    x: any;\n    f() {\n        if (Array.isArray(this.x)) {\n            return 1;\n        }\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Bool(matches!(&self.x, Value::Arr(_)))');
+        expect(output).not.toContain('is_array(');
+    });
+
+    test('Array.isArray on a call result keeps the helper', () => {
+        const ts = "function g(): any { return []; }\nfunction f() {\n    if (Array.isArray(g())) {\n        return 1;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_array(&g())');
+        expect(output).not.toContain('matches!(&g()');
+    });
+
+    test('typeof string in a condition emits the native match', () => {
+        const ts = "function f(code: any) {\n    if (typeof code === 'string') {\n        return code;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(&code, Value::Str(_))');
+        expect(output).not.toContain('is_string(');
+    });
+
+    test('negated typeof string emits the negated native match', () => {
+        const ts = "function f(value: any) {\n    if (typeof value !== 'string') {\n        return 1;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !matches!(&value, Value::Str(_))');
+        expect(output).not.toContain('is_string(');
+    });
+
+    test('typeof boolean / number / object emit their native matches', () => {
+        const ts = "function f(value: any) {\n    if (typeof value === 'boolean') { return 1; }\n    if (typeof value === 'number') { return 2; }\n    if (typeof value === 'object') { return 3; }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!(&value, Value::Bool(_))');
+        expect(output).toContain('matches!(&value, Value::Int(_) | Value::Float(_))');
+        expect(output).toContain('matches!(&value, Value::Dict(_))');
+        expect(output).not.toContain('is_bool(');
+        expect(output).not.toContain('is_number(');
+        expect(output).not.toContain('is_object(');
+    });
+
+    test('typeof string in a Value position boxes the native match', () => {
+        const ts = "function f(code: any) {\n    let flag = typeof code === 'string';\n    return flag;\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut flag: Value = Value::Bool(matches!(&code, Value::Str(_)));');
+    });
+
+    test('typeof string on a call result keeps the helper', () => {
+        const ts = "function g(): any { return 1; }\nfunction f() {\n    if (typeof g() === 'string') {\n        return 1;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_string(&g())');
+        expect(output).not.toContain('matches!(&g()');
+    });
+
+    test('this.json on a local calls the free json_stringify', () => {
+        const ts = "class A {\n    id: any;\n    f(params: any) {\n        return this.json(params);\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('return json_stringify(&params);');
+        expect(output).not.toContain('self.json(');
+    });
+
+    test('this.json drops the argument clone the method signature forced', () => {
+        const ts = "class A {\n    id: any;\n    f(query: any) {\n        let body = this.json(query.clone());\n        return body;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut body: Value = json_stringify(&query);');
+        expect(output).not.toContain('query.clone()');
+    });
+
+    test('this.json on a self field keeps the method call', () => {
+        const ts = "class A {\n    id: any;\n    params: any;\n    f() {\n        return this.json(this.params);\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.json(self.params');
+        expect(output).not.toContain('json_stringify');
+    });
+});

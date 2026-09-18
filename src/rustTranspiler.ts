@@ -797,6 +797,70 @@ export class RustTranspiler extends BaseTranspiler {
             `.map(Value::Str).unwrap_or(Value::Null)`;
     }
 
+    // ── native value predicates (`Array.isArray` / `typeof … === '…'`) ────────
+    // Every runtime predicate is a single `matches!` over the `Value` variants;
+    // when the operand is a declared `Value` place the call is replaced by that
+    // same match — no helper call, and the operand is still read exactly once.
+
+    // `matches!` pattern of the runtime predicate, keyed by the `typeof` word.
+    private static readonly RUST_TYPE_PREDICATE_PATTERNS: { [key: string]: string } = {
+        'array': 'Value::Arr(_)',
+        'string': 'Value::Str(_)',
+        'number': 'Value::Int(_) | Value::Float(_)',
+        'boolean': 'Value::Bool(_)',
+        'object': 'Value::Dict(_)',
+    };
+
+    // An identifier bound by a local/param declaration: the printer declares
+    // every one of them as `Value`. Imports, classes and function names print
+    // as Rust items rather than as values, so they keep the helper.
+    isDeclaredValueIdentifier(node): boolean {
+        const symbol = (this.getChecker() as any).getSymbolAtLocation(node);
+        const declarations = symbol?.declarations ?? [];
+        if (declarations.length === 0) {
+            return false;
+        }
+        return declarations.every((declaration) => ts.isVariableDeclaration(declaration)
+            || ts.isParameter(declaration)
+            || ts.isBindingElement(declaration));
+    }
+
+    // A declared `Value` place: a local/param identifier, or a field/element
+    // access rooted at `this` or at such an identifier. Those are the operands
+    // whose printed text the helper already borrows as a `Value`.
+    isDeclaredValuePlace(node): boolean {
+        const inner = this.unwrapParens(node);
+        if (inner === undefined) {
+            return false;
+        }
+        if (ts.isIdentifier(inner)) {
+            return this.isDeclaredValueIdentifier(inner);
+        }
+        if (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner)) {
+            const root = this.unwrapParens(this.valuePlaceRoot(inner));
+            return root !== undefined &&
+                (root.kind === SyntaxKind.ThisKeyword || this.isDeclaredValueIdentifier(root));
+        }
+        return false;
+    }
+
+    valuePlaceRoot(node): any {
+        let current: any = node;
+        while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    nativeValuePredicateText(kind: string, operandNode, printedOperand: string): string | undefined {
+        const pattern = RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS[kind];
+        if (pattern === undefined || operandNode === undefined || printedOperand === undefined ||
+            !this.isDeclaredValuePlace(operandNode)) {
+            return undefined;
+        }
+        return `matches!(${this.ensureRef(printedOperand)}, ${pattern})`;
+    }
+
     // Object-typed values are Dicts at runtime, so `key in obj` is a plain
     // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
     // A `Dict`/`Dictionary<T>` receiver is a Reference to its index-signature
@@ -1363,6 +1427,13 @@ export class RustTranspiler extends BaseTranspiler {
             const target = this.printNode(expression, 0);
             const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
             const not = isDiff ? '!' : '';
+            const native = this.nativeValuePredicateText(rightText, expression, target);
+            if (native !== undefined) {
+                const negated = isDiff ? `!${native}` : native;
+                // Conditions/logical operands expect a bool; every other
+                // position stores the result in a `Value`, so box it as before.
+                return this.isBooleanPosition(node) ? negated : `Value::Bool(${negated})`;
+            }
             switch (rightText) {
             case 'string': return `${not}is_string(&${target})`;
             case 'number': return `${not}is_number(&${target})`;
@@ -2437,6 +2508,22 @@ export class RustTranspiler extends BaseTranspiler {
         const nativeParse = this.printNativeParseCall(node);
         if (nativeParse !== undefined) return nativeParse;
 
+        // `this.json(v)` — the runtime's `Exchange::json` is exactly the free
+        // `json_stringify` over an owned `Value`; the free function takes the
+        // same value by reference, so the call sites' `.clone()` is dropped.
+        // `self.<field>` args keep the method: the post-pass hoists an inner
+        // `self.<method>(…)` out of a `&mut self` call's args, and the free
+        // function's `&self.<field>` reborrow is not on its radar.
+        if (expression.kind === SyntaxKind.PropertyAccessExpression &&
+            expression.expression.kind === SyntaxKind.ThisKeyword &&
+            expression.name.escapedText === 'json' && node.arguments.length === 1) {
+            const argText = this.printNode(node.arguments[0], 0).trim();
+            if (!argText.includes('self.')) {
+                const withoutClone = argText.replace(/\.clone\(\)$/, '');
+                return `json_stringify(${this.ensureRef(withoutClone)})`;
+            }
+        }
+
         return super.printCallExpression(node, identation);
     }
 
@@ -3417,6 +3504,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Built-in method call overrides
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
+        const native = this.nativeValuePredicateText('array', node?.arguments?.[0], parsedArg);
+        if (native !== undefined) {
+            return `Value::Bool(${native})`;
+        }
         return `Value::Bool(is_array(&${parsedArg}))`;
     }
 

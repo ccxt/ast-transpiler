@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10986,6 +10986,48 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `get_array_length(&${receiver})`;
   }
+  // An identifier bound by a local/param declaration: the printer declares
+  // every one of them as `Value`. Imports, classes and function names print
+  // as Rust items rather than as values, so they keep the helper.
+  isDeclaredValueIdentifier(node) {
+    const symbol = this.getChecker().getSymbolAtLocation(node);
+    const declarations = symbol?.declarations ?? [];
+    if (declarations.length === 0) {
+      return false;
+    }
+    return declarations.every((declaration) => ts7.isVariableDeclaration(declaration) || ts7.isParameter(declaration) || ts7.isBindingElement(declaration));
+  }
+  // A declared `Value` place: a local/param identifier, or a field/element
+  // access rooted at `this` or at such an identifier. Those are the operands
+  // whose printed text the helper already borrows as a `Value`.
+  isDeclaredValuePlace(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0) {
+      return false;
+    }
+    if (ts7.isIdentifier(inner)) {
+      return this.isDeclaredValueIdentifier(inner);
+    }
+    if (ts7.isPropertyAccessExpression(inner) || ts7.isElementAccessExpression(inner)) {
+      const root = this.unwrapParens(this.valuePlaceRoot(inner));
+      return root !== void 0 && (root.kind === SyntaxKind4.ThisKeyword || this.isDeclaredValueIdentifier(root));
+    }
+    return false;
+  }
+  valuePlaceRoot(node) {
+    let current = node;
+    while (ts7.isPropertyAccessExpression(current) || ts7.isElementAccessExpression(current)) {
+      current = current.expression;
+    }
+    return current;
+  }
+  nativeValuePredicateText(kind, operandNode, printedOperand) {
+    const pattern = _RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS[kind];
+    if (pattern === void 0 || operandNode === void 0 || printedOperand === void 0 || !this.isDeclaredValuePlace(operandNode)) {
+      return void 0;
+    }
+    return `matches!(${this.ensureRef(printedOperand)}, ${pattern})`;
+  }
   // Object-typed values are Dicts at runtime, so `key in obj` is a plain
   // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
   isDictShapedType(type) {
@@ -11219,6 +11261,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const target = this.printNode(expression, 0);
       const isDiff = op === SyntaxKind4.ExclamationEqualsEqualsToken || op === SyntaxKind4.ExclamationEqualsToken;
       const not = isDiff ? "!" : "";
+      const native = this.nativeValuePredicateText(rightText, expression, target);
+      if (native !== void 0) {
+        const negated = isDiff ? `!${native}` : native;
+        return this.isBooleanPosition(node) ? negated : `Value::Bool(${negated})`;
+      }
       switch (rightText) {
         case "string":
           return `${not}is_string(&${target})`;
@@ -11702,6 +11749,13 @@ ${classMethods}
     const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
     if (outOfOrder)
       return outOfOrder;
+    if (expression.kind === SyntaxKind4.PropertyAccessExpression && expression.expression.kind === SyntaxKind4.ThisKeyword && expression.name.escapedText === "json" && node.arguments.length === 1) {
+      const argText = this.printNode(node.arguments[0], 0).trim();
+      if (!argText.includes("self.")) {
+        const withoutClone = argText.replace(/\.clone\(\)$/, "");
+        return `json_stringify(${this.ensureRef(withoutClone)})`;
+      }
+    }
     return super.printCallExpression(node, identation);
   }
   printThisKeyword(node, identation) {
@@ -12249,6 +12303,10 @@ ${this.getIden(identation)}})`;
   }
   // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
+    const native = this.nativeValuePredicateText("array", node?.arguments?.[0], parsedArg);
+    if (native !== void 0) {
+      return `Value::Bool(${native})`;
+    }
     return `Value::Bool(is_array(&${parsedArg}))`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
@@ -12412,6 +12470,18 @@ _RustTranspiler.PAYLOAD_ACCESSORS = {
   "string": "as_str",
   "number": "as_f64",
   "boolean": "as_bool"
+};
+// ── native value predicates (`Array.isArray` / `typeof … === '…'`) ────────
+// Every runtime predicate is a single `matches!` over the `Value` variants;
+// when the operand is a declared `Value` place the call is replaced by that
+// same match — no helper call, and the operand is still read exactly once.
+// `matches!` pattern of the runtime predicate, keyed by the `typeof` word.
+_RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS = {
+  "array": "Value::Arr(_)",
+  "string": "Value::Str(_)",
+  "number": "Value::Int(_) | Value::Float(_)",
+  "boolean": "Value::Bool(_)",
+  "object": "Value::Dict(_)"
 };
 // ── native-typed locals ───────────────────────────────────────────────────
 //
