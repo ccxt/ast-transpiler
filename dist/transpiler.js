@@ -3064,6 +3064,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return `${this.printNode(node.expression, 0)}[Convert.ToInt32(${this.printNode(node.argumentExpression, 0)})]`;
       }
     }
+    const listRead = this.csharpListIndexRead(node);
+    if (listRead !== void 0) {
+      return listRead;
+    }
     return super.printElementAccessExpression(node, identation);
   }
   csharpNativeElementAccess(node) {
@@ -3332,6 +3336,180 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const localTypeOf = this.csharpLocalTypeOf;
     return typeof localTypeOf === "function" && localTypeOf.call(this, receiver) === "List<object>";
+  }
+  // The C# declared type pair of a list index READ (`x[i]`): the receiver's printed type
+  // (`List<object>` / `IList<object>`) and the index's (`int`). Consumer-installed
+  // (build/csharp-local-types.js); undefined by default, so an unpatched printer keeps the
+  // base `getValue (x, i)` for every read.
+  csharpListIndexReadTypes(node) {
+    return void 0;
+  }
+  // `x[i]` read on a list receiver: the helper answers null for an index off the end while
+  // the C# indexer throws (ArgumentOutOfRangeException), so the native read is only emitted
+  // where the source proves the index in range. Every other read keeps the helper; the
+  // receiver/index types come from the consumer hook above, so the untyped emission is
+  // byte-identical.
+  csharpListIndexRead(node) {
+    if (node?.kind !== ts4.SyntaxKind.ElementAccessExpression) {
+      return void 0;
+    }
+    const { expression, argumentExpression } = node;
+    if (expression?.kind !== ts4.SyntaxKind.Identifier || argumentExpression?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const parent = node.parent;
+    const isWrite = parent?.kind === ts4.SyntaxKind.BinaryExpression && (parent.operatorToken.kind === ts4.SyntaxKind.EqualsToken || parent.operatorToken.kind === ts4.SyntaxKind.PlusEqualsToken) && parent.left === node;
+    if (isWrite) {
+      return void 0;
+    }
+    const types = typeof this.csharpListIndexReadTypes === "function" ? this.csharpListIndexReadTypes(node) : void 0;
+    if (types?.index !== "int") {
+      return void 0;
+    }
+    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>") {
+      return void 0;
+    }
+    if (!this.csharpIndexIsLoopBounded(node, expression, argumentExpression)) {
+      return void 0;
+    }
+    return this.printNode(expression, 0) + "[" + this.printNode(argumentExpression, 0) + "]";
+  }
+  // the read sits in the body of a `for` that re-tests `index < receiver.length`, both
+  // resolved to the very symbols the read uses, and nothing in the body can move either
+  csharpIndexIsLoopBounded(read, receiver, index) {
+    const receiverSymbol = this.csharpIdentifierSymbol(receiver);
+    const indexSymbol = this.csharpIdentifierSymbol(index);
+    if (receiverSymbol === void 0 || indexSymbol === void 0) {
+      return false;
+    }
+    let node = read;
+    while (node?.parent !== void 0) {
+      const parent = node.parent;
+      if (ts4.isFunctionLike(parent)) {
+        return false;
+      }
+      if (ts4.isForStatement(parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol)) {
+        return true;
+      }
+      node = parent;
+    }
+    return false;
+  }
+  csharpIdentifierSymbol(node) {
+    if (node?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    try {
+      return this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol) {
+    if (!this.csharpContains(forStatement.statement, read)) {
+      return false;
+    }
+    const condition = forStatement.condition;
+    if (condition?.kind !== ts4.SyntaxKind.BinaryExpression || condition.operatorToken?.kind !== ts4.SyntaxKind.LessThanToken) {
+      return false;
+    }
+    const length = condition.right;
+    if (length?.kind !== ts4.SyntaxKind.PropertyAccessExpression || length.name?.escapedText !== "length") {
+      return false;
+    }
+    if (this.csharpIdentifierSymbol(condition.left) !== indexSymbol) {
+      return false;
+    }
+    if (this.csharpIdentifierSymbol(this.csharpLengthReceiverIdentifier(length.expression)) !== receiverSymbol) {
+      return false;
+    }
+    return !this.csharpIndexBoundIsVoided(forStatement.statement, receiverSymbol, indexSymbol);
+  }
+  // the identifier a `.length` receiver reads through the wrappers whose C# print is the bare
+  // expression: parentheses, and an `as T` assertion for a T printAsExpression does not cast
+  // (`any` / `string` / `T[]` print a cast of their own, and the bound would then not be the
+  // receiver's own Count). `(response as List).length` prints `response?.Count ?? 0`
+  csharpLengthReceiverIdentifier(node) {
+    let current = node;
+    while (current !== void 0) {
+      if (current.kind === ts4.SyntaxKind.ParenthesizedExpression) {
+        current = current.expression;
+        continue;
+      }
+      if (current.kind === ts4.SyntaxKind.AsExpression && current.type !== void 0 && current.type.kind !== ts4.SyntaxKind.AnyKeyword && current.type.kind !== ts4.SyntaxKind.StringKeyword && current.type.kind !== ts4.SyntaxKind.ArrayType) {
+        current = current.expression;
+        continue;
+      }
+      break;
+    }
+    return current;
+  }
+  // the condition ran before the body did: a write to the index, or any use of the receiver
+  // other than an element access / a property read (a method call, an argument, a bare read —
+  // anything that could hand the list to something that shrinks it) voids the bound
+  csharpIndexBoundIsVoided(body, receiverSymbol, indexSymbol) {
+    let voided = false;
+    const visit = (n) => {
+      if (voided || n === void 0) {
+        return;
+      }
+      if (n.kind === ts4.SyntaxKind.Identifier) {
+        const symbol = this.csharpIdentifierSymbol(n);
+        if (symbol === indexSymbol && this.csharpIdentifierIsWritten(n)) {
+          voided = true;
+          return;
+        }
+        if (symbol === receiverSymbol && !this.csharpReceiverUseKeepsBound(n)) {
+          voided = true;
+          return;
+        }
+      }
+      ts4.forEachChild(n, visit);
+    };
+    ts4.forEachChild(body, visit);
+    return voided;
+  }
+  // a use that cannot move the value the condition tested: the expression of an element
+  // access (`recv[i]`, a read or an element write — neither changes the length) or of a
+  // property READ (`recv.Count`); a property write or a call on the receiver is not one
+  csharpReceiverUseKeepsBound(node) {
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    if (parent.kind === ts4.SyntaxKind.ElementAccessExpression && parent.expression === node) {
+      return true;
+    }
+    if (parent.kind === ts4.SyntaxKind.PropertyAccessExpression && parent.expression === node) {
+      if (this.csharpIdentifierIsWritten(node)) {
+        return false;
+      }
+      const grand = parent.parent;
+      return !(grand?.kind === ts4.SyntaxKind.CallExpression && grand.expression === parent);
+    }
+    return false;
+  }
+  // the identifier is a write target: `x = v`, `x += v`, `x++` / `x--`, a destructuring
+  // element, or a property/element write through it (`x.length = 0`)
+  csharpIdentifierIsWritten(node) {
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    if (parent.kind === ts4.SyntaxKind.BinaryExpression && parent.left === node && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
+      return true;
+    }
+    if ((parent.kind === ts4.SyntaxKind.PrefixUnaryExpression || parent.kind === ts4.SyntaxKind.PostfixUnaryExpression) && (parent.operator === ts4.SyntaxKind.PlusPlusToken || parent.operator === ts4.SyntaxKind.MinusMinusToken)) {
+      return true;
+    }
+    if (parent.kind === ts4.SyntaxKind.ArrayLiteralExpression || parent.kind === ts4.SyntaxKind.PropertyAccessExpression) {
+      const grand = parent.parent;
+      return grand?.kind === ts4.SyntaxKind.BinaryExpression && grand.left === parent && this.csharpIsAssignmentOperator(grand.operatorToken.kind);
+    }
+    return false;
+  }
+  csharpIsAssignmentOperator(kind) {
+    return kind >= ts4.SyntaxKind.FirstAssignment && kind <= ts4.SyntaxKind.LastAssignment;
   }
   // S22: an index WRITE (`x["k"] = v`) needs no `((IDictionary<string,object>)x)` cast when
   // the receiver's printed C# declaration already IS a dictionary — the cast only exists

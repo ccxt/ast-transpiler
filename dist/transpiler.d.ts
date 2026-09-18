@@ -523,6 +523,19 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpAlwaysExits(statement: any): boolean;
     csharpContains(outer: any, inner: any): boolean;
     csharpElementAccessReceiverIsList(node: any): boolean;
+    csharpListIndexReadTypes(node: any): {
+        receiver: string;
+        index: string;
+    } | undefined;
+    csharpListIndexRead(node: any): string | undefined;
+    csharpIndexIsLoopBounded(read: any, receiver: any, index: any): boolean;
+    csharpIdentifierSymbol(node: any): any;
+    csharpForBoundsIndex(forStatement: any, read: any, receiverSymbol: any, indexSymbol: any): boolean;
+    csharpLengthReceiverIdentifier(node: any): any;
+    csharpIndexBoundIsVoided(body: any, receiverSymbol: any, indexSymbol: any): boolean;
+    csharpReceiverUseKeepsBound(node: any): boolean;
+    csharpIdentifierIsWritten(node: any): boolean;
+    csharpIsAssignmentOperator(kind: any): boolean;
     csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
     csharpElementAccessTypedReceiver(node: any): string | undefined;
     printTypedDictElementAccessIfAny(node: any): string;

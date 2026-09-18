@@ -2502,3 +2502,135 @@ describe('S62: falsy wrapper around a printed bool', () => {
         expect(output).not.toContain("if (isTrue(flag) ? a : b)");
     });
 });
+
+// U59: `x[i]` reads on a list receiver. getValue answers null for an index off the end while
+// the C# indexer throws, so the native read is emitted only where the enclosing `for` re-tests
+// `i < x.length` at the top of every iteration and neither the index nor the receiver can move
+// in the body. The receiver/index types come from the consumer hook
+// (csharpListIndexReadTypes); these tests stub it.
+describe('U59 list index reads bounded by the enclosing for', () => {
+    const config = {
+        'verbose': false,
+        'csharp': {
+            'parser': {
+                'NUM_LINES_END_FILE': 0,
+                'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+                'ELEMENT_ACCESS_WRAPPER_CLOSE': ')',
+            }
+        }
+    };
+    const transpile = (input: string, hook?: (node: any) => any) => {
+        const localTranspiler: any = new Transpiler(config as any);
+        if (hook !== undefined) {
+            localTranspiler.csharpTranspiler.csharpListIndexReadTypes = hook;
+        }
+        return localTranspiler.transpileCSharp(input).content;
+    };
+    const listRead = () => ({ receiver: 'List<object>', index: 'int' });
+    const body = (lines: string[]) => 'function test () {\n    const orders: any[] = [];\n' + lines.join('\n') + '\n}';
+    const loop = (read: string, extra: string[] = []) =>
+        body(['    for (let i = 0; i < orders.length; i++) {', '        const a = ' + read + ';'].concat(extra).concat(['    }']));
+
+    test('an untyped receiver keeps the helper (no hook)', () => {
+        const output = transpile(loop('orders[i]'));
+        expect(output).toContain('object a = getValue(orders, i);');
+        expect(output).not.toContain('orders[i]');
+    });
+    test('a loop-bounded read on a List<object> receiver prints the native indexer', () => {
+        const output = transpile(loop('orders[i]'), listRead);
+        expect(output).toContain('object a = orders[i];');
+        expect(output).not.toContain('getValue(orders, i)');
+    });
+    test('an IList<object> receiver is a valid indexer receiver too', () => {
+        const output = transpile(loop('orders[i]'), () => ({ receiver: 'IList<object>', index: 'int' }));
+        expect(output).toContain('object a = orders[i];');
+    });
+    test('a non-int index keeps the helper', () => {
+        const output = transpile(loop('orders[i]'), () => ({ receiver: 'List<object>', index: 'Int64' }));
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a receiver the hook does not name a list keeps the helper', () => {
+        const output = transpile(loop('orders[i]'), () => ({ receiver: 'object', index: 'int' }));
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a read outside any loop keeps the helper', () => {
+        const output = transpile(body(['    let i = 0;', '    const a = orders[i];']), listRead);
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a while loop keeps the helper', () => {
+        const output = transpile(body(['    let i = 0;', '    while (i < orders.length) {', '        const a = orders[i];', '        i++;', '    }']), listRead);
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a `<=` condition keeps the helper', () => {
+        const output = transpile(body(['    for (let i = 0; i <= orders.length - 1; i++) {', '        const a = orders[i];', '    }']), listRead);
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a condition bounding another name keeps the helper', () => {
+        const output = transpile(body(['    const other: any[] = [];', '    for (let i = 0; i < other.length; i++) {', '        const a = orders[i];', '    }']), listRead);
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a read in the loop header keeps the helper', () => {
+        const output = transpile(body(['    for (let i = 0; i < orders.length; i++) {', '        const a = orders[i];', '    }']), listRead);
+        expect(output).toContain('object a = orders[i];');
+        const header = transpile(body(['    for (let i = 0; i < orders.length; i = i + orders[i].length) {', '        const a = orders[i];', '    }']), listRead);
+        expect(header).toContain('getValue(orders, i)');
+    });
+    test('a receiver mutated in the body keeps the helper', () => {
+        const push = transpile(loop('orders[i]', ['        orders.push (a);']), listRead);
+        expect(push).toContain('object a = getValue(orders, i);');
+        const pop = transpile(loop('orders[i]', ['        orders.pop ();']), listRead);
+        expect(pop).toContain('object a = getValue(orders, i);');
+        const truncate = transpile(loop('orders[i]', ['        orders.length = 0;']), listRead);
+        expect(truncate).toContain('object a = getValue(orders, i);');
+    });
+    test('a receiver handed to a callee in the body keeps the helper', () => {
+        const output = transpile(loop('orders[i]', ['        this.parseAll (orders);']), listRead);
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('an index written in the body keeps the helper', () => {
+        const output = transpile(loop('orders[i]', ['        i = i + 1;']), listRead);
+        expect(output).toContain('object a = getValue(orders, i);');
+    });
+    test('a read inside a nested function keeps the helper', () => {
+        const output = transpile(loop('orders[i]', ['        const f = () => orders[i];']), listRead);
+        expect(output).toContain('getValue(orders, i)');
+    });
+    test('a nested loop reading the outer receiver through the outer index prints natively', () => {
+        const output = transpile(body([
+            '    const other: any[] = [];',
+            '    for (let i = 0; i < orders.length; i++) {',
+            '        for (let j = 0; j < other.length; j++) {',
+            '            const a = orders[i];',
+            '        }',
+            '    }',
+        ]), listRead);
+        expect(output).toContain('object a = orders[i];');
+    });
+    test('a receiver written before the loop still qualifies', () => {
+        const output = transpile('function test (other) {\n    let orders: any[] = [];\n    orders = other;\n    for (let i = 0; i < orders.length; i++) {\n        const a = orders[i];\n    }\n}', listRead);
+        expect(output).toContain('object a = orders[i];');
+    });
+    test('a property read of the receiver in the body keeps the bound', () => {
+        const output = transpile(loop('orders[i]', ['        const n = orders.length;']), listRead);
+        expect(output).toContain('object a = orders[i];');
+    });
+    test('an element write keeps the cast path', () => {
+        const output = transpile(body(['    for (let i = 0; i < orders.length; i++) {', '        orders[i] = 5;', '    }']), listRead);
+        expect(output).toContain('((List<object>)orders)[Convert.ToInt32(i)] = 5;');
+    });
+    test('a `(x as List).length` condition bounds the receiver itself', () => {
+        const output = transpile(body(['    for (let i = 0; i < (orders as List).length; i++) {', '        const a = orders[i];', '    }']), listRead);
+        expect(output).toContain('object a = orders[i];');
+    });
+    test('an `as any` / `as string[]` length receiver keeps the helper', () => {
+        const anyCast = transpile(body(['    for (let i = 0; i < (orders as any).length; i++) {', '        const a = orders[i];', '    }']), listRead);
+        expect(anyCast).toContain('getValue(orders, i)');
+        const arrayCast = transpile(body(['    for (let i = 0; i < (orders as any[]).length; i++) {', '        const a = orders[i];', '    }']), listRead);
+        expect(arrayCast).toContain('getValue(orders, i)');
+    });
+    test('a string key is not a list index read', () => {
+        const output = transpile(body(['    for (let i = 0; i < orders.length; i++) {', '        const a = orders["k"];', '    }']), listRead);
+        expect(output).not.toContain('orders["k"]');
+    });
+});
+
