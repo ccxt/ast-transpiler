@@ -1014,9 +1014,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaProvableNumericKind(node: any): string | undefined;
     javaNativeArithmeticKind(node: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
-    javaProvableCounterInt(node: any): boolean;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
-    javaProvableNumericDoubleOperand(node: any): boolean;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
     collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;
