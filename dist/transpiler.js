@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8396,15 +8396,6 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
-var JAVA_SPLIT_RECEIVER_KINDS = /* @__PURE__ */ new Set([
-  ts6.SyntaxKind.Identifier,
-  ts6.SyntaxKind.PropertyAccessExpression,
-  ts6.SyntaxKind.ElementAccessExpression,
-  ts6.SyntaxKind.CallExpression,
-  ts6.SyntaxKind.ParenthesizedExpression,
-  ts6.SyntaxKind.StringLiteral,
-  ts6.SyntaxKind.NoSubstitutionTemplateLiteral
-]);
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -9421,44 +9412,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return leftKind;
   }
-  // true when the receiver's printed Java would be a `cond ? a : b` (a parenthesised
-  // conditional): those keep the helper so no added line carries a `?`
-  javaSplitTernaryReceiver(node) {
-    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
-      return this.javaSplitTernaryReceiver(node.expression);
-    }
-    return node.kind === ts6.SyntaxKind.ConditionalExpression;
-  }
-  // `s.split (<literal>)` -> the printer's own TS-array shape around Java's
-  // String.split(Pattern.quote(...)): the plain-string receiver makes the helper's
-  // String.valueOf/null branch unreachable and the result stays readable as List<Object>.
-  javaNativeSplitCall(node, name, parsedArg) {
-    if (node === void 0 || name === void 0 || parsedArg === void 0) {
-      return void 0;
-    }
-    const callee = node.expression;
-    if (callee === void 0 || callee.kind !== ts6.SyntaxKind.PropertyAccessExpression) {
-      return void 0;
-    }
-    if (callee.name?.escapedText !== "split" || node.arguments?.length !== 1) {
-      return void 0;
-    }
-    const receiver = callee.expression;
-    const separator = node.arguments[0];
-    if (receiver === void 0 || !JAVA_SPLIT_RECEIVER_KINDS.has(receiver.kind)) {
-      return void 0;
-    }
-    if (this.javaSplitTernaryReceiver(receiver)) {
-      return void 0;
-    }
-    if (separator.kind !== ts6.SyntaxKind.StringLiteral && separator.kind !== ts6.SyntaxKind.NoSubstitutionTemplateLiteral) {
-      return void 0;
-    }
-    if (this.javaScalarFamily(receiver) !== "string") {
-      return void 0;
-    }
-    return `${this.ARRAY_OPENING_TOKEN}((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))${this.ARRAY_CLOSING_TOKEN}`;
-  }
   // integer literals print as Java `int`; the helpers normalize Integer to Long before
   // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
   // result identical
@@ -10369,11 +10322,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   printJoinCall(_node, _identation, name = void 0, parsedArg = void 0) {
     return `String.join((String)${parsedArg}, (java.util.List<String>)${name})`;
   }
-  printSplitCall(node, _identation, name = void 0, parsedArg = void 0) {
-    const nativeSplit = this.javaNativeSplitCall(node, name, parsedArg);
-    if (nativeSplit !== void 0) {
-      return nativeSplit;
-    }
+  printSplitCall(_node, _identation, name = void 0, parsedArg = void 0) {
     return `Helpers.split(${name}, ${parsedArg})`;
   }
   printConcatCall(_node, _identation, name = void 0, parsedArg = void 0) {
