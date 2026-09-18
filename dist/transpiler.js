@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -5818,6 +5818,40 @@ func New${this.capitalize(this.className)}() *${this.className} {
     ts5.forEachChild(scope, visit);
     return shadowed;
   }
+  // the shape `x.push(v)` that both the native emission and the declaration's safety
+  // scan accept: the printed `x = append(x, v)` is a statement, so a value position or
+  // a multi-argument/spread call still needs the helper
+  goIsNativeAppendShape(receiverNode, pushNode) {
+    if (receiverNode?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    if (pushNode?.parent?.kind !== ts5.SyntaxKind.ExpressionStatement) {
+      return false;
+    }
+    if (pushNode.questionDotToken !== void 0 || pushNode.expression?.questionDotToken !== void 0) {
+      return false;
+    }
+    const access = pushNode.expression;
+    if (access?.kind !== ts5.SyntaxKind.PropertyAccessExpression || access.expression !== receiverNode || access.name?.escapedText !== "push") {
+      return false;
+    }
+    const args = pushNode.arguments;
+    return args?.length === 1 && args[0].kind !== ts5.SyntaxKind.SpreadElement;
+  }
+  // `x.push(v)` on a local the printer declared `[]any` prints the native
+  // `x = append(x, v)`, or undefined to keep AppendToArray(&x, v). An `any` box holding
+  // the slice keeps the helper: `&x` is a *any there, while a declared []any local would
+  // pass a *[]any the helper's parameter does not accept.
+  goNativeAppendReceiver(pushNode) {
+    const receiver = pushNode?.expression?.expression;
+    if (!this.goIsNativeAppendShape(receiver, pushNode)) {
+      return void 0;
+    }
+    if (this.goDeclaredTypeOfIdentifier(receiver) !== "[]any") {
+      return void 0;
+    }
+    return this.printNode(receiver, 0);
+  }
   // reject the refinement when something downstream needs the local to stay `any`:
   // `x.push(v)` prints `AppendToArray(&x, v)` (a *T is not a *any) and a later
   // assignment of a value with another concrete type would stop compiling
@@ -5833,8 +5867,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
       if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === varName && n !== declaration.name) {
         const parent = n.parent;
         if (parent?.kind === ts5.SyntaxKind.PropertyAccessExpression && parent.expression === n && parent.name?.escapedText === "push") {
-          safe = false;
-          return;
+          if (goType !== "[]any" || !this.goIsNativeAppendShape(n, parent.parent)) {
+            safe = false;
+            return;
+          }
         }
         if (parent?.kind === ts5.SyntaxKind.VariableDeclaration && parent.name === n) {
           return;
@@ -7757,6 +7793,10 @@ ${this.getIden(identation)}${returnStatement}`;
     let returnValue = "";
     let returnRandName = name;
     parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
+    const nativeReceiver = this.goNativeAppendReceiver(node);
+    if (nativeReceiver !== void 0) {
+      return `${nativeReceiver} = append(${nativeReceiver}, ${parsedArg})`;
+    }
     if (name?.startsWith("GetValue") || /[\]\)]$/.test(name ?? "")) {
       returnRandName = "retRes" + this.getLineBasedSuffix(node);
       returnValue = `${returnRandName} := ${name}

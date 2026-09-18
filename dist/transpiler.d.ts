@@ -752,6 +752,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
+    goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
+    goNativeAppendReceiver(pushNode: any): string | undefined;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
