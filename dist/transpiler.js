@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9065,19 +9065,112 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return incrementor.kind === ts6.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts6.SyntaxKind.PrefixUnaryExpression;
   }
-  // Java primitive kind of a comparison operand; undefined keeps the helper
+  // Java primitive kind of a comparison operand; undefined keeps the helper.
+  // Two proof sources, both from emissions the printer itself performs:
+  //   * literals: int/long (magnitude, `L` suffix) and fractional/exponent doubles;
+  //   * expressions whose Java text is pinned by the printer's own emitter or by the
+  //     runtime signature it calls: a `var` for-counter (int), a `.length` access
+  //     (List.size()/String.length(), else the int-returning Helpers.getArrayLength),
+  //     `x.indexOf(arg)`/`x.search(arg)` (Helpers.getIndexOf / String.indexOf, int),
+  //     Math.round (long) and Math.floor/Math.ceil/Math.pow (double).
+  // The printed value of every accepted shape is a Java primitive, so none of them can
+  // be null and the helper's null ordering cannot differ.
   javaPrimitiveOperandKind(node) {
+    if (node === void 0 || node === null) {
+      return void 0;
+    }
+    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      return this.javaPrimitiveOperandKind(node.expression);
+    }
     const literalKind = this.javaIntegerLiteralKind(node);
     if (literalKind !== void 0) {
       return literalKind;
+    }
+    if (this.isJavaFloatLiteral(node)) {
+      return "double";
     }
     if (this.isJavaPrimitiveForCounter(node)) {
       return "int";
     }
     if (node.kind === ts6.SyntaxKind.PropertyAccessExpression && node.name.escapedText === "length") {
-      return this.javaLengthKind(node.expression) !== void 0 ? "int" : void 0;
+      return "int";
+    }
+    if (node.kind === ts6.SyntaxKind.CallExpression) {
+      return this.javaPrintedCallKind(node);
     }
     return void 0;
+  }
+  // fractional / exponent literals print as Java double literals (printNumericLiteral)
+  isJavaFloatLiteral(node) {
+    if (!node || !ts6.isNumericLiteral(node)) {
+      return false;
+    }
+    const text = node.text;
+    if (/^0[xXbBoO]/.test(text)) {
+      return false;
+    }
+    return text.indexOf(".") !== -1 || text.indexOf("e") !== -1 || text.indexOf("E") !== -1;
+  }
+  // Java kind of a call the printer emits itself, undefined when the callee is not one of
+  // the pinned emitters. Mirrors printIndexOfCall / printSearchCall / printMathRoundCall /
+  // printMathFloorCall / printMathCeilCall and the Math.pow emission:
+  //   x.indexOf(a) / x.search(a) -> int    Math.round(x)      -> long
+  //   Math.floor(x) / Math.ceil(x)  -> double                 Math.pow(a, b) -> double
+  javaPrintedCallKind(node) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression) {
+      return void 0;
+    }
+    const name = callee.name?.escapedText;
+    const argCount = node.arguments?.length ?? 0;
+    const onMath = callee.expression?.kind === ts6.SyntaxKind.Identifier && callee.expression.escapedText === "Math";
+    switch (name) {
+      case "indexOf":
+      case "search":
+        return argCount >= 1 ? "int" : void 0;
+      case "round":
+        return onMath && argCount === 1 ? "long" : void 0;
+      case "floor":
+      case "ceil":
+        return onMath && argCount === 1 ? "double" : void 0;
+      case "pow":
+        return onMath && argCount === 2 ? "double" : void 0;
+    }
+    return void 0;
+  }
+  // operand usability for `>=` / `<` / `<=`, which all route through the helper's
+  // isEqual. Two integral operands are always exact (the helper normalizes both to
+  // Long and compares through toLong); once a double is involved, every operand must
+  // be exact on both of isEqual's paths at once — a double goes through toLong (which
+  // saturates at Long.MAX_VALUE) and BigDecimal (which throws for ±Infinity), and a
+  // long above 2^53 is rounded by the operator but not by toLong. So a double is
+  // accepted only as a finite literal within ±2^53, and a long only as a literal in
+  // the same range (every accepted int shape is int-range already).
+  javaComparisonOperandsAreExact(left, leftKind, right, rightKind) {
+    if (leftKind === "int" && rightKind === "int") {
+      return true;
+    }
+    if (leftKind !== "double" && rightKind !== "double") {
+      return true;
+    }
+    return this.javaComparisonOperandIsExactAgainstDouble(left, leftKind) && this.javaComparisonOperandIsExactAgainstDouble(right, rightKind);
+  }
+  javaComparisonOperandIsExactAgainstDouble(node, kind) {
+    if (kind === "int") {
+      return true;
+    }
+    if (kind !== "long" && kind !== "double") {
+      return false;
+    }
+    if (!ts6.isNumericLiteral(node)) {
+      return false;
+    }
+    const text = node.text;
+    if (/^[0-9]+$/.test(text)) {
+      return BigInt(text) <= 9007199254740992n;
+    }
+    const value = Number(text);
+    return Number.isFinite(value) && Math.abs(value) <= 9007199254740992;
   }
   // checker proof that the value is printed as a java.util.HashMap: TS object
   // shapes (interfaces, object literals, aliases) become HashMaps, while class
@@ -9180,7 +9273,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
     }
     if (op === ts6.SyntaxKind.LessThanToken || op === ts6.SyntaxKind.GreaterThanToken || op === ts6.SyntaxKind.LessThanEqualsToken || op === ts6.SyntaxKind.GreaterThanEqualsToken) {
-      if (this.javaPrimitiveOperandKind(left) !== void 0 && this.javaPrimitiveOperandKind(right) !== void 0) {
+      const leftKind = this.javaPrimitiveOperandKind(left);
+      const rightKind = this.javaPrimitiveOperandKind(right);
+      const orderingSafe = op === ts6.SyntaxKind.GreaterThanToken || this.javaComparisonOperandsAreExact(left, leftKind, right, rightKind);
+      if (leftKind !== void 0 && rightKind !== void 0 && orderingSafe) {
         return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
       }
     }

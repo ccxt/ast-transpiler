@@ -866,19 +866,122 @@ export class JavaTranspiler extends BaseTranspiler {
         return incrementor.kind === ts.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts.SyntaxKind.PrefixUnaryExpression;
     }
 
-    // Java primitive kind of a comparison operand; undefined keeps the helper
+    // Java primitive kind of a comparison operand; undefined keeps the helper.
+    // Two proof sources, both from emissions the printer itself performs:
+    //   * literals: int/long (magnitude, `L` suffix) and fractional/exponent doubles;
+    //   * expressions whose Java text is pinned by the printer's own emitter or by the
+    //     runtime signature it calls: a `var` for-counter (int), a `.length` access
+    //     (List.size()/String.length(), else the int-returning Helpers.getArrayLength),
+    //     `x.indexOf(arg)`/`x.search(arg)` (Helpers.getIndexOf / String.indexOf, int),
+    //     Math.round (long) and Math.floor/Math.ceil/Math.pow (double).
+    // The printed value of every accepted shape is a Java primitive, so none of them can
+    // be null and the helper's null ordering cannot differ.
     javaPrimitiveOperandKind(node) {
+        if (node === undefined || node === null) {
+            return undefined;
+        }
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaPrimitiveOperandKind(node.expression);
+        }
         const literalKind = this.javaIntegerLiteralKind(node);
         if (literalKind !== undefined) {
             return literalKind;
+        }
+        if (this.isJavaFloatLiteral(node)) {
+            return 'double';
         }
         if (this.isJavaPrimitiveForCounter(node)) {
             return 'int';
         }
         if (node.kind === ts.SyntaxKind.PropertyAccessExpression && node.name.escapedText === 'length') {
-            return this.javaLengthKind(node.expression) !== undefined ? 'int' : undefined;
+            return 'int';
+        }
+        if (node.kind === ts.SyntaxKind.CallExpression) {
+            return this.javaPrintedCallKind(node);
         }
         return undefined;
+    }
+
+    // fractional / exponent literals print as Java double literals (printNumericLiteral)
+    isJavaFloatLiteral(node) {
+        if (!node || !ts.isNumericLiteral(node)) {
+            return false;
+        }
+        const text = node.text;
+        if (/^0[xXbBoO]/.test(text)) {
+            return false;
+        }
+        return text.indexOf('.') !== -1 || text.indexOf('e') !== -1 || text.indexOf('E') !== -1;
+    }
+
+    // Java kind of a call the printer emits itself, undefined when the callee is not one of
+    // the pinned emitters. Mirrors printIndexOfCall / printSearchCall / printMathRoundCall /
+    // printMathFloorCall / printMathCeilCall and the Math.pow emission:
+    //   x.indexOf(a) / x.search(a) -> int    Math.round(x)      -> long
+    //   Math.floor(x) / Math.ceil(x)  -> double                 Math.pow(a, b) -> double
+    javaPrintedCallKind(node) {
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) {
+            return undefined;
+        }
+        const name = callee.name?.escapedText;
+        const argCount = node.arguments?.length ?? 0;
+        const onMath = callee.expression?.kind === ts.SyntaxKind.Identifier
+            && callee.expression.escapedText === 'Math';
+        switch (name) {
+        case 'indexOf':
+        case 'search':
+            // the dispatch routes a 1-argument indexOf/search through the int-returning
+            // helpers; a receiver that prints String keeps String.indexOf (int as well)
+            return argCount >= 1 ? 'int' : undefined;
+        case 'round':
+            return onMath && argCount === 1 ? 'long' : undefined;
+        case 'floor':
+        case 'ceil':
+            return onMath && argCount === 1 ? 'double' : undefined;
+        case 'pow':
+            return onMath && argCount === 2 ? 'double' : undefined;
+        }
+        return undefined;
+    }
+
+    // operand usability for `>=` / `<` / `<=`, which all route through the helper's
+    // isEqual. Two integral operands are always exact (the helper normalizes both to
+    // Long and compares through toLong); once a double is involved, every operand must
+    // be exact on both of isEqual's paths at once — a double goes through toLong (which
+    // saturates at Long.MAX_VALUE) and BigDecimal (which throws for ±Infinity), and a
+    // long above 2^53 is rounded by the operator but not by toLong. So a double is
+    // accepted only as a finite literal within ±2^53, and a long only as a literal in
+    // the same range (every accepted int shape is int-range already).
+    javaComparisonOperandsAreExact(left, leftKind, right, rightKind) {
+        if (leftKind === 'int' && rightKind === 'int') {
+            return true;
+        }
+        if (leftKind !== 'double' && rightKind !== 'double') {
+            return true;
+        }
+        return this.javaComparisonOperandIsExactAgainstDouble(left, leftKind)
+            && this.javaComparisonOperandIsExactAgainstDouble(right, rightKind);
+    }
+
+    javaComparisonOperandIsExactAgainstDouble(node, kind) {
+        if (kind === 'int') {
+            return true;
+        }
+        if (kind !== 'long' && kind !== 'double') {
+            return false;
+        }
+        if (!ts.isNumericLiteral(node)) {
+            return false;
+        }
+        const text = node.text;
+        if (/^[0-9]+$/.test(text)) {
+            // the text is what the printer emits, and JS Number() rounds above 2^53 —
+            // compare the literal's exact value instead
+            return BigInt(text) <= 9007199254740992n;
+        }
+        const value = Number(text);
+        return Number.isFinite(value) && Math.abs(value) <= 9007199254740992;
     }
 
     // checker proof that the value is printed as a java.util.HashMap: TS object
@@ -1011,11 +1114,17 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
-        // native comparison for two operands that are provably Java int/long
-        // values; the helper's ordering is identical for every int/long pair
+        // native comparison when both operands provably print as Java numbers. `>` is
+        // exact for every numeric pair (isGreaterThan is a toDouble compare, NaN
+        // included); `>=` / `<` / `<=` also go through the helper's isEqual, so they
+        // need operands isEqual reproduces exactly.
         if (op === ts.SyntaxKind.LessThanToken || op === ts.SyntaxKind.GreaterThanToken ||
             op === ts.SyntaxKind.LessThanEqualsToken || op === ts.SyntaxKind.GreaterThanEqualsToken) {
-            if (this.javaPrimitiveOperandKind(left) !== undefined && this.javaPrimitiveOperandKind(right) !== undefined) {
+            const leftKind = this.javaPrimitiveOperandKind(left);
+            const rightKind = this.javaPrimitiveOperandKind(right);
+            const orderingSafe = op === ts.SyntaxKind.GreaterThanToken
+                || this.javaComparisonOperandsAreExact(left, leftKind, right, rightKind);
+            if (leftKind !== undefined && rightKind !== undefined && orderingSafe) {
                 return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
             }
         }

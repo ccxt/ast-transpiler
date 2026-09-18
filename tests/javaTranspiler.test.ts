@@ -3237,6 +3237,178 @@ describe('helper removal: native comparison / containsKey / size', () => {
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("((java.util.Map<?, ?>)Helpers.GetValue(o, k)).containsKey(j)");
     });
+
+    // ---- java-17: printed-primitive comparison operands -------------------
+    // `.length`, `.indexOf`/`.search`, Math.round and Math.floor/ceil/pow all print
+    // through emitters whose Java text is a primitive, so the ordered comparison no
+    // longer round-trips through the Object-taking helper.
+
+    test('unproven length receiver compares natively through the int-returning helper', () => {
+        const input =
+        "class T {\\n" +
+        "    f(o: any): boolean {\\n" +
+        "        return o.length > 0;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArrayLength(o) > 0");
+        expect(output).not.toContain("Helpers.isGreaterThan");
+    });
+
+    test('indexOf result compares natively (int) instead of through the comparison helper', () => {
+        const input =
+        "class T {\\n" +
+        "    f(s: any, needle: any): boolean {\\n" +
+        "        return s.indexOf(needle) >= 0;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(s, needle) >= 0");
+        expect(output).not.toContain("Helpers.isGreaterThanOrEqual");
+    });
+
+    test('zero-argument indexOf (no printed helper route) keeps the comparison helper', () => {
+        const input =
+        "class T {\\n" +
+        "    f(s: any): boolean {\\n" +
+        "        return s.indexOf() >= 0;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isGreaterThanOrEqual(s.indexOf(), 0)");
+    });
+
+    test('search result (String.indexOf, int) compares natively', () => {
+        const input =
+        "class T {\\n" +
+        "    f(s: any, needle: any): boolean {\\n" +
+        "        return s.search(needle) >= 0;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((String)s).indexOf(needle) >= 0');
+        expect(output).not.toContain("Helpers.isGreaterThanOrEqual");
+    });
+
+    test('Math.round result (long, never NaN) compares natively under <', () => {
+        const input =
+        "class T {\\n" +
+        "    f(x: number): boolean {\\n" +
+        "        return Math.round(x) < 5;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Math.round(Double.parseDouble(Helpers.toString(x))) < 5");
+        expect(output).not.toContain("Helpers.isLessThan");
+    });
+
+    test('Math.floor result (double) keeps `<=` (NaN ordering) and goes native under `>`', () => {
+        const lessEqual =
+        "class T {\\n" +
+        "    f(x: number): boolean {\\n" +
+        "        return Math.floor(x) <= 5;\\n" +
+        "    }\\n" +
+        "}"
+        const lessEqualOutput = transpiler.transpileJava(lessEqual).content;
+        expect(lessEqualOutput).toContain("Helpers.isLessThanOrEqual((Math.floor(Double.parseDouble(Helpers.toString(x)))), 5)");
+        const greater =
+        "class T {\\n" +
+        "    f(x: number): boolean {\\n" +
+        "        return Math.floor(x) > 5;\\n" +
+        "    }\\n" +
+        "}"
+        const greaterOutput = transpiler.transpileJava(greater).content;
+        expect(greaterOutput).toContain("(Math.floor(Double.parseDouble(Helpers.toString(x)))) > 5");
+        expect(greaterOutput).not.toContain("Helpers.isGreaterThan");
+    });
+
+    test('Math.pow result (double) goes native under `>` and keeps `>=`', () => {
+        const greater =
+        "class T {\\n" +
+        "    f(x: number, y: number): boolean {\\n" +
+        "        return Math.pow(x, y) > 5;\\n" +
+        "    }\\n" +
+        "}"
+        const greaterOutput = transpiler.transpileJava(greater).content;
+        expect(greaterOutput).toContain("Helpers.mathPow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y))) > 5");
+        expect(greaterOutput).not.toContain("Helpers.isGreaterThan");
+        const greaterEqual =
+        "class T {\\n" +
+        "    f(x: number, y: number): boolean {\\n" +
+        "        return Math.pow(x, y) >= 5;\\n" +
+        "    }\\n" +
+        "}"
+        const greaterEqualOutput = transpiler.transpileJava(greaterEqual).content;
+        expect(greaterEqualOutput).toContain("Helpers.isGreaterThanOrEqual(Helpers.mathPow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y))), 5)");
+    });
+
+    test('two numeric literals compare natively, a fractional literal one-sidedly', () => {
+        const input =
+        "class T {\\n" +
+        "    f(): boolean {\\n" +
+        "        return 1.5 > 1;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return 1.5 > 1;");
+        expect(output).not.toContain("Helpers.isGreaterThan");
+    });
+
+    test('a NaN-capable double operand keeps `<` against a primitively-printed side', () => {
+        const input =
+        "class T {\\n" +
+        "    f(x: number): boolean {\\n" +
+        "        return Math.floor(x) < 0.5;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isLessThan((Math.floor(Double.parseDouble(Helpers.toString(x)))), 0.5)");
+    });
+
+    test('a double value keeps `>=` (isEqual is not exact for ±Infinity / 2^63 saturation)', () => {
+        const input =
+        "class T {\\n" +
+        "    f(x: number): boolean {\\n" +
+        "        return Math.floor(x) >= 5;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isGreaterThanOrEqual((Math.floor(Double.parseDouble(Helpers.toString(x)))), 5)");
+    });
+
+    test('a small finite double literal compares natively under `<`', () => {
+        const input =
+        "class T {\\n" +
+        "    f(s: any): boolean {\\n" +
+        "        return s.search(\"x\") < 1.5;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((String)s).indexOf("x") < 1.5');
+        expect(output).not.toContain("Helpers.isLessThan");
+    });
+
+    test('a long literal above 2^53 keeps the helper once a double is involved', () => {
+        const input =
+        "class T {\\n" +
+        "    f(): boolean {\\n" +
+        "        return 9007199254740994 <= 1.5;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isLessThanOrEqual(9007199254740994L, 1.5)");
+    });
+
+    test('Object-typed side keeps the comparison helper even when the other side prints a primitive', () => {
+        const input =
+        "class T {\\n" +
+        "    f(a: number, o: any): boolean {\\n" +
+        "        return a < o.length;\\n" +
+        "    }\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isLessThan(a, Helpers.getArrayLength(o))");
+    });
 });
 
 describe('java replaceAll native emission', () => {
