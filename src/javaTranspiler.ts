@@ -79,6 +79,13 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
 
 export class JavaTranspiler extends BaseTranspiler {
 
+    // optional proof of the concrete printed Java type of an expression, installed by
+    // the embedding build layer for the locals it retypes itself (ccxt:
+    // build/java-local-types.js); it must describe the same type the declaration is
+    // emitted with, or the operator will not compile. Only `String` is consumed today,
+    // as the anchor of a native `+` concat (see javaProvableString).
+    javaExpressionTypeResolver?: (node) => string | undefined;
+
     countRequiredParameters(declaration) {
         // parameters with no default, no question token and no rest are required positionally
         const params = declaration?.parameters ?? [];
@@ -1192,8 +1199,11 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // true when the printed Java for this operand is statically a String: a string
-    // literal, or a nested `+` this rule prints as a native concat (so every native
-    // concat is anchored by a literal and Java concatenates the other side).
+    // literal, a nested `+` this rule prints as a native concat, or a form the
+    // embedding build layer's javaExpressionTypeResolver names `String` (a local whose
+    // emitted declaration is `String <name> = `, a call to a hand-written `public
+    // String` runtime method). Java compiles `+` only when at least one operand is
+    // statically a String, so a String local anchors the concat like a literal does.
     javaProvableString(node): boolean {
         if (node === undefined) {
             return false;
@@ -1207,7 +1217,21 @@ export class JavaTranspiler extends BaseTranspiler {
         case ts.SyntaxKind.BinaryExpression:
             return this.javaNativeConcat(node);
         }
-        return false;
+        return this.javaResolvedString(node);
+    }
+
+    // the embedding build layer's proof of the concrete printed Java type of an
+    // expression (installed like csharpExpressionTypeResolver); only `String` is
+    // consumed here, and a missing resolver proves nothing
+    javaResolvedString(node): boolean {
+        if (node === undefined || this.javaExpressionTypeResolver === undefined) {
+            return false;
+        }
+        try {
+            return this.javaExpressionTypeResolver(node) === 'String';
+        } catch (e) {
+            return false;
+        }
     }
 
     // does this `+` node print as a native concat (both sides plain string, one side a
