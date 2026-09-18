@@ -1,4 +1,6 @@
 import { Transpiler } from '../src/transpiler';
+import ts from 'typescript';
+import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
 
 jest.mock('module',()=>({
     __esModule: true,
@@ -1333,5 +1335,254 @@ describe('rust numeric literals', () => {
         expect(output).toContain('x.g(Value::Float(-1e-7))');
         expect(output).toContain('Value::Int(-5)');
         expect(output).not.toContain('Value::Int(1e-7)');
+    });
+});
+
+describe('rust declared-Dict locals (rust-25)', () => {
+    // The declared-Dict table answers `rustDeclaredLocalTypeResolver(node)` for a
+    // local the printer itself can prove holds a `Value::Dict` at every use: the
+    // initialiser is a `safe_dict*` call whose default is itself Dict-proven, or
+    // a `Value::Map(..)` object literal, and no later write changes the kind.
+    // The declaration stays `Value`; consumers (get_value / in_op /
+    // add_element_to_object families) read the hook.
+
+    const rustPrinter = () => (transpiler as any).rustTranspiler;
+
+    const identifierUses = (name: string) => {
+        const sourceFile = rustPrinter().getSrc();
+        const found: any[] = [];
+        const walk = (node: any) => {
+            if (ts.isIdentifier(node) && node.text === name) found.push(node);
+            ts.forEachChild(node, walk);
+        };
+        walk(sourceFile);
+        return found;
+    };
+
+    const resolveNamed = (snippet: string, name: string, predicate: (node: any) => boolean = () => true) => {
+        transpiler.transpileRust(snippet);
+        const rust = rustPrinter();
+        const node = identifierUses(name).find(predicate);
+        expect(node).toBeDefined();
+        return { rust, answer: rust.rustDeclaredLocalTypeResolver(node), node };
+    };
+
+    const isElementReceiver = (node: any) => node.parent !== undefined && ts.isElementAccessExpression(node.parent) && node.parent.expression === node;
+
+    test('safe_dict with an object default is proven Dict', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        data['a'] = 1;\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('the declaration stays Value (no native HashMap retype)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(snippet).content;
+        expect(output).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".to_string()), Value::Map({');
+        expect(output).not.toContain('HashMap<String, Value> = self.safeDict');
+    });
+
+    test('safe_dict without a default may be Value::Null, so no proof', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data');\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('an object literal initialiser is proven Dict', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(params) {\n' +
+            '        const request = { symbol: params, type: 1 };\n' +
+            "        request['limit'] = 10;\n" +
+            "        return request['symbol'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'request', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('a safe_dict2 default proves Dict too', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const row = this.safeDict2(response, 'a', 'b', {});\n" +
+            "        return row['x'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'row', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('a default that is itself a proven local proves Dict', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const fallback = this.safeDict(response, 'fallback', {});\n" +
+            "        const row = this.safeDict(response, 'row', fallback);\n" +
+            "        return row['x'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'row', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('reassignment of a non-proven value drops the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, other) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            '        data = other;\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('reassignment of another proven Dict keeps the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            "        data = this.safeDict(response, 'other', {});\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('a destructuring write drops the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, params) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            "        [ data, params ] = this.handleUntilOption('endTime', data, params);\n" +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('a for-of rebind of the local drops the proof (D2)', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, list) {\n' +
+            "        let data = this.safeDict(response, 'data', {});\n" +
+            '        for (data of list) {}\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('an element write into the local stays kind-preserving', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        data['a'] = data['b'];\n" +
+            "        return data['c'];\n" +
+            '    }\n' +
+            '}';
+        const { rust, answer, node } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+        expect(rust.rustDeclaredLocalEntry(node).uses.elementAccess).toBe(3);
+    });
+
+    test('a different binding of the name in a nested block does not invalidate', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            '        { const data = 1; m.insert("k", data); }\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', (node) => isElementReceiver(node) && node.getStart() > snippet.indexOf('return'));
+        expect(answer).toBe('dict');
+    });
+
+    test('a use of a shadowing binding is not answered for the outer local', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            '        { const other = 1; m.insert("k", other); }\n' +
+            "        return data['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'data', isElementReceiver);
+        expect(answer).toBe('dict');
+    });
+
+    test('an unrelated Value local is not in the table', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const value = this.safeValue(response, 'data');\n" +
+            "        return value['b'];\n" +
+            '    }\n' +
+            '}';
+        const { answer } = resolveNamed(snippet, 'value', isElementReceiver);
+        expect(answer).toBeUndefined();
+    });
+
+    test('the census counts proven and unproven declarators', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response, other) {\n' +
+            "        const proven = this.safeDict(response, 'a', {});\n" +
+            "        const mayBeNull = this.safeDict(response, 'b');\n" +
+            "        let reassigned = this.safeDict(response, 'c', {});\n" +
+            '        reassigned = other;\n' +
+            "        return [ proven['x'], mayBeNull['y'], reassigned['z'] ];\n" +
+            '    }\n' +
+            '}';
+        transpiler.transpileRust(snippet);
+        const census = rustPrinter().rustDeclaredDictLocalCensus();
+        expect(census).toEqual({ declarators: 3, dict: 1, alwaysDict: 2, kindUnstable: 1, retypeEligible: 1 });
+    });
+
+    test('the table is keyed by local name and skips non-dict initialisers', () => {
+        const snippet =
+            'class T {\n' +
+            '    m(response) {\n' +
+            "        const data = this.safeDict(response, 'data', {});\n" +
+            "        const list = this.safeList(response, 'data');\n" +
+            '        return data;\n' +
+            '    }\n' +
+            '}';
+        transpiler.transpileRust(snippet);
+        const table = rustPrinter().rustDeclaredDictLocals();
+        expect(Array.from(table.keys())).toEqual(['data']);
+    });
+
+    test('RUST_DECLARED_DICT_LOCALS exposes the vocabulary and callee table', () => {
+        expect(RUST_DECLARED_DICT_LOCALS.DICT).toBe('dict');
+        expect(RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES['safe_dict_k']).toBe(2);
+        expect(RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES['safe_dict2']).toBe(3);
+        expect(RUST_DECLARED_DICT_LOCALS.KIND_PRESERVING_MUTATORS.has('add_element_to_object')).toBe(true);
     });
 });

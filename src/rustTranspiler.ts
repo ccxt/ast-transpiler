@@ -68,6 +68,57 @@ const parserConfig = {
     'FALSE_KEYWORD': 'Value::Bool(false)',
 };
 
+/** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
+ *  value provably holds a `Value::Dict` at every use. */
+export type RustDeclaredLocalKind = 'dict';
+
+/** One `let x: Value = <dict-proven initialiser>` declaration. `kind` is only
+ *  answered by the resolver when `alwaysDict && stable`. */
+export interface RustDeclaredDictLocalEntry {
+    kind: RustDeclaredLocalKind;
+    name: string;
+    /** printed callee of the initialiser: a `safe_dict*` name, or `value_map`. */
+    source: string;
+    /** the `safe_dict*` `optionalArgs` default is itself Dict-proven, so the
+     *  helper returns a Dict on every path (it returns that default when the
+     *  key does not hold one). */
+    alwaysDict: boolean;
+    /** no later write in the enclosing function can change the kind (D2). */
+    stable: boolean;
+    /** use census: element-access receiver / kind-preserving mutator / anything else. */
+    uses: { elementAccess: number, mutHelper: number, other: number };
+    declaration: ts.VariableDeclaration;
+    start: number;
+}
+
+/** Vocabulary of the declared-Dict locals table (see
+ *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
+export const RUST_DECLARED_DICT_LOCALS = {
+    /** value the resolver answers for a proven Dict local */
+    DICT: 'dict' as RustDeclaredLocalKind,
+    /** printed `self.<callee>` -> index of its `optionalArgs` parameter.
+     *  `safe_dict*` returns `optional_args[0]` whenever the key holds a non-Dict. */
+    SAFE_CALLEES: {
+        safe_dict_k: 2,
+        safe_dict: 2,
+        safe_dict_n: 2,
+        safe_dict2: 3,
+    } as Record<string, number>,
+    /** `&mut` receivers whose writes land inside the container, so a Dict local
+     *  stays a Dict (`add_element_to_object` / `append_to_array` no-op on a
+     *  non-container, `set_value` / `remove` write a key). */
+    KIND_PRESERVING_MUTATORS: new Set([
+        'add_element_to_object', 'append_to_array', 'set_value', 'remove',
+        'get_value_mut',
+    ]),
+};
+
+/** `x = ..` / `x += ..` — every token that writes a place. */
+function rustIsAssignmentOperator(kind: ts.SyntaxKind): boolean {
+    return kind === ts.SyntaxKind.EqualsToken ||
+        (kind >= ts.SyntaxKind.PlusEqualsToken && kind <= ts.SyntaxKind.CaretEqualsToken);
+}
+
 export class RustTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -1083,6 +1134,316 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         return peeled !== undefined ? peeled : inner;
+    }
+
+    // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
+    //
+    // The printer declares non-bool locals `Value`, and the checker types a
+    // `safe_dict*` result `object | undefined`, so `get_value` / `in_op` /
+    // `add_element_to_object` consumers cannot prove a Dict from the checker.
+    // This table supplies the proof from the printer side and leaves the
+    // declaration `Value`: the initialiser is a `safe_dict*` call whose
+    // `optionalArgs` default is itself Dict-proven (the helper returns that
+    // default whenever the key does not hold a Dict, so the local is a Dict on
+    // every path), or a `Value::Map(..)` object literal; and no later write in
+    // the enclosing function can change the kind (D2).
+    //
+    // Consumers ask `rustDeclaredLocalTypeResolver(node)` for the receiver of a
+    // `get_value`/`get_value_k`/`in_op`/`add_element_to_object` call. A native
+    // `HashMap<String, Value>` *declaration* is deliberately NOT emitted: it
+    // would need a runtime `Value::Dict(Arc<..>)` -> `HashMap` conversion the
+    // runtime does not have, and every use that passes the local to a `&Value`
+    // helper would stop compiling.
+
+    private declaredDictLocalsCache: { src: ts.SourceFile, table: Map<string, RustDeclaredDictLocalEntry[]> } | undefined;
+
+    /** All `let x: Value = <dict-proven initialiser>` declarations of the current
+     *  source file, keyed by local name in declaration order. */
+    rustDeclaredDictLocals(): Map<string, RustDeclaredDictLocalEntry[]> {
+        const src = this.getSrc();
+        if (this.declaredDictLocalsCache === undefined || this.declaredDictLocalsCache.src !== src) {
+            let table: Map<string, RustDeclaredDictLocalEntry[]>;
+            try {
+                table = this.collectRustDeclaredDictLocals(src);
+            } catch (e) {
+                table = new Map(); // no proof -> consumers keep the helper
+            }
+            this.declaredDictLocalsCache = { src, table };
+        }
+        return this.declaredDictLocalsCache.table;
+    }
+
+    /** Printer hook for the helper-removal units: the proven kind of a declared
+     *  local, or undefined when the local is not proven Dict at every use.
+     *  Accepts the receiver node of the helper call (identifier, `x['k']` chain,
+     *  `this.x` chain) or the declaration itself. */
+    rustDeclaredLocalTypeResolver(node: ts.Node): RustDeclaredLocalKind | undefined {
+        const entry = this.rustDeclaredLocalEntry(node);
+        return entry === undefined ? undefined : entry.kind;
+    }
+
+    /** The table entry a use site resolves to (the declaration whose binding the
+     *  use refers to, proven), or undefined. */
+    rustDeclaredLocalEntry(node: ts.Node): RustDeclaredDictLocalEntry | undefined {
+        if (node === undefined) return undefined;
+        const name = ts.isVariableDeclaration(node) ? (node.name as ts.Identifier).text : this.rootPlaceText(node);
+        if (name === undefined) return undefined;
+        const entries = this.rustDeclaredDictLocals().get(name);
+        if (entries === undefined) return undefined;
+        const start = node.getStart();
+        const identifier = this.rustDeclaredLocalIdentifier(node);
+        const symbol = identifier === undefined ? undefined : this.rustSymbolOf(identifier);
+        let best: RustDeclaredDictLocalEntry | undefined;
+        for (const entry of entries) {
+            if (entry.start > start || !entry.alwaysDict || !entry.stable) continue;
+            const scope = this.rustEnclosingFunction(entry.declaration);
+            if (scope !== undefined && !this.isNodeInsideNode(node, scope)) continue;
+            if (identifier !== undefined) {
+                const entrySymbol = this.rustSymbolOf((entry.declaration.name as ts.Identifier));
+                if (symbol !== undefined && entrySymbol !== undefined && symbol !== entrySymbol) continue;
+            }
+            if (best === undefined || entry.start > best.start) best = entry;
+        }
+        return best;
+    }
+
+    /** The identifier at the head of a place (`x`, `x['k']`, `this.x` is not a
+     *  local) — the node the resolver matches against the table. */
+    private rustDeclaredLocalIdentifier(node: ts.Node): ts.Identifier | undefined {
+        let current: any = node;
+        while (current !== undefined) {
+            if (ts.isIdentifier(current)) return current;
+            if (ts.isElementAccessExpression(current) || ts.isPropertyAccessExpression(current)) {
+                if (current.expression.kind === SyntaxKind.ThisKeyword) return undefined;
+                current = current.expression;
+                continue;
+            }
+            if (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
+                current = current.expression;
+                continue;
+            }
+            return undefined;
+        }
+        return undefined;
+    }
+
+    /** Binding symbol of an identifier, or undefined when the checker cannot
+     *  answer (ByContent probes without a class context, for instance). */
+    private rustSymbolOf(node: ts.Identifier): ts.Symbol | undefined {
+        try {
+            return this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /** True when this identifier is a use of the given declaration's binding.
+     *  Without a checker answer the callers stay conservative (reject). */
+    private rustIdentifierRefersToDeclaration(node: ts.Identifier, declaration: ts.VariableDeclaration): boolean {
+        const symbol = this.rustSymbolOf(node);
+        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
+        if (symbol === undefined || declarationSymbol === undefined) return false;
+        return symbol === declarationSymbol;
+    }
+
+    /** Census of the current source file's table, for reports and tests. */
+    rustDeclaredDictLocalCensus(): { declarators: number, dict: number, alwaysDict: number, kindUnstable: number, retypeEligible: number } {
+        let declarators = 0, dict = 0, alwaysDict = 0, kindUnstable = 0, retypeEligible = 0;
+        for (const entries of this.rustDeclaredDictLocals().values()) {
+            for (const entry of entries) {
+                declarators++;
+                if (entry.alwaysDict) alwaysDict++;
+                if (entry.alwaysDict && entry.stable) dict++;
+                if (entry.alwaysDict && !entry.stable) kindUnstable++;
+                // every later use is an element access or a kind-preserving
+                // mutator -> the only uses a native declaration has to serve.
+                if (entry.alwaysDict && entry.stable && entry.uses.other === 0) retypeEligible++;
+            }
+        }
+        return { declarators, dict, alwaysDict, kindUnstable, retypeEligible };
+    }
+
+    private collectRustDeclaredDictLocals(src: ts.SourceFile): Map<string, RustDeclaredDictLocalEntry[]> {
+        const candidates: { declaration: ts.VariableDeclaration, name: string, source: string, defaultNode: ts.Node | undefined }[] = [];
+        const collect = (node) => {
+            if (ts.isVariableDeclaration(node) && node.initializer !== undefined && node.name.kind === SyntaxKind.Identifier) {
+                const info = this.rustDictInitializerInfo(node.initializer);
+                if (info !== undefined) {
+                    candidates.push({ declaration: node, name: String(node.name.escapedText), source: info.source, defaultNode: info.defaultNode });
+                }
+            }
+            ts.forEachChild(node, collect);
+        };
+        ts.forEachChild(src, collect);
+        candidates.sort((a, b) => a.declaration.getStart() - b.declaration.getStart());
+        const table = new Map<string, RustDeclaredDictLocalEntry[]>();
+        for (const candidate of candidates) {
+            const declaration = candidate.declaration;
+            const start = declaration.getStart();
+            const alwaysDict = this.rustDictProvenExpression(candidate.defaultNode, table, start);
+            const scan = this.rustDictLocalWriteScan(declaration, candidate.name, table);
+            const entries = table.get(candidate.name) ?? [];
+            entries.push({
+                kind: RUST_DECLARED_DICT_LOCALS.DICT,
+                name: candidate.name,
+                source: candidate.source,
+                alwaysDict,
+                stable: scan.stable,
+                uses: scan.uses,
+                declaration,
+                start,
+            });
+            table.set(candidate.name, entries);
+        }
+        return table;
+    }
+
+    /** The Dict-proven initialiser shape of a declaration, or undefined. */
+    private rustDictInitializerInfo(node: ts.Node): { source: string, defaultNode: ts.Node | undefined } | undefined {
+        if (ts.isObjectLiteralExpression(node)) {
+            return { source: 'value_map', defaultNode: node };
+        }
+        if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
+            return this.rustDictInitializerInfo(node.expression);
+        }
+        if (!ts.isCallExpression(node)) return undefined;
+        const callee = this.rustSafeDictCallee(node);
+        if (callee === undefined) return undefined;
+        return { source: callee, defaultNode: node.arguments[RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES[callee]] };
+    }
+
+    /** Printed `safe_dict*` callee name of `self.<name>(..)`, or undefined. */
+    private rustSafeDictCallee(node: ts.CallExpression): string | undefined {
+        const expression = node.expression;
+        if (!ts.isPropertyAccessExpression(expression) || expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const printed = this.toSnakeCaseName(expression.name.text);
+        return RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES[printed] === undefined ? undefined : printed;
+    }
+
+    /** True when the expression can only be a Dict at run time: an object
+     *  literal, a `safe_dict*` call with a Dict-proven default, an element of a
+     *  one-element literal default, or an already-proven local. */
+    private rustDictProvenExpression(node: ts.Node | undefined, table: Map<string, RustDeclaredDictLocalEntry[]>, useStart: number): boolean {
+        if (node === undefined) return false;
+        if (ts.isObjectLiteralExpression(node)) return true;
+        if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
+            return this.rustDictProvenExpression(node.expression, table, useStart);
+        }
+        if (ts.isArrayLiteralExpression(node)) {
+            return node.elements.length === 1 && this.rustDictProvenExpression(node.elements[0], table, useStart);
+        }
+        if (ts.isIdentifier(node)) {
+            const entries = table.get(node.text) ?? [];
+            return entries.some((entry) => {
+                if (!entry.alwaysDict || entry.start > useStart) return false;
+                const scope = this.rustEnclosingFunction(entry.declaration);
+                return scope === undefined || this.isNodeInsideNode(node, scope);
+            });
+        }
+        const info = this.rustDictInitializerInfo(node);
+        return info !== undefined && this.rustDictProvenExpression(info.defaultNode, table, useStart);
+    }
+
+    /** D2 scan over the enclosing function: an assignment of a non-Dict-proven
+     *  value would let the kind change. Every other write path the printer emits
+     *  for a local is kind-preserving (`x['k'] = v` -> `add_element_to_object`,
+     *  `x.push(v)` -> `append_to_array`, `delete x[k]` -> `remove`, nested
+     *  `x['a']['b'] = v` -> `get_value_mut`/`set_value`). A *different* binding of
+     *  the same name (sibling block, parameter) is not this local and does not
+     *  count; when the checker cannot separate the two bindings the scan stays
+     *  conservative and rejects. */
+    private rustDictLocalWriteScan(declaration: ts.VariableDeclaration, name: string, table: Map<string, RustDeclaredDictLocalEntry[]>): { stable: boolean, uses: { elementAccess: number, mutHelper: number, other: number } } {
+        const uses = { elementAccess: 0, mutHelper: 0, other: 0 };
+        let stable = true;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) return { stable, uses };
+        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
+        const visit = (node) => {
+            if (!stable) return;
+            if (node !== declaration && this.rustBindsName(node, name)) {
+                const otherSymbol = this.rustSymbolOf((node as any).name);
+                if (declarationSymbol === undefined || otherSymbol === undefined || otherSymbol === declarationSymbol) {
+                    stable = false; // same binding, or the checker cannot tell them apart
+                    return;
+                }
+            }
+            if (node.kind === SyntaxKind.Identifier && node.escapedText === name && node !== declaration.name &&
+                this.rustIdentifierRefersToDeclaration(node, declaration)) {
+                this.rustDictLocalClassifyUse(node, uses);
+            }
+            if (ts.isBinaryExpression(node) && rustIsAssignmentOperator(node.operatorToken.kind) &&
+                this.rustAssignmentWritesWholeLocal(node.left, declaration) &&
+                !this.rustDictProvenExpression(node.right, table, declaration.getStart())) {
+                stable = false; // the local itself is reassigned a non-Dict value
+                return;
+            }
+            // `for (x of list)` / `for (x in obj)` rebind an existing local.
+            if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+                this.rustAssignmentWritesWholeLocal(node.initializer, declaration)) {
+                stable = false;
+                return;
+            }
+            ts.forEachChild(node, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return { stable, uses };
+    }
+
+    /** True when this assignment target writes the local ITSELF (`x = ..`,
+     *  `[x, y] = ..`, `({x} = ..)`), as opposed to a write *into* it
+     *  (`x['k'] = ..`, kind-preserving). */
+    private rustAssignmentWritesWholeLocal(left: ts.Node, declaration: ts.VariableDeclaration): boolean {
+        if (ts.isIdentifier(left)) {
+            return this.rustIdentifierRefersToDeclaration(left, declaration);
+        }
+        if (ts.isParenthesizedExpression(left)) {
+            return this.rustAssignmentWritesWholeLocal(left.expression, declaration);
+        }
+        if (ts.isArrayLiteralExpression(left)) {
+            return left.elements.some((element) => this.rustAssignmentWritesWholeLocal(element, declaration));
+        }
+        if (ts.isObjectLiteralExpression(left)) {
+            return left.properties.some((property) => {
+                if (!ts.isShorthandPropertyAssignment(property)) return false;
+                return this.rustAssignmentWritesWholeLocal(property.name, declaration);
+            });
+        }
+        return false;
+    }
+
+    /** One use of a dict-proven local: an element-access chain (`x['k']`, also
+     *  the `x['k'] = v` write), a kind-preserving mutator (`x.push(v)`,
+     *  `delete x[k]`), or something that would need the local to still be a
+     *  `Value`. */
+    private rustDictLocalClassifyUse(node: ts.Node, uses: { elementAccess: number, mutHelper: number, other: number }): void {
+        let current: any = node;
+        let parent: any = current.parent;
+        if (parent !== undefined && (ts.isElementAccessExpression(parent) || ts.isPropertyAccessExpression(parent)) && parent.expression === current) {
+            current = parent;
+            while (current.parent !== undefined &&
+                (ts.isElementAccessExpression(current.parent) || ts.isPropertyAccessExpression(current.parent)) &&
+                current.parent.expression === current) {
+                current = current.parent;
+            }
+            if (ts.isElementAccessExpression(current)) {
+                uses.elementAccess++;
+                return;
+            }
+            uses.other++; // `x.field` on a dict value
+            return;
+        }
+        if (parent !== undefined && ts.isCallExpression(parent) && ts.isPropertyAccessExpression(parent.expression) &&
+            parent.expression.expression === current && parent.expression.name.text === 'push') {
+            uses.mutHelper++;
+            return;
+        }
+        if (parent !== undefined && ts.isDeleteExpression(parent)) {
+            uses.mutHelper++;
+            return;
+        }
+        uses.other++;
     }
 
 
