@@ -1381,7 +1381,7 @@ describe('csharp typed body locals', () => {
         "}";
         const otherOutput = transpiler.transpileCSharp(otherReceiver).content;
         expect(otherOutput).toContain('Dictionary<string, object> response = this.extend(a, b);');
-        expect(otherOutput).toContain('object id = getValue(response, "id");');
+        expect(otherOutput).toContain('object id = (response != null && response.ContainsKey("id") ? response["id"] : null);');
         // a numeric key is a list index, not a market key
         const numberKey =
         "class Exchange {\n" +
@@ -1935,7 +1935,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         "}\n";
         const output = withDeclaredTypes({ x: 'string?', y: 'string?' }, input);
         expect(output).toContain("isEqual(x, 5)");
-        expect(output).toContain("isEqual(x, y)");
+        expect(output).toContain("(x == y)"); // two declared string? locals compare natively
     });
     test('a parameter keeps isEqual: it prints `object` and the resolver declines it', () => {
         const withDeclaredTypes = (types, input) => {
@@ -2141,7 +2141,7 @@ describe('csharp equality of two reads the embedding build layer typed', () => {
         const mixed = withReadKinds({ alpha: 'string?', beta: 'Int64?' }, twoReads);
         expect(mixed).toContain("isEqual(alpha, beta)");
     });
-    test('a literal on one side stays on the helper', () => {
+    test('a literal against a declared string? read compares natively', () => {
         const input =
         "function f () {\n" +
         "    const alpha = this.safeValue({}, 'a');\n" +
@@ -2149,7 +2149,7 @@ describe('csharp equality of two reads the embedding build layer typed', () => {
         "    return isA;\n" +
         "}";
         const output = withReadKinds({ alpha: 'string?' }, input);
-        expect(output).toContain("isEqual(alpha, \"a\")");
+        expect(output).toContain("(alpha == \"a\")");
     });
 });
 
@@ -2515,7 +2515,7 @@ describe('csharp helper removal: own bool-returning calls type their locals', ()
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain('bool isLinearType = this.isLinear(type, subType);');
         expect(output).toContain('bool isInverseType = this.isInverse(type);');
-        expect(output).toContain("bool isLinearSwapConditional = isLinearType && (!isEqual(market, null));");
+        expect(output).toContain("bool isLinearSwapConditional = isLinearType && ((market != null));");
         expect(output).toContain('if (isLinearSwapConditional)');
         expect(output).toContain('if (isLinearType)');
         expect(output).toContain('if (!isInverseType)');
@@ -2611,9 +2611,9 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    const notInverse = market['inverse'] !== false;\n" +
         "    return [isLinear, notInverse];\n" +
         "}");
-        expect(output).toContain('bool isLinear = ((getValue(market, "linear") as bool?) == true);');
-        expect(output).toContain('bool notInverse = ((getValue(market, "inverse") as bool?) != false);');
-        expect(output).not.toContain('isEqual(getValue(market, "linear"), true)');
+        expect(output).toContain('bool isLinear = (((market.ContainsKey("linear") ? market["linear"] : null) as bool?) == true);');
+        expect(output).toContain('bool notInverse = (((market.ContainsKey("inverse") ? market["inverse"] : null) as bool?) != false);');
+        expect(output).not.toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), true)');
         expect(output).not.toContain('isEqual(getValue(market, "inverse"), false)');
     });
     test('a string-proven dictionary element compared with a string literal', () => {
@@ -2637,8 +2637,8 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "}").content;
         // a hard (bool?) cast would throw on the 'emulated' box, `as` reads it as null, where
         // isEqual answers false for the bool branch and true only for the string one
-        expect(output).toContain('bool enabled = ((getValue(this.has, "fetchTrades") as bool?) != false);');
-        expect(output).toContain('bool emulated = ((getValue(this.has, "fetchCurrencies") as string) == "emulated");');
+        expect(output).toContain('bool enabled = (((this.has.ContainsKey("fetchTrades") ? this.has["fetchTrades"] : null) as bool?) != false);');
+        expect(output).toContain('bool emulated = (((this.has.ContainsKey("fetchCurrencies") ? this.has["fetchCurrencies"] : null) as string) == "emulated");');
     });
     test('an untyped dictionary element keeps isEqual', () => {
         const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
@@ -2646,7 +2646,7 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    const isLinear = market['linear'] === true;\n" +
         "    return isLinear;\n" +
         "}");
-        expect(output).toContain('isEqual(getValue(market, "linear"), true)');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), true)');
     });
     test('an unproven receiver keeps isEqual', () => {
         const output = transpiler.transpileCSharp(
@@ -2662,7 +2662,7 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    const isLinear = market['linear'] === 'true';\n" +
         "    return isLinear;\n" +
         "}");
-        expect(output).toContain('isEqual(getValue(market, "linear"), "true")');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), "true")');
     });
     test('an identifier, a null and a numeric literal keep isEqual', () => {
         const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
@@ -2672,9 +2672,9 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    const c = market['linear'] === 1;\n" +
         "    return [a, b, c];\n" +
         "}");
-        expect(output).toContain('isEqual(getValue(market, "linear"), flag)');
-        expect(output).toContain('isEqual(getValue(market, "linear"), null)');
-        expect(output).toContain('isEqual(getValue(market, "linear"), 1)');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), flag)');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), null)');
+        expect(output).toContain('isEqual((market.ContainsKey("linear") ? market["linear"] : null), 1)');
     });
     test('a non-literal key keeps isEqual', () => {
         const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
@@ -3601,9 +3601,8 @@ describe('isTrue drops for a declared bool the printer did not type itself', () 
     };
     const input = `
 class T {
-    isRoundNumber(x: number): boolean { return true; }
-    f(leverage: number) {
-        const rational = this.isRoundNumber(leverage);
+    f(leverage: number, helper: { isRoundNumber: (x: number) => boolean }) {
+        const rational = helper.isRoundNumber(leverage);
         if (!rational) { return 1; }
         const band = rational ? 'a' : 'b';
         return band;
@@ -3621,8 +3620,8 @@ class T {
         expect(output).toContain('((bool) isTrue(rational)) ? "a" : "b"');
     });
     test('a nullable or non-bool declaration keeps the wrapper', () => {
-        // `bool?` is no condition in C#, and the other resolved kinds are not booleans at all
-        expect(withKind('bool?', input)).toContain('if (!isTrue(rational))');
+        // `bool?` is no condition in C#: it lifts to `== true` (what isTrue answers for a null box)
+        expect(withKind('bool?', input)).toContain('if (!(rational == true))');
         expect(withKind('object', input)).toContain('if (!isTrue(rational))');
     });
 });

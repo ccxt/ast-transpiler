@@ -1036,7 +1036,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0;
         }
         if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && parent.operand === value) {
-            return true;
+            return (parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken);
         }
         return ts.isDeleteExpression(parent);
     }
@@ -1578,6 +1578,23 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         return (typeof resolved === 'string') ? resolved : undefined;
+    }
+
+    // the declared type of an identifier read, including this printer's own local table
+    csharpDeclaredLocalType(node): string | undefined {
+        const provided = this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : undefined;
+        if (provided !== undefined) {
+            return provided;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        if (!this.csharpLocalTypes.has(declaration)) {
+            this.csharpLocalTypes.set(declaration, this.getCSharpLocalType(declaration));
+        }
+        const type = this.csharpLocalTypes.get(declaration);
+        return (type === undefined || type === this.VAR_TOKEN) ? undefined : type;
     }
 
     // `a === b` / `a !== b` between two plain reads: a local or parameter prints as a bare
@@ -3493,21 +3510,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         return written;
     }
 
-    csharpIsWriteTarget(node): boolean {
-        const parent: any = node?.parent;
-        if (parent === undefined) {
-            return false;
-        }
-        if (ts.isBinaryExpression(parent) && (parent.left === node)) {
-            const op = parent.operatorToken.kind;
-            return (op >= ts.SyntaxKind.FirstAssignment) && (op <= ts.SyntaxKind.LastAssignment);
-        }
-        if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && (parent.operand === node)) {
-            return (parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken);
-        }
-        return ts.isDeleteExpression(parent);
-    }
-
     // the C# string the native `IndexOf` takes as its needle: a value the printer types a C#
     // string prints as-is, an `object`-printed operand takes the helper's own `(string)` cast.
     // A value of any other named C# type (number, bool, collection) keeps the helper
@@ -3968,22 +3970,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the declared type of an identifier read: the embedding build layer's proof first (it
     // retypes locals this printer leaves `object`), then this printer's own table. Both name
     // only a type the local already carries at runtime, and `var`/`object` mean "no type".
-    csharpDeclaredReadType(node): string | undefined {
-        const provided = this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : undefined;
-        if (provided !== undefined) {
-            return provided;
-        }
-        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
-            return undefined;
-        }
-        if (!this.csharpLocalTypes.has(declaration)) {
-            this.csharpLocalTypes.set(declaration, this.getCSharpLocalType(declaration));
-        }
-        const type = this.csharpLocalTypes.get(declaration);
-        return (type === undefined || type === this.VAR_TOKEN) ? undefined : type;
-    }
-
     // `isTrue (x)` boxes x and answers false for a null box, which is exactly what the lifted
     // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only reads
     // whose declaration is emitted `bool?` qualify; every other shape keeps the helper.
@@ -3992,7 +3978,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (value?.kind === ts.SyntaxKind.ParenthesizedExpression) {
             value = value.expression;
         }
-        if (value?.kind !== ts.SyntaxKind.Identifier || this.csharpDeclaredReadType(value) !== 'bool?') {
+        if (value?.kind !== ts.SyntaxKind.Identifier || this.csharpDeclaredLocalType(value) !== 'bool?') {
             return undefined;
         }
         return `(${this.printNode(value, 0)} == true)`;
