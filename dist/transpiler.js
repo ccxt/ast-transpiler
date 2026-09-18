@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8766,15 +8766,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     return void 0;
   }
   printOutOfOrderCallExpressionIfAny(node, identation) {
-    if (node.expression.kind === ts6.SyntaxKind.Identifier) {
-      const callee = node.expression.escapedText;
-      if (callee === "parseInt" || callee === "parseFloat") {
-        const nativeParse = this.printNativeScalarParse(node, callee);
-        if (nativeParse !== void 0) {
-          return nativeParse;
-        }
-      }
-    }
     if (node.expression.kind === ts6.SyntaxKind.PropertyAccessExpression) {
       const expressionText = node.expression.getText().trim();
       const args = node.arguments;
@@ -8782,7 +8773,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         const parsedArg = this.printNode(args[0], 0);
         switch (expressionText) {
           case "Math.abs":
-            return `Helpers.mathAbs(Double.parseDouble(${this.javaStringBoxText(args[0], parsedArg)}))`;
+            return `Helpers.mathAbs(Double.parseDouble(Helpers.toString(${parsedArg})))`;
         }
       } else if (args.length === 2) {
         const parsedArg1 = this.printNode(args[0], 0);
@@ -8793,7 +8784,7 @@ var JavaTranspiler = class extends BaseTranspiler {
           case "Math.max":
             return `Helpers.mathMax(${parsedArg1}, ${parsedArg2})`;
           case "Math.pow":
-            return `Helpers.mathPow(Double.parseDouble(${this.javaStringBoxText(args[0], parsedArg1)}), Double.parseDouble(${this.javaStringBoxText(args[1], parsedArg2)}))`;
+            return `Helpers.mathPow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
         }
       }
       const leftSide = node.expression?.expression;
@@ -9467,93 +9458,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const operator = isPlus ? "+" : isMinus ? "-" : "*";
     return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
-  }
-  // ---- helper-family inlining: `parseInt/parseFloat/toString/padStart` -------
-  // Every one of these helpers answers a value the native Java call cannot: parseInt
-  // catches its NumberFormatException into null, parseFloat catches it into 0.0,
-  // Helpers.toString maps a null input to null (String.valueOf maps it to "null") and
-  // Helpers.padStart pads AND truncates. The native form is printed only where the
-  // helper's fallback path is unreachable for the printed operand.
-  // `Helpers.toString(x)` is `x == null ? null : x.toString()`, so `String.valueOf(x)`
-  // is exact for every argument that cannot be null. Only a numeric literal or a
-  // nested `+ - * /` this rule prints natively qualifies: both are Java primitives.
-  javaStringBoxText(node, text) {
-    return this.javaProvableNumericKind(node) !== void 0 ? `String.valueOf(${text})` : `Helpers.toString(${text})`;
-  }
-  // The runtime parses a String with Long.parseLong (parseInt) / Double.parseDouble
-  // (parseFloat) inside a catch; a literal the native parser ACCEPTS cannot reach the
-  // catch, so the native call cannot change the answer (and parseInt additionally
-  // needs the value inside the long range, else the helper would answer null).
-  javaScalarParseAccepts(callee, text) {
-    if (callee === "parseInt") {
-      if (!/^[+-]?[0-9]+$/.test(text)) {
-        return false;
-      }
-      const value = BigInt(text.replace(/^\+/, ""));
-      return value >= BigInt("-9223372036854775808") && value <= BigInt("9223372036854775807");
-    }
-    return /^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$/.test(text) || /^[+-]?Infinity$/.test(text) || text === "NaN";
-  }
-  // `parseInt(x)` / `parseFloat(x)` -> the native parse, or undefined to keep the helper
-  printNativeScalarParse(node, callee) {
-    const args = node?.arguments;
-    if (args === void 0 || args.length !== 1 || !ts6.isStringLiteral(args[0])) {
-      return void 0;
-    }
-    if (!this.javaScalarParseAccepts(callee, args[0].text)) {
-      return void 0;
-    }
-    const nativeName = callee === "parseInt" ? "Long.parseLong" : "Double.parseDouble";
-    return `${nativeName}(${this.printNode(args[0], 0)})`;
-  }
-  // The printed receiver of a `padStart` this rule can inline: the printer or the
-  // ccxt local-typing pass already cast it (`((String)x)`), or the checker proves a
-  // plain TS string, in which case the accessor cast this rule adds cannot fire (the
-  // printer declares locals Object and the local-typing pass decides the final type).
-  javaPadStartReceiverText(receiver, name) {
-    if (/^\(+\(String\)/.test(name)) {
-      return name;
-    }
-    if (this.javaScalarFamily(receiver) === "string") {
-      return `((String)${name})`;
-    }
-    return void 0;
-  }
-  // `x.padStart(n, 'c')` with a non-negative integer literal length and a single-char
-  // literal pad. Helpers.padStart pads with the pad char up to `n` chars and then
-  // answers the LAST `n` chars, so the native form keeps both halves: String.format
-  // builds the pad from an empty `%<k>s` (never touching a space inside the value)
-  // and the >= arm reproduces the helper's truncation (format does not truncate).
-  printNativePadStart(node, name) {
-    const args = node?.arguments;
-    if (args === void 0 || args.length !== 2 || name === void 0) {
-      return void 0;
-    }
-    if (this.javaIntegerLiteralKind(args[0]) !== "int" || !/^[0-9]+$/.test(args[0].text)) {
-      return void 0;
-    }
-    if (!ts6.isStringLiteral(args[1]) || args[1].text.length === 0) {
-      return void 0;
-    }
-    const receiver = node.expression?.expression;
-    if (!this.sideEffectFreeReceiver(receiver)) {
-      return void 0;
-    }
-    const receiverText = this.javaPadStartReceiverText(receiver, name);
-    if (receiverText === void 0) {
-      return void 0;
-    }
-    const length = args[0].text;
-    const pad = `'${this.javaCharLiteral(args[1].text[0])}'`;
-    const lengthCall = `${receiverText}.length()`;
-    return `(${lengthCall} >= ${length} ? ${receiverText}.substring(${lengthCall} - ${length}) : String.format("%" + (${length} - ${lengthCall}) + "s", "").replace(' ', ${pad}) + ${receiverText})`;
-  }
-  // one char literal for the `String.format(...).replace(' ', c)` pad, escaped
-  javaCharLiteral(character) {
-    if (character === "'" || character === "\\") {
-      return `\\${character}`;
-    }
-    return character;
   }
   getObjectLiteralFromCallExpressionArguments(node) {
     const res = [];
@@ -10382,14 +10286,14 @@ var JavaTranspiler = class extends BaseTranspiler {
   printPromiseAllCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.promiseAll(${parsedArg})`;
   }
-  printMathFloorCall(node, _identation, parsedArg = void 0) {
-    return `(Math.floor(Double.parseDouble(${this.javaStringBoxText(node?.arguments?.[0], parsedArg)})))`;
+  printMathFloorCall(_node, _identation, parsedArg = void 0) {
+    return `(Math.floor(Double.parseDouble(Helpers.toString(${parsedArg}))))`;
   }
-  printMathRoundCall(node, _identation, parsedArg = void 0) {
-    return `Math.round(Double.parseDouble(${this.javaStringBoxText(node?.arguments?.[0], parsedArg)}))`;
+  printMathRoundCall(_node, _identation, parsedArg = void 0) {
+    return `Math.round(Double.parseDouble(Helpers.toString(${parsedArg})))`;
   }
-  printMathCeilCall(node, _identation, parsedArg = void 0) {
-    return `Math.ceil(Double.parseDouble(${this.javaStringBoxText(node?.arguments?.[0], parsedArg)}))`;
+  printMathCeilCall(_node, _identation, parsedArg = void 0) {
+    return `Math.ceil(Double.parseDouble(Helpers.toString(${parsedArg})))`;
   }
   printNumberIsIntegerCall(_node, _identation, parsedArg = void 0) {
     return `((${parsedArg} instanceof Integer) || (${parsedArg} instanceof Long))`;
@@ -10495,11 +10399,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   printPadEndCall(_node, _identation, name, parsedArg, parsedArg2) {
     return `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
   }
-  printPadStartCall(node, _identation, name, parsedArg, parsedArg2) {
-    const native = this.printNativePadStart(node, name);
-    if (native !== void 0) {
-      return native;
-    }
+  printPadStartCall(_node, _identation, name, parsedArg, parsedArg2) {
     return `Helpers.padStart((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
   }
   printDateNowCall(_node, _identation) {
