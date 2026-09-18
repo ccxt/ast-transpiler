@@ -1325,6 +1325,93 @@ describe('rust checker-typed native container access', () => {
     });
 });
 
+describe('rust native dict inserts', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".to_string(), ${value}); }`;
+
+    test('string-literal write on a typed dict local inserts natively', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('result', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('a Dictionary-typed receiver counts as a dict', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T; }\nconst account: Dictionary<any> = {};\naccount["free"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('account', 'free', 'Value::Int(1)'));
+    });
+
+    test('a bare identifier value is cloned like the helper call would', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst v = 1;\nresult["k"] = v;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('result', 'k', 'v.clone()'));
+    });
+
+    test('a value operand reading the receiver is hoisted into a temp', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = result["j"];';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('{ let __be_tmp = ');
+        expect(output).toContain('&mut result { std::sync::Arc::make_mut(__d).insert("k".to_string(), __be_tmp); }');
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('a bool-typed value operand is boxed in Value::Bool', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst a: any = 1;\nresult["k"] = (a === 1);';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('insert("k".to_string(), Value::Bool(');
+    });
+
+    test('this.<field> receivers insert natively', () => {
+        const ts = 'class A { options: { [key: string]: any } = {};\n    f() { this.options["k"] = 1; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('self.options', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut self.options');
+    });
+
+    test('array-typed receivers keep the helper', () => {
+        const ts = 'const result: any[] = [];\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('class-typed receivers keep the helper', () => {
+        const ts = 'class Book { bids: any[] = []; }\nfunction f(book: Book) { book["k"] = 1; }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut book');
+    });
+
+    test('receivers bound from an element read keep the helper', () => {
+        const ts = 'const rows: any[] = [];\nconst result = rows[0];\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('book-meta keys keep the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult["timestamp"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('computed keys keep the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst k = "x";\nresult[k] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result, &k,');
+    });
+
+    test('a later write of another shape keeps the helper', () => {
+        const ts = 'let result: { [key: string]: any } = {};\nresult = [] as any;\nresult["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result');
+    });
+
+    test('the request receiver keeps the helper', () => {
+        const ts = 'const request: { [key: string]: any } = {};\nrequest["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut request');
+    });
+});
+
 describe('rust numeric literals', () => {
     test('an exponent literal is a float, negated or not', () => {
         const input = "class A { f(x) { const a = x.g(1e-7); const b = x.g(-1e-7); const c = -5; return [a, b, c]; } }";

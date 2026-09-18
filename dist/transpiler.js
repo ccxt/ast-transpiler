@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11019,6 +11019,182 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const objExpr = this.printNode(obj, 0);
     return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral[1]})))`;
   }
+  // `X["k"] = v` on a checker-proven plain Dict receiver: mutate the Dict
+  // natively. The helper's tag hooks (book meta, ws subscriptions, cache
+  // hashmap) only fire on tagged dicts, which a plain object type never is.
+  printNativeDictInsert(baseExpr, keyNode, keyText, valueText) {
+    const receiver = this.rustNativeInsertReceiver(baseExpr);
+    if (receiver === void 0) {
+      return void 0;
+    }
+    if (!ts7.isStringLiteral(keyNode) || _RustTranspiler.RUST_BOOK_META_KEYS.has(keyNode.text)) {
+      return void 0;
+    }
+    if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
+      return void 0;
+    }
+    const keyLiteral = keyText.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
+    if (!keyLiteral) {
+      return void 0;
+    }
+    const name = receiver.text;
+    let value = valueText;
+    if (this.rustPrintedBoolArg(value)) {
+      value = `Value::Bool(${value})`;
+    }
+    const insert = (val) => `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyLiteral[1]}.to_string(), ${val}); }`;
+    if (receiver.isField ? /\bself\b/.test(value) : new RegExp(`\\b${name}\\.clone\\(\\)|&\\s*${name}\\b`).test(value)) {
+      return `{ let __be_tmp = ${value}; ${insert("__be_tmp")} }`;
+    }
+    const trimmed = value.trim();
+    if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== "self" && trimmed !== "true" && trimmed !== "false") {
+      return insert(`${trimmed}.clone()`);
+    }
+    return insert(value);
+  }
+  // Receivers this unit may write natively: the named locals plus `self.<field>`
+  // (both print as a `Value` place that `&mut` can borrow). `request` is rust-12's.
+  rustNativeInsertReceiver(expr) {
+    if (ts7.isIdentifier(expr) && _RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(expr.text)) {
+      return { text: expr.text, isField: false, nameNode: expr };
+    }
+    if (ts7.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind4.ThisKeyword && expr.name?.kind === SyntaxKind4.Identifier) {
+      return { text: `self.${expr.name.text}`, isField: true, nameNode: expr.name };
+    }
+    return void 0;
+  }
+  // Dict-shape proof for a write receiver: an object type with no class, array
+  // or callable shape — `Dictionary<T>` instantiations count (they resolve to
+  // their interface target). A union keeps the proof when every member is a
+  // Dict or `undefined` (both are untaggable at runtime).
+  rustWriteDictShape(type) {
+    if (type === void 0) {
+      return false;
+    }
+    if (type.flags & ts7.TypeFlags.Union) {
+      const parts = type.types ?? [];
+      return parts.length > 0 && parts.every((part) => this.rustWriteDictShape(part));
+    }
+    if (type.flags & (ts7.TypeFlags.Undefined | ts7.TypeFlags.Void)) {
+      return true;
+    }
+    if (!(type.flags & ts7.TypeFlags.Object)) {
+      return false;
+    }
+    const checker = this.getChecker();
+    if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
+      return false;
+    }
+    const target = type.target ?? type;
+    if (target.objectFlags & ts7.ObjectFlags.Class) {
+      return false;
+    }
+    return type.getCallSignatures().length === 0 && type.getConstructSignatures().length === 0;
+  }
+  // The receiver is a plain Dict on every path: its declared/initializer type
+  // is object-shaped (never a class or array handle), its initializer is not
+  // an element read (the get_value COW write-back pass keys on the helper
+  // call's `&mut <name>` text), and no write in scope assigns another shape.
+  rustReceiverStaysDict(baseExpr, receiver) {
+    if (receiver.isField) {
+      return this.rustFieldStaysDict(baseExpr, receiver.nameNode.text);
+    }
+    const ident = baseExpr;
+    let declarations;
+    try {
+      declarations = this.getChecker().getSymbolAtLocation(ident)?.declarations ?? [];
+    } catch (e) {
+      return false;
+    }
+    if (declarations.length !== 1) {
+      return false;
+    }
+    const declaration = declarations[0];
+    if (!ts7.isVariableDeclaration(declaration) && !ts7.isParameter(declaration)) {
+      return false;
+    }
+    const name = ident.text;
+    const initializer = declaration.initializer;
+    if (initializer === void 0 || ts7.isElementAccessExpression(initializer) || declaration.name?.kind !== SyntaxKind4.Identifier) {
+      return false;
+    }
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return false;
+    }
+    let safe = this.rustWriteDictShape(this.typeOfNodeIfAny(ident)) && this.rustWriteDictShape(this.typeOfNodeIfAny(initializer));
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (n !== declaration && this.rustBindsName(n, name)) {
+        safe = false;
+        return;
+      }
+      if (ts7.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind4.EqualsToken && ts7.isIdentifier(n.left) && n.left.text === name && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
+        safe = false;
+        return;
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(scope, visit);
+    return safe;
+  }
+  // `this.<field>` receivers: the field's checker type is object-shaped and no
+  // `this.<field> = …` write in the enclosing method assigns another shape.
+  // Handle fields (cache / client / subscriptions / order book) are excluded —
+  // their Values carry the runtime tags the helper routes through a store.
+  rustFieldStaysDict(baseExpr, fieldName) {
+    if (_RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(fieldName)) {
+      return false;
+    }
+    if (!this.rustWriteDictShape(this.typeOfNodeIfAny(baseExpr))) {
+      return false;
+    }
+    const scope = this.rustEnclosingFunction(baseExpr);
+    if (scope === void 0) {
+      return false;
+    }
+    let safe = true;
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (ts7.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind4.EqualsToken && ts7.isPropertyAccessExpression(n.left) && n.left.expression.kind === SyntaxKind4.ThisKeyword && n.left.name?.text === fieldName && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
+        safe = false;
+        return;
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(scope, visit);
+    return safe;
+  }
+  // Conservative "argument position expects a Value" bool test — the same set
+  // ccxt's wrapBoolValueArgs pass uses on the helper call's value operand.
+  rustPrintedBoolArg(raw) {
+    let s = raw.trim();
+    while (s.startsWith("(") && s.endsWith(")")) {
+      let depth = 0;
+      let balanced = true;
+      for (let k = 0; k < s.length; k++) {
+        if (s[k] === "(")
+          depth++;
+        else if (s[k] === ")") {
+          depth--;
+          if (depth === 0 && k < s.length - 1) {
+            balanced = false;
+            break;
+          }
+        }
+      }
+      if (!balanced || depth !== 0)
+        break;
+      s = s.slice(1, -1).trim();
+    }
+    if (s.startsWith("!"))
+      s = s.slice(1).trim();
+    return _RustTranspiler.RUST_BOOL_VALUE_HELPERS.some((fn) => s.startsWith(fn + "("));
+  }
   // `negate(&Value::Int(n))` is `Value::Int(-n)` (same for Float) — fold the
   // literal so no helper call is needed. Runtime `negate` also coerces
   // strings/bools/floats, so only Int/Float literals can be folded.
@@ -11211,6 +11387,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
+      if (keyStrs.length === 1) {
+        const nativeInsert = this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs);
+        if (nativeInsert !== void 0) {
+          return nativeInsert;
+        }
+      }
       return `add_element_to_object(${acc}, &${lastKey}, ${rhs})`;
     }
     if (left.kind === SyntaxKind4.TypeOfExpression) {
@@ -12407,6 +12589,48 @@ _RustTranspiler.BOOL_PRODUCING_CALLS = /* @__PURE__ */ new Set([
   "every",
   "test"
 ]);
+// Receiver locals whose element writes may go native (rust-13). `request`
+// is rust-12's family; every other receiver keeps the helper.
+_RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS = /* @__PURE__ */ new Set([
+  "result",
+  "account",
+  "params",
+  "fee"
+]);
+// Scalar book fields the shared order-book store keeps instead of the Dict
+// (value.rs `is_book_meta_key` plus the `cache` replacement write).
+_RustTranspiler.RUST_BOOK_META_KEYS = /* @__PURE__ */ new Set([
+  "timestamp",
+  "datetime",
+  "nonce",
+  "symbol",
+  "checksum",
+  "cache"
+]);
+// `this.<field>` receivers whose Value may be a tagged live handle (order
+// book / cache / ws client / subscriptions snapshot) — these keep the helper
+// so its store write-through stays reachable.
+_RustTranspiler.RUST_TAGGED_HANDLE_FIELDS = /* @__PURE__ */ new Set([
+  "cache",
+  "client",
+  "subscriptions",
+  "orderbook"
+]);
+// Free helpers whose call prints a bare `bool` — an argument position that
+// expects a `Value` has to box them (ccxt's wrapBoolValueArgs set).
+_RustTranspiler.RUST_BOOL_VALUE_HELPERS = [
+  "is_equal",
+  "is_true",
+  "is_greater_than",
+  "is_less_than",
+  "is_greater_than_or_equal",
+  "is_less_than_or_equal",
+  "is_array",
+  "is_object",
+  "in_op",
+  "is_number",
+  "is_string"
+];
 // Payload accessor used to compare each primitive kind natively.
 _RustTranspiler.PAYLOAD_ACCESSORS = {
   "string": "as_str",
