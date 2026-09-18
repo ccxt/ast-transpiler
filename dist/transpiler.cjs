@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -2740,7 +2740,6 @@ var CSHARP_SAFE_ACCESSOR_NAMES = [
 var CSHARP_TYPE_NAMES = ["string", "bool", "int", "long", "Int64", "double", "object", "List", "IList", "Dictionary", "IDictionary", "var"];
 var GUARD_KEY_SEPARATOR = "\0";
 var CSHARP_NUMERIC_KINDS = ["int", "Int64", "double"];
-var CSHARP_INTEGER_KINDS = ["int", "Int64"];
 var CSHARP_NATIVE_COMPARISON_TOKENS = {
   [_typescript2.default.SyntaxKind.LessThanToken]: "<",
   [_typescript2.default.SyntaxKind.GreaterThanToken]: ">",
@@ -3481,10 +3480,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     };
     return isNumber(node.left) && isNumber(node.right);
   }
-  // `<`, `>`, `<=`, `>=` on two operands whose printed C# kind this printer can name (a
-  // declaration, a literal, a call of a known signature — never the JS type) print natively:
-  // the helper compares the same two boxes through the conversions the C# operator applies,
-  // and an int/Int64 pair is the same comparison too — see CSHARP_NUMERIC_KINDS
+  // `<`, `>`, `<=`, `>=` on two operands of the same proven C# number kind print natively:
+  // the helper compares the two boxes with the conversions the operator applies, and only
+  // `double` carries a value (NaN) the two disagree on — see CSHARP_NUMERIC_KINDS
   csharpNativeNumericComparison(node, identation) {
     const token = CSHARP_NATIVE_COMPARISON_TOKENS[node.operatorToken.kind];
     if (token === void 0) {
@@ -3492,14 +3490,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const leftKind = this.csharpExpressionTypeOf(node.left);
     const rightKind = this.csharpExpressionTypeOf(node.right);
-    if (leftKind === void 0 || rightKind === void 0) {
-      return void 0;
-    }
-    const integerPair = CSHARP_INTEGER_KINDS.indexOf(leftKind) >= 0 && CSHARP_INTEGER_KINDS.indexOf(rightKind) >= 0;
-    if (!integerPair && (leftKind !== rightKind || CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0)) {
+    if (leftKind === void 0 || leftKind !== rightKind || CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0) {
       return void 0;
     }
     if (leftKind === "double" && (token === "<" || token === "<=")) {
+      return void 0;
+    }
+    if (!this.csharpOperandsAreNumbers(node)) {
       return void 0;
     }
     const leftText = this.printNode(node.left, 0).trim();
