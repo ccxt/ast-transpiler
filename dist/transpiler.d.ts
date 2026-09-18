@@ -1094,6 +1094,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printDateNowCall(_node: any, _identation: any): string;
     printLengthProperty(node: any, _identation: any, _name?: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
+    javaPrimitiveCounter(node: any): boolean;
+    javaNativeNegation(node: any): boolean;
     printPrefixUnaryExpression(node: any, identation: any): any;
     javaBooleanCondition(node: any): any;
     javaConditionPrintsBoolean(node: any): boolean;

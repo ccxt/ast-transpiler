@@ -4667,6 +4667,65 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${leftSide}++`;
     }
 
+    // the identifier declared by a `for (var i = <int literal>; ...; i++)` header: the
+    // printer writes that initializer as `var`, so javac infers a primitive int and the
+    // ++/-- increment keeps it one
+    javaPrimitiveCounter(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(node);
+        const declaration: any = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) {
+            return false;
+        }
+        if (declaration.name.escapedText !== node.escapedText || declaration.initializer === undefined) {
+            return false;
+        }
+        const list = declaration.parent;
+        if (list?.kind !== ts.SyntaxKind.VariableDeclarationList || list.declarations.length !== 1) {
+            return false;
+        }
+        const forStatement: any = list.parent;
+        if (forStatement?.kind !== ts.SyntaxKind.ForStatement || forStatement.initializer !== list) {
+            return false;
+        }
+        if (this.javaIntegerLiteralKind(declaration.initializer) === undefined) {
+            return false;
+        }
+        const incrementor = forStatement.incrementor;
+        return incrementor?.kind === ts.SyntaxKind.PostfixUnaryExpression
+            && incrementor.operand?.kind === ts.SyntaxKind.Identifier
+            && incrementor.operand.escapedText === node.escapedText;
+    }
+
+    // `-x` prints as the plain Java operator when the printed operand is already a
+    // primitive: a decimal numeric literal or a nested `+ - * /` this rule prints
+    // natively (long/double), a `for (var i = <int literal>` counter or a `.length`
+    // read (int). Helpers.opNeg negates exactly the box it receives (Integer ->
+    // Integer, Long -> Long, Double -> Double) and maps null to null, so every boxed
+    // local (Object / Long / Double) keeps the helper.
+    javaNativeNegation(node): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaNativeNegation(node.expression);
+        }
+        if (ts.isNumericLiteral(node)) {
+            return this.javaProvableNumericKind(node) !== undefined;
+        }
+        if (node.kind === ts.SyntaxKind.BinaryExpression) {
+            return this.javaNativeArithmeticKind(node) !== undefined;
+        }
+        if (this.javaPrimitiveCounter(node)) {
+            return true;
+        }
+        return node.kind === ts.SyntaxKind.PropertyAccessExpression
+            && node.name.escapedText === 'length'
+            && this.javaLengthKind(node.expression) !== undefined;
+    }
+
     printPrefixUnaryExpression(node, identation) {
         const { operand, operator } = node;
         if (operator === ts.SyntaxKind.ExclamationToken) {
@@ -4676,6 +4735,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (operator === ts.SyntaxKind.PlusToken) {
             return `+(${leftSide})`;
         } else if (operator === ts.SyntaxKind.MinusToken) {
+            if (this.javaNativeNegation(operand)) {
+                return `-${leftSide}`;
+            }
             return `Helpers.opNeg(${leftSide})`;
         }
         return super.printPrefixUnaryExpression(node, identation);

@@ -5775,3 +5775,110 @@ describe('java native-arithmetic locals (java-31)', () => {
         expect(output).toContain('this.g(Helpers.add(oneWeek, 1));');
     });
 });
+
+describe('java unary minus inlining (opNeg)', () => {
+    // Literals are primitives: Helpers.opNeg would return exactly the same box the
+    // plain operator produces, so the printer drops the helper.
+    test('an integer literal negates natively', () => {
+        const input = "const x = -1;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -1;");
+    });
+
+    test('a fractional literal negates natively', () => {
+        const input = "const x = -1.5;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -1.5;");
+    });
+
+    test('an exponent literal negates natively', () => {
+        const input = "const x = -1e-7;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -1e-7;");
+    });
+
+    // a > int-max literal already prints with the long suffix; the negation keeps it
+    test('a long literal negates natively with its suffix', () => {
+        const input = "const x = -3000000000;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -3000000000L;");
+    });
+
+    // a nested `+` this rule prints natively is a primitive too
+    test('a nested native arithmetic operand negates natively', () => {
+        const input = "const x = -(1 + 2);"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -((1L + 2L));");
+    });
+
+    // a `.length` read on a String receiver is a Java int
+    test('a String .length read negates natively', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const x = -s.length;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object x = -((String)s).length();");
+    });
+
+    // the counter of `for (var i = <literal>; ...)` is a Java int
+    test('a for-statement counter negates natively', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        for (let i = 0; -i > -10; i++) {\n" +
+        "            const y = i;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isGreaterThan(-i, -10)");
+    });
+
+    // Boxed values keep the helper: it alone maps null -> null and returns the box it
+    // was given, which `-x` on a Java Object cannot do (and would not compile on).
+    test('a boxed local keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const y = 1;\n" +
+        "        const x = -y;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object x = Helpers.opNeg(y);");
+    });
+
+    test('a parameter keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(a: number): void {\n" +
+        "        const x = -a;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object x = Helpers.opNeg(a);");
+    });
+
+    // the printer's numeric literal text is already the decimal value (TS normalizes
+    // 0x10 to 16), so a hex literal arrives as plain decimal text and negates natively
+    test('a hex literal negates natively through its decimal print', () => {
+        const input = "const x = -0x10;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -16;");
+    });
+
+    test('a hex literal above int-max keeps the long suffix', () => {
+        const input = "const x = -0xFFFFFFFF;"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = -4294967295L;");
+    });
+
+    test('a non-numeric operand keeps the helper', () => {
+        const input = "const x = -\"a\";"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toBe("Object x = Helpers.opNeg(\"a\");");
+    });
+});
