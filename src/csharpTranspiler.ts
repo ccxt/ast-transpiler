@@ -1166,7 +1166,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // object the read evaluates unprovable, so the read falls back to the helper
     csharpReceiverIsRewritten(func, expression): boolean {
         const text = expression.getText();
-        const name = ts.isIdentifier(expression) ? text : text.split(/[.\[]/)[1];
+        const name = ts.isIdentifier(expression) ? text : text.split(/[.[]/)[1];
         if (name === undefined) {
             return true;
         }

@@ -2291,7 +2291,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  `Value`. */
     private rustDictLocalClassifyUse(node: ts.Node, uses: { elementAccess: number, mutHelper: number, other: number }): void {
         let current: any = node;
-        let parent: any = current.parent;
+        const parent: any = current.parent;
         if (parent !== undefined && (ts.isElementAccessExpression(parent) || ts.isPropertyAccessExpression(parent)) && parent.expression === current) {
             current = parent;
             while (current.parent !== undefined &&
