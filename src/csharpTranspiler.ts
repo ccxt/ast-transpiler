@@ -2265,6 +2265,39 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === 'bool');
     }
 
+    // the declared type of an identifier read: the embedding build layer's proof first (it
+    // retypes locals this printer leaves `object`), then this printer's own table. Both name
+    // only a type the local already carries at runtime, and `var`/`object` mean "no type".
+    csharpDeclaredReadType(node): string | undefined {
+        const provided = this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : undefined;
+        if (provided !== undefined) {
+            return provided;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        if (!this.csharpLocalTypes.has(declaration)) {
+            this.csharpLocalTypes.set(declaration, this.getCSharpLocalType(declaration));
+        }
+        const type = this.csharpLocalTypes.get(declaration);
+        return (type === undefined || type === this.VAR_TOKEN) ? undefined : type;
+    }
+
+    // `isTrue (x)` boxes x and answers false for a null box, which is exactly what the lifted
+    // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only reads
+    // whose declaration is emitted `bool?` qualify; every other shape keeps the helper.
+    csharpNullableBoolCondition(node): string | undefined {
+        let value = node;
+        while (value?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            value = value.expression;
+        }
+        if (value?.kind !== ts.SyntaxKind.Identifier || this.csharpDeclaredReadType(value) !== 'bool?') {
+            return undefined;
+        }
+        return `(${this.printNode(value, 0)} == true)`;
+    }
+
     // same emission as the base implementation except for the bare-bool branch: the node is
     // printed once and only wrapped in isTrue(...) when the printer did not already render a bool
     printCondition(node, identation) {
@@ -2276,6 +2309,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.printPrefixUnaryExpression(node, identation); // avoid infinite recursion
         }
         const printed = this.printNode(node, 0);
+        const nullableBool = this.csharpNullableBoolCondition(node);
+        if (nullableBool !== undefined) {
+            return `${this.getIden(identation)}${nullableBool}`;
+        }
         if (this.csharpConditionPrintsBool(node)) {
             return `${this.getIden(identation)}${this.csharpConditionParensIfNeeded(node, printed)}`;
         }
