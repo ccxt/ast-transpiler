@@ -1057,7 +1057,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printMethodDeclaration(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
     printArrayIsArrayCall(_node: any, _identation: any, parsedArg?: any): string;
-    printObjectKeysCall(_node: any, _identation: any, parsedArg?: any): string;
+    printObjectKeysCall(node: any, _identation: any, parsedArg?: any): string;
+    printNativeObjectKeysCall(node: any): string;
     printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonParseCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonStringifyCall(_node: any, _identation: any, parsedArg?: any): string;
