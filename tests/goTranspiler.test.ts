@@ -671,7 +671,159 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var pair any = this.SafeList2(item, \"a\", \"b\")");
         expect(output).toContain("var deepList any = this.SafeListN(");
     });
-    test('an any-typed dict/list local keeps the helper for truthiness/nil tests', () => {
+    test('a SafeDict local read as a map is declared map[string]any and read with SafeMapTyped', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const name = this.safeString (info, 'name');\n" +
+        "        return name;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info map[string]any = SafeMapTyped(item, \"info\")");
+        expect(output).toContain("this.SafeString(info, \"name\")");
+    });
+    test('a SafeDict local with an empty-map default drops it: SafeMapTyped carries no default', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info', {});\n" +
+        "        const name = GetValue(info, 'name');\n" +
+        "        return name;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info map[string]any = SafeMapTyped(item, \"info\")");
+        expect(output).not.toContain("map[string]any{}");
+    });
+    test('a SafeDict local read through GetValue/ObjectKeys/InOp/an index stays typed', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const keys = ObjectKeys(info);\n" +
+        "        const has = InOp(info, 'id');\n" +
+        "        const id = info['id'];\n" +
+        "        const extra = GetValue(info, 'extra');\n" +
+        "        return [keys, has, id, extra];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info map[string]any = SafeMapTyped(item, \"info\")");
+    });
+    test('a SafeDict local handed to another Safe* accessor as its receiver stays typed', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    main(item, parsed) {\n" +
+        "        const marginEntry = this.safeDict (item, 'margin');\n" +
+        "        parsed['margin'] = this.safeBool (marginEntry, 'isBorrowable');\n" +
+        "        return parsed;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var marginEntry map[string]any = SafeMapTyped(item, \"margin\")");
+    });
+    test('a SafeDict local a later use could observe as nil stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        if (info === undefined) { return 1; }\n" +
+        "        return GetValue(info, 'id');\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a SafeDict local whose truthiness is read stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        if (info) { return GetValue(info, 'id'); }\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a SafeDict local returned or boxed into a value position stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item, params) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        params['info'] = info;\n" +
+        "        return info;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a SafeDict local written through stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        info['id'] = 1;\n" +
+        "        return GetValue(info, 'id');\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a SafeDict default that carries data keeps the local any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info', { 'id': 1 });\n" +
+        "        return GetValue(info, 'id');\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\", map[string]any{");
+    });
+    test('the dict variants outside the safeDict(key) shape stay any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict2(a, b, c, d?) { return a; }\n" +
+        "    safeDictN(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const nested = this.safeDict2 (item, 'a', 'b');\n" +
+        "        const deep = this.safeDictN (item, ['a', 'b']);\n" +
+        "        return GetValue(nested, 'x') + GetValue(deep, 'y');\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var nested any = this.SafeDict2(item, \"a\", \"b\")");
+        expect(output).toContain("var deep any = this.SafeDictN(");
+    });
+    test('a SafeDict local handed out as a key or a trailing argument stays any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b, c?) { return a; }\n" +
+        "    main(item, other) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const x = GetValue(other, info);\n" +
+        "        AddElementToObject(other, 'k', info);\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a SafeDict local keeps the helper for truthiness/nil tests', () => {
         const input =
         "class Exchange {\n" +
         "    safeDict(a, b) { return a; }\n" +

@@ -199,6 +199,20 @@ const GO_ANY_BOX_CALLS = [
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
+// `var x any = this.SafeDict(container, key)` may carry the map type even though the Go
+// accessor returns `any`: SafeMapTyped reads the same member and hands back the map (or the
+// sync.Map converted), nil when the member is absent or not a map at all. The typed
+// declaration is only emitted when every later use READS the value as a dictionary, because
+// a typed nil map is a non-nil interface: a nil comparison, a truthiness test, a return or
+// any value position would observe the difference the helper's absent case used to hide.
+const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
+
+// the hand-written helpers a typed dict local may be handed to as their receiver: each one
+// normalises the argument with derefScalar/GetValue, so a nil map reads exactly like the nil
+// interface the local used to hold
+const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDictionary' ];
+
+
 // the Go numeric kinds. `<` `>` `<=` `>=` compile without a conversion only when
 // both operands carry the same one of these
 const GO_NUMERIC_KINDS = [ 'int', 'int64', 'float64' ];
@@ -1427,10 +1441,156 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return safe;
     }
 
+    // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or
+    // undefined when the initializer is another shape. A third argument is only droppable
+    // when it is the empty map literal the TS call sites pass (`safeDict(x, k, {})`), which
+    // contributes nothing any whitelisted read could observe.
+    goSafeDictLocalArgs(initializer) {
+        if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        const callee: any = initializer.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.name?.escapedText !== 'safeDict') {
+            return undefined;
+        }
+        if (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const args = initializer.arguments;
+        if (args.length === 3) {
+            const fallback = args[2];
+            if (fallback?.kind !== ts.SyntaxKind.ObjectLiteralExpression || fallback.properties.length !== 0) {
+                return undefined;
+            }
+        } else if (args.length !== 2) {
+            return undefined;
+        }
+        return { container: args[0], key: args[1] };
+    }
+
+    // one later use of a dict local: it must read the value as a dictionary, never hand the
+    // box out. Only the receiver position of the deref-aware read helpers, the `this.Safe*`
+    // accessors and a plain `x[k]` element read qualify.
+    goSafeDictUseReadsTheMap(node): boolean {
+        const parent: any = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        switch (parent.kind) {
+        case ts.SyntaxKind.ElementAccessExpression: {
+            if (parent.expression !== node) {
+                return false; // x as an index key
+            }
+            const grandparent: any = parent.parent;
+            if (grandparent?.kind === ts.SyntaxKind.BinaryExpression && grandparent.left === parent) {
+                return false; // `x[k] = v` / `x[k] += v` writes into the map
+            }
+            if ((grandparent?.kind === ts.SyntaxKind.PostfixUnaryExpression) || (grandparent?.kind === ts.SyntaxKind.PrefixUnaryExpression)) {
+                return false; // `x[k]++` / `&x[k]`
+            }
+            if (grandparent?.kind === ts.SyntaxKind.DeleteExpression) {
+                return false;
+            }
+            return true;
+        }
+        case ts.SyntaxKind.CallExpression: {
+            if (parent.expression === node) {
+                return false; // the local called as a function
+            }
+            if (parent.arguments.indexOf(node) !== 0) {
+                return false; // value position: the box escapes
+            }
+            const callee = this.goPrintedCallee(this.printNode(parent, 0));
+            if (callee === undefined) {
+                return false;
+            }
+            if (GO_SAFE_DICT_READ_HELPERS.indexOf(callee) >= 0) {
+                return true;
+            }
+            return /^(?:this\.)?Safe[A-Z]/.test(callee) || (callee === 'this.IsDictionary');
+        }
+        default:
+            return false;
+        }
+    }
+
+    // `var x any = this.SafeDict(container, key)` -> `var x map[string]any = SafeMapTyped(container, key)`.
+    // The value the accessor returned is the same member SafeMapTyped reads, and every later
+    // use of the local reads it: with the absent case left as a nil map, each read observes
+    // what the nil interface used to (GetValue/InOp/ObjectKeys/IsDictionary and the Safe*
+    // accessors all normalise a nil receiver). Anything else keeps the box.
+    goSafeDictLocalUnboxCache = new Map<any, string | undefined>();
+
+    goSafeDictLocalUnbox(declaration): string | undefined {
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        // the printer annotates `var x T = …` only for a declaration statement; a for-init or
+        // any other shape prints `:=`, where the annotation would not appear
+        if (declaration.parent?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
+            return undefined;
+        }
+        if (this.goSafeDictLocalUnboxCache.has(declaration)) {
+            return this.goSafeDictLocalUnboxCache.get(declaration);
+        }
+        this.goSafeDictLocalUnboxCache.set(declaration, undefined); // in-progress guard
+        let result: string | undefined;
+        try {
+            result = this.goSafeDictLocalUnboxUncached(declaration);
+        } finally {
+            this.goSafeDictLocalUnboxCache.set(declaration, result);
+        }
+        return result;
+    }
+
+    goSafeDictLocalUnboxUncached(declaration): string | undefined {
+        if (this.goSafeDictLocalArgs(declaration.initializer) === undefined) {
+            return undefined;
+        }
+        const sourceName = declaration.name.escapedText as string;
+        const scope: any = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return undefined;
+        }
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) { return; }
+            if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter)
+                && (n !== declaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.escapedText === sourceName)) {
+                safe = false; // a shadowing binding would mix two values under one name
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === sourceName) && (n !== declaration.name)) {
+                if (!this.goSafeDictUseReadsTheMap(n)) {
+                    safe = false;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        if (!safe || this.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)) {
+            return undefined;
+        }
+        return GO_SAFE_DICT_LOCAL_TYPE;
+    }
+
+    // the initializer a typed dict local is declared with: the accessor call is replaced by the
+    // typed reader, which reads the same member (and converts a sync.Map) but names the result
+    goSafeDictUnboxValue(declaration, identation: number): string | undefined {
+        if (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE) {
+            return undefined;
+        }
+        const args: any = this.goSafeDictLocalArgs(declaration.initializer);
+        const container = this.printNode(args.container, identation);
+        const key = this.printNode(args.key, 0);
+        return `SafeMapTyped(${container}, ${key})`;
+    }
+
     getGoLocalType(declaration, parsedValue: string): string {
         const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
         if (goType === undefined) {
-            return 'any';
+            return this.goSafeDictLocalUnbox(declaration) ?? 'any';
         }
         // the scan matches AST identifiers, so it needs the source name, not the
         // printed one (`type` is renamed to `typeVar` on the way out)
@@ -1499,9 +1659,14 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             }
             const varName = this.printNode(declaration.name);
             const declaredType = this.getGoLocalType(declaration, parsedValue);
+            // a typed dict local is declared with the typed reader rather than the `any`
+            // accessor, so the declaration compiles against the map type
+            const declaredValue = (declaredType === GO_SAFE_DICT_LOCAL_TYPE)
+                ? (this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart())
+                : parsedValue.trimStart();
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
-            const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + parsedValue.trimStart();
+            const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
             if (parsedValue.startsWith("<-this.callInternal(")) {
                 return `
 ${stm}

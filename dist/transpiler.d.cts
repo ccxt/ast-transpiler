@@ -753,6 +753,15 @@ declare class GoTranspiler extends BaseTranspiler {
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
+    goSafeDictLocalArgs(initializer: any): {
+        container: any;
+        key: any;
+    };
+    goSafeDictUseReadsTheMap(node: any): boolean;
+    goSafeDictLocalUnboxCache: Map<any, string>;
+    goSafeDictLocalUnbox(declaration: any): string | undefined;
+    goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
+    goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
