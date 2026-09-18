@@ -857,6 +857,11 @@ declare class GoTranspiler extends BaseTranspiler {
     printAsExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
+    isArraySliceTypes: string[];
+    isArrayNonSliceTypes: string[];
+    goIdentifierUsedElsewhere(nameNode: any): boolean;
+    goLocalHoldsOnlyArrays(nameNode: any): boolean;
+    printNativeIsArray(node: any, parsedArg: string | undefined): string | undefined;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;

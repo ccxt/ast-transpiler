@@ -3647,6 +3647,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goTypeOfInitializer(node, printed) === 'bool') {
             return printed;
         }
+        // a predicate the printer folds to a constant — IsArray on a proven slice or map —
+        // prints a Go bool that the probe above cannot name
+        if ((node?.kind === ts.SyntaxKind.CallExpression) && ((printed === 'true') || (printed === 'false'))) {
+            return printed;
+        }
         if (GO_BOOL_FIELDS.has(printed)) {
             return printed;
         }
@@ -4972,8 +4977,123 @@ ${this.getIden(identation)}${returnStatement}`;
 
     // check this out later
 
+    // IsArray(v) answers true exactly for the slice types its runtime type switch lists
+    // and false for every other box, a nil box included. On an operand whose Go type the
+    // printer can name the predicate is that constant.
+    isArraySliceTypes = [ '[]any', '[][]any', '[]map[string]any', '[]string', '[]bool',
+        '[]int', '[]int8', '[]int16', '[]int32', '[]int64', '[]float32', '[]float64',
+        '[]uint', '[]uint8', '[]uint16', '[]uint32', '[]uint64' ];
+
+    // the other Go types the printer can name: a map, a string, a bool, a number, or a
+    // pointer to a scalar — none of them is a slice the switch matches
+    isArrayNonSliceTypes = [ 'map[string]any', 'string', 'bool', 'int', 'int64', 'float64',
+        '*string', '*int64', '*float64', '*bool', '*int' ];
+
+    // true when the identifier keeps a reference besides this one: the constant fold
+    // drops the call's reference to the operand, and Go rejects a local that ends up
+    // unused, so an operand without another use keeps the helper
+    goIdentifierUsedElsewhere(nameNode): boolean {
+        const scope = this.goEnclosingFunction(nameNode);
+        if (scope === undefined) {
+            return false;
+        }
+        const name = nameNode.escapedText;
+        let used = false;
+        const visit = (n) => {
+            if (used) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name) && (n !== nameNode)) {
+                const parent = n.parent;
+                const isDeclarationName = (parent?.kind === ts.SyntaxKind.VariableDeclaration) && (parent.name === n);
+                const isPropertyName = (parent?.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.name === n);
+                if (!isDeclarationName && !isPropertyName) {
+                    used = true;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return used;
+    }
+
+    // the local is printed `any` yet every value that reaches it is a []any: it starts
+    // from a slice initializer and no later statement rebinds it (a push only appends
+    // to the same slice), so the box holds a []any at every use
+    goLocalHoldsOnlyArrays(nameNode): boolean {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(nameNode);
+        } catch (e) {
+            return false;
+        }
+        const declaration: any = symbol?.valueDeclaration;
+        if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
+            return false;
+        }
+        if (this.goTypeOfInitializer(declaration.initializer, this.printNode(declaration.initializer, 0)) !== '[]any') {
+            return false;
+        }
+        const scope = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const name = declaration.name.escapedText;
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name) && (n !== declaration.name) && (n !== nameNode)) {
+                const parent = n.parent;
+                if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name === n) {
+                    return; // a sibling block-scoped declaration; it gets its own type
+                }
+                if (this.goRebindingTargetOf(n) !== undefined) {
+                    safe = false; // a rebinding write can box another type
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    // native IsArray: a constant for an operand whose Go type the printer proves, and
+    // the two-value assertion on an `any` box that only ever holds a []any
+    printNativeIsArray(node, parsedArg: string | undefined): string | undefined {
+        if ((typeof parsedArg !== 'string') || parsedArg.includes('\n')) {
+            return undefined;
+        }
+        const argNode = node.arguments?.[0];
+        if (argNode?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined; // a call operand may have effects and has no declared type
+        }
+        const goType = this.goPrintedTypeOfExpression(argNode, parsedArg);
+        if (goType !== undefined) {
+            const isSlice = this.isArraySliceTypes.indexOf(goType) >= 0;
+            if (isSlice || (this.isArrayNonSliceTypes.indexOf(goType) >= 0)) {
+                return this.goIdentifierUsedElsewhere(argNode) ? (isSlice ? 'true' : 'false') : undefined;
+            }
+            return undefined;
+        }
+        if (!this.goLocalHoldsOnlyArrays(argNode)) {
+            return undefined;
+        }
+        // the box only ever holds a []any, so the assertion answers what the type switch
+        // would and keeps the operand referenced
+        const read = `_, ok := ${parsedArg}.([]any)`;
+        if (11 + read.length + 2 + 'return ok'.length <= 100) {
+            return `func() bool { ${read}; return ok }()`;
+        }
+        const level = this.goStatementLevel;
+        return `func() bool {\n${this.getIden(level + 1)}${read}\n${this.getIden(level + 1)}return ok\n${this.getIden(level)}}()`;
+    }
+
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
-        return `IsArray(${parsedArg})`;
+        return this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
