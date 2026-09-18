@@ -1158,8 +1158,6 @@ declare class RustTranspiler extends BaseTranspiler {
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
     private static readonly RUST_BOOL_RESULT_HELPERS;
-    private static readonly RUST_BOOL_RESULT_CALLEES;
-    rustCallPrintsBool(node: any): boolean;
     peelValueBoolBox(printedValue: string): string | undefined;
     stripOuterParens(printedValue: string): string;
     printedBoolHelperCall(printedValue: string): boolean;

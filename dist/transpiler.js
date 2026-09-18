@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11336,24 +11336,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
   }
-  // Call to a hand-written `-> bool` fn: the checker must agree the TS call
-  // is boolean-typed and the callee must be in the verified table above.
-  rustCallPrintsBool(node) {
-    if (node?.kind !== SyntaxKind4.CallExpression) {
-      return false;
-    }
-    const callee = node.expression;
-    let name;
-    if (callee?.kind === SyntaxKind4.Identifier) {
-      name = callee.escapedText;
-    } else if (callee?.kind === SyntaxKind4.PropertyAccessExpression) {
-      name = callee.name?.escapedText;
-    }
-    if (name === void 0 || !_RustTranspiler.RUST_BOOL_RESULT_CALLEES.has(name)) {
-      return false;
-    }
-    return this.rustTypeIsBoolean(node);
-  }
   // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
   peelValueBoolBox(printedValue) {
     const prefix = "Value::Bool(";
@@ -12050,9 +12032,6 @@ ${idn}}`;
     if (node.kind === SyntaxKind4.PrefixUnaryExpression && node.operator === SyntaxKind4.ExclamationToken) {
       return this.printPrefixUnaryExpression(node, identation);
     }
-    if (this.rustCallPrintsBool(node)) {
-      return `${this.getIden(identation)}${this.printNode(node, 0)}`;
-    }
     const expression = this.printNode(node, 0);
     return `${this.getIden(identation)}is_true(&${expression})`;
   }
@@ -12464,14 +12443,6 @@ _RustTranspiler.RUST_BOOL_RESULT_HELPERS = /* @__PURE__ */ new Set([
   "ends_with",
   "in_op",
   "contains"
-]);
-// Hand-written Rust fns outside `runtime.rs` whose signature is `-> bool`,
-// keyed by the TS callee name they are transpiled from (verified in
-// `rust/tests/src/tests_support.rs`). A call to one is already a Rust bool,
-// so the condition printer's `is_true(&…)` wrapper is the identity
-// (`IsTruthy for bool`) and is dropped.
-_RustTranspiler.RUST_BOOL_RESULT_CALLEES = /* @__PURE__ */ new Set([
-  "tickerExceptionNeedsOhlcv"
 ]);
 // ── native container access (`get_value(...)` -> `.get(...)`) ─────────────
 // When the TypeScript checker proves the receiver is a plain Map/List value
