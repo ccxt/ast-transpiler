@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -2757,6 +2757,7 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
+var CSHARP_COUNT_TYPES = ["List<", "IList<", "Dictionary<", "IDictionary<", "ConcurrentDictionary<"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, _nullishCoalesce(config["parser"], () => ( {})));
@@ -3540,6 +3541,33 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const declaration = _optionalChain([this, 'access', _111 => _111.getChecker, 'call', _112 => _112(), 'access', _113 => _113.getSymbolAtLocation, 'call', _114 => _114(node), 'optionalAccess', _115 => _115.valueDeclaration]);
     return declaration === void 0 ? void 0 : this.csharpTypedLocals.get(declaration);
   }
+  // the member that replaces getArrayLength on a declared C# type: Count counts the same
+  // elements the helper's IList / ICollection branches count, Length is its string branch.
+  // Any other declared type keeps the helper
+  csharpCountMemberOf(csharpType) {
+    if (csharpType === "string" || csharpType === "string?") {
+      return "Length";
+    }
+    return CSHARP_COUNT_TYPES.some((prefix) => csharpType.indexOf(prefix) === 0) ? "Count" : void 0;
+  }
+  // `getArrayLength(x)` -> `(x?.Count ?? 0)` for a local whose printed declaration already
+  // carries a C# collection / string type. The type comes from the printer's own
+  // declared-local table, then from the embedding build layer's proof for the locals it
+  // retypes itself (ccxt: build/csharp-local-types.js). The null-conditional is exactly the
+  // helper's `null -> 0`: the receiver is read once and a plain member read would throw
+  // where the helper answered 0
+  csharpDeclaredLengthExpression(node) {
+    if (!_typescript2.default.isIdentifier(node)) {
+      return void 0;
+    }
+    const named = this.csharpTypedLocalType(node);
+    const csharpType = named !== void 0 ? named : this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : void 0;
+    const member = csharpType === void 0 ? void 0 : this.csharpCountMemberOf(csharpType);
+    if (member === void 0) {
+      return void 0;
+    }
+    return `(${this.printNode(node, 0)}?.${member} ?? 0)`;
+  }
   // the printed key of ContainsKey must itself be a C# string: a literal, a local this
   // printer declared `string`, a call it types as string, or its own `((string)x)` cast
   csharpNativeStringKey(key) {
@@ -3597,14 +3625,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
   // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
   csharpNativeLengthExpression(expression) {
-    if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
-      return void 0;
+    if (this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+      const receiver = this.csharpNativeReceiver(expression);
+      if (receiver !== void 0) {
+        return `${receiver.text}.Count`;
+      }
     }
-    const receiver = this.csharpNativeReceiver(expression);
-    if (receiver === void 0) {
-      return void 0;
-    }
-    return `${receiver.text}.Count`;
+    return this.csharpDeclaredLengthExpression(expression);
   }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
