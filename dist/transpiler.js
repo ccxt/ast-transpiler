@@ -7794,9 +7794,13 @@ ${this.getIden(identation)}`;
     return `${value}[${startText}:${endText}]`;
   }
   // receiver of an inlinable `.slice(...)`: `string` prints a plain subscript and
-  // `*string` a nil-guarded one, while anything else (an `any` box) keeps the helper
+  // `*string` a nil-guarded one, while anything else (an `any` box) keeps the helper.
+  // A TS cast (`(id as string).slice(...)`) prints nothing, so it is transparent here.
   goSliceReceiverType(node) {
-    const receiverNode = node?.expression?.expression;
+    let receiverNode = node?.expression?.expression;
+    while (receiverNode?.kind === ts5.SyntaxKind.AsExpression || receiverNode?.kind === ts5.SyntaxKind.NonNullExpression || receiverNode?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      receiverNode = receiverNode.expression;
+    }
     if (receiverNode?.kind !== ts5.SyntaxKind.Identifier) {
       return void 0;
     }

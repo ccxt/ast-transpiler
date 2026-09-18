@@ -323,6 +323,18 @@ describe('go .slice(a, b) -> native subscript on a declared string', () => {
         const output = transpile(ts);
         expect(output).toContain('Slice(parts, 0, 2)');
     });
+    test('a cast around the receiver prints nothing and keeps the subscript', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return (s as string).slice (0, 3)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[0:min(3, len(s))]');
+        expect(output).not.toContain('Slice(');
+    });
 });
 
 // a `*string` local is nil when the accessor found nothing and the helper answers ""
@@ -350,5 +362,27 @@ describe('go .slice(a, b) -> native subscript on a declared *string', () => {
         "}";
         const output = transpile(ts);
         expect(output).toContain('Slice(s, 0, GetLength(a))');
+    });
+    test('a cast around a pointer receiver is transparent too', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const s = Precise.stringMul (a, '2')\n" +
+        "        return (s as string).slice (-4)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).not.toContain('Slice(');
+        expect(output).toContain('str[max(len(str) - 4, 0):]');
+    });
+    test('a cast around an any-typed receiver keeps Slice', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        return (a as string).slice (0, 3)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Slice(a, 0, 3)');
     });
 });
