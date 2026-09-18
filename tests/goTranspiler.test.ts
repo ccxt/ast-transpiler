@@ -1833,6 +1833,86 @@ describe('go native element assignment', () => {
         expect(output).toContain("var b bool = (values == false)");
         expect(output).toContain("var c bool = (values == \"\")");
     });
+    test('an object-typed parameter compares natively against nil', () => {
+        const input =
+        "type Strings = string[] | undefined;\n" +
+        "type NullableDict = Dict | undefined;\n" +
+        "interface Dict { [key: string]: any }\n" +
+        "interface Market { symbol: string }\n" +
+        "function f (symbols: Strings, market: Market, headers: NullableDict, params: object | undefined) {\n" +
+        "    const a = symbols !== undefined;\n" +
+        "    const b = market === undefined;\n" +
+        "    const c = headers !== undefined;\n" +
+        "    const d = params === undefined;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a map/slice box holds a value or an untyped nil, never a typed pointer
+        expect(output).toContain("var a bool = (symbols != nil)");
+        expect(output).toContain("var b bool = (market == nil)");
+        expect(output).toContain("var c bool = (headers != nil)");
+        expect(output).toContain("var d bool = (params == nil)");
+    });
+    test('an optional object parameter bound by GetArg compares natively against nil', () => {
+        const input =
+        "type Strings = string[] | undefined;\n" +
+        "class T {\n" +
+        "    async fetchTickers (symbols: Strings = undefined, params = {}) {\n" +
+        "        if (symbols === undefined) { return 1; }\n" +
+        "        return 2;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("symbols := GetArg(optionalArgs, 0, nil)");
+        expect(output).toContain("if symbols == nil {");
+    });
+    test('object boxes that are not parameters keep the helper', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "type NullableDict = Dict | undefined;\n" +
+        "interface Dict { [key: string]: any }\n" +
+        "class T {\n" +
+        "    safeDict (a, b) { return a; }\n" +
+        "    f (since: Int = undefined, raw: any) {\n" +
+        "        const localDict = this.safeDict (raw, 'precision');\n" +
+        "        const a = localDict === undefined;\n" +
+        "        const b = since === undefined;\n" +
+        "        const c = raw === undefined;\n" +
+        "        return [ a, b, c ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a local can box a *sync.Map an accessor returned, a nil *sync.Map is not `== nil`
+        expect(output).toContain("var a bool = IsEqual(localDict, nil)");
+        expect(output).not.toContain("localDict == nil");
+        // numbers and `any` keep the helper
+        expect(output).toContain("var b bool = IsEqual(since, nil)");
+        expect(output).toContain("var c bool = IsEqual(raw, nil)");
+    });
+    test('two object boxes do not compare with a native operator', () => {
+        const input =
+        "type Strings = string[] | undefined;\n" +
+        "function k (a: Strings, b: Strings) {\n" +
+        "    const x = a === b;\n" +
+        "    return x;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // Go panics comparing two uncomparable values through `==`
+        expect(output).toContain("var x bool = IsEqual(a, b)");
+    });
+    test('a class-typed parameter keeps the helper', () => {
+        const input =
+        "class Cache { x: number = 1; }\n" +
+        "function h (cache: Cache, other: Cache | undefined) {\n" +
+        "    const a = cache === undefined;\n" +
+        "    const b = other === undefined;\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a class instance may be an identity-bearing pointer in Go
+        expect(output).toContain("var a bool = IsEqual(cache, nil)");
+        expect(output).toContain("var b bool = IsEqual(other, nil)");
+    });
 });
 
 describe('go array push onto an element access', () => {
