@@ -701,13 +701,186 @@ export class JavaTranspiler extends BaseTranspiler {
     // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
     // printed only when the checker excludes all of those.
     elementWriteTargetsMap(container, base, keys): boolean {
-        if (!ts.isStringLiteral(keys[keys.length - 1])) {
-            return false; // Map.put takes the String key; a non-literal key prints as Object
+        const lastKey = keys[keys.length - 1];
+        if (!ts.isStringLiteral(lastKey) && !this.isJavaStringType(this.getChecker().getTypeAtLocation(lastKey))) {
+            return false; // Map.put takes the String key; every other key prints as Object
         }
         if (ts.isPropertyAccessExpression(base) && base.expression.kind === ts.SyntaxKind.ThisKeyword) {
             return false; // field maps are ConcurrentHashMaps (a null value must remove, not put) and other threads read them
         }
-        return this.isDictionaryType(container);
+        return this.isDictionaryType(container) || this.isPlainHashMapReceiver(container, keys);
+    }
+
+    // a key proven by the checker to be a string prints as a java String: the read is
+    // the same expression, only the key needs the (String) cast the typed put demands
+    elementWriteKeyText(key, keyText: string): string {
+        if (ts.isStringLiteral(key)) {
+            return keyText;
+        }
+        return `(String)${keyText}`;
+    }
+
+    // Receivers that are a plain java.util.HashMap at runtime, where ".put" and the
+    // helper's map branch are the same write: a local initialized with an object
+    // literal or with a call whose every return is such a literal (this.account()).
+    // Lists (append), class instances (reflection) and ConcurrentHashMaps stay helpers.
+    isPlainHashMapReceiver(container, keys: any[]): boolean {
+        if (keys.length !== 1 || container === undefined || container.kind !== ts.SyntaxKind.Identifier) {
+            return false; // only a direct write on the proven local, no read in between
+        }
+        let symbol: any;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(container);
+        } catch (e) {
+            return false;
+        }
+        const declaration: any = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (!declaration || declaration.kind !== ts.SyntaxKind.VariableDeclaration || !declaration.initializer) {
+            return false; // parameters and receivers without an initializer stay the helper
+        }
+        const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
+        const proven = ts.isObjectLiteralExpression(initializer)
+            || (ts.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0));
+        if (!proven) {
+            return false;
+        }
+        return !this.javaLocalIsReassigned(container); // a later write can hand the local another type (D2)
+    }
+
+    unwrapPrintTransparentExpression(node): any {
+        let current = node;
+        while (current && (ts.isParenthesizedExpression(current)
+            || ts.isAsExpression(current)
+            || ts.isTypeAssertionExpression(current)
+            || current.kind === ts.SyntaxKind.NonNullExpression)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    // Every write of the local in its enclosing function must be the element write
+    // itself; an assignment could replace the HashMap with a List or a class instance.
+    javaLocalIsReassigned(node): boolean {
+        let scope: any = node;
+        while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) {
+            scope = scope.parent;
+        }
+        if (!scope) {
+            return true;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(node);
+        let reassigned = false;
+        const walk = (current) => {
+            if (reassigned || current === undefined) {
+                return;
+            }
+            if (current.kind === ts.SyntaxKind.BinaryExpression
+                && current.operatorToken.kind === ts.SyntaxKind.EqualsToken
+                && current.left.kind === ts.SyntaxKind.Identifier
+                && this.getChecker().getSymbolAtLocation(current.left) === symbol) {
+                reassigned = true;
+                return;
+            }
+            if ((ts.isForOfStatement(current) || ts.isForInStatement(current))
+                && ts.isIdentifier(current.initializer)
+                && this.getChecker().getSymbolAtLocation(current.initializer) === symbol) {
+                reassigned = true;
+                return;
+            }
+            ts.forEachChild(current, walk);
+        };
+        walk(scope);
+        return reassigned;
+    }
+
+    // A call whose callee body returns object literals only, so the value it hands
+    // back is always a freshly built HashMap on the Java side as well.
+    callAlwaysReturnsPlainHashMap(node, depth: number): boolean {
+        if (depth > 3) {
+            return false;
+        }
+        const checker: any = this.getChecker();
+        let callee: any = this.unwrapPrintTransparentExpression(node.expression);
+        if (callee !== undefined && ts.isPropertyAccessExpression(callee)) {
+            if (callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+                return false; // this.<method>() only: another receiver's body is not in this class
+            }
+            callee = callee.name;
+        }
+        if (callee === undefined || callee.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol: any;
+        try {
+            symbol = checker.getSymbolAtLocation(callee);
+        } catch (e) {
+            return false;
+        }
+        const declaration: any = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (!declaration || (declaration.kind !== ts.SyntaxKind.MethodDeclaration && declaration.kind !== ts.SyntaxKind.FunctionDeclaration)) {
+            return false;
+        }
+        if (!this.returnTypePrintsAsHashMap(declaration)) {
+            return false;
+        }
+        const body = declaration.body;
+        if (!body || !ts.isBlock(body)) {
+            return false;
+        }
+        let plain = true;
+        let returns = 0;
+        const walk = (current) => {
+            if (!plain || current === undefined) {
+                return;
+            }
+            if (ts.isFunctionLike(current) && current !== declaration) {
+                return; // a nested closure returns into its own call
+            }
+            if (ts.isReturnStatement(current)) {
+                returns += 1;
+                const expression = current.expression;
+                if (expression === undefined) {
+                    plain = false;
+                    return;
+                }
+                const value = this.unwrapPrintTransparentExpression(expression);
+                if (ts.isObjectLiteralExpression(value)) {
+                    return;
+                }
+                if (ts.isCallExpression(value) && this.callAlwaysReturnsPlainHashMap(value, depth + 1)) {
+                    return;
+                }
+                plain = false;
+                return;
+            }
+            ts.forEachChild(current, walk);
+        };
+        walk(body);
+        return plain && returns > 0;
+    }
+
+    // the declared return type must not be a class instance (those print as objects)
+    // or an array (those print as Lists), so the object-literal returns above are what
+    // the caller can rely on
+    returnTypePrintsAsHashMap(declaration): boolean {
+        try {
+            const checker: any = this.getChecker();
+            const signature: any = checker.getSignatureFromDeclaration(declaration);
+            const type: any = signature?.getReturnType();
+            if (!type || (type.flags & ts.TypeFlags.Object) === 0) {
+                return false;
+            }
+            if (checker.isArrayType(type) || checker.isTupleType(type)) {
+                return false;
+            }
+            const declarations = type.getSymbol()?.declarations ?? [];
+            if (declarations.some((d) => d.kind === ts.SyntaxKind.ClassDeclaration)) {
+                return false;
+            }
+            return type.getCallSignatures().length === 0;
+        } catch (e) {
+            return false;
+        }
     }
 
     isDictionaryType(node): boolean {
@@ -994,9 +1167,10 @@ export class JavaTranspiler extends BaseTranspiler {
 
             const lastKey = keyStrs[keyStrs.length - 1];
             const rhs     = this.printNode(right, 0);
+            const keyArg  = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
 
             if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
-                return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${lastKey}, ${rhs})`;
+                return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${keyArg}, ${rhs})`;
             }
 
             return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;

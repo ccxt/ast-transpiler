@@ -2984,7 +2984,7 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         expect(output).not.toContain(".put(");
     });
 
-    test('non-literal key keeps the helper (the key prints as Object)', () => {
+    test('string-typed key prints the typed put with the (String) cast', () => {
         const input =
         "class T {\n" +
         "    test(code: string): void {\n" +
@@ -2993,7 +2993,8 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.addElementToObject(request, code, 1)");
+        expect(output).toContain('((java.util.Map<String, Object>)request).put((String)code, 1)');
+        expect(output).not.toContain("addElementToObject");
     });
 
     test('element read as key keeps the helper (GetValue returns Object)', () => {
@@ -3024,7 +3025,7 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         expect(output).not.toContain(".set(");
     });
 
-    test('any-typed target keeps the helper (no proof)', () => {
+    test('object-literal local keeps the native put even when its type is any', () => {
         const input =
         "class T {\n" +
         "    test(): void {\n" +
@@ -3033,10 +3034,13 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Helpers.addElementToObject(x, "k", 1)');
+        // the initializer is the object literal the printer turns into `new HashMap`, so the
+        // receiver is a HashMap on every path the local takes
+        expect(output).toContain('((java.util.Map<String, Object>)x).put("k", 1)');
+        expect(output).not.toContain("addElementToObject");
     });
 
-    test('non-dictionary interface target keeps the helper', () => {
+    test('interface-typed local with an object-literal initializer prints Map.put', () => {
         const input =
         "interface Foo { a: number; }\n" +
         "class T {\n" +
@@ -3046,7 +3050,22 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Helpers.addElementToObject(x, "a", 2)');
+        expect(output).toContain('((java.util.Map<String, Object>)x).put("a", 2)');
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('a local reassigned after the object literal keeps the helper (D2)', () => {
+        const input =
+        "class T {\n" +
+        "    test(foo: Foo, other: any): void {\n" +
+        "        let x: Foo = { a: 1 };\n" +
+        "        x = other;\n" +
+        "        x[\"a\"] = 2;\n" +
+        "    }\n" +
+        "}\n" +
+        "interface Foo { a: number; }"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(x, \"a\", 2)");
     });
 
     test('numeric key on a dictionary keeps the helper (Map.put takes a String key)', () => {
@@ -3071,6 +3090,152 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain('((java.util.Map<String, Object>)Helpers.GetValue(features, "spot")).put("limit", 1)');
+    });
+});
+
+// phase 2 of the element-write rule: keys proven String by the checker reach
+// Map.put through a (String) cast, and receivers whose initializer is an object
+// literal (or a call that only ever returns one) are plain HashMaps at runtime.
+describe('java element-access write: proven-String keys and HashMap receivers', () => {
+    test('string-literal-union key prints the typed put with the (String) cast', () => {
+        const input =
+        "class T {\n" +
+        "    test(flag: boolean): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        const key = flag ? \"orderId\" : \"strategyId\";\n" +
+        "        request[key] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)request).put((String)key, 1)');
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('a call whose body returns object literals only prints Map.put', () => {
+        const input =
+        "interface BalanceAccount { free: any; used: any; total: any; }\n" +
+        "class T {\n" +
+        "    account(): BalanceAccount {\n" +
+        "        return { \"free\": undefined, \"used\": undefined, \"total\": undefined };\n" +
+        "    }\n" +
+        "    test(): void {\n" +
+        "        const account = this.account();\n" +
+        "        account[\"used\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)account).put("used", 1)');
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('a call that can return something else keeps the helper', () => {
+        const input =
+        "interface Foo { a: number; }\n" +
+        "class T {\n" +
+        "    pick(x: Foo): Foo {\n" +
+        "        if (x.a === 1) {\n" +
+        "            return { a: 1 };\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "    test(x: Foo): void {\n" +
+        "        const y = this.pick(x);\n" +
+        "        y[\"a\"] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(y, \"a\", 2)");
+    });
+
+    test('a call returning a class instance keeps the helper (reflection branch)', () => {
+        const input =
+        "class Holder { a = 0; }\n" +
+        "class T {\n" +
+        "    make(): Holder {\n" +
+        "        return { a: 1 } as any;\n" +
+        "    }\n" +
+        "    test(): void {\n" +
+        "        const holder = this.make();\n" +
+        "        holder[\"a\"] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(holder, \"a\", 2)");
+    });
+
+    test('a call returning an array keeps the helper (append branch)', () => {
+        const input =
+        "class T {\n" +
+        "    make(): number[] {\n" +
+        "        return [1];\n" +
+        "    }\n" +
+        "    test(): void {\n" +
+        "        const xs = this.make();\n" +
+        "        xs[0] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(xs, 0, 2)");
+    });
+
+    test('a parameter receiver without a dictionary type keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(fee: any): void {\n" +
+        "        fee[\"cost\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(fee, "cost", 1)');
+    });
+
+    test('a nested write on a proven HashMap local keeps the helper (the read is untyped)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = { a: {} };\n" +
+        "        x[\"a\"][\"b\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(Helpers.GetValue(x, "a"), "b", 1)');
+    });
+
+    test('a string-typed key on a proven HashMap local prints the typed put', () => {
+        const input =
+        "class T {\n" +
+        "    test(code: string): void {\n" +
+        "        const result = { \"a\": 1 };\n" +
+        "        result[code] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)result).put((String)code, 2)');
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('an any-typed key on a dictionary receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(code: any): void {\n" +
+        "        const result: { [key: string]: any } = {};\n" +
+        "        result[code] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(result, code, 2)");
+    });
+
+    test('a number-typed key on a proven HashMap local keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(i: number): void {\n" +
+        "        const result = { \"a\": 1 };\n" +
+        "        result[i] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(result, i, 2)");
     });
 });
 
