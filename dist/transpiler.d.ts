@@ -885,6 +885,16 @@ declare class GoTranspiler extends BaseTranspiler {
     printReverseCall(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
     printAssertCall(node: any, identation: any, parsedArgs: any): string;
+    goSliceLiteralBound(node: any): number | undefined;
+    goSliceSubscript(value: string, start: number, hasEnd: boolean, end: number | undefined): string;
+    goSliceReceiverType(node: any): string | undefined;
+    goSliceLiteralBounds(node: any): {
+        start: number;
+        hasEnd: boolean;
+        end: number;
+    } | undefined;
+    goIsNativeSliceCall(node: any): boolean;
+    printInlineSlice(node: any, receiverText: string): string | undefined;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;

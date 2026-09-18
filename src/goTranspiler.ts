@@ -1172,6 +1172,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the concrete Go type the initializer already produces, or undefined when the
     // printer cannot name it (GetValue, Ternary, Add, ... return any)
     goTypeOfInitializer(initializer, printedValue: string): string | undefined {
+        // a `.slice(a, b)` this printer inlines to a Go subscript (or its guarded func
+        // literal) still holds a string, so its local keeps the type the helper gave it
+        if (this.goIsNativeSliceCall(initializer)) {
+            return 'string';
+        }
         switch (initializer?.kind) {
         case ts.SyntaxKind.StringLiteral:
         case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
@@ -5072,14 +5077,126 @@ ${this.getIden(identation)}${returnStatement}`;
         return `assert(${parsedArgs})`;
     }
 
+    // `x.slice(a)` / `x.slice(a, b)` prints `Slice(x, a, b)`, a JS slice on a string: a
+    // negative bound counts from the end, a start-only call clamps its start to 0 and an
+    // end past len is clamped to len, where Go's native slicing panics
+    goSliceLiteralBound(node): number | undefined {
+        if (node?.kind === ts.SyntaxKind.NumericLiteral) {
+            const text = node.text;
+            if (!/^\d+$/.test(text)) {
+                return undefined;
+            }
+            const value = Number(text);
+            return (value > 2147483647) ? undefined : value;
+        }
+        if ((node?.kind === ts.SyntaxKind.PrefixUnaryExpression) && (node.operator === ts.SyntaxKind.MinusToken)) {
+            const operand = this.goSliceLiteralBound(node.operand);
+            return (operand === undefined) ? undefined : -operand;
+        }
+        return undefined;
+    }
+
+    // the subscript for a string value, with the helper's own index arithmetic
+    goSliceSubscript(value: string, start: number, hasEnd: boolean, end: number | undefined): string {
+        const length = `len(${value})`;
+        let startText;
+        if (start >= 0) {
+            startText = `${start}`;
+        } else if (hasEnd) {
+            startText = `${length} - ${-start}`;
+        } else {
+            startText = `max(${length} - ${-start}, 0)`;
+        }
+        if (!hasEnd) {
+            return `${value}[${startText}:]`;
+        }
+        const endText = (end >= 0) ? `min(${end}, ${length})` : `${length} - ${-end}`;
+        return `${value}[${startText}:${endText}]`;
+    }
+
+    // receiver of an inlinable `.slice(...)`: `string` prints a plain subscript and
+    // `*string` a nil-guarded one, while anything else (an `any` box) keeps the helper.
+    // A TS cast (`(id as string).slice(...)`) prints nothing, so it is transparent here.
+    goSliceReceiverType(node): string | undefined {
+        let receiverNode = node?.expression?.expression;
+        while ((receiverNode?.kind === ts.SyntaxKind.AsExpression) || (receiverNode?.kind === ts.SyntaxKind.NonNullExpression)
+            || (receiverNode?.kind === ts.SyntaxKind.ParenthesizedExpression)) {
+            receiverNode = receiverNode.expression;
+        }
+        if (receiverNode?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const goType = this.goPrintedTypeOfExpression(receiverNode, '');
+        return ((goType === 'string') || (goType === '*string')) ? goType : undefined;
+    }
+
+    // the integer-literal bounds of a `.slice(a, b)` call; undefined when a bound is an
+    // expression, whose Go value is not provably a non-negative int the subscript could take
+    goSliceLiteralBounds(node): { start: number, hasEnd: boolean, end: number } | undefined {
+        const args = node?.arguments ?? [];
+        const start = this.goSliceLiteralBound(args[0]);
+        if (start === undefined) {
+            return undefined;
+        }
+        const hasEnd = args.length > 1;
+        const end = hasEnd ? this.goSliceLiteralBound(args[1]) : undefined;
+        if (hasEnd && (end === undefined)) {
+            return undefined;
+        }
+        return { start, hasEnd, end };
+    }
+
+    // true when this `.slice(a, b)` call prints native Go slicing of a string value
+    goIsNativeSliceCall(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee: any = node.expression;
+        if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.name?.escapedText !== 'slice')) {
+            return false;
+        }
+        if (this.goSliceReceiverType(node) === undefined) {
+            return false;
+        }
+        return this.goSliceLiteralBounds(node) !== undefined;
+    }
+
+    // `x.slice(a, b)` -> `x[a:b]` when the receiver is a local the printer declares
+    // `string` (or `*string`, which keeps the helper's nil -> "" branch as a guard) and
+    // both bounds are integer literals. Any other bound or receiver keeps the helper.
+    printInlineSlice(node, receiverText: string): string | undefined {
+        if ((receiverText ?? '').includes('\n')) {
+            return undefined;
+        }
+        const goType = this.goSliceReceiverType(node);
+        if (goType === undefined) {
+            return undefined;
+        }
+        const bounds = this.goSliceLiteralBounds(node);
+        if (bounds === undefined) {
+            return undefined;
+        }
+        const { start, hasEnd, end } = bounds;
+        if (goType === 'string') {
+            return this.goSliceSubscript(receiverText, start, hasEnd, end);
+        }
+        const level = this.goStatementLevel;
+        const body = this.getIden(level + 1);
+        const branch = this.getIden(level + 2);
+        const subscript = this.goSliceSubscript('str', start, hasEnd, end);
+        return `func() string {\n${body}if ${receiverText} == nil {\n${branch}return ""\n${body}}\n${body}str := *${receiverText}\n${body}return ${subscript}\n${this.getIden(level)}}()`;
+    }
+
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
         parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
         parsedArg2 = this.goPrintCallArgument(node.arguments?.[1], parsedArg2);
+        const nativeSlice = this.printInlineSlice(node, name);
+        if (nativeSlice !== undefined) {
+            return nativeSlice;
+        }
         if (parsedArg2 === undefined){
-            // return `((string)${name}).Substring((int)${parsedArg})`;
             parsedArg2 = 'nil';
         }
-        // return `((string)${name})[((int)${parsedArg})..((int)${parsedArg2})]`;
         return `Slice(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 

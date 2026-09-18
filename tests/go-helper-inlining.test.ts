@@ -476,3 +476,176 @@ describe('go IsEqual on a table-typed string local -> ==', () => {
         expect(output).toContain('IsEqual(x, y)');
     });
 });
+
+// the runtime Slice helper clamps a JS-style slice (negative bounds count from the end,
+// a start-only call clamps its start to 0, an end past len is clamped to len), so the
+// printed subscript reproduces that arithmetic; anything unproven keeps Slice(...)
+describe('go .slice(a, b) -> native subscript on a declared string', () => {
+    test('an end past len is clamped with min', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return s.slice (0, 3)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[0:min(3, len(s))]');
+        expect(output).not.toContain('Slice(');
+    });
+    test('a single non-negative bound keeps the :len form', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return s.slice (2)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[2:]');
+        expect(output).not.toContain('Slice(');
+    });
+    test('a negative start-only bound is clamped to 0 like the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return s.slice (-4)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[max(len(s) - 4, 0):]');
+        expect(output).not.toContain('Slice(');
+    });
+    test('a negative end counts from the end', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return s.slice (0, -2)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[0:len(s) - 2]');
+        expect(output).not.toContain('Slice(');
+    });
+    test('two negative bounds shift both indices', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return s.slice (-4, -1)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[len(s) - 4:len(s) - 1]');
+        expect(output).not.toContain('Slice(');
+    });
+    test('the local keeps the string type the helper gave it', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        const head = s.slice (0, 2)\n" +
+        "        return head\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('var head string = s[0:min(2, len(s))]');
+    });
+    test('an any-typed receiver keeps Slice', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        return a.slice (0, 3)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Slice(a, 0, 3)');
+    });
+    test('a non-literal bound keeps Slice', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const s = 'abcdef'\n" +
+        "        const n = GetLength(a)\n" +
+        "        return s.slice (0, n)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Slice(s, 0, n)');
+    });
+    test('a slice-list receiver keeps Slice', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const parts = Split(a, ',')\n" +
+        "        return parts.slice (0, 2)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Slice(parts, 0, 2)');
+    });
+    test('a cast around the receiver prints nothing and keeps the subscript', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abcdef'\n" +
+        "        return (s as string).slice (0, 3)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('s[0:min(3, len(s))]');
+        expect(output).not.toContain('Slice(');
+    });
+});
+
+// a `*string` local is nil when the accessor found nothing and the helper answers ""
+// for it, so the inlined form keeps that branch as a guard around the subscript
+describe('go .slice(a, b) -> native subscript on a declared *string', () => {
+    test('the nil branch and the deref replace the helper call', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const s = Precise.stringMul (a, '2')\n" +
+        "        return s.slice (2, 4)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).not.toContain('Slice(');
+        expect(output).toContain('if s == nil {\n\t\t\treturn ""\n\t\t}\n\t\tstr := *s\n\t\treturn str[2:min(4, len(str))]\n\t}()');
+    });
+    test('a pointer receiver with a non-literal bound keeps Slice', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const s = Precise.stringMul (a, '2')\n" +
+        "        return s.slice (0, GetLength(a))\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Slice(s, 0, GetLength(a))');
+    });
+    test('a cast around a pointer receiver is transparent too', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const s = Precise.stringMul (a, '2')\n" +
+        "        return (s as string).slice (-4)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).not.toContain('Slice(');
+        expect(output).toContain('str[max(len(str) - 4, 0):]');
+    });
+    test('a cast around an any-typed receiver keeps Slice', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        return (a as string).slice (0, 3)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Slice(a, 0, 3)');
+    });
+});
