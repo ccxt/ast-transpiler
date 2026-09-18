@@ -579,6 +579,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpDestructuringTempType(initializer: any): string | undefined;
     csharpConditionOperandType(node: any): string;
     csharpNativeCondition(node: any, identation: any): string;
+    csharpNegatedConditionOperand(operand: any): string;
     csharpConditionPositionAllowsNative(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
@@ -641,6 +642,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printCondition(node: any, identation: any): any;
     csharpConditionParensIfNeeded(node: any, printed: string): string;
     printConditionalExpression(node: any, identation: any): string;
+    csharpTernaryConditionOperand(node: any): string;
     printTernaryCondition(node: any): any;
     csharpConditionPrintsAsBool(node: any): boolean;
     csharpMatchingParenIndex(text: string, start: number): number;

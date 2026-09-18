@@ -2021,9 +2021,22 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.getIden(identation) + (negated ? `(${equalsTrue})` : equalsTrue);
     }
 
-    // only the if / while / && / || / ! condition positions print natively: the ternary
-    // condition keeps the base path (its `((bool) …)` wrapper and the isTrue drop on a
-    // typed bool local are that unit's change, not this one).
+    // `!x` on the `bool?` the hook names prints `x != true`: exactly `!(x == true)` (null -> true)
+    // and the value isTrue computes for the box. A `bool` operand keeps the base `!x`; an operand
+    // the hook cannot name keeps `!isTrue(x)` (the untyped emission is untouched).
+    csharpNegatedConditionOperand(operand) {
+        if (operand?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        if (this.csharpConditionOperandType(operand) !== 'bool?') {
+            return undefined;
+        }
+        return `${this.printNode(operand, 0)} != true`;
+    }
+
+    // only the if / while / && / || / ! condition positions print natively through this gate; the
+    // ternary condition has its own hook-driven fold (csharpTernaryConditionOperand, U56) because
+    // its operand is a plain value position the base printCondition path never asks about.
     csharpConditionPositionAllowsNative(node) {
         const parent = node?.parent;
         switch (parent?.kind) {
@@ -2658,6 +2671,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (operator === ts.SyntaxKind.ExclamationToken) {
             // not branch check falsy/turthy values if needed;
+            const nativeNot = this.csharpNegatedConditionOperand(operand);
+            if (nativeNot !== undefined) {
+                return nativeNot;
+            }
             return  this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
         }
         const leftSide = this.printNode(operand, 0);
@@ -2806,12 +2823,37 @@ export class CSharpTranspiler extends BaseTranspiler {
         return condition + " ? " + whenTrue + " : " + whenFalse;
     }
 
+    // the ternary condition is a condition position the native gate above never sees (the operand
+    // sits under a ConditionalExpression): the same hook answer prints natively there -- `bool`
+    // bare, `bool?` as `x == true` (isTrue's value for the box, null -> false), source parens
+    // unwrapped. Undefined keeps the base path, so an operand the hook cannot name is unchanged.
+    csharpTernaryConditionOperand(node) {
+        let operand = node;
+        while (operand?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            operand = operand.expression;
+        }
+        if (operand?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const type = this.csharpConditionOperandType(operand);
+        if (type === 'bool') {
+            return this.printNode(operand, 0);
+        }
+        if (type === 'bool?') {
+            return `${this.printNode(operand, 0)} == true`;
+        }
+        return undefined;
+    }
+
     // printCondition already yields a C# `bool` (`isTrue(x)` / `!isTrue(x)`), so the
-    // `((bool) <cond>)` wrapper this printer used to emit was a cast on a bool.
-    // `isTrue` is the identity on a C# `bool`, so a condition the printer itself
-    // declares `bool` (getCSharpLocalType, same proof as the declaration) needs no
-    // wrapper either; anything the printer cannot name `bool` keeps `isTrue`.
+    // `((bool) <cond>)` wrapper this printer used to emit was a cast on a bool. The hook fold
+    // above answers the emitted declaration's own type first; anything it cannot name keeps the
+    // printer's `bool` fold (getCSharpLocalType) and then `isTrue`.
     printTernaryCondition(node) {
+        const native = this.csharpTernaryConditionOperand(node);
+        if (native !== undefined) {
+            return native;
+        }
         if (this.csharpConditionPrintsAsBool(node)) {
             return this.printNode(node, 0);
         }
