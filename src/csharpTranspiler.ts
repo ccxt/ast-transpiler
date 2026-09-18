@@ -142,6 +142,14 @@ const CSHARP_THIS_RETURN_TYPES: { [name: string]: string } = {
 // slice, safeTimestamp, ...) are deliberately absent above: their box holds a value the printer
 // cannot name, so those locals stay `object`.
 
+// this.<name>(...) base methods whose printed C# signature is a concrete numeric value the
+// tables above do not carry: `int precisionFromString(object)` (Exchange.Number.cs) and
+// `Int64? parseToInt(object)` (Exchange.BaseMethods.cs, retyped by the build layer)
+const CSHARP_NATIVE_NUMERIC_THIS_KINDS: { [name: string]: string } = {
+    'precisionFromString': 'int',
+    'parseToInt': 'Int64?',
+};
+
 // the safe* accessor names of the table above: a local initialised by one of them gets the
 // extra sink guards of csharpLocalIsSafeToType (list-only methods, hard `(string)` casts,
 // the `+` LEFT operand overload rebinding)
@@ -169,6 +177,10 @@ const GUARD_KEY_SEPARATOR = "\u0000";
 // boxes of one kind with the conversions the C# operator applies too. `double` keeps only
 // `>`/`>=` — the helper reads a NaN operand as "less than", a native comparison is false.
 const CSHARP_NUMERIC_KINDS = [ 'int', 'Int64', 'double' ];
+
+// numeric kinds a printed call result can carry (with the nullable spellings the safe*
+// accessors and parseToInt use), for the equality path only
+const CSHARP_NUMERIC_VALUE_KINDS = [ 'int', 'Int64', 'Int64?', 'double', 'double?' ];
 
 const CSHARP_NATIVE_COMPARISON_TOKENS = {
     [ts.SyntaxKind.LessThanToken]: '<',
@@ -1014,6 +1026,77 @@ export class CSharpTranspiler extends BaseTranspiler {
         return isEquality ? `(${text} == null)` : `(${text} != null)`;
     }
 
+    // `isEqual(<numeric call>, N)` / `isEqual(N, <numeric call>)` -> `==` / `!=`: the call
+    // prints a C# value of a concrete numeric kind, so the integer literal adapts to it and
+    // the operator performs the comparison isEqual's integer and double branches do. The
+    // string/bool/collection calls and every `object` box (getValue, mod, safeValue, a
+    // parameter) name no numeric kind: those keep the helper.
+    csharpNativeNumericCallEquality(left, right, leftText: string, rightText: string, isEquality: boolean): string | undefined {
+        const leftKind = this.csharpNumericCallKind(left);
+        const rightKind = this.csharpNumericCallKind(right);
+        const leftLiteral = (leftKind === undefined) ? this.csharpIntegerLiteralKind(left) : undefined;
+        const rightLiteral = (rightKind === undefined) ? this.csharpIntegerLiteralKind(right) : undefined;
+        const callOnLeft = (leftKind !== undefined) && (rightLiteral !== undefined) && this.csharpNumericKindHoldsLiteral(leftKind, rightLiteral);
+        const callOnRight = (rightKind !== undefined) && (leftLiteral !== undefined) && this.csharpNumericKindHoldsLiteral(rightKind, leftLiteral);
+        if (!callOnLeft && !callOnRight) {
+            return undefined;
+        }
+        // both operands are printed once: the call is not duplicated
+        return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+
+    // the C# value kind of an operand printed as a call (or as `x.length`), when that printed
+    // signature is a numeric value type: `.indexOf(...)`/`.length` (int) and the safe*
+    // accessors come from the printer's own tables, the this.<name>() methods of
+    // CSHARP_NATIVE_NUMERIC_THIS_KINDS from the hand-written C# signatures. undefined keeps
+    // the helper, since an `object` box has no comparable value
+    csharpNumericCallKind(node): string | undefined {
+        const expression = node?.expression;
+        if ((node?.kind === ts.SyntaxKind.CallExpression)
+            && (expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+            && (expression.expression?.kind === ts.SyntaxKind.ThisKeyword)) {
+            const named = CSHARP_NATIVE_NUMERIC_THIS_KINDS[expression.name?.escapedText as string];
+            // an unresolvable callee prints callDynamically(this, ...), which returns object
+            if ((named !== undefined) && this.csharpCalleeResolves(node)) {
+                return named;
+            }
+        }
+        const named = this.csharpCallReturnType(node);
+        return ((named === undefined) || (CSHARP_NUMERIC_VALUE_KINDS.indexOf(named) < 0)) ? undefined : named;
+    }
+
+    // the C# kind of an integer literal operand (`N` / `-N`), or undefined when the text is not
+    // an integer the literal can hold exactly. isEqual's integer branch round-trips through
+    // Convert.ToInt64 and its `(int)a == (int)b` branch truncates a non-integral literal, so
+    // only a safe integer literal keeps the two comparisons identical
+    csharpIntegerLiteralKind(node): string | undefined {
+        let value;
+        if (node?.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+            if ((node.operator !== ts.SyntaxKind.MinusToken) || (node.operand?.kind !== ts.SyntaxKind.NumericLiteral)) {
+                return undefined;
+            }
+            value = -Number(node.operand.text);
+        } else if (node?.kind === ts.SyntaxKind.NumericLiteral) {
+            value = Number(node.text);
+        } else {
+            return undefined;
+        }
+        if (!Number.isSafeInteger(value)) {
+            return undefined;
+        }
+        return ((value >= -2147483648) && (value <= 2147483647)) ? 'int' : 'long';
+    }
+
+    // a `long` literal has no implicit conversion to an `int` operand; every other pair
+    // converts the literal exactly, which is what isEqual's Convert.ToInt64 /
+    // Convert.ToDouble branches do with the same two boxes
+    csharpNumericKindHoldsLiteral(callKind: string, literalKind: string): boolean {
+        if (callKind === 'int') {
+            return literalKind === 'int';
+        }
+        return (callKind.indexOf('Int64') === 0) || (callKind.indexOf('double') === 0);
+    }
+
     // the concrete C# type of an expression the printer can name, or undefined: the embedding
     // build layer's proof wins (it retypes locals the printer leaves `object`), then the
     // printer's own tables and the literals whose C# type is fixed by their text
@@ -1264,6 +1347,10 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
                 if (inlined !== undefined) {
                     return inlined;
+                }
+                const numericCall = this.csharpNativeNumericCallEquality(left, right, leftText, rightText, isEquality);
+                if (numericCall !== undefined) {
+                    return numericCall;
                 }
             }
 

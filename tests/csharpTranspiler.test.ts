@@ -1619,6 +1619,74 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
     });
 });
 
+describe('csharp helper removal: isEqual on a numeric call result', () => {
+    const outputOf = (input: string) => transpiler.transpileCSharp(input).content;
+    test('a string indexOf against a negative literal prints the native operator', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    main(s: any) {\n" +
+        "        if (s.indexOf(' ') !== -1) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('if ((getIndexOf(s, " ") != -1))');
+        expect(output).not.toContain('isEqual(');
+    });
+    test('the literal may be on either side of the call', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    main(s: any) {\n" +
+        "        const first = -1 === s.indexOf(' ');\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('bool first = (-1 == getIndexOf(s, " "));');
+        expect(output).not.toContain('isEqual(');
+    });
+    test('a this.<name>() method whose C# signature is numeric compares natively', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    precisionFromString(v) { return 1; }\n" +
+        "    parseToInt(v) { return 1; }\n" +
+        "    main(x) {\n" +
+        "        if (this.precisionFromString(x) !== 0) { return 1; }\n" +
+        "        if (this.parseToInt(x) === 3) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('if ((this.precisionFromString(x) != 0))');
+        expect(output).toContain('if ((this.parseToInt(x) == 3))');
+        expect(output).not.toContain('isEqual(');
+    });
+    test('a literal that kind cannot hold keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    precisionFromString(v) { return 1; }\n" +
+        "    main(x) {\n" +
+        "        const unsafe_ = this.precisionFromString(x) === 9007199254740993;\n" +
+        "        const fractional = this.precisionFromString(x) === 0.5;\n" +
+        "        return [unsafe_, fractional];\n" +
+        "    }\n" +
+        "}");
+        // the integer literal does not survive isEqual's Convert.ToInt64 round-trip, and the
+        // fractional one would be truncated by its `(int)a == (int)b` branch
+        expect(output).toContain('isEqual(this.precisionFromString(x), 9007199254740992)');
+        expect(output).toContain('isEqual(this.precisionFromString(x), 0.5)');
+    });
+    test('an object-returning call keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    main(position: any, ms: any) {\n" +
+        "        if (position['contracts'] === 0) { return 1; }\n" +
+        "        if (mod(ms, 2) === 0) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(position, "contracts"), 0)');
+        expect(output).toContain('isEqual(mod(ms, 2), 0)');
+    });
+});
+
 describe('csharp native numeric comparisons', () => {
     // the printer names the C# kind of int-range literals, `.length` and a few call results
     // itself; locals it leaves `object` (or that the embedding build layer retypes) come back
