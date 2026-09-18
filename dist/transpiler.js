@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4468,37 +4468,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpCallPrintsBool(node) {
     return this.csharpIsCheckedBoolean(node) && this.csharpCallReturnType(node) === "bool";
   }
-  // the declared type of an identifier read: the embedding build layer's proof first (it
-  // retypes locals this printer leaves `object`), then this printer's own table. Both name
-  // only a type the local already carries at runtime, and `var`/`object` mean "no type".
-  csharpDeclaredReadType(node) {
-    const provided = this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : void 0;
-    if (provided !== void 0) {
-      return provided;
-    }
-    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-    if (declaration === void 0 || !ts4.isVariableDeclaration(declaration) || declaration.name?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (!this.csharpLocalTypes.has(declaration)) {
-      this.csharpLocalTypes.set(declaration, this.getCSharpLocalType(declaration));
-    }
-    const type = this.csharpLocalTypes.get(declaration);
-    return type === void 0 || type === this.VAR_TOKEN ? void 0 : type;
-  }
-  // `isTrue (x)` boxes x and answers false for a null box, which is exactly what the lifted
-  // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only reads
-  // whose declaration is emitted `bool?` qualify; every other shape keeps the helper.
-  csharpNullableBoolCondition(node) {
-    let value = node;
-    while (value?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
-      value = value.expression;
-    }
-    if (value?.kind !== ts4.SyntaxKind.Identifier || this.csharpDeclaredReadType(value) !== "bool?") {
-      return void 0;
-    }
-    return `(${this.printNode(value, 0)} == true)`;
-  }
   // same emission as the base implementation except for the bare-bool branch: the node is
   // printed once and only wrapped in isTrue(...) when the printer did not already render a bool
   printCondition(node, identation) {
@@ -4509,10 +4478,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return this.printPrefixUnaryExpression(node, identation);
     }
     const printed = this.printNode(node, 0);
-    const nullableBool = this.csharpNullableBoolCondition(node);
-    if (nullableBool !== void 0) {
-      return `${this.getIden(identation)}${nullableBool}`;
-    }
     if (this.csharpConditionPrintsBool(node)) {
       return `${this.getIden(identation)}${this.csharpConditionParensIfNeeded(node, printed)}`;
     }
