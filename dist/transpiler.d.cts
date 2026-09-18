@@ -507,6 +507,17 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
     csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
+    csharpLoopIndexListRead(expression: any, argumentExpression: any): string | undefined;
+    csharpCounterRangeLoop(counter: any, receiver: any): ts.ForStatement;
+    csharpForBoundsCounter(loop: any, counter: any, receiver: any): boolean;
+    csharpCounterStartsAtZero(loop: any, counter: any): boolean;
+    csharpCounterAdvances(loop: any, counter: any): boolean;
+    csharpCounterUnwrittenIn(range: any, counter: any): boolean;
+    csharpReceiverIntactIn(range: any, receiver: any): boolean;
+    csharpIsSameDeclaration(identifier: any, declaration: any): boolean;
+    csharpWalkIdentifiers(node: any, visit: any): void;
+    csharpIsWriteTarget(node: any): boolean;
+    csharpUnparenthesized(node: any): any;
     csharpGuardAdmitsRead(guard: any, read: any): boolean;
     csharpInGuardsOf(func: any): Map<string, any[]>;
     csharpLiteralDeclaresKey(node: any, expression: any, key: any, isNumberKey: any): boolean;
