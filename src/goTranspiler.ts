@@ -2033,11 +2033,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const containerStr = this.printNode(baseExpr, 0);
             const keyStrs      = keys.map(k => this.printNode(k, 0));
 
-            // Build GetValue(GetValue( ... )) chain for all but the last key.
-            let acc = containerStr;
-            for (let i = 0; i < keyStrs.length - 1; i++) {
-                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
-            }
+            // the container of a nested `m["a"]["b"] = v` write is a plain read of the
+            // receiver: a declared map indexes natively and only the `any` steps above
+            // it keep the helper (Go refuses to index an `any`)
+            const acc = this.goElementWriteChain(baseExpr, containerStr, keys, keyStrs);
 
             const lastKey = keyStrs[keyStrs.length - 1];
             // the value is printed at the statement's own level so a multi-line object
@@ -2084,11 +2083,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const containerStr = this.printNode(baseExpr, 0);
             const keyStrs      = keys.map(k => this.printNode(k, 0));
 
-            // Build GetValue(GetValue( ... )) chain for all but the last key.
-            let acc = containerStr;
-            for (let i = 0; i < keyStrs.length - 1; i++) {
-                acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
-            }
+            // Build the GetValue(GetValue( ... )) chain for all but the last key; the
+            // first step is the same read of a declared map the `=` branch types
+            const acc = this.goElementWriteChain(baseExpr, containerStr, keys, keyStrs);
 
             const lastKey = keyStrs[keyStrs.length - 1];
             const rhs     = this.printNode(right, 0);
@@ -4411,6 +4408,11 @@ ${tryBodyBlock}
         switch (node.kind) {
         case ts.SyntaxKind.ParenthesizedExpression:
             return this.goIndexableTypeOf(node.expression, printed);
+        // `(x as Dict)['k']` prints `x["k"]`: the assertion is a compile-time hint in
+        // TypeScript, so the receiver is typed exactly like the bare expression — the
+        // printer's own table stays the only source of the Go type
+        case ts.SyntaxKind.AsExpression:
+            return this.goIndexableTypeOf(node.expression, printed);
         case ts.SyntaxKind.ObjectLiteralExpression:
             return 'map[string]any';
         case ts.SyntaxKind.ArrayLiteralExpression:
@@ -4433,6 +4435,25 @@ ${tryBodyBlock}
         return acc;
     }
 
+    // the container of a nested `m["a"]["b"] = v` write, for all but the last key: its
+    // first step is a plain read of the receiver, so a receiver the printer typed as a
+    // map indexes natively and only the `any` steps above it keep the helper (Go refuses
+    // to index an `any`). A missing key and a nil map read as nil in both forms, and a
+    // non-map container is a no-op for AddElementToObject either way.
+    goElementWriteChain(baseExpr, containerStr: string, keyNodes, keyStrs: string[]): string {
+        let acc = containerStr;
+        let first = 0;
+        if ((keyStrs.length > 1) && (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any')
+            && this.goKeyIsString(keyNodes[0], keyStrs[0])) {
+            acc = `${containerStr}[${keyStrs[0]}]`;
+            first = 1;
+        }
+        for (let i = first; i < keyStrs.length - 1; i++) {
+            acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        }
+        return acc;
+    }
+
     // true when the printed key is a Go string, so `m[key]` reads the map with the
     // same key GetValue resolves for a string operand (GetValue parses a non-string
     // key, which on map[string]any just yields nil)
@@ -4444,6 +4465,9 @@ ${tryBodyBlock}
         case ts.SyntaxKind.StringLiteral:
         case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
             return true;
+        case ts.SyntaxKind.ParenthesizedExpression:
+        case ts.SyntaxKind.AsExpression:
+            return this.goKeyIsString(node.expression, printed);
         case ts.SyntaxKind.Identifier:
             return this.goDeclaredTypeOfIdentifier(node) === 'string';
         case ts.SyntaxKind.CallExpression:

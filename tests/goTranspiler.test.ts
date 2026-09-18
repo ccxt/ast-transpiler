@@ -1250,6 +1250,79 @@ describe('go inline equality', () => {
         // a field the printer cannot name keeps the helper
         expect(output).toContain("if EvalTruthy(this.Options) {");
     });
+    test('a *sync.Map BaseExchange field nil test inlines to == / != nil', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        if (this.markets === undefined) { return 1; }\n" +
+        "        if (this.markets !== undefined) { return 2; }\n" +
+        "        const a = this.markets_by_id === undefined;\n" +
+        "        const b = this.currencies_by_id !== undefined;\n" +
+        "        const c = this.tickers === undefined;\n" +
+        "        return [ a, b, c ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // go/v4/exchange.go declares these BaseExchange fields as *sync.Map: the Go nil
+        // test answers exactly what the IsEqual helper answers for a nil pointer
+        expect(output).toContain("if this.Markets == nil {");
+        expect(output).toContain("if this.Markets != nil {");
+        expect(output).toContain("var a bool = (this.Markets_by_id == nil)");
+        expect(output).toContain("var b bool = (this.Currencies_by_id != nil)");
+        expect(output).toContain("var c bool = (this.Tickers == nil)");
+        expect(output).not.toContain("IsEqual(this.Markets");
+    });
+    test('fields whose Go nil test the helpers do not reproduce keep IsEqual', () => {
+        // Orders is an `any` field, Hostname a plain string, Clients a map, Ids a slice,
+        // LastRequest is not a hand-written base field: `== nil` would change meaning
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        if (this.orders === undefined) { return 1; }\n" +
+        "        if (this.hostname === undefined) { return 2; }\n" +
+        "        if (this.clients === undefined) { return 3; }\n" +
+        "        if (this.ids === undefined) { return 4; }\n" +
+        "        if (this.lastRequest === undefined) { return 5; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(this.Orders, nil)");
+        expect(output).toContain("IsEqual(this.Hostname, nil)");
+        expect(output).toContain("IsEqual(this.Clients, nil)");
+        expect(output).toContain("IsEqual(this.Ids, nil)");
+        expect(output).toContain("IsEqual(this.LastRequest, nil)");
+        expect(output).not.toContain("this.Orders == nil");
+    });
+    test('a *sync.Map field compared to a literal or to another field keeps IsEqual', () => {
+        // a *sync.Map is not comparable to a string, and two of them would have to be
+        // dereferenced: the printer repeats each operand in that shape
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        if (this.markets === 'tok') { return 1; }\n" +
+        "        if (this.markets === this.options) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(this.Markets, \"tok\")");
+        expect(output).toContain("IsEqual(this.Markets, this.Options)");
+        expect(output).not.toContain("*this.Markets");
+    });
+    test('a local holding the field stays the any box it was declared with', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const markets = this.markets;\n" +
+        "        if (markets === undefined) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var markets any = this.Markets");
+        expect(output).toContain("IsEqual(markets, nil)");
+    });
 });
 
 describe('go ordered comparisons inline to native operators', () => {
