@@ -3304,4 +3304,79 @@ describe('java replaceAll native emission', () => {
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
+
+    // Helper-removal (java-28): `Promise.all ([...])` whose every element is
+    // checker-typed `Promise<...>` prints CompletableFuture.allOf instead of the
+    // reflective Helpers.promiseAll loop; anything unproven keeps the helper.
+    const promiseAllSnippet = (body: string) =>
+        "class T {\n" +
+        "    async fetchA (): Promise<number> {\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "    async fetchB (): Promise<string> {\n" +
+        "        return 'x';\n" +
+        "    }\n" +
+        body +
+        "}\n";
+
+    test('a discarded Promise.all of typed futures prints CompletableFuture.allOf', () => {
+        const input = promiseAllSnippet(
+            "    async discarded (): Promise<void> {\n" +
+            "        await Promise.all ([ this.fetchA (), this.fetchB () ]);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('(java.util.concurrent.CompletableFuture.allOf(((java.util.concurrent.CompletableFuture<?>) this.fetchA()), ((java.util.concurrent.CompletableFuture<?>) this.fetchB()))).join();');
+        expect(output).not.toContain('Helpers.promiseAll');
+    });
+
+    test('a used Promise.all of const-bound typed futures collects the values natively', () => {
+        const input = promiseAllSnippet(
+            "    async destructured (): Promise<void> {\n" +
+            "        const a = this.fetchA ();\n" +
+            "        const b = this.fetchB ();\n" +
+            "        const [ x, y ] = await Promise.all ([ a, b ]);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('java.util.concurrent.CompletableFuture.allOf(((java.util.concurrent.CompletableFuture<?>) a), ((java.util.concurrent.CompletableFuture<?>) b)).thenApply(promiseAllValue -> new java.util.ArrayList<Object>(java.util.Arrays.asList(((java.util.concurrent.CompletableFuture<?>) a).join(), ((java.util.concurrent.CompletableFuture<?>) b).join())))');
+        expect(output).not.toContain('Helpers.promiseAll');
+    });
+
+    test('a consumed Promise.all whose element is not const-bound keeps the helper', () => {
+        const input = promiseAllSnippet(
+            "    async test (): Promise<void> {\n" +
+            "        const a = this.fetchA ();\n" +
+            "        let b = this.fetchB ();\n" +
+            "        const results = await Promise.all ([ a, b ]);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.promiseAll(new java.util.ArrayList<Object>(java.util.Arrays.asList(a, b)))');
+    });
+
+    test('a consumed Promise.all with a call element keeps the helper (single evaluation)', () => {
+        const input = promiseAllSnippet(
+            "    async test (): Promise<void> {\n" +
+            "        const results = await Promise.all ([ this.fetchA (), this.fetchB () ]);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.promiseAll(new java.util.ArrayList<Object>(java.util.Arrays.asList(this.fetchA(), this.fetchB())))');
+    });
+
+    test('a Promise.all over a list variable keeps the helper (element types unknown)', () => {
+        const input = promiseAllSnippet(
+            "    async test (): Promise<void> {\n" +
+            "        const tasks: Promise<any>[] = [ this.fetchA () ];\n" +
+            "        const results = await Promise.all (tasks);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.promiseAll(tasks)');
+    });
+
+    test('a Promise.all with non-promise elements keeps the helper', () => {
+        const input = promiseAllSnippet(
+            "    async test (): Promise<void> {\n" +
+            "        await Promise.all ([ 1, 2 ]);\n" +
+            "    }\n");
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.promiseAll(new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 2)))');
+    });
 });

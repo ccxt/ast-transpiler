@@ -1061,7 +1061,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonParseCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonStringifyCall(_node: any, _identation: any, parsedArg?: any): string;
-    printPromiseAllCall(_node: any, _identation: any, parsedArg?: any): string;
+    printNativePromiseAllCall(node: any): string;
+    isConstBoundIdentifier(node: any): boolean;
+    printPromiseAllCall(node: any, identation: any, parsedArg?: any): string;
     printMathFloorCall(_node: any, _identation: any, parsedArg?: any): string;
     printMathRoundCall(_node: any, _identation: any, parsedArg?: any): string;
     printMathCeilCall(_node: any, _identation: any, parsedArg?: any): string;
