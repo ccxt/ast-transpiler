@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -8174,6 +8174,7 @@ ${tryBodyBlock}
     }
     switch (node.kind) {
       case _typescript2.default.SyntaxKind.ParenthesizedExpression:
+      case _typescript2.default.SyntaxKind.AsExpression:
         return this.goIndexableTypeOf(node.expression, printed);
       case _typescript2.default.SyntaxKind.ObjectLiteralExpression:
         return "map[string]any";
