@@ -68,6 +68,22 @@ const parserConfig = {
     INFER_ARG_TYPE: false,
 };
 
+// hand-written base methods whose Java declaration carries a concrete numeric return
+// type (java/lib/src/main/java/io/github/ccxt/BaseExchange.java: `public Long
+// milliseconds()`), so a `this.<name>()` call holds that box on every path. Generated
+// methods print `Object` - only this closed table is an arithmetic anchor.
+const JAVA_THIS_RETURN_TYPES: { [name: string]: string } = {
+    'milliseconds': 'long',
+};
+
+// source files the table was audited against: the declaration on the base class, or
+// its overload-stripped temp copy (build/stripOverloads.ts). A call resolving anywhere
+// else is a venue override that prints its own signature - not provable.
+const JAVA_THIS_RETURN_TYPES_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
+// `milliseconds = milliseconds` (Exchange.ts) mixes in the functions/time.ts helper, so
+// the same call may resolve to the Date.now signature in a typescript lib.d.ts instead.
+const JAVA_THIS_RETURN_TYPES_LIB_FILE = /(^|[\\/])node_modules[\\/](?:[^\\/]+[\\/]node_modules[\\/])?typescript6?[\\/]lib[\\/]lib\.[^\\/]*\.d\.ts$/;
+
 // every assignment operator (`=`, `+=`, `??=`, ...) but no comparison (`===`, `!==`, `<=`, `>=`):
 // an element access on the left of one of these is a write site and keeps the base emission
 const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
@@ -2003,6 +2019,43 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableString(node.left) || this.javaProvableString(node.right);
     }
 
+    // the Java kind a `this.<name>(...)` call provably prints with (a hand-written base
+    // declaration from JAVA_THIS_RETURN_TYPES), or undefined to keep the helper. The
+    // signature must resolve to the base tier or to the Date.now lib signature the
+    // mixed-in functions/time.ts helper points at; a venue override prints its own
+    // (usually Object) signature and is not provable.
+    javaThisCallNumericKind(node): string | undefined {
+        if (node?.kind !== ts.SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const name = callee.name?.escapedText;
+        if (typeof name !== 'string') {
+            return undefined;
+        }
+        const kind = JAVA_THIS_RETURN_TYPES[name];
+        if (kind === undefined) {
+            return undefined;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            declaration = undefined;
+        }
+        const fileName = declaration?.getSourceFile?.().fileName;
+        if (typeof fileName !== 'string') {
+            return undefined;
+        }
+        if (!JAVA_THIS_RETURN_TYPES_BASE_FILE.test(fileName) && !JAVA_THIS_RETURN_TYPES_LIB_FILE.test(fileName)) {
+            return undefined;
+        }
+        return kind;
+    }
+
     // the Java kind a numeric operand provably prints with: decimal integer literal ->
     // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
     // natively -> that node's kind, a local the embedding layer retyped `Long`/`Double`
@@ -2353,6 +2406,15 @@ export class JavaTranspiler extends BaseTranspiler {
         // declares Object, so the native operator would not compile
         if (op === ts.SyntaxKind.PlusEqualsToken || op === ts.SyntaxKind.MinusEqualsToken) {
             return undefined;
+        }
+        // `this.milliseconds() - <long-provable>`: the hand-written base call hands back
+        // a Long, and Helpers.subtract's Long - Long branch is plain long arithmetic with
+        // the same box (Helpers.java), so the helper drops when the right side is long too
+        if (op === ts.SyntaxKind.MinusToken) {
+            const anchoredKind = this.javaThisCallNumericKind(left);
+            if (anchoredKind === 'long' && this.javaProvableNumericKind(right) === 'long') {
+                return `(${leftText} - ${this.javaPrintOperandAsLong(right, rightText)})`;
+            }
         }
         if (leftFamily !== 'number' || rightFamily !== 'number') {
             return undefined;
