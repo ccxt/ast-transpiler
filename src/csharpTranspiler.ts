@@ -198,6 +198,10 @@ const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks',
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
+// receivers the market-typed-local unit owns (market/currency rows); this printer's literal-key
+// read rule leaves them to that family and covers every other declared-collection local
+const CSHARP_MARKET_RECEIVER_NAMES = [ 'market', 'currency' ];
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -211,6 +215,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // layer for the locals it retypes itself (ccxt: build/csharp-local-types.js); it must
     // describe the same type the declaration is emitted with, or the operator will not compile
     csharpExpressionTypeResolver?: (node) => string | undefined;
+    // optional proof of the C# type a LOCAL's declaration was emitted with, installed by the
+    // embedding build layer for declarations it retyped itself; the member-access rules read it
+    // only after this printer's own declared-local table declined
+    csharpDeclaredLocalTypeResolver?: (declaration) => string | undefined;
     // variable declaration -> the concrete C# type this printer named for it
     // (getCSharpLocalType): 'List<object>' / 'Dictionary<string, object>' / 'string' / ...
     // Only declarations the printer typed itself are kept: the printed `<type> name = `
@@ -514,7 +522,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
         const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
         if (!builtFromLiteral && !guarded) {
-            return undefined;
+            return this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey);
         }
         const receiver = this.printNode(expression, 0);
         const printedKey = this.printNode(argumentExpression, 0);
@@ -522,6 +530,65 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
         }
         return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
+    }
+
+    // A literal-key read on a local whose C# declaration is already a collection: the static type
+    // needs no cast, but the indexer throws where GetValue answers null, so the native form
+    // carries the helper's own key/index test -- and the helper's null for a null receiver. Only
+    // an Identifier qualifies: its text is read up to three times, and only a local re-evaluates
+    // nothing. `market`/`currency` receivers belong to the market-typed-local unit.
+    csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey): string | undefined {
+        if (!ts.isIdentifier(expression)) {
+            return undefined;
+        }
+        if (CSHARP_MARKET_RECEIVER_NAMES.indexOf(expression.escapedText as string) >= 0) {
+            return undefined;
+        }
+        const csharpType = this.csharpDeclaredCollectionType(expression);
+        if (csharpType === undefined) {
+            return undefined;
+        }
+        const func = this.csharpEnclosingFunction(node);
+        if (func === undefined || this.csharpReceiverIsRewritten(func, expression)) {
+            return undefined; // a reassigned receiver is not the object the declared type describes
+        }
+        const receiver = this.printNode(expression, 0);
+        if (csharpType.indexOf('Dictionary<') >= 0) {
+            if (!isStringKey) {
+                return undefined; // the helper reads a dictionary key as a string, a literal index has no native twin
+            }
+            const printedKey = this.printNode(argumentExpression, 0);
+            return `(${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        }
+        if (isNumberKey) {
+            const index = Number((argumentExpression as any).text);
+            if (!Number.isInteger(index) || (index < 0)) {
+                return undefined; // the helper throws on a negative index too, but never prints one itself
+            }
+            return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`;
+        }
+        return undefined;
+    }
+
+    // the C# collection type a local read was DECLARED with: the type this printer printed for
+    // the declaration, or one the embedding build layer recorded for a declaration it retyped
+    // itself (csharpDeclaredLocalTypeResolver). The value-type oracle (csharpExpressionTypeOf)
+    // does not qualify: it names the box a read holds, while the declaration may still be
+    // `object`, and the member access would not compile.
+    csharpDeclaredCollectionType(expression): string | undefined {
+        const named = this.csharpTypedLocalType(expression);
+        if (named !== undefined && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(named) >= 0) {
+            return named;
+        }
+        if (this.csharpDeclaredLocalTypeResolver === undefined) {
+            return undefined;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(expression)?.valueDeclaration;
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const recorded = this.csharpDeclaredLocalTypeResolver(declaration);
+        return (recorded !== undefined && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(recorded) >= 0) ? recorded : undefined;
     }
 
     // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the

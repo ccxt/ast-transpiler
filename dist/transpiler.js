@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2763,6 +2763,7 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
+var CSHARP_MARKET_RECEIVER_NAMES = ["market", "currency"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -3011,7 +3012,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
     const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
     if (!builtFromLiteral && !guarded) {
-      return void 0;
+      return this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey);
     }
     const receiver = this.printNode(expression, 0);
     const printedKey = this.printNode(argumentExpression, 0);
@@ -3019,6 +3020,63 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
     }
     return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
+  }
+  // A literal-key read on a local whose C# declaration is already a collection: the static type
+  // needs no cast, but the indexer throws where GetValue answers null, so the native form
+  // carries the helper's own key/index test -- and the helper's null for a null receiver. Only
+  // an Identifier qualifies: its text is read up to three times, and only a local re-evaluates
+  // nothing. `market`/`currency` receivers belong to the market-typed-local unit.
+  csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey) {
+    if (!ts4.isIdentifier(expression)) {
+      return void 0;
+    }
+    if (CSHARP_MARKET_RECEIVER_NAMES.indexOf(expression.escapedText) >= 0) {
+      return void 0;
+    }
+    const csharpType = this.csharpDeclaredCollectionType(expression);
+    if (csharpType === void 0) {
+      return void 0;
+    }
+    const func = this.csharpEnclosingFunction(node);
+    if (func === void 0 || this.csharpReceiverIsRewritten(func, expression)) {
+      return void 0;
+    }
+    const receiver = this.printNode(expression, 0);
+    if (csharpType.indexOf("Dictionary<") >= 0) {
+      if (!isStringKey) {
+        return void 0;
+      }
+      const printedKey = this.printNode(argumentExpression, 0);
+      return `(${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+    }
+    if (isNumberKey) {
+      const index = Number(argumentExpression.text);
+      if (!Number.isInteger(index) || index < 0) {
+        return void 0;
+      }
+      return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`;
+    }
+    return void 0;
+  }
+  // the C# collection type a local read was DECLARED with: the type this printer printed for
+  // the declaration, or one the embedding build layer recorded for a declaration it retyped
+  // itself (csharpDeclaredLocalTypeResolver). The value-type oracle (csharpExpressionTypeOf)
+  // does not qualify: it names the box a read holds, while the declaration may still be
+  // `object`, and the member access would not compile.
+  csharpDeclaredCollectionType(expression) {
+    const named = this.csharpTypedLocalType(expression);
+    if (named !== void 0 && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(named) >= 0) {
+      return named;
+    }
+    if (this.csharpDeclaredLocalTypeResolver === void 0) {
+      return void 0;
+    }
+    const declaration = this.getChecker().getSymbolAtLocation(expression)?.valueDeclaration;
+    if (declaration === void 0) {
+      return void 0;
+    }
+    const recorded = this.csharpDeclaredLocalTypeResolver(declaration);
+    return recorded !== void 0 && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(recorded) >= 0 ? recorded : void 0;
   }
   // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
   // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`
