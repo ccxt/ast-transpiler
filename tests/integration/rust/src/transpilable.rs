@@ -43,10 +43,10 @@ impl Test {
         let c = get_arg(optional_args, 0, Value::Null);
         let d = get_arg(optional_args, 1, Value::Int(1));
         println_val(&a);
-        if !is_equal(&c, &Value::Null) {
+        if (c != Value::Null) {
             println_val(&c);
         }
-        if !is_equal(&d, &Value::Null) {
+        if (d != Value::Null) {
             println_val(&d);
         }
 }
@@ -87,7 +87,7 @@ impl Test {
         let mut instance = Second::new();
         println_val(&instance.stringifyNumber(Value::Int(4))); // should print 4
         println_val(&instance.myClassProperty); // should print "classProp"
-        if is_equal(&instance.myBoolProp, &Value::Bool(false)) {
+        if (instance.myBoolProp.as_bool() == Some(false)) {
             println_val(&Value::Str("myBoolProp is false".to_string())); // should print "myBoolProp is false"
         }
         let mut arr: Value = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
@@ -191,7 +191,7 @@ impl Test {
     pub fn testStringMethods(&self) {
         let mut str_val: Value = Value::Str("hello world".to_string());
         // isEqual test
-        if is_equal(&str_val, &Value::Str("hello world".to_string())) {
+        if (str_val.as_str() == Some("hello world")) {
             println_val(&Value::Str("str is hello world".to_string())); // should print "str is hello world"
         }
         println_val(&to_upper(&str_val));

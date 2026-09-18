@@ -9770,11 +9770,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   capitalize(str) {
     return str[0].toUpperCase() + str.slice(1);
   }
-  printStringLiteral(node) {
-    let text = node.text;
-    if (text in this.StringLiteralReplacements) {
-      return this.StringLiteralReplacements[text];
-    }
+  // Escaped Rust string literal for the given TS literal text — shared by
+  // the `Value::Str(..)` form and the `&str` key form below.
+  quotedStringLiteral(text) {
     const backslashPlaceholder = "\0";
     text = text.replaceAll("\\", backslashPlaceholder);
     text = text.replaceAll("\b", "\\b");
@@ -9784,11 +9782,18 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     text = text.replaceAll("	", "\\t");
     text = text.replaceAll(backslashPlaceholder, "\\\\");
     text = text.replaceAll('"', '\\"');
-    return `Value::Str("${text}".to_string())`;
+    return `"${text}"`;
+  }
+  printStringLiteral(node) {
+    const text = node.text;
+    if (text in this.StringLiteralReplacements) {
+      return this.StringLiteralReplacements[text];
+    }
+    return `Value::Str(${this.quotedStringLiteral(text)}.to_string())`;
   }
   printNumericLiteral(node) {
     const text = node.text;
-    if (text.includes(".")) {
+    if (text.includes(".") || /[eE]/.test(text)) {
       return `Value::Float(${text})`;
     }
     return `Value::Int(${text})`;
@@ -9802,12 +9807,401 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   printNullKeyword(node, identation) {
     return "Value::Null";
   }
+  // Primitive kind the checker proves for `type`; a union keeps the kind only
+  // when every non-nullable member is that same primitive.
+  primitiveKindOfType(type) {
+    if (type === void 0) {
+      return void 0;
+    }
+    const flags = type.flags;
+    if (this.isStringType(flags)) {
+      return "string";
+    }
+    if (flags === ts7.TypeFlags.Number || flags === ts7.TypeFlags.NumberLiteral) {
+      return "number";
+    }
+    if (flags === ts7.TypeFlags.Boolean || flags === ts7.TypeFlags.BooleanLiteral) {
+      return "boolean";
+    }
+    if (flags & ts7.TypeFlags.Union) {
+      let kind = void 0;
+      for (const member of type.types ?? []) {
+        if (member.flags & (ts7.TypeFlags.Undefined | ts7.TypeFlags.Null)) {
+          continue;
+        }
+        const memberKind = this.primitiveKindOfType(member);
+        if (memberKind === void 0 || kind !== void 0 && kind !== memberKind) {
+          return void 0;
+        }
+        kind = memberKind;
+      }
+      return kind;
+    }
+    return void 0;
+  }
+  // Kind of a literal operand whose printed Value variant is exactly known.
+  literalKindOfNode(node) {
+    if (node === void 0) {
+      return void 0;
+    }
+    switch (node.kind) {
+      case SyntaxKind4.StringLiteral:
+        return "string";
+      case SyntaxKind4.NumericLiteral:
+        return "number";
+      case SyntaxKind4.TrueKeyword:
+      case SyntaxKind4.FalseKeyword:
+        return "boolean";
+      case SyntaxKind4.NullKeyword:
+        return "null";
+      case SyntaxKind4.Identifier:
+        return node.escapedText === "undefined" ? "null" : void 0;
+    }
+    return void 0;
+  }
+  // Does printNode() render `node` as a Rust `Value` (and not a bare bool)?
+  printsValueExpression(node) {
+    if (node === void 0) {
+      return false;
+    }
+    switch (node.kind) {
+      case SyntaxKind4.ParenthesizedExpression:
+        return this.printsValueExpression(node.expression);
+      case SyntaxKind4.AwaitExpression:
+        return this.printsValueExpression(node.expression);
+      case SyntaxKind4.BinaryExpression:
+        return !_RustTranspiler.BOOL_PRODUCING_OPERATORS.has(node.operatorToken.kind);
+      case SyntaxKind4.PrefixUnaryExpression:
+        return node.operator !== SyntaxKind4.ExclamationToken;
+      case SyntaxKind4.CallExpression:
+        return !_RustTranspiler.BOOL_PRODUCING_CALLS.has(this.callExpressionName(node));
+      case SyntaxKind4.Identifier:
+      case SyntaxKind4.PropertyAccessExpression:
+      case SyntaxKind4.ElementAccessExpression:
+        return !this.isClassInstanceType(this.getChecker().getTypeAtLocation(node));
+      case SyntaxKind4.StringLiteral:
+      case SyntaxKind4.NumericLiteral:
+      case SyntaxKind4.TrueKeyword:
+      case SyntaxKind4.FalseKeyword:
+      case SyntaxKind4.NullKeyword:
+      case SyntaxKind4.ArrayLiteralExpression:
+      case SyntaxKind4.ObjectLiteralExpression:
+      case SyntaxKind4.ConditionalExpression:
+        return true;
+    }
+    return false;
+  }
+  // Class instances are emitted as their Rust struct (not a Value), so they
+  // can neither be compared to Value::Null nor unwrapped with as_*().
+  callExpressionName(node) {
+    const expression = node.expression;
+    if (ts7.isIdentifier(expression)) {
+      return expression.escapedText;
+    }
+    if (ts7.isPropertyAccessExpression(expression)) {
+      return expression.name.escapedText;
+    }
+    return "";
+  }
+  // A string literal whose text parses as a number — is_equal() coerces those
+  // against numeric/bool operands, a plain string compare does not.
+  stringLiteralCoercesToNumber(node) {
+    const text = node.text;
+    if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text)) {
+      return true;
+    }
+    return /^[+-]?(inf|infinity|nan)$/i.test(text);
+  }
+  // f64 literal text for a numeric literal; undefined when it is not a Rust
+  // decimal/float literal (hex/octal/binary fall back to the helper).
+  numericLiteralF64Text(node) {
+    const text = node.text;
+    if (text.startsWith("0x") || text.startsWith("0o") || text.startsWith("0b")) {
+      return void 0;
+    }
+    if (text.startsWith(".")) {
+      return `0${text}`;
+    }
+    if (text.includes(".") || text.includes("e") || text.includes("E")) {
+      return text;
+    }
+    return `${text}.0`;
+  }
+  // Native `==`/`!=` on the unwrapped payload when the checker proves the
+  // Value variants line up; undefined keeps the is_equal() helper.
+  printNativeEqualityComparison(left, right, op) {
+    const operator = op === SyntaxKind4.EqualsEqualsToken || op === SyntaxKind4.EqualsEqualsEqualsToken ? "==" : "!=";
+    const leftLiteral = this.literalKindOfNode(left);
+    const rightLiteral = this.literalKindOfNode(right);
+    if (leftLiteral !== void 0 && rightLiteral !== void 0) {
+      return void 0;
+    }
+    if (leftLiteral !== void 0 || rightLiteral !== void 0) {
+      const literal = leftLiteral !== void 0 ? left : right;
+      const literalKind = leftLiteral ?? rightLiteral;
+      const other = leftLiteral !== void 0 ? right : left;
+      if (!this.printsValueExpression(other)) {
+        return void 0;
+      }
+      const otherKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(other));
+      if (literalKind === "null") {
+        return `${this.printNode(other, 0)} ${operator} Value::Null`;
+      }
+      if (literalKind === "string") {
+        if (literal.text in this.StringLiteralReplacements) {
+          return void 0;
+        }
+        if (this.stringLiteralCoercesToNumber(literal) && otherKind !== "string") {
+          return void 0;
+        }
+        return `${this.printNode(other, 0)}.as_str() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
+      }
+      if (literalKind === "number") {
+        if (otherKind !== "number") {
+          return void 0;
+        }
+        const text = this.numericLiteralF64Text(literal);
+        if (text === void 0) {
+          return void 0;
+        }
+        return `${this.printNode(other, 0)}.as_f64() ${operator} Some(${text})`;
+      }
+      if (literalKind === "boolean") {
+        if (otherKind !== "boolean") {
+          return void 0;
+        }
+        const value = literal.kind === SyntaxKind4.TrueKeyword ? "true" : "false";
+        return `${this.printNode(other, 0)}.as_bool() ${operator} Some(${value})`;
+      }
+      return void 0;
+    }
+    if (!this.printsValueExpression(left) || !this.printsValueExpression(right)) {
+      return void 0;
+    }
+    const leftKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(left));
+    const rightKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(right));
+    if (leftKind === void 0 || leftKind !== rightKind) {
+      return void 0;
+    }
+    const accessor = _RustTranspiler.PAYLOAD_ACCESSORS[leftKind];
+    return `${this.printNode(left, 0)}.${accessor}() ${operator} ${this.printNode(right, 0)}.${accessor}()`;
+  }
+  // ── checker-typed helper elimination ─────────────────────────────────
+  // Each predicate proves a static TS shape for which the native Rust form
+  // is exactly what the runtime helper computes; only then is the helper
+  // call dropped, anything unproven keeps the helper.
+  typeOfNodeIfAny(node) {
+    try {
+      return this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  // Arrays/tuples/strings: `.length` is exactly what `Value::len()` returns.
+  // Other shapes (Dict) keep the helper — ArrayCache / OrderBookSide markers
+  // hold their length in the marker dict, which get_array_length unwraps.
+  isValueLengthType(type) {
+    if (type === void 0) {
+      return false;
+    }
+    if (type.flags & ts7.TypeFlags.Union) {
+      const parts = type.types ?? [];
+      return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
+    }
+    return this.getChecker().isArrayType(type) || this.getChecker().isTupleType(type) || this.isStringType(type.flags);
+  }
+  printArrayLength(node, identation, leftExpr = void 0) {
+    const receiver = leftExpr ?? this.printNode(node.expression, 0);
+    if (this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) {
+      return `Value::Int(${receiver}.len() as i64)`;
+    }
+    return `get_array_length(&${receiver})`;
+  }
+  // Object-typed values are Dicts at runtime, so `key in obj` is a plain
+  // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
+  isDictShapedType(type) {
+    if (type === void 0 || !(type.flags & ts7.TypeFlags.Object)) {
+      return false;
+    }
+    const checker = this.getChecker();
+    if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
+      return false;
+    }
+    const objectFlags = type.objectFlags;
+    if (objectFlags & (ts7.ObjectFlags.Class | ts7.ObjectFlags.Reference)) {
+      return false;
+    }
+    return type.getCallSignatures().length === 0;
+  }
+  // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
+  // In the TS AST `key` is the left operand and `obj` the right one.
+  printNativeInOperator(key, obj) {
+    if (!ts7.isStringLiteral(key)) {
+      return void 0;
+    }
+    if (!this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
+      return void 0;
+    }
+    const printedKey = this.printStringLiteral(key);
+    const keyLiteral = printedKey.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
+    if (!keyLiteral) {
+      return void 0;
+    }
+    const objExpr = this.printNode(obj, 0);
+    return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral[1]})))`;
+  }
+  // `negate(&Value::Int(n))` is `Value::Int(-n)` (same for Float) — fold the
+  // literal so no helper call is needed. Runtime `negate` also coerces
+  // strings/bools/floats, so only Int/Float literals can be folded.
+  foldNegateLiteral(operandText) {
+    const match = operandText.match(/^Value::(Int|Float)\((-?)(\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\)$/);
+    if (!match) {
+      return void 0;
+    }
+    const digits = match[3].replaceAll("_", "");
+    if (digits.replace(".", "").length > 18) {
+      return void 0;
+    }
+    const sign = match[2] === "-" ? "" : "-";
+    return `Value::${match[1]}(${sign}${match[3]})`;
+  }
   // Ensure a & ref prefix — skip only if already a reference
   ensureRef(expr) {
     if (expr.startsWith("&")) {
       return expr;
     }
     return `&${expr}`;
+  }
+  // TS `number` / number-literal type proof for a comparison operand. Unions
+  // (`number | undefined`) and `any` are rejected — those keep the helper.
+  isNumberTyped(node) {
+    const type = this.getChecker().getTypeAtLocation(node);
+    if (type === void 0) {
+      return false;
+    }
+    return (type.flags & (ts7.TypeFlags.Number | ts7.TypeFlags.NumberLiteral)) !== 0;
+  }
+  // Positions whose emitted Rust is a native `bool`: if/while/do/for
+  // conditions, `? :` conditions, `!` operands and `&&` / `||` operands.
+  // Parentheses are transparent.
+  isBooleanPosition(node) {
+    let current = node;
+    let parent = current.parent;
+    while (parent !== void 0 && ts7.isParenthesizedExpression(parent)) {
+      current = parent;
+      parent = parent.parent;
+    }
+    if (parent === void 0) {
+      return false;
+    }
+    switch (parent.kind) {
+      case SyntaxKind4.IfStatement:
+      case SyntaxKind4.WhileStatement:
+      case SyntaxKind4.DoStatement:
+        return parent.expression === current;
+      case SyntaxKind4.ForStatement:
+        return parent.condition === current;
+      case SyntaxKind4.ConditionalExpression:
+        return parent.condition === current;
+      case SyntaxKind4.PrefixUnaryExpression:
+        return parent.operator === SyntaxKind4.ExclamationToken;
+      case SyntaxKind4.BinaryExpression:
+        return parent.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || parent.operatorToken.kind === SyntaxKind4.BarBarToken;
+    }
+    return false;
+  }
+  // `is_less_than` & co. compare two `Value`s and answer `false` for
+  // non-numbers; with both operands checker-typed numbers the same f64
+  // comparison runs natively on `Value::as_f64()` unwraps.
+  printNativeNumericComparison(node, operator, leftText, rightText) {
+    const unwrap = (text) => `${text}.as_f64().unwrap_or(f64::NAN)`;
+    const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
+    return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
+  }
+  // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
+  // When the checker proves both operands are numbers (`Int`/`Float` at
+  // runtime) or, for `+`, both are strings, the helper call is replaced by
+  // the arithmetic itself: a 4-arm `Value` match reproducing the helper's
+  // Int/Float dispatch, `as_f64()` division, or a `format!` string concat.
+  // Anything the checker cannot prove keeps the runtime helper.
+  isNumberLikeType(type) {
+    if (!type) {
+      return false;
+    }
+    if (type.flags === ts7.TypeFlags.Number || type.flags === ts7.TypeFlags.NumberLiteral) {
+      return true;
+    }
+    if (type.flags === ts7.TypeFlags.Union && Array.isArray(type.types)) {
+      return type.types.length > 0 && type.types.every((member) => this.isNumberLikeType(member));
+    }
+    return false;
+  }
+  isStringLikeType(type) {
+    if (!type) {
+      return false;
+    }
+    if (type.flags === ts7.TypeFlags.String || type.flags === ts7.TypeFlags.StringLiteral) {
+      return true;
+    }
+    if (type.flags === ts7.TypeFlags.Union && Array.isArray(type.types)) {
+      return type.types.length > 0 && type.types.every((member) => this.isStringLikeType(member));
+    }
+    return false;
+  }
+  // `(+|-)` with the left operand of `+=`/`-=`: assignment plus the same
+  // native emission as the plain binary form.
+  printNativeAssignmentArithmetic(op, left, right, leftText, rightText) {
+    let leftType, rightType;
+    try {
+      const checker = this.getChecker();
+      leftType = checker.getTypeAtLocation(left);
+      rightType = checker.getTypeAtLocation(right);
+    } catch (e) {
+      return void 0;
+    }
+    if (op === SyntaxKind4.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+      return `${leftText} = ${this.printNativeStringConcat(leftText, rightText)}`;
+    }
+    if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
+      return void 0;
+    }
+    return `${leftText} = ${this.printNativeNumeric(op, leftText, rightText)}`;
+  }
+  printNativeArithmetic(op, left, right, leftText, rightText) {
+    if (op !== SyntaxKind4.PlusToken && op !== SyntaxKind4.MinusToken && op !== SyntaxKind4.AsteriskToken && op !== SyntaxKind4.SlashToken) {
+      return void 0;
+    }
+    let leftType, rightType;
+    try {
+      const checker = this.getChecker();
+      leftType = checker.getTypeAtLocation(left);
+      rightType = checker.getTypeAtLocation(right);
+    } catch (e) {
+      return void 0;
+    }
+    if (op === SyntaxKind4.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+      return this.printNativeStringConcat(leftText, rightText);
+    }
+    if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
+      return void 0;
+    }
+    return this.printNativeNumeric(op, leftText, rightText);
+  }
+  printNativeStringConcat(leftText, rightText) {
+    return `Value::Str(format!("{}{}", ${leftText}, ${rightText}))`;
+  }
+  // Both operands are `Int`/`Float` at runtime; `-> Value::Null` covers the
+  // `Null`/non-numeric values the same way the helper's fallthrough does.
+  // Always parenthesised so it composes under `&`, in argument position and
+  // as an operand of another native match.
+  printNativeNumeric(op, leftText, rightText) {
+    const left = `(${leftText})`;
+    const right = `(${rightText})`;
+    if (op === SyntaxKind4.SlashToken) {
+      return `(match (${left}.as_f64(), ${right}.as_f64()) { (Some(x), Some(y)) if y != 0.0 => Value::Float(x / y), _ => Value::Null })`;
+    }
+    const sign = op === SyntaxKind4.PlusToken ? "+" : op === SyntaxKind4.MinusToken ? "-" : "*";
+    return `(match (&${left}, &${right}) { (Value::Int(x), Value::Int(y)) => Value::Int(x ${sign} y), (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 ${sign} *y), (Value::Float(x), Value::Int(y)) => Value::Float(*x ${sign} *y as f64), (Value::Float(x), Value::Float(y)) => Value::Float(x ${sign} y), _ => Value::Null })`;
   }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
@@ -9817,8 +10211,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const elements = left.elements;
       const rhs = this.printNode(right, 0);
       const tmpName = "__destr_tmp";
+      const nativeList = this.isProvenListExpression(right);
       const assignments = elements.map((e, idx) => {
         const target = this.printNode(e, 0);
+        if (nativeList) {
+          return `${target} = ${this.printNativeListIndex(tmpName, idx)}`;
+        }
         return `${target} = get_value(&${tmpName}, &Value::Int(${idx}))`;
       }).join("; ");
       return `{ let ${tmpName} = ${rhs}; ${assignments}; }`;
@@ -9866,22 +10264,53 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
     }
     if (op === SyntaxKind4.InKeyword) {
+      const native = this.printNativeInOperator(left, right);
+      if (native !== void 0) {
+        return native;
+      }
       return `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
     }
     if (op === SyntaxKind4.PlusEqualsToken && left.kind !== SyntaxKind4.ElementAccessExpression) {
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const native = this.printNativeAssignmentArithmetic(SyntaxKind4.PlusToken, left, right, leftText, rightText);
+      if (native !== void 0) {
+        return native;
+      }
       return `${leftText} = add(&${leftText}, &${rightText})`;
     }
     if (op === SyntaxKind4.MinusEqualsToken && left.kind !== SyntaxKind4.ElementAccessExpression) {
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const native = this.printNativeAssignmentArithmetic(SyntaxKind4.MinusToken, left, right, leftText, rightText);
+      if (native !== void 0) {
+        return native;
+      }
       return `${leftText} = subtract(&${leftText}, &${rightText})`;
     }
+    if (op === SyntaxKind4.EqualsEqualsToken || op === SyntaxKind4.EqualsEqualsEqualsToken || op === SyntaxKind4.ExclamationEqualsToken || op === SyntaxKind4.ExclamationEqualsEqualsToken) {
+      const nativeEquality = this.printNativeEqualityComparison(left, right, op);
+      if (nativeEquality) {
+        return `Value::Bool(${nativeEquality})`;
+      }
+    }
+    if (op === SyntaxKind4.AmpersandAmpersandToken || op === SyntaxKind4.BarBarToken) {
+      if (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right)) {
+        return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
+      }
+    }
     if (op in this.binaryExpressionsWrappers) {
+      const nativeOperator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+      if (nativeOperator !== void 0 && this.isNumberTyped(left) && this.isNumberTyped(right)) {
+        return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
+      }
       const [fnName, close] = this.binaryExpressionsWrappers[op];
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const native = this.printNativeArithmetic(op, left, right, leftText, rightText);
+      if (native !== void 0) {
+        return native;
+      }
       const leftRef = this.ensureRef(leftText);
       const rightRef = this.ensureRef(rightText);
       return `${fnName}${leftRef}, ${rightRef}${close}`;
@@ -9916,8 +10345,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const syntheticName = parsedElements.join("") + "Variable";
       let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
 `;
+      const nativeList = this.isProvenListExpression(declaration.initializer);
       parsedElements.forEach((e, idx) => {
-        const line = `${this.getIden(identation)}let mut ${e}: Value = get_value(&${syntheticName}, &Value::Int(${idx}))`;
+        const access = nativeList ? this.printNativeListIndex(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`;
+        const line = `${this.getIden(identation)}let mut ${e}: Value = ${access}`;
         stmt += idx < parsedElements.length - 1 ? line + ";\n" : line;
       });
       return stmt;
@@ -9930,7 +10361,214 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (isNew) {
       return `${this.getIden(identation)}let mut ${varName} = ${parsedValue}`;
     }
+    const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
+    if (boolValue !== void 0) {
+      return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
+    }
     return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
+  }
+  // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
+  peelValueBoolBox(printedValue) {
+    const prefix = "Value::Bool(";
+    if (!printedValue.startsWith(prefix) || !printedValue.endsWith(")")) {
+      return void 0;
+    }
+    let depth = 0;
+    for (let i = prefix.length - 1; i < printedValue.length; i++) {
+      const char = printedValue[i];
+      if (char === '"') {
+        i++;
+        while (i < printedValue.length && printedValue[i] !== '"') {
+          if (printedValue[i] === "\\")
+            i++;
+          i++;
+        }
+        continue;
+      }
+      if (char === "(")
+        depth++;
+      else if (char === ")") {
+        depth--;
+        if (depth === 0) {
+          return i === printedValue.length - 1 ? printedValue.slice(prefix.length, i) : void 0;
+        }
+      }
+    }
+    return void 0;
+  }
+  // `((expr))` → `expr` — a redundant layer kept from the TS source; the
+  // right-hand side of a declaration binds the whole expression anyway.
+  stripOuterParens(printedValue) {
+    let value = printedValue.trim();
+    while (value.startsWith("(") && value.endsWith(")")) {
+      let depth = 0;
+      let closesAtEnd = true;
+      for (let i = 0; i < value.length; i++) {
+        const char = value[i];
+        if (char === '"') {
+          i++;
+          while (i < value.length && value[i] !== '"') {
+            if (value[i] === "\\")
+              i++;
+            i++;
+          }
+          continue;
+        }
+        if (char === "(")
+          depth++;
+        else if (char === ")") {
+          depth--;
+          if (depth === 0 && i !== value.length - 1) {
+            closesAtEnd = false;
+            break;
+          }
+        }
+      }
+      if (!closesAtEnd || depth !== 0)
+        break;
+      value = value.slice(1, -1).trim();
+    }
+    return value;
+  }
+  // `is_equal(...)` / `!is_true(...)` / `contains(...)` — bare bool helper calls.
+  printedBoolHelperCall(printedValue) {
+    const stripped = printedValue.startsWith("!") ? printedValue.slice(1).trim() : printedValue;
+    const match = /^([a-z_][a-z0-9_]*)\(/.exec(stripped);
+    return match !== null && _RustTranspiler.RUST_BOOL_RESULT_HELPERS.has(match[1]);
+  }
+  // Source shapes the printer turns into a bool: comparisons, `&&`/`||`
+  // (each operand is is_true-wrapped), `!`, `in`, `instanceof`, true/false.
+  rustNodeIsBoolExpression(node) {
+    switch (node?.kind) {
+      case SyntaxKind4.TrueKeyword:
+      case SyntaxKind4.FalseKeyword:
+        return true;
+      case SyntaxKind4.ParenthesizedExpression:
+        return this.rustNodeIsBoolExpression(node.expression);
+      case SyntaxKind4.PrefixUnaryExpression:
+        return node.operator === SyntaxKind4.ExclamationToken;
+      case SyntaxKind4.BinaryExpression:
+        return _RustTranspiler.COMPARISON_OPS.has(node.operatorToken.kind) || node.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || node.operatorToken.kind === SyntaxKind4.BarBarToken || node.operatorToken.kind === SyntaxKind4.InKeyword || node.operatorToken.kind === SyntaxKind4.InstanceOfKeyword;
+    }
+    return false;
+  }
+  rustTypeIsBoolean(node) {
+    try {
+      const type = this.getChecker().getTypeAtLocation(node);
+      if ((type.flags & ts7.TypeFlags.BooleanLike) !== 0) {
+        return true;
+      }
+      return this.getChecker().typeToString(type).trim() === "boolean";
+    } catch (e) {
+      return false;
+    }
+  }
+  rustEnclosingFunction(node) {
+    let current = node?.parent;
+    while (current) {
+      switch (current.kind) {
+        case SyntaxKind4.MethodDeclaration:
+        case SyntaxKind4.FunctionDeclaration:
+        case SyntaxKind4.FunctionExpression:
+        case SyntaxKind4.ArrowFunction:
+        case SyntaxKind4.Constructor:
+        case SyntaxKind4.SourceFile:
+          return current;
+      }
+      current = current.parent;
+    }
+    return void 0;
+  }
+  rustBindsName(node, name) {
+    switch (node?.kind) {
+      case SyntaxKind4.VariableDeclaration:
+      case SyntaxKind4.Parameter:
+      case SyntaxKind4.FunctionDeclaration:
+      case SyntaxKind4.ClassDeclaration:
+      case SyntaxKind4.PropertyDeclaration:
+      case SyntaxKind4.FunctionExpression:
+      case SyntaxKind4.ArrowFunction:
+        return node.name?.kind === SyntaxKind4.Identifier && node.name.escapedText === name;
+    }
+    return false;
+  }
+  // Only these uses compile against a native `bool` local today: `is_true(&x)`
+  // (under any depth of `(...)`, `!`, `&&`/`||`), and the condition slot of
+  // if/while/for/ternary — all printed is_true-wrapped.
+  rustIdentifierUseIsCondition(node) {
+    let current = node;
+    let parent = current.parent;
+    while (parent) {
+      switch (parent.kind) {
+        case SyntaxKind4.ParenthesizedExpression:
+          if (parent.expression !== current)
+            return false;
+          break;
+        case SyntaxKind4.PrefixUnaryExpression:
+          if (parent.operator !== SyntaxKind4.ExclamationToken || parent.operand !== current)
+            return false;
+          break;
+        case SyntaxKind4.BinaryExpression:
+          if (parent.operatorToken.kind !== SyntaxKind4.AmpersandAmpersandToken && parent.operatorToken.kind !== SyntaxKind4.BarBarToken)
+            return false;
+          break;
+        case SyntaxKind4.IfStatement:
+        case SyntaxKind4.WhileStatement:
+        case SyntaxKind4.DoStatement:
+          return parent.expression === current;
+        case SyntaxKind4.ForStatement:
+        case SyntaxKind4.ConditionalExpression:
+          return parent.condition === current;
+        default:
+          return false;
+      }
+      current = parent;
+      parent = current.parent;
+    }
+    return false;
+  }
+  rustLocalUsesAcceptBool(declaration, sourceName) {
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0 || sourceName === void 0) {
+      return false;
+    }
+    let safe = true;
+    const visit = (n) => {
+      if (!safe)
+        return;
+      if (n !== declaration && this.rustBindsName(n, sourceName)) {
+        safe = false;
+        return;
+      }
+      if (n.kind === SyntaxKind4.Identifier && n.escapedText === sourceName && n !== declaration.name) {
+        if (!this.rustIdentifierUseIsCondition(n)) {
+          safe = false;
+          return;
+        }
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(scope, visit);
+    return safe;
+  }
+  // `let x = <bool expr>` → the printed bool expression, or undefined.
+  getRustBoolLocalInitializer(declaration, printedValue) {
+    const initializer = declaration.initializer;
+    if (initializer === void 0 || declaration.name?.kind !== SyntaxKind4.Identifier) {
+      return void 0;
+    }
+    const inner = this.stripOuterParens(printedValue);
+    const peeled = this.peelValueBoolBox(inner);
+    if (peeled === void 0 && !this.printedBoolHelperCall(inner) && !this.rustNodeIsBoolExpression(initializer)) {
+      return void 0;
+    }
+    if (!this.rustTypeIsBoolean(initializer)) {
+      return void 0;
+    }
+    if (!this.rustLocalUsesAcceptBool(declaration, declaration.name.escapedText)) {
+      return void 0;
+    }
+    return peeled !== void 0 ? peeled : inner;
   }
   printPropertyDeclaration(node, identation) {
     const name = this.printNode(node.name, 0);
@@ -10126,27 +10764,239 @@ ${classMethods}
     }
     const leftExpr = this.printNode(node.expression, 0);
     if (rightSide === "length") {
-      return `get_array_length(&${leftExpr})`;
+      return this.printArrayLength(node, 0, leftExpr);
+    }
+    if (ts7.isIdentifier(node.name) && this.isShallowValueReceiver(node.expression) && this.isNativeAccessPositionSafe(node)) {
+      const native = this.printNativeMapAccess(leftExpr, node.expression, String(rightSide));
+      if (native)
+        return native;
     }
     return `${leftExpr}.${rightSide}`;
+  }
+  toSnakeCaseName(name) {
+    return name.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+  }
+  escapeRustStringLiteral(text) {
+    return String(text).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+  }
+  getCheckedTypeOf(node) {
+    try {
+      return this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  typeSymbolOf(type) {
+    if (type === void 0 || type === null)
+      return void 0;
+    return type.getSymbol?.() ?? type.symbol ?? type.aliasSymbol;
+  }
+  /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
+   *  backed by a plain `Value` map in the rust port. */
+  isLibDeclaredType(type) {
+    const declarations = this.typeSymbolOf(type)?.declarations ?? [];
+    return declarations.some((d) => {
+      const file = d?.getSourceFile?.()?.fileName ?? "";
+      return /[\\/]lib\.[^\\/]*\.d\.ts$/.test(file) || /[\\/]node_modules[\\/]typescript[\\/]/.test(file);
+    });
+  }
+  isClassInstanceType(type) {
+    if (type === void 0)
+      return false;
+    if (type.flags & (ts7.TypeFlags.Union | ts7.TypeFlags.Intersection)) {
+      return (type.types ?? []).some((member) => this.isClassInstanceType(member));
+    }
+    const symbol = this.typeSymbolOf(type) ?? type.aliasSymbol;
+    if (symbol?.flags & ts7.SymbolFlags.Class)
+      return true;
+    const declarations = symbol?.declarations ?? [];
+    return declarations.some((d) => ts7.isClassDeclaration(d) || ts7.isClassExpression(d));
+  }
+  hasCallableShape(type) {
+    const checker = this.getChecker();
+    return checker.getSignaturesOfType(type, ts7.SignatureKind.Call).length > 0 || checker.getSignaturesOfType(type, ts7.SignatureKind.Construct).length > 0;
+  }
+  isProvenListType(type) {
+    if (!(type.flags & ts7.TypeFlags.Object))
+      return false;
+    const objectFlags = (type.objectFlags ?? 0) | (type.target?.objectFlags ?? 0);
+    if (objectFlags & ts7.ObjectFlags.Tuple)
+      return true;
+    const name = this.typeSymbolOf(type)?.getName?.();
+    if (name === "Array" || name === "ReadonlyArray")
+      return true;
+    const targetName = this.typeSymbolOf(type.target)?.getName?.();
+    return targetName === "Array" || targetName === "ReadonlyArray";
+  }
+  /** True only for object types the rust port represents as `Value::Dict`
+   *  (plain interfaces / index-signature / literal types — never classes). */
+  isProvenMapType(type) {
+    if (!(type.flags & ts7.TypeFlags.Object))
+      return false;
+    if (this.isProvenListType(type))
+      return false;
+    if (this.hasCallableShape(type))
+      return false;
+    if (this.isClassInstanceType(type))
+      return false;
+    if (this.isLibDeclaredType(type))
+      return false;
+    const hasStringIndex = this.getChecker().getIndexTypeOfType(type, ts7.IndexKind.String) !== void 0;
+    return hasStringIndex || this.typeSymbolOf(type) !== void 0;
+  }
+  isProvenMapExpression(node) {
+    const type = this.getCheckedTypeOf(node);
+    return type !== void 0 && this.isProvenMapType(type);
+  }
+  isProvenListExpression(node) {
+    const type = this.getCheckedTypeOf(node);
+    return type !== void 0 && this.isProvenListType(type);
+  }
+  /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
+  printNativeListIndex(receiverText, index) {
+    return `${receiverText}.as_array().and_then(|__arr| __arr.get(${index})).cloned().unwrap_or(Value::Null)`;
+  }
+  /** Native read for one chain level, or undefined to keep `get_value`. */
+  printNativeContainerAccess(receiverText, receiverNode, keyNode) {
+    if (ts7.isStringLiteralLike(keyNode)) {
+      return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text);
+    }
+    if (ts7.isNumericLiteral(keyNode)) {
+      const index = Number(keyNode.text);
+      if (!Number.isInteger(index) || index < 0)
+        return void 0;
+      if (!this.isProvenListExpression(receiverNode))
+        return void 0;
+      return this.printNativeListIndex(receiverText, index);
+    }
+    return void 0;
+  }
+  printNativeMapAccess(receiverText, receiverNode, keyText) {
+    if (!this.isProvenMapExpression(receiverNode))
+      return void 0;
+    const key = this.escapeRustStringLiteral(keyText);
+    return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+  }
+  isNodeInsideNode(node, container) {
+    return node.pos >= container.pos && node.end <= container.end;
+  }
+  /** Root place of an access chain (`x` for `x['a']['b']`, `this.balance` for
+   *  `this.balance['usdt']`), or undefined for a temporary. */
+  rootPlaceText(node) {
+    let current = node;
+    while (current) {
+      if (ts7.isPropertyAccessExpression(current) || ts7.isElementAccessExpression(current)) {
+        if (current.expression.kind === ts7.SyntaxKind.ThisKeyword)
+          return current.getText().trim();
+        current = current.expression;
+        continue;
+      }
+      if (ts7.isParenthesizedExpression(current)) {
+        current = current.expression;
+        continue;
+      }
+      if (ts7.isIdentifier(current) || current.kind === ts7.SyntaxKind.ThisKeyword) {
+        return current.getText().trim();
+      }
+      return void 0;
+    }
+    return void 0;
+  }
+  /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
+   *  matching their text; the native form is invisible to them, so it is only
+   *  emitted where no such hoist is needed. */
+  isNativeAccessPositionSafe(node) {
+    const parent = node.parent;
+    if (parent && ts7.isPropertyAccessExpression(parent) && parent.expression === node)
+      return false;
+    if (parent && ts7.isCallExpression(parent) && parent.expression === node)
+      return false;
+    const root = this.rootPlaceText(node);
+    let current = node.parent;
+    while (current) {
+      if (ts7.isStatement(current) || ts7.isSourceFile(current) || ts7.isFunctionLike(current))
+        break;
+      if (ts7.isBinaryExpression(current) && this.isNodeInsideNode(node, current.right)) {
+        const op = current.operatorToken.kind;
+        const isAssign = op === ts7.SyntaxKind.EqualsToken || op >= ts7.SyntaxKind.PlusEqualsToken && op <= ts7.SyntaxKind.CaretEqualsToken;
+        if (isAssign && root !== void 0 && this.rootPlaceText(current.left) === root)
+          return false;
+      }
+      if (ts7.isCallExpression(current) && ts7.isPropertyAccessExpression(current.expression) && this.isNodeInsideNode(node, current) && current.arguments.some((a) => this.isNodeInsideNode(node, a))) {
+        const callee = current.expression;
+        if (root !== void 0 && this.rootPlaceText(callee.expression) === root)
+          return false;
+        if (callee.expression.kind === ts7.SyntaxKind.ThisKeyword && _RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))))
+          return false;
+      }
+      current = current.parent;
+    }
+    return true;
+  }
+  /** Receiver shapes whose printed text is a single `Value` place (`x`, `this.x`). */
+  isShallowValueReceiver(node) {
+    if (ts7.isIdentifier(node))
+      return true;
+    return ts7.isPropertyAccessExpression(node) && node.expression.kind === ts7.SyntaxKind.ThisKeyword;
   }
   transformPropertyAcessExpressionIfNeeded(node) {
     const rightSide = node.name.escapedText;
     const leftExpr = this.printNode(node.expression, 0);
     if (rightSide === "length") {
-      return `get_array_length(&${leftExpr})`;
+      return this.printArrayLength(node, 0, leftExpr);
     }
     return void 0;
+  }
+  // `crate::value::get_value_k` is `get_value` for a `&str` key — the same
+  // dict lookup minus the per-read `Value::Str` allocation. Three literal-key
+  // families reach branches only `get_value` has (numeric cache/side indices,
+  // the cache `hashmap` bucket, live client `subscriptions`/`futures`) and a
+  // `this`/class receiver is not a `Value`, so those keep `get_value`.
+  staticKeyLookup(node, container) {
+    if (!ts7.isStringLiteral(node)) {
+      return void 0;
+    }
+    const source = node.getSourceFile ? node.getSourceFile().fileName : "";
+    if (typeof source === "string" && /\/test\//.test(source)) {
+      return void 0;
+    }
+    if (container.kind === SyntaxKind4.ThisKeyword) {
+      return void 0;
+    }
+    const text = node.text;
+    if (text === "" || text in this.StringLiteralReplacements) {
+      return void 0;
+    }
+    if (/^\d+$/.test(text) || text === "hashmap" || text === "subscriptions" || text === "futures") {
+      return void 0;
+    }
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(container);
+    } catch (e) {
+      return void 0;
+    }
+    if (type !== void 0 && type.objectFlags & ts7.ObjectFlags.Class) {
+      return void 0;
+    }
+    return this.quotedStringLiteral(text);
   }
   printElementAccessExpression(node, identation) {
     const special = this.printElementAccessExpressionExceptionIfAny(node);
     if (special)
       return special;
+    const parent = node.parent;
+    const isAssignmentTarget = parent !== void 0 && ts7.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind >= SyntaxKind4.FirstAssignment && parent.operatorToken.kind <= SyntaxKind4.LastAssignment;
+    const isCallOrPropertyTarget = parent !== void 0 && (ts7.isPropertyAccessExpression(parent) && parent.expression === node || ts7.isCallExpression(parent) && parent.expression === node);
     const keys = [];
+    const receivers = [];
+    const containers = [];
     let baseExpr = null;
     let current = node;
     while (ts7.isElementAccessExpression(current)) {
       keys.unshift(current.argumentExpression);
+      receivers.unshift(current.expression);
+      containers.unshift(current.expression);
       const expr = current.expression;
       if (!ts7.isElementAccessExpression(expr)) {
         baseExpr = expr;
@@ -10154,11 +11004,20 @@ ${classMethods}
       }
       current = expr;
     }
-    const containerStr = this.printNode(baseExpr, 0);
-    const keyStrs = keys.map((k) => this.printNode(k, 0));
-    let acc = containerStr;
-    keyStrs.forEach((k) => {
-      const kRef = k.startsWith("Value::") ? `&${k}` : `&${k}`;
+    const nativeAllowed = this.isNativeAccessPositionSafe(node);
+    let acc = this.printNode(baseExpr, 0);
+    keys.forEach((key, index) => {
+      const native = nativeAllowed ? this.printNativeContainerAccess(acc, receivers[index], key) : void 0;
+      if (native !== void 0) {
+        acc = native;
+        return;
+      }
+      const staticKey = isAssignmentTarget || isCallOrPropertyTarget ? void 0 : this.staticKeyLookup(key, containers[index]);
+      if (staticKey !== void 0) {
+        acc = `crate::value::get_value_k(&${acc}, ${staticKey})`;
+        return;
+      }
+      const kRef = `&${this.printNode(key, 0)}`;
       acc = `get_value(&${acc}, ${kRef})`;
     });
     return acc;
@@ -10170,7 +11029,7 @@ ${classMethods}
     const idn = this.getIden(identation);
     const idn1 = this.getIden(identation + 1);
     const initStr = initNode ? this.printNode(initNode, identation + 1) + ";\n" : "";
-    const condStr = condNode ? this.printNode(condNode, 0) : "true";
+    const condStr = condNode ? this.printComparisonInBooleanContext(condNode, 0).trim() : "true";
     const incrStr = incrNode ? this.printNode(incrNode, 0) : "";
     const statements = node.statement.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
     const body = `{
@@ -10192,9 +11051,12 @@ ${idn}}`;
     if (node.kind === SyntaxKind4.BinaryExpression) {
       const opKind = node.operatorToken.kind;
       if (_RustTranspiler.COMPARISON_OPS.has(opKind)) {
-        return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+        return this.printComparisonInBooleanContext(node, identation);
       }
       if (opKind === SyntaxKind4.AmpersandAmpersandToken || opKind === SyntaxKind4.BarBarToken) {
+        if (this.hasNativeComparisonOperand(node.left) || this.hasNativeComparisonOperand(node.right)) {
+          return `${this.getIden(identation)}${this.printLogicalInBooleanContext(node)}`;
+        }
         return `${this.getIden(identation)}${this.printNode(node, 0)}`;
       }
     }
@@ -10203,6 +11065,62 @@ ${idn}}`;
     }
     const expression = this.printNode(node, 0);
     return `${this.getIden(identation)}is_true(&${expression})`;
+  }
+  // Bool-position text for a comparison: the native payload compare (already
+  // bool) when the checker proves it, the is_equal() helper otherwise.
+  printComparisonInBooleanContext(node, identation) {
+    const native = this.nativeEqualityText(node);
+    if (native) {
+      return `${this.getIden(identation)}(${native})`;
+    }
+    return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+  }
+  // Native equality text of `node` (parens unwrapped), if the checker proves it.
+  nativeEqualityText(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0 || inner.kind !== SyntaxKind4.BinaryExpression) {
+      return void 0;
+    }
+    const op = inner.operatorToken.kind;
+    if (op !== SyntaxKind4.EqualsEqualsToken && op !== SyntaxKind4.EqualsEqualsEqualsToken && op !== SyntaxKind4.ExclamationEqualsToken && op !== SyntaxKind4.ExclamationEqualsEqualsToken) {
+      return void 0;
+    }
+    return this.printNativeEqualityComparison(inner.left, inner.right, op);
+  }
+  unwrapParens(node) {
+    let inner = node;
+    while (inner !== void 0 && inner.kind === SyntaxKind4.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    return inner;
+  }
+  // Does `node` carry a native payload compare in a position where the old
+  // text started with a bool helper? The post-pass types locals by that token.
+  hasNativeComparisonOperand(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0) {
+      return false;
+    }
+    if (inner.kind === SyntaxKind4.PrefixUnaryExpression && inner.operator === SyntaxKind4.ExclamationToken) {
+      return this.hasNativeComparisonOperand(inner.operand);
+    }
+    if (this.nativeEqualityText(inner) !== void 0) {
+      return true;
+    }
+    if (inner.kind === SyntaxKind4.BinaryExpression) {
+      const op = inner.operatorToken.kind;
+      if (op === SyntaxKind4.AmpersandAmpersandToken || op === SyntaxKind4.BarBarToken) {
+        return this.hasNativeComparisonOperand(inner.left) || this.hasNativeComparisonOperand(inner.right);
+      }
+    }
+    return false;
+  }
+  // Bare `&&`/`||` text of a logical expression (its operands are bools).
+  printLogicalInBooleanContext(node) {
+    const token = node.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken ? "&&" : "||";
+    const left = this.printCondition(node.left, 0).trim();
+    const right = this.printCondition(node.right, 0).trim();
+    return `${left} ${token} ${right}`;
   }
   printWhileStatement(node, identation) {
     const expr = this.printCondition(node.expression, 0);
@@ -10232,12 +11150,31 @@ ${idn}}`;
     const { operand, operator } = node;
     const operandText = this.printNode(operand, 0);
     if (operator === SyntaxKind4.PlusPlusToken) {
+      const native = this.printNativeIncrement(SyntaxKind4.PlusToken, operand, operandText);
+      if (native !== void 0) {
+        return `${this.getIden(identation)}${operandText} = ${native}`;
+      }
       return `${this.getIden(identation)}${operandText} = add(&${operandText}, &Value::Int(1))`;
     }
     if (operator === SyntaxKind4.MinusMinusToken) {
+      const native = this.printNativeIncrement(SyntaxKind4.MinusToken, operand, operandText);
+      if (native !== void 0) {
+        return `${this.getIden(identation)}${operandText} = ${native}`;
+      }
       return `${this.getIden(identation)}${operandText} = subtract(&${operandText}, &Value::Int(1))`;
     }
     return super.printPostFixUnaryExpression(node, identation);
+  }
+  // `x++` / `x--` on a checker-typed number: native `+`/`-` with `Value::Int(1)`.
+  printNativeIncrement(op, operand, operandText) {
+    try {
+      if (!this.isNumberLikeType(this.getChecker().getTypeAtLocation(operand))) {
+        return void 0;
+      }
+    } catch (e) {
+      return void 0;
+    }
+    return this.printNativeNumeric(op, operandText, "Value::Int(1)");
   }
   printPrefixUnaryExpression(node, identation) {
     const { operand, operator } = node;
@@ -10245,7 +11182,12 @@ ${idn}}`;
       return this.getIden(identation) + "!" + this.printCondition(node.operand, 0);
     }
     if (operator === SyntaxKind4.MinusToken) {
-      return this.getIden(identation) + `negate(&${this.printNode(operand, 0)})`;
+      const operandText = this.printNode(operand, 0);
+      const folded = this.foldNegateLiteral(operandText);
+      if (folded !== void 0) {
+        return this.getIden(identation) + folded;
+      }
+      return this.getIden(identation) + `negate(&${operandText})`;
     }
     return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
   }
@@ -10289,9 +11231,52 @@ ${this.getIden(identation)}})`;
   }
   printConditionalExpression(node, identation) {
     const condition = this.printCondition(node.condition, 0);
-    const whenTrue = this.printNode(node.whenTrue, 0);
-    const whenFalse = this.printNode(node.whenFalse, 0);
-    return `ternary(${condition}, ${whenTrue}, ${whenFalse})`;
+    const whenTrue = this.printTernaryArm(node.whenTrue);
+    const whenFalse = this.printTernaryArm(node.whenFalse);
+    return `(if ${condition} { ${whenTrue} } else { ${whenFalse} })`;
+  }
+  static isBoolValueExpression(text) {
+    let value = text.trim();
+    for (; ; ) {
+      if (!(value.startsWith("(") && value.endsWith(")"))) {
+        break;
+      }
+      let depth = 0;
+      let wrapsWhole = true;
+      for (let i = 0; i < value.length; i++) {
+        if (value[i] === "(") {
+          depth++;
+        } else if (value[i] === ")") {
+          depth--;
+          if (depth === 0 && i < value.length - 1) {
+            wrapsWhole = false;
+            break;
+          }
+        }
+      }
+      if (!wrapsWhole) {
+        break;
+      }
+      value = value.slice(1, -1).trim();
+    }
+    if (value.startsWith("!")) {
+      value = value.slice(1).trim();
+    }
+    return _RustTranspiler.BOOL_VALUE_PREFIXES.some((fn) => value.startsWith(fn + "("));
+  }
+  // An if-expression arm keeps the type `ternary()`'s `Value` parameters gave
+  // it: box bool expressions, and clone bare identifiers so the arm does not
+  // move a local the caller still uses.
+  printTernaryArm(node, identation = 0) {
+    const text = this.printNode(node, identation);
+    const trimmed = text.trim();
+    if (_RustTranspiler.isBoolValueExpression(trimmed)) {
+      return `Value::Bool(${trimmed})`;
+    }
+    if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== "self" && trimmed !== "true" && trimmed !== "false") {
+      return `${trimmed}.clone()`;
+    }
+    return text;
   }
   // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
@@ -10427,6 +11412,89 @@ ${iden}}`;
     return `${this.getIden(identation)}${expression}`;
   }
 };
+// ── native equality emission ────────────────────────────────────────────
+// When the checker proves both operands hold the same primitive payload
+// (string / number / boolean, or one side is a matching literal) the
+// unwrapped payloads are compared with `==`/`!=` instead of is_equal().
+// Operators whose printed form is a bare Rust `bool` (not a Value).
+_RustTranspiler.BOOL_PRODUCING_OPERATORS = /* @__PURE__ */ new Set([
+  SyntaxKind4.EqualsEqualsToken,
+  SyntaxKind4.EqualsEqualsEqualsToken,
+  SyntaxKind4.ExclamationEqualsToken,
+  SyntaxKind4.ExclamationEqualsEqualsToken,
+  SyntaxKind4.LessThanToken,
+  SyntaxKind4.LessThanEqualsToken,
+  SyntaxKind4.GreaterThanToken,
+  SyntaxKind4.GreaterThanEqualsToken,
+  SyntaxKind4.AmpersandAmpersandToken,
+  SyntaxKind4.BarBarToken,
+  SyntaxKind4.InstanceOfKeyword
+]);
+// Method names whose Rust helper returns a bare `bool` (not a Value).
+_RustTranspiler.BOOL_PRODUCING_CALLS = /* @__PURE__ */ new Set([
+  "isInteger",
+  "isSafeInteger",
+  "some",
+  "every",
+  "test"
+]);
+// Payload accessor used to compare each primitive kind natively.
+_RustTranspiler.PAYLOAD_ACCESSORS = {
+  "string": "as_str",
+  "number": "as_f64",
+  "boolean": "as_bool"
+};
+// ── native-typed locals ───────────────────────────────────────────────────
+//
+// A local is declared `bool` (instead of `Value`) when its initializer is
+// already a bool-valued Rust expression and every use is a condition sink
+// (`is_true(&x)`) — the one sink that accepts a native bool today.
+//
+// `is_true` is generic over `IsTruthy` (impl for `bool`/`&bool` in
+// runtime.rs); every other sink takes `&Value`, so any other use keeps the
+// local boxed. Bools come in two shapes: helpers whose Rust return type is
+// already `bool` (below), and the printer's own `Value::Bool(...)` box,
+// which the declaration drops at the init site.
+_RustTranspiler.RUST_BOOL_RESULT_HELPERS = /* @__PURE__ */ new Set([
+  "is_true",
+  "is_equal",
+  "is_greater_than",
+  "is_greater_than_or_equal",
+  "is_less_than",
+  "is_less_than_or_equal",
+  "is_array",
+  "is_object",
+  "is_string",
+  "is_number",
+  "is_bool",
+  "is_integer",
+  "is_function",
+  "is_instance",
+  "starts_with",
+  "ends_with",
+  "in_op",
+  "contains"
+]);
+// ── native container access (`get_value(...)` -> `.get(...)`) ─────────────
+// When the TypeScript checker proves the receiver is a plain Map/List value
+// and the key is a literal, the runtime `get_value` key-marker / `__live_id`
+// paths cannot apply, so the access is emitted natively. Missing keys still
+// fall back to `Value::Null`.
+/** Methods whose Rust counterpart takes `&mut self`: a `self.<field>` read in
+ *  their args must keep the `get_value(...)` shape the ccxt post-pass hoists. */
+_RustTranspiler.MUT_SELF_METHODS = /* @__PURE__ */ new Set([
+  "watch",
+  "watch_multiple",
+  "fetch_order_book_snapshot",
+  "un_watch",
+  "client",
+  "spawn",
+  "delay",
+  "fetch_tickers",
+  "extend",
+  "fetch",
+  "send_evm_transaction"
+]);
 _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.EqualsEqualsToken,
   SyntaxKind4.EqualsEqualsEqualsToken,
@@ -10437,6 +11505,28 @@ _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.GreaterThanToken,
   SyntaxKind4.GreaterThanEqualsToken
 ]);
+// Comparison helpers that can be replaced by a native numeric operator.
+_RustTranspiler.NATIVE_COMPARISON_OPERATORS = {
+  [SyntaxKind4.LessThanToken]: "<",
+  [SyntaxKind4.LessThanEqualsToken]: "<=",
+  [SyntaxKind4.GreaterThanToken]: ">",
+  [SyntaxKind4.GreaterThanEqualsToken]: ">="
+};
+// Free runtime functions that print as `bool` (not `Value`) — mirror of the
+// Rust pipeline's `ternary()` bool-boxing list.
+_RustTranspiler.BOOL_VALUE_PREFIXES = [
+  "is_equal",
+  "is_true",
+  "is_greater_than",
+  "is_less_than",
+  "is_greater_than_or_equal",
+  "is_less_than_or_equal",
+  "is_array",
+  "is_object",
+  "in_op",
+  "is_number",
+  "is_string"
+];
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts
