@@ -1031,8 +1031,8 @@ describe('java transpiling tests', () => {
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain('final Object finalIsSpot = isSpot;');
         // The !isSpot values must reference finalIsSpot, not raw isSpot
-        expect(output).toMatch(/put\(\s*"swap",\s*!Helpers\.isTrue\(finalIsSpot\)\s*\)/);
-        expect(output).toMatch(/put\(\s*"contract",\s*!Helpers\.isTrue\(finalIsSpot\)\s*\)/);
+        expect(output).toMatch(/put\(\s*"swap",\s*!Boolean\.TRUE\.equals\(finalIsSpot\)\s*\)/);
+        expect(output).toMatch(/put\(\s*"contract",\s*!Boolean\.TRUE\.equals\(finalIsSpot\)\s*\)/);
         // No put value should reference raw isSpot
         expect(output).not.toMatch(/put\(\s*"[^"]+",[^)]*\bisSpot\b/);
     });
@@ -3303,5 +3303,126 @@ describe('java replaceAll native emission', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
+    });
+});
+
+describe('falsy-wrapper removal: boolean identifiers and Array.isArray', () => {
+    const wrapped = (body: string, extra = '', signature = 'test(x: any): void') => {
+        const input =
+        "class T {\n" +
+        "    newUpdates: boolean = true;\n" +
+        "    secret: string = '';\n" +
+        "    verbose: boolean = false;\n" +
+        "    other: object = {};\n" +
+        "    isBool (): boolean { return true; }\n" +
+        "    valueIsDefined (v: any): boolean { return true; }\n" +
+        "    isBoolNamed (v: any): string { return ''; }\n" +
+        "    newUpdatesString (): string { return ''; }\n" +
+        "    " + signature + " {\n" +
+        body +
+        "    }\n" +
+        extra +
+        "}\n"
+        return transpiler.transpileJava(input).content;
+    };
+
+    test('a boolean field read drops the wrapper and keeps the native Java boolean', () => {
+        const output = wrapped("        if (this.newUpdates) { return; }\n" +
+            "        if (!this.verbose) { return; }\n");
+        expect(output).toContain("if (this.newUpdates)");
+        expect(output).toContain("if (!this.verbose)");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('a non-boolean field read keeps the helper', () => {
+        // secret is a String field, other is an object: their truthiness is the helper's job
+        const output = wrapped("        if (this.secret) { return; }\n" +
+            "        if (this.other) { return; }\n");
+        expect(output).toContain("if (Helpers.isTrue(this.secret))");
+        expect(output).toContain("if (Helpers.isTrue(this.other))");
+    });
+
+    test('a field the checker does not type boolean keeps the helper even when named like a bool field', () => {
+        const output = wrapped("        if (this.newUpdatesString()) { return; }\n");
+        expect(output).toContain("Helpers.isTrue(this.newUpdatesString())");
+        const shadowed = wrapped("        if (this.newUpdates) { return; }\n", '', 'test(x: any): void');
+        expect(shadowed).toContain("if (this.newUpdates)");
+    });
+
+    test('a local holding a Boolean box prints Boolean.TRUE.equals', () => {
+        const output = wrapped("        const ok: boolean = true;\n" +
+            "        if (ok) { return; }\n" +
+            "        if (!ok) { return; }\n");
+        expect(output).toContain("if (Boolean.TRUE.equals(ok))");
+        expect(output).toContain("if (!Boolean.TRUE.equals(ok))");
+        expect(output).not.toContain("Helpers.isTrue(ok)");
+    });
+
+    test('comparison / logical / literal / hand-written boolean initialisers are all proven', () => {
+        const output = wrapped("        const a: boolean = (x === 1);\n" +
+            "        const b: boolean = (a && x !== 2);\n" +
+            "        const c: boolean = !(x in this.options);\n" +
+            "        const d: boolean = this.valueIsDefined(x);\n" +
+            "        if (a && b) { return; }\n" +
+            "        if (c) { return; }\n" +
+            "        if (d) { return; }\n");
+        expect(output).toContain("if (Boolean.TRUE.equals(a) && Boolean.TRUE.equals(b))");
+        expect(output).toContain("if (Boolean.TRUE.equals(c))");
+        expect(output).toContain("if (Boolean.TRUE.equals(d))");
+    });
+
+    test('a generated boolean-returning method keeps the helper', () => {
+        const output = wrapped("        const a: boolean = this.isBool();\n" +
+            "        if (a) { return; }\n");
+        expect(output).toContain("if (Helpers.isTrue(a))");
+    });
+
+    test('a later non-boolean write keeps the box (D2 scan)', () => {
+        const output = wrapped("        let a: boolean = false;\n" +
+            "        a = x;\n" +
+            "        if (a) { return; }\n");
+        expect(output).toContain("if (Helpers.isTrue(a))");
+    });
+
+    test('a later boolean write keeps the rewrite', () => {
+        const output = wrapped("        let a: boolean = false;\n" +
+            "        a = (x === 1);\n" +
+            "        if (a) { return; }\n");
+        expect(output).toContain("if (Boolean.TRUE.equals(a))");
+    });
+
+    test('nullable, any and parameter identifiers keep the helper', () => {
+        const output = wrapped("        if (maybe) { return; }\n", '', 'test(x: any, maybe: boolean | undefined): void');
+        expect(output).toContain("if (Helpers.isTrue(maybe))");
+        const implicitAny = wrapped("        let a;\n        if (a) { return; }\n");
+        expect(implicitAny).toContain("if (Helpers.isTrue(a))");
+        const parameter = wrapped("        if (flag) { return; }\n", '', 'test(x: any, flag: boolean): void');
+        expect(parameter).toContain("if (Helpers.isTrue(flag))");
+    });
+
+    test('a destructured binding element keeps the helper', () => {
+        // a binding element is fed by the container, so its box is not proven boolean here
+        const output = wrapped("        const [a, b] = x;\n" +
+            "        if (b) { return; }\n");
+        expect(output).toContain("if (Helpers.isTrue(b))");
+    });
+
+    test('Array.isArray prints instanceof List, negated and inside a logical expression too', () => {
+        const output = wrapped("        if (Array.isArray(x)) { return; }\n" +
+            "        if (!Array.isArray(x)) { return; }\n" +
+            "        if (Array.isArray(x) && this.newUpdates) { return; }\n");
+        expect(output).toContain("if ((x instanceof java.util.List))");
+        expect(output).toContain("if (!(x instanceof java.util.List))");
+        expect(output).toContain("if ((x instanceof java.util.List) && this.newUpdates)");
+        expect(output).not.toContain("Helpers.isArray(");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('a ternary condition and a while condition unwrap the same way', () => {
+        const output = wrapped("        while (this.newUpdates) { x = 1; }\n" +
+            "        return (this.verbose) ? 1 : 2;\n", '', 'test(x: any)');
+        expect(output).toContain("while (this.newUpdates)");
+        expect(output).toContain("((this.verbose)) ? 1 : 2");
+        expect(output).not.toContain("Helpers.isTrue(");
     });
 });

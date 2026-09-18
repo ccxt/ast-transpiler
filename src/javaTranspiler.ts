@@ -77,6 +77,76 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
+// ===== falsy-wrapper removal: `Helpers.isTrue(<X>)` -> native when <X> is already a Java boolean
+//
+// The falsy wrapper wraps every condition the printer cannot prove boolean. `isTrue` itself
+// does `null -> false`; `Boolean -> value`; `Long/Integer/Double -> != 0`; everything else
+// `!= false`. So the wrapper is redundant when the Java value is a primitive `boolean`, and
+// becomes `Boolean.TRUE.equals(x)` when it is a `Boolean` box (or null), which is exactly the
+// same answer for a box the wrapper would test and cannot throw where the helper did not.
+
+// hand-written `boolean` fields in the class body of BaseExchange.java / PredictionExchange.java
+// (the half hand-written base files the generated exchanges inherit): a read of one prints a
+// primitive Java boolean, so `this.<field>` IS the wrapper's result.
+const JAVA_BOOLEAN_BASE_FIELDS = new Set([
+    'this.alias',
+    'this.verbose',
+    'this.validateServerSsl',
+    'this.enableRateLimit',
+    'this.pro',
+    'this.certified',
+    'this.reloadingMarkets',
+    'this.marketsLoaded',
+    'this.reduceFees',
+    'this.substituteCommonCurrencyCodes',
+    'this.isSandboxModeEnabled',
+    'this.returnResponseHeaders',
+    'this.newUpdates',
+    'this.syncSleep',
+    // PredictionExchange.java
+    'this.reloadingEvents',
+]);
+
+// hand-written base methods declared `public boolean` (BaseExchange.java): a call prints a
+// primitive Java boolean, so a local fed by one holds a Boolean box or null.
+const JAVA_BOOLEAN_BASE_CALLS = new Set([
+    'valueIsDefined',
+    'inArray',
+    'isEmpty',
+    'isJsonEncodedObject',
+    'isBinaryMessage',
+]);
+
+// operators whose printed Java form is a primitive boolean on every path: the logical ones and
+// every comparison / `in` / `instanceof`-style test the printer lowers to Helpers.isEqual /
+// isGreaterThan / inOp (all declared `public static boolean`) or to a native Java boolean
+const JAVA_BOOLEAN_OPERATOR_KINDS: Set<number> = (() => {
+    const k: any = ts.SyntaxKind;
+    return new Set<number>([
+        k.AmpersandAmpersandToken,
+        k.BarBarToken,
+        k.EqualsEqualsToken,
+        k.EqualsEqualsEqualsToken,
+        k.ExclamationEqualsToken,
+        k.ExclamationEqualsEqualsToken,
+        k.LessThanToken,
+        k.LessThanEqualsToken,
+        k.GreaterThanToken,
+        k.GreaterThanEqualsToken,
+        k.InKeyword,
+        k.InstanceOfKeyword,
+    ]);
+})();
+
+// the TypeScript side of the box proof: `boolean` (or a boolean literal type) and nothing else -
+// an `any`, an `undefined`/`null` union, a type parameter or the nullable aliases (Bool/...) can
+// hold a non-boolean box at runtime, which the wrapper absorbs and `Boolean.TRUE.equals` must not
+const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
+    ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Null
+    | ts.TypeFlags.Void | ts.TypeFlags.Never | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional
+    | ts.TypeFlags.Enum | ts.TypeFlags.EnumLiteral;
+
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -2702,9 +2772,252 @@ export class JavaTranspiler extends BaseTranspiler {
         return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
     }
 
+    // the checker proves this expression's TypeScript type is exactly `boolean` (or a boolean
+    // literal type): no `any`, no `undefined`/`null` union, no nullable alias
+    javaBooleanBoxType(type: any): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.aliasSymbol !== undefined) {
+            return false;
+        }
+        const flags = type.flags ?? 0;
+        if ((flags & JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS) !== 0) {
+            return false;
+        }
+        return (flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) !== 0;
+    }
+
+    javaTypeOfNode(node): any {
+        try {
+            return this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // the DECLARED type of a declaration, not the narrowed type at a use site: TypeScript
+    // narrows a `const ok: boolean = true` to the literal `true` and can even reach `never`
+    // after a guarding `if (ok) return;`, which says nothing about the box the local holds
+    javaTypeOfDeclaration(decl): any {
+        if (decl === undefined) {
+            return undefined;
+        }
+        try {
+            return this.getChecker().getTypeAtLocation(decl);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // the printed Java of this expression is a primitive `boolean` (or a Boolean box): boolean
+    // literals, `!`, the logical / comparison / `in` operators, `Array.isArray(x)` (printed
+    // Helpers.isArray, declared `public static boolean`) and the hand-written `public boolean`
+    // base methods. `seen` breaks the identifier cycle of `a = b; b = a;` style writes.
+    javaPrintsBooleanValue(node, seen: Set<any>): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return true;
+        case ts.SyntaxKind.ParenthesizedExpression:
+        case ts.SyntaxKind.AsExpression:
+        case ts.SyntaxKind.NonNullExpression:
+            return this.javaPrintsBooleanValue(node.expression, seen);
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            return node.operator === ts.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen);
+        case ts.SyntaxKind.BinaryExpression:
+            // the comparison and logical operators all print a Java primitive boolean (the
+            // helpers they lower to are declared `public static boolean`), whatever the operands
+            return JAVA_BOOLEAN_OPERATOR_KINDS.has(node.operatorToken.kind);
+        case ts.SyntaxKind.CallExpression:
+            return this.javaPrintsBooleanCall(node);
+        case ts.SyntaxKind.PropertyAccessExpression:
+            return this.javaBooleanBaseField(node) !== undefined;
+        case ts.SyntaxKind.Identifier:
+            return this.javaBooleanBoxIdentifier(node, seen) !== undefined;
+        }
+        return false;
+    }
+
+    // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and the
+    // hand-written `public boolean` base methods print a primitive boolean. Everything else -
+    // including the generated boolean-returning methods, which print `public Object` - keeps the
+    // wrapper, because its box is not proven boolean here.
+    javaPrintsBooleanCall(node): boolean {
+        const callee = node.expression;
+        if (this.isArrayIsArrayCall(node)) {
+            return true;
+        }
+        if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        return JAVA_BOOLEAN_BASE_CALLS.has(String(callee.name.escapedText));
+    }
+
+    isArrayIsArrayCall(node): boolean {
+        if (node === undefined || node.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee: any = node.expression;
+        return ts.isPropertyAccessExpression(callee)
+            && String(callee.name.escapedText) === 'isArray'
+            && callee.expression.kind === ts.SyntaxKind.Identifier
+            && String((callee.expression as any).escapedText) === 'Array'
+            && (node.arguments?.length ?? 0) === 1;
+    }
+
+    // `this.<name>` read of a hand-written base field declared `boolean`, or undefined. The
+    // TsChecker guard keeps a field the hand-written base declares Object (or String) out.
+    javaBooleanBaseField(node): string | undefined {
+        if (!ts.isPropertyAccessExpression(node) || node.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const printed = this.printNode(node, 0);
+        if (!JAVA_BOOLEAN_BASE_FIELDS.has(printed)) {
+            return undefined;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(node.name)?.valueDeclaration;
+        } catch (e) {
+            declaration = undefined;
+        }
+        const type = this.javaTypeOfDeclaration(declaration) ?? this.javaTypeOfNode(node);
+        return this.javaBooleanBoxType(type) ? printed : undefined;
+    }
+
+    // the Java name of an identifier that provably holds a Boolean box or null, so that
+    // `Helpers.isTrue(x)` IS `Boolean.TRUE.equals(x)`, or undefined to keep the wrapper.
+    // The proof is the TypeScript type (`boolean`, never `any`/`undefined`-able) plus the
+    // D2 write scan: every write of the identifier in the enclosing function must print a Java
+    // boolean value, so no path can leave a Long/Integer/Double/String box in it.
+    javaBooleanBoxIdentifier(node, seen: Set<any>): string | undefined {
+        if (node?.kind !== ts.SyntaxKind.Identifier || seen.has(node)) {
+            return undefined;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        const decl = symbol?.valueDeclaration;
+        if (decl === undefined) {
+            return undefined;
+        }
+        // only a local with its own initializer: a parameter (and the `optionalArgs[n]` prologue
+        // the printer prints for an optional one) is an `Object` box its CALLERS fill, so the box
+        // is not proven boolean here; a binding element (`for (const b of ...)`, destructuring) is
+        // fed by the container instead of a typed value
+        if (decl.kind !== ts.SyntaxKind.VariableDeclaration) {
+            return undefined;
+        }
+        let type;
+        try {
+            type = this.javaTypeOfDeclaration(decl);
+        } catch (e) {
+            type = undefined;
+        }
+        if (!this.javaBooleanBoxType(type)) {
+            return undefined;
+        }
+        if (!this.javaBooleanWritesAreBoxed(symbol, decl, node, seen)) {
+            return undefined;
+        }
+        return this.printNode(node, 0);
+    }
+
+    // every value written to the symbol prints a Java boolean. The scan runs over the function
+    // the DECLARATION lives in (a local can only be written inside it or inside a closure nested
+    // in it), so a write in an enclosing scope is never missed.
+    javaBooleanWritesAreBoxed(symbol, decl, node, seen: Set<any>): boolean {
+        const next = new Set(seen);
+        next.add(node);
+        let fn = decl.parent;
+        while (fn !== undefined && !ts.isFunctionLike(fn)) {
+            fn = fn.parent;
+        }
+        if (fn === undefined) {
+            return false;
+        }
+        if (decl.initializer !== undefined && !this.javaPrintsBooleanValue(decl.initializer, next)) {
+            return false;
+        }
+        let ok = true;
+        const scan = (current: ts.Node) => {
+            if (!ok) {
+                return;
+            }
+            if ((ts.isForOfStatement(current) || ts.isForInStatement(current))
+                && ts.isIdentifier(current.initializer)) {
+                // `for (x of list)` re-fills the box from the container
+                let loop;
+                try {
+                    loop = this.getChecker().getSymbolAtLocation(current.initializer);
+                } catch (e) {
+                    loop = undefined;
+                }
+                if (loop === symbol) {
+                    ok = false;
+                    return;
+                }
+            }
+            if (ts.isBinaryExpression(current)
+                && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(current.operatorToken.kind)
+                && ts.isIdentifier(current.left)) {
+                let left;
+                try {
+                    left = this.getChecker().getSymbolAtLocation(current.left);
+                } catch (e) {
+                    left = undefined;
+                }
+                if (left === symbol && !this.javaPrintsBooleanValue(current.right, next)) {
+                    ok = false;
+                    return;
+                }
+            }
+            ts.forEachChild(current, scan);
+        };
+        scan(fn);
+        return ok;
+    }
+
+    // the native Java a falsy wrapper around this condition prints, or undefined to keep
+    // `Helpers.isTrue(...)`: a read of a hand-written boolean field prints bare;
+    // `Array.isArray(x)` prints `Helpers.isArray(x)`, whose result is exactly
+    // `x instanceof java.util.List` (null -> false exactly like the helper); an identifier
+    // holding a proven Boolean box prints `Boolean.TRUE.equals(x)`
+    javaBooleanWrapperFreeCondition(node): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaBooleanWrapperFreeCondition(node.expression);
+        }
+        if (this.isArrayIsArrayCall(node)) {
+            return `(${this.printNode(node.arguments[0], 0)} instanceof java.util.List)`;
+        }
+        const field = this.javaBooleanBaseField(node);
+        if (field !== undefined) {
+            return field;
+        }
+        const identifier = this.javaBooleanBoxIdentifier(node, new Set());
+        if (identifier !== undefined) {
+            return `Boolean.TRUE.equals(${identifier})`;
+        }
+        return undefined;
+    }
+
     printCondition(node, identation) {
         if (this.javaConditionPrintsBoolean(node)) {
             return this.getIden(identation) + this.printNode(node, 0);
+        }
+        const wrapperFree = this.javaBooleanWrapperFreeCondition(node);
+        if (wrapperFree !== undefined) {
+            return this.getIden(identation) + wrapperFree;
         }
         return super.printCondition(node, identation);
     }
