@@ -1140,7 +1140,6 @@ declare class RustTranspiler extends BaseTranspiler {
     printArrayLength(node: any, identation: any, leftExpr?: any): string;
     isDictShapedType(type: ts.Type | undefined): boolean;
     printNativeInOperator(key: any, obj: any): string;
-    rustStringLiteralOf(printedKey: string): string | undefined;
     foldNegateLiteral(operandText: string): string | undefined;
     ensureRef(expr: string): string;
     isNumberTyped(node: any): boolean;
