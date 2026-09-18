@@ -1,6 +1,7 @@
 import { Transpiler } from '../src/transpiler';
 import { readFileSync } from 'fs';
-
+// the test bodies name their TS source snippets `ts`, so the compiler API gets its own name
+import tsApi from 'typescript';
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
     default: jest.fn()
@@ -483,6 +484,9 @@ describe('csharp transpiling tests', () => {
         const csharp =
         "string a = \"hi\";\n" +
         "bool b = false;\n" +
+        // `b` is declared bool, so the condition operand prints natively; `a` is a string
+        // local and keeps the falsy/truthy wrapper (csharpConditionOperandType answers bool
+        // only for the declarations the printer itself types)
         "bool c = isTrue(a) && b;\n" +
         "bool d = !isTrue(a) && !b;\n" +
         "bool e = (isTrue(a) || !b);\n" +
@@ -566,6 +570,67 @@ describe('csharp transpiling tests', () => {
         expect(hooked.transpileCSharp(ts).content).toBe(
             "object x = new Dictionary<string, object>() {};\n" +
             "((List<object>)x)[Convert.ToInt32(1)] = 1;");
+    })
+    // the typed dict read family: the consumer's classifier proves the receiver's declared C# type
+    // (see build/csharp-local-types.js), the printer then binds the typed static twin. Without the
+    // hook (undefined) every read keeps the `getValue (...)` wrapper byte for byte.
+    describe('typed dict element access', () => {
+        const install = (answer) => {
+            (transpiler as any).csharpTranspiler.csharpElementAccessTypedReceiver = answer;
+        };
+        afterEach(() => {
+            install(() => undefined);
+        });
+        test('a proven dict receiver with a literal key binds the typed twin', () => {
+            install(() => 'IDictionary<string, object>');
+            const ts =
+            "const a = {};\n" +
+            "const b = a[\"teste\"]\n" +
+            "a[\"b\"] = a[\"teste\"];"
+            const csharp =
+            "object a = new Dictionary<string, object>() {};\n" +
+            "object b = GetValue(a, \"teste\");\n" +
+            "((IDictionary<string,object>)a)[\"b\"] = GetValue(a, \"teste\");"
+            const output = transpiler.transpileCSharp(ts).content;
+            expect(output).toBe(csharp);
+        })
+        test('a non-literal key keeps the wrapper (the twin takes a string)', () => {
+            install((node: any) => (tsApi.isStringLiteralLike(node.argumentExpression) ? 'IDictionary<string, object>' : undefined));
+            const ts =
+            "class Exchange {\n" +
+            "    async read (key) {\n" +
+            "        const a = {};\n" +
+            "        const byLiteral = a[\"teste\"];\n" +
+            "        const byName = a[key];\n" +
+            "        return [ byLiteral, byName ];\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(ts).content;
+            expect(output).toContain("GetValue(a, \"teste\")");
+            expect(output).toContain("getValue(a, key)");
+        })
+        test('an element write is never rewritten to the read twin', () => {
+            install(() => 'IDictionary<string, object>');
+            const ts =
+            "class Exchange {\n" +
+            "    write (v) {\n" +
+            "        const a = {};\n" +
+            "        a[\"teste\"] = v;\n" +
+            "        return a;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(ts).content;
+            expect(output).toContain("((IDictionary<string,object>)a)[\"teste\"] = v;");
+            expect(output).not.toContain("GetValue(a, \"teste\")");
+        })
+        test('an unproven receiver keeps the wrapper', () => {
+            install(() => undefined);
+            const ts =
+            "const a = {};\n" +
+            "const b = a[\"teste\"];"
+            const output = transpiler.transpileCSharp(ts).content;
+            expect(output).toContain("object b = getValue(a, \"teste\");");
+        })
     })
     // test('basic throw statement', () => {
     //     const ts =
@@ -1327,6 +1392,10 @@ describe('csharp typed body locals', () => {
         "}";
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("public virtual bool isDictionary(object value)");
+        // the `isTrue(...)` the `&&` operand used to carry is gone: the operand
+        // prints as a C# bool (this is #82's csharpConditionPrintsBool node-shape fold,
+        // and S62's printed-form fold names the same identity); the return unbox is
+        // unchanged
         expect(output).toContain("return ((bool)((object)((!isEqual(value, null)) && ((value is IDictionary<string, object>))))!);");
     });
     test('a method declared `: boolean | undefined` (or an alias) returns bool? and keeps null', () => {
@@ -1590,7 +1659,7 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain("((bool) (isEqual(a, b))) ? 1 : 2");
+        expect(output).toContain("(isEqual(a, b)) ? 1 : 2");
         expect(output).toContain("if (((string)a).StartsWith(((string)\"x\")))");
     });
     test('a bool local reassigned with another bool keeps the type and the bare condition', () => {
@@ -1966,7 +2035,11 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain("isTrue(isEqual(side, \"sell\")) ? a : b");
+        // S62 folds the wrapper around the printed `isEqual (...)` too (that describe), so the
+        // ternary condition is the bare helper call here; the `((bool) …)` cast removal stays
+        // this unit's own change and is asserted by the two negatives below.
+        expect(output).toContain("isEqual(side, \"sell\") ? a : b");
+        expect(output).not.toContain("isTrue(isEqual(side, \"sell\")) ? a : b");
         expect(output).not.toContain("((bool) isTrue");
         expect(output).not.toContain("((bool) !isTrue");
     });
@@ -2000,6 +2073,79 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain("isTrue(read) ? a : b");
         expect(output).toContain("isTrue(reassigned) ? a : b");
         expect(output).toContain("isTrue(flag) ? a : b");
+    });
+
+    // S60: `isEqual (x, "lit")` -> `x == "lit"` when csharpLocalTypeOf names the operand a
+    // string. A string literal is never null and isEqual's string branch is the same
+    // `((string)a) == ((string)b)` ordinal comparison, so the emission is equivalent.
+    test('string-literal equality keeps isEqual while csharpLocalTypeOf is not installed', () => {
+        const input =
+        "class Exchange {\n" +
+        "    test (a: any) {\n" +
+        "        const s = a;\n" +
+        "        if (s === 'lit') { return 1; }\n" +
+        "        if (s !== 'other') { return 2; }\n" +
+        "        if ('third' === s) { return 3; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // no hook installed: the helper call is what S60's gate must keep. S62 folds the isTrue
+        // wrapper around the printed isEqual (see the S62 describe), so the assertions below
+        // pin the helper AND -- stronger -- that no native operator was emitted.
+        expect(output).toContain('if (isEqual(s, "lit"))');
+        expect(output).toContain('if (!isEqual(s, "other"))');
+        expect(output).toContain('if (isEqual("third", s))');
+        expect(output).not.toContain('s == "lit"');
+        expect(output).not.toContain('s != "other"');
+        expect(output).not.toContain('"third" == s');
+    });
+    test('csharpLocalTypeOf naming the operand a string emits the native operator', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpLocalTypeOf = (node: any) => (node?.escapedText === 's' ? 'string' : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    test (a: any) {\n" +
+            "        const s = a;\n" +
+            "        if (s === 'lit') { return 1; }\n" +
+            "        if (s !== 'other') { return 2; }\n" +
+            "        if ('third' === s) { return 3; }\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('if (s == "lit")');
+            expect(output).toContain('if (s != "other")');
+            expect(output).toContain('if ("third" == s)');
+            expect(output).not.toContain('isEqual(s,');
+        } finally {
+            delete csharp.csharpLocalTypeOf;
+        }
+    });
+    test('a non-string hook answer and a non-literal side keep the helper', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpLocalTypeOf = (node: any) => (node?.escapedText === 's' ? 'object' : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    test (a: any) {\n" +
+            "        const s = a;\n" +
+            "        if (s === 'lit') { return 1; }\n" +
+            "        if (s === a) { return 2; }\n" +
+            "        if (s === null) { return 3; }\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(input).content;
+            // an 'object' answer is not a string: S60 never fires and the helper stays (S62
+            // folds the isTrue wrapper around the printed isEqual)
+            expect(output).toContain('if (isEqual(s, "lit"))');
+            expect(output).toContain('if (isEqual(s, a))');
+            // `isEqual(s, null)` is inlined by #82's printInlineEquality (null comparison on an
+            // object operand); the S60 string gate above cannot name it either way
+            expect(output).toContain('if ((s == null))');
+            expect(output).not.toContain('s == "lit"');
+        } finally {
+            delete csharp.csharpLocalTypeOf;
+        }
     });
 });
 
@@ -2163,5 +2309,196 @@ describe('dictionary index-write cast elision hook', () => {
         const output = t.transpileCSharp("class A { f (x: any, k: string, v: any) { x[k] = v; } }").content;
         expect(output).toContain('x[(string)k] = v;');
         expect(output).not.toContain('IDictionary<string,object>');
+    });
+});
+
+describe('csharp typed condition operands', () => {
+    // ast-transpiler's C# printer wraps every if / while / && / || / ! condition operand in
+    // `isTrue (x)`. The helper is the identity on a C# `bool` and `x == true` on a `bool?`
+    // (null -> false), so a bare operand whose emitted declaration is already that type
+    // prints natively. The gate is csharpConditionOperandType (the type hook the ccxt
+    // classifier overrides); an operand it cannot name keeps the isTrue wrapper.
+    test('a typed bool local drops the isTrue wrapper in every listed position', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (market, a) {\n" +
+        "        const isSpot = market['spot'] === true;\n" +
+        "        if (isSpot) { a = 1; }\n" +
+        "        if (!isSpot) { a = 2; }\n" +
+        "        const both = isSpot && (a === 1);\n" +
+        "        const either = isSpot || (a === 1);\n" +
+        "        return [both, either];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("bool isSpot = isEqual(getValue(market, \"spot\"), true)");
+        expect(output).toContain("if (isSpot)");
+        expect(output).toContain("if (!isSpot)");
+        expect(output).toContain("bool both = isSpot && (isEqual(a, 1));");
+        expect(output).toContain("bool either = isSpot || (isEqual(a, 1));");
+        // S62 folds the wrapper around the printed `(isEqual(a, 1))` operand too; what this test
+        // pins is the bare `isSpot` operand, which only S61's type hook can name
+        expect(output).not.toContain("isTrue((isEqual(a, 1)))");
+        expect(output).not.toContain("isTrue(isSpot)");
+    });
+    test('a bool? operand named by the type hook prints x == true (parenthesised under !)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, b) {\n" +
+        "        const flag = a;\n" +
+        "        if (flag) { b = 1; }\n" +
+        "        if (!flag) { b = 2; }\n" +
+        "        const both = flag && a;\n" +
+        "        const either = flag || a;\n" +
+        "        return [both, either];\n" +
+        "    }\n" +
+        "}";
+        const csharp = transpiler.csharpTranspiler;
+        const upstream = csharp.csharpConditionOperandType.bind(csharp);
+        // what the ccxt classifier's installCsharpConditionOperands override answers for a
+        // declaration its tables retype to `bool?`
+        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'flag') ? 'bool?' : upstream(node));
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("if (flag == true)");
+            expect(output).toContain("if (!(flag == true))");
+            expect(output).toContain("bool both = flag == true && isTrue(a);");
+            expect(output).toContain("bool either = flag == true || isTrue(a);");
+            expect(output).not.toContain("isTrue(flag)");
+        } finally {
+            csharp.csharpConditionOperandType = upstream;
+        }
+    });
+    test('an operand the type hook cannot name keeps the isTrue wrapper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, b) {\n" +
+        "        const read = a;\n" +
+        "        if (read) { b = 1; }\n" +
+        "        if (!read) { b = 2; }\n" +
+        "        const both = read && a;\n" +
+        "        return both;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object read = a;");
+        expect(output).toContain("if (isTrue(read))");
+        expect(output).toContain("if (!isTrue(read))");
+        expect(output).toContain("bool both = isTrue(read) && isTrue(a);");
+    });
+    test('a typed bool parameter is not named by the hook and keeps isTrue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, flag: boolean | undefined) {\n" +
+        "        if (flag) { a = 1; }\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isTrue(flag))");
+        expect(output).not.toContain("if (flag)");
+    });
+    test('a ternary condition is not this hook\'s position and keeps the base emission', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (market, a, b) {\n" +
+        "        const isSpot = market['spot'] === true;\n" +
+        "        return isSpot ? a : b;\n" +
+        "    }\n" +
+        "}";
+        const csharp = transpiler.csharpTranspiler;
+        const upstream = csharp.csharpConditionOperandType.bind(csharp);
+        // wave-1's ternary unit (printTernaryCondition + csharpConditionPrintsAsBool) owns this
+        // site: the printer itself declares `isSpot` bool, so the condition prints natively and
+        // neither the `((bool) …)` wrapper nor the isTrue call survives. S61's hook must never
+        // fire in a ternary, so it answers `bool?` here and the ` == true` spelling below must
+        // stay absent.
+        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'isSpot') ? 'bool?' : upstream(node));
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("return isSpot ? a : b;");
+            expect(output).not.toContain("isSpot == true");
+            expect(output).not.toContain("isTrue(isSpot)");
+        } finally {
+            csharp.csharpConditionOperandType = upstream;
+        }
+    });
+});
+
+describe('S62: falsy wrapper around a printed bool', () => {
+    test('the wrapper is dropped around a bool-returning helper call', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a, b) {\n" +
+        "        if (a === b) { return 1; }\n" +
+        "        if (a !== b) { return 2; }\n" +
+        "        if (a < b) { return 3; }\n" +
+        "        if ('k' in a) { return 4; }\n" +
+        "        return 5;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isEqual(a, b))");
+        expect(output).toContain("if (!isEqual(a, b))");
+        expect(output).toContain("if (isLessThan(a, b))");
+        expect(output).toContain("if (inOp(a, \"k\"))");
+        expect(output).not.toContain("isTrue(isEqual(");
+        expect(output).not.toContain("isTrue(inOp(");
+    });
+    test('the wrapper is dropped through `!` and through whole parentheses', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a, b) {\n" +
+        "        if (!(a === b)) { return 1; }\n" +
+        "        if ((a === b)) { return 2; }\n" +
+        "        if (!(a && b)) { return 3; }\n" +
+        "        return 4;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (!(isEqual(a, b)))");
+        expect(output).toContain("if ((isEqual(a, b)))");
+        expect(output).toContain("if (!(isTrue(a) && isTrue(b)))");
+    });
+    test('a logical composite loses its own wrapper, its operands keep theirs', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a, b) {\n" +
+        "        if (a && b) { return 1; }\n" +
+        "        if (a || b) { return 2; }\n" +
+        "        return 3;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isTrue(a) && isTrue(b))");
+        expect(output).toContain("if (isTrue(a) || isTrue(b))");
+        expect(output).not.toContain("isTrue(isTrue(");
+    });
+    test('conditions the printer cannot name bool keep the wrapper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    isThing(a) { return a; }\n" +
+        "    main(flag, a, b) {\n" +
+        "        if (flag) { return 1; }\n" +
+        "        if (this.safeBool(a, 'x')) { return 2; }\n" +
+        "        if (this.isThing(a)) { return 3; }\n" +
+        "        if (a instanceof Object) { return 4; }\n" +
+        "        if (flag ? a : b) { return 5; }\n" +
+        "        return 6;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isTrue(flag))");
+        expect(output).toContain("if (isTrue(this.safeBool(a, \"x\")))");
+        expect(output).toContain("if (isTrue(this.isThing(a)))");
+        expect(output).toContain("if (isTrue(a is Object))");
+        // wave-1's ternary unit dropped the `((bool) …)` cast around the condition; the ternary
+        // itself stays inside the wrapper, because its C# type is the branches' common type
+        // (object), not bool -- see csharpTextHasTopLevelConditional. The merged printer must
+        // not fold it on the strength of the leading `isTrue(flag)` text.
+        expect(output).toContain("if (isTrue(isTrue(flag) ? a : b))");
+        expect(output).not.toContain("((bool)");
+        expect(output).not.toContain("if (isTrue(flag) ? a : b)");
     });
 });

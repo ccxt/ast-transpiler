@@ -340,6 +340,7 @@ declare class BaseTranspiler {
     printCustomRightSidePropertyAssignment(node: any, identation: any): string;
     printPropertyAssignment(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): any;
+    csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
     printElementAccessExpression(node: any, identation: any): any;
     printCondition(node: any, identation: any): any;
     printIfStatement(node: any, identation: any): string;
@@ -495,6 +496,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpGuardIndex: WeakMap<ts.Node, Map<string, any[]>>;
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
     csharpTypedLocals: WeakMap<ts.Node, string>;
+    stringReceiverTypes: WeakMap<ts.Node, string>;
+    conditionOperandTypes: WeakMap<ts.Node, string>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -503,6 +506,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printConstructorDeclaration(node: any, identation: any): string;
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
+    csharpDeclaredReceiverType(node: any): string | undefined;
+    csharpDictionaryElementWriteTarget(node: any): string | undefined;
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
@@ -517,6 +522,10 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpGuardIsNegated(guard: any): boolean;
     csharpAlwaysExits(statement: any): boolean;
     csharpContains(outer: any, inner: any): boolean;
+    csharpElementAccessReceiverIsList(node: any): boolean;
+    csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
+    csharpElementAccessTypedReceiver(node: any): string | undefined;
+    printTypedDictElementAccessIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
@@ -543,6 +552,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsArrayType(type: any): boolean;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
     csharpNativeLengthExpression(expression: any): string | undefined;
+    csharpStringLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     csharpCallReturnType(initializer: any): string | undefined;
     csharpCalleeResolves(node: any): boolean;
@@ -557,6 +567,13 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsClassThrowArgument(node: any): boolean;
     csharpIsDeleteKey(node: any): boolean;
     csharpIsLeftPlusOperand(node: any): boolean;
+    csharpReceiverBinding(receiver: any): ts.Declaration;
+    csharpStringReceiverType(receiver: any): string | undefined;
+    csharpStringMethodReceiver(node: any, name: any): any;
+    csharpDestructuringTempType(initializer: any): string | undefined;
+    csharpConditionOperandType(node: any): string;
+    csharpNativeCondition(node: any, identation: any): string;
+    csharpConditionPositionAllowsNative(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
@@ -581,6 +598,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printMathCeilCall(node: any, identation: any, parsedArg?: any): string;
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    csharpLocalTypeOf(node: any): string | undefined;
+    csharpReceiverIsDeclaredList(receiver: any): boolean;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printSearchCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -615,6 +634,11 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printCondition(node: any, identation: any): any;
     csharpConditionParensIfNeeded(node: any, printed: string): string;
     printConditionalExpression(node: any, identation: any): string;
+    printTernaryCondition(node: any): any;
+    csharpConditionPrintsAsBool(node: any): boolean;
+    csharpMatchingParenIndex(text: string, start: number): number;
+    csharpTextHasTopLevelConditional(text: string): boolean;
+    csharpPrintedConditionIsBoolean(text: string): boolean;
     printDeleteExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;

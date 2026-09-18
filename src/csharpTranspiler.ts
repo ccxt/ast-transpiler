@@ -157,6 +157,17 @@ const CSHARP_SAFE_ACCESSOR_NAMES = [
     'safeList', 'safeList2', 'safeListN',
 ];
 
+// S62: printed calls whose C# signature is a hand-written `bool`
+// (cs/ccxt/base/Exchange.TranspileHelpers.cs: isTrue L225, isEqual L286, isGreaterThan L363,
+// isLessThan L399, isGreaterThanOrEqual L405, isLessThanOrEqual L410, inOp L1322 — the printer
+// emits them for ==/===/!=/!==/>/>=/</<=/in and for a TS `isTrue` call). A call to one of them
+// is already a C# `bool`, so the falsy wrapper the condition printer adds around it is the
+// identity and can be dropped.
+const CSHARP_BOOLEAN_PRINTED_CALLS = [
+    'isTrue', 'isEqual', 'isGreaterThan', 'isGreaterThanOrEqual',
+    'isLessThan', 'isLessThanOrEqual', 'inOp',
+];
+
 // a transpiled parameter or local can literally be named `bool`, which would turn
 // `bool x = ...` into a reference to that value instead of the type. `string` and
 // `object` are already renamed by ReservedKeywordsReplacements.
@@ -220,6 +231,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     // declaration node -> C# type of the local ('' = the printer prints `object`); see
     // csharpStringReceiverType -- the ccxt classifier asks once per string-method receiver
     stringReceiverTypes = new WeakMap<ts.Node, string>();
+    // declaration node -> 'bool' | 'bool?' | '' (the printer cannot name it); see
+    // csharpConditionOperandType — asked once per condition operand
+    conditionOperandTypes = new WeakMap<ts.Node, string>();
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -521,6 +535,12 @@ export class CSharpTranspiler extends BaseTranspiler {
     // throws instead, so the native form is only emitted where the source guarantees the key
     // is there: a dominating `key in recv` guard, or a receiver local built by a literal that
     // declares the key. every other read keeps the helper.
+    // the single element-access override, gates strongest (declaration-type) proof first:
+    // S21 typed dict WRITE (csharpDictionaryElementWriteTarget), S63 typed dict READ twin
+    // (printTypedDictElementAccessIfAny), S14 list-cast (csharpElementAccessReceiverIsList),
+    // then the native read form proven from the printed source (#82, csharpNativeElementAccess,
+    // see the note above). Every other read keeps the helper; a site no gate names keeps the
+    // base printing.
     printElementAccessExpression(node, identation) {
         const native = this.csharpNativeElementAccess(node);
         if (native !== undefined) {
@@ -529,6 +549,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const dictWrite = this.csharpDictionaryElementWriteTarget(node);
         if (dictWrite !== undefined) {
             return dictWrite;
+        }
+        const typedRead = this.printTypedDictElementAccessIfAny(node);
+        if (typedRead !== undefined) {
+            return typedRead;
         }
         if (this.csharpElementAccessReceiverIsList(node)) {
             const type = this.getChecker().getTypeAtLocation(node.argumentExpression);
@@ -807,8 +831,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     // The rule sits on printElementAccessExpression and not on the exception hook above:
     // build/csharp-worker.ts#setupCsharpPrinter replaces that hook per instance for the
     // union-key dispatch, and an instance property cannot delegate to a method it hides.
-    // Its body is the second layer of the single printElementAccessExpression override
-    // above (S21's dict-write gate is the first); this helper is what that layer calls.
+    // It is the third layer of the single printElementAccessExpression override above
+    // (S21's dict-write gate is the first, S63's typed dict read the second); this helper
+    // is what that layer calls.
     //
     // is this the left side of a plain `x[i] = v` element write on a receiver whose printed
     // C# declaration is a concrete List<object>? Only List<object> and not IList<object>:
@@ -839,6 +864,34 @@ export class CSharpTranspiler extends BaseTranspiler {
     // emission is unchanged. Receiver `request` is unit S21's family.
     csharpDictionaryIndexWriteNeedsNoCast(node): boolean | undefined {
         return undefined;
+    }
+    // the consumer's classifier may prove the declared C# type of an element-access receiver
+    // (`Dictionary<string, object>` / `IDictionary<string, object>`); consumer-installed, so an
+    // answer of undefined keeps the untyped emission byte-identical
+    csharpElementAccessTypedReceiver(node): string | undefined {
+        return undefined;
+    }
+
+    // `recv[key]` read with a consumer-proven string-keyed dict receiver and a literal key: the
+    // typed static twin GetValue(IDictionary<string, object>, string) runs the same dictionary
+    // read the object overload's dict branch runs (null receiver or key -> null, ContainsKey ->
+    // indexer) without its runtime string/array sniffing. Every other read keeps the wrapper.
+    printTypedDictElementAccessIfAny(node) {
+        if (this.csharpElementAccessTypedReceiver(node) === undefined) {
+            return undefined;
+        }
+        const { expression, argumentExpression } = node;
+        if (!ts.isStringLiteralLike(argumentExpression)) {
+            return undefined; // the twin's key parameter is `string`; any other key keeps the object overload
+        }
+        const parent = node.parent;
+        const isLeftSideOfAssignment = parent?.kind === ts.SyntaxKind.BinaryExpression
+            && (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken || parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken)
+            && parent.left === node;
+        if (isLeftSideOfAssignment) {
+            return undefined; // a write prints the dictionary element assignment, not this read
+        }
+        return 'GetValue(' + this.printNode(expression, 0) + ', ' + this.printNode(argumentExpression, 0) + ')';
     }
 
     printWrappedUnknownThisProperty(node) {
@@ -1290,6 +1343,33 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         return `${receiver.text}.Count`;
     }
+    // `isEqual (x, "lit")` -> `x == "lit"` when the operand's emitted declaration is a string.
+    // A string literal is never null, and isEqual's string branch is `((string)a) == ((string)b)`,
+    // so the native operator is the very same ordinal comparison and a null operand is false in
+    // both spellings (isEqual's `a == null || b == null` guard). `!isEqual (x, "lit")` ->
+    // `x != "lit"` is that comparison negated. Gated on the csharpLocalTypeOf hook, so an
+    // operand the classifier cannot name keeps the helper call.
+    csharpStringLiteralEquality(op, left, right, leftText: string, rightText: string): string | undefined {
+        const equality = (op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken);
+        const inequality = (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+        if (!equality && !inequality) {
+            return undefined;
+        }
+        const leftLiteral = ts.isStringLiteral(left);
+        const rightLiteral = ts.isStringLiteral(right);
+        if (leftLiteral === rightLiteral) {
+            return undefined; // exactly one side must be the (never-null) string literal
+        }
+        const operand = leftLiteral ? right : left;
+        if (operand?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const operandType = this.csharpLocalTypeOf(operand);
+        if ((operandType !== 'string') && (operandType !== 'string?')) {
+            return undefined;
+        }
+        return `${leftText} ${inequality ? '!=' : '=='} ${rightText}`;
+    }
 
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
@@ -1369,6 +1449,14 @@ export class CSharpTranspiler extends BaseTranspiler {
             const isEquality = (op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken);
             const isDifference = (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
             if (isEquality || isDifference) {
+                // `isEqual (x, "lit")` / `!isEqual (x, "lit")` over a string-typed operand
+                // (S60, csharpStringLiteralEquality) first -- the consumer's classifier proves
+                // that operand's declaration; anything the hook cannot name falls through to the
+                // printed-form inlining below, byte-identically
+                const nativeEquality = this.csharpStringLiteralEquality(op, left, right, leftText, rightText);
+                if (nativeEquality !== undefined) {
+                    return nativeEquality;
+                }
                 const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
                 if (inlined !== undefined) {
                     return inlined;
@@ -1770,6 +1858,74 @@ export class CSharpTranspiler extends BaseTranspiler {
     // then declared `IList<object>` and the reads index it directly.
     csharpDestructuringTempType(initializer): string | undefined {
         return undefined;
+    }
+
+    // `isTrue (x)` is the identity on a C# `bool`, and `x == true` is what isTrue computes
+    // for a `bool?` (null -> false): in a condition position the wrapper adds nothing. This
+    // hook answers with the type of the declaration the emitted line carries -- the printer
+    // names the locals IT types (getCSharpLocalType) and the ccxt classifier overrides it to
+    // add the declarations its tables retype; an operand this hook cannot name keeps the
+    // `isTrue (x)` emission unchanged.
+    csharpConditionOperandType(node) {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const symbol = (this.getChecker() as TypeChecker).getSymbolAtLocation(node); // eslint-disable-line
+        const declaration = symbol?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration) {
+            return undefined; // a parameter / member read has no declaration this pass retypes
+        }
+        if ((declaration.parent as any)?.declarations?.length !== 1) {
+            return undefined; // `object a = ..., b = ...` is printed as one statement
+        }
+        // memoized: the caller asks per operand, getCSharpLocalType scans the scope
+        const cached = this.conditionOperandTypes.get(declaration);
+        if (cached !== undefined) {
+            return (cached === '') ? undefined : cached;
+        }
+        const type = this.getCSharpLocalType(declaration);
+        const result = ((type === 'bool') || (type === 'bool?')) ? type : undefined;
+        this.conditionOperandTypes.set(declaration, result ?? '');
+        return result;
+    }
+
+    // the native spelling of a condition operand, or undefined when it needs `isTrue`.
+    // `!x == true` would parse as `(!x) == true`, so the `bool?` form takes parentheses
+    // under the `!` operator; every other allowed position binds `==` tighter already.
+    csharpNativeCondition(node, identation) {
+        const type = this.csharpConditionOperandType(node);
+        if (type === undefined) {
+            return undefined;
+        }
+        const text = this.printNode(node, 0);
+        if (type === 'bool') {
+            return this.getIden(identation) + text;
+        }
+        const equalsTrue = text + ' == true';
+        const parent = node.parent;
+        const negated = (parent?.kind === ts.SyntaxKind.PrefixUnaryExpression) && (parent.operator === ts.SyntaxKind.ExclamationToken);
+        return this.getIden(identation) + (negated ? `(${equalsTrue})` : equalsTrue);
+    }
+
+    // only the if / while / && / || / ! condition positions print natively: the ternary
+    // condition keeps the base path (its `((bool) …)` wrapper and the isTrue drop on a
+    // typed bool local are that unit's change, not this one).
+    csharpConditionPositionAllowsNative(node) {
+        const parent = node?.parent;
+        switch (parent?.kind) {
+        case ts.SyntaxKind.IfStatement:
+            return parent.expression === node;
+        case ts.SyntaxKind.WhileStatement:
+            return parent.expression === node;
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            return (parent.operator === ts.SyntaxKind.ExclamationToken) && (parent.operand === node);
+        case ts.SyntaxKind.BinaryExpression: {
+            const op = parent.operatorToken?.kind;
+            return ((op === ts.SyntaxKind.AmpersandAmpersandToken) || (op === ts.SyntaxKind.BarBarToken))
+                && ((parent.left === node) || (parent.right === node));
+        }
+        }
+        return false;
     }
 
     printVariableDeclarationList(node,identation) {
@@ -2234,10 +2390,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         return  `((IList<object>)${name}).Add(${parsedArg})`;
     }
 
-    // the C# type the classifier prints for reading this local, or undefined when the
-    // printer's own print names no type for it (installed by build/csharp-local-types.js,
-    // which retypes the declaration AFTER the printer printed it — the printer cannot see
-    // that rewrite on its own). Undefined by default: the untyped emission is unchanged.
+    // The C# type the emitted declaration gives a local / operand read -- e.g. `string` /
+    // `string?` for the isEqual twin (S60), or `List<object>` / `Dictionary<string, object>`
+    // for the element-access rules -- or undefined when the printer's own print names no type
+    // for it. Installed by build/csharp-local-types.js, which retypes the declaration AFTER
+    // the printer printed it, so the printer cannot see that rewrite on its own. Undefined by
+    // default: the untyped emission is unchanged (every caller above keeps the helper form).
     csharpLocalTypeOf(node): string | undefined {
         return undefined;
     }
@@ -2462,6 +2620,17 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     // same emission as the base implementation except for the bare-bool branch: the node is
     // printed once and only wrapped in isTrue(...) when the printer did not already render a bool
+    //
+    // the single `printCondition` override, rules layered strongest-proof-first over the base
+    // body (the untyped fallback at the bottom):
+    // S61 -- bare `isTrue (x)` in an if / while / && / || / ! condition: the operand is already
+    // the `bool` (or `bool?`) the helper computes, so the wrapper adds nothing (the gate is the
+    // csharpConditionPositionAllowsNative / csharpNativeCondition pair, never a name shape).
+    // S62 -- a condition whose printed text is already a C# `bool` helper call
+    // (csharpPrintedConditionIsBoolean) needs no wrapper either; the same identity proven from
+    // the printed form rather than from the declaration.
+    // #82 -- csharpConditionPrintsBool folds the wrapper on the node shapes the printer itself
+    // renders as a bool, with csharpConditionParensIfNeeded keeping the `&&` / `||` precedence.
     printCondition(node, identation) {
         if (this.supportsFalsyOrTruthyValues) {
             return this.printNode(node, identation);
@@ -2470,9 +2639,19 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (node?.kind === ts.SyntaxKind.PrefixUnaryExpression && node.operator === ts.SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation); // avoid infinite recursion
         }
+        const native = this.csharpConditionPositionAllowsNative(node) ? this.csharpNativeCondition(node, identation) : undefined;
+        if (native !== undefined) {
+            return native;
+        }
         const printed = this.printNode(node, 0);
         if (this.csharpConditionPrintsBool(node)) {
             return `${this.getIden(identation)}${this.csharpConditionParensIfNeeded(node, printed)}`;
+        }
+        // `isTrue(X)` is the identity on a printed C# bool (Exchange.TranspileHelpers.cs:
+        // `isTrue(object)` returns `(bool)value`, and normalizeIntIfNeeded is a no-op on bools),
+        // so the wrapper is dropped when the node already prints as one
+        if (this.csharpPrintedConditionIsBoolean(printed)) {
+            return `${this.getIden(identation)}${printed}`;
         }
         return `${this.getIden(identation)}${this.FALSY_WRAPPER_OPEN}${printed}${this.FALSY_WRAPPER_CLOSE}`;
     }
@@ -2526,6 +2705,90 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         return this.getCSharpLocalType(declaration) === 'bool';
+    }
+
+    // index of the `)` matching the `(` at `start` inside printed C# text, or -1; string
+    // and char literals are skipped so a `(` inside a literal cannot shift the depth
+    csharpMatchingParenIndex(text: string, start: number): number {
+        let depth = 0;
+        for (let i = start; i < text.length; i++) {
+            const char = text[i];
+            if (char === '"' || char === '\'') {
+                const quote = char;
+                i++;
+                while (i < text.length) {
+                    if (text[i] === '\\') { i += 2; continue; }
+                    if (text[i] === quote) { break; }
+                    i++;
+                }
+            } else if (char === '(') {
+                depth++;
+            } else if (char === ')') {
+                depth--;
+                if (depth === 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    // S62 (merge fix): a `?` at paren / bracket / brace depth 0 in printed condition text is a
+    // C# conditional expression (`isTrue(flag) ? a : b`), and its type is the branches' common
+    // type -- `object` for the falsy wrapper's operands -- never `bool`. Wave-1's ternary unit
+    // removed the `((bool) ...)` cast around such a condition, so the text no longer carries a
+    // marker that would keep this predicate off it; without this guard the wrapper would be
+    // folded away on a site whose C# type is `object` (invalid `if (object)`). A `?` *inside*
+    // parens / brackets is a type annotation (`((string?)x)`, `List<object?>`) and stays
+    // irrelevant; string and char literals are skipped so a `'?'` cannot trigger it.
+    csharpTextHasTopLevelConditional(text: string): boolean {
+        let depth = 0;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if (char === '"' || char === '\'') {
+                const quote = char;
+                i++;
+                while (i < text.length) {
+                    if (text[i] === '\\') { i += 2; continue; }
+                    if (text[i] === quote) { break; }
+                    i++;
+                }
+            } else if ((char === '(') || (char === '[') || (char === '{')) {
+                depth++;
+            } else if ((char === ')') || (char === ']') || (char === '}')) {
+                depth--;
+            } else if ((char === '?') && (depth === 0)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // S62: is this printed condition text already a C# `bool`? Only `isTrue`/`isEqual`/
+    // `isGreaterThan(OrEqual)`/`isLessThan(OrEqual)`/`inOp` calls qualify (hand-written `bool`,
+    // see CSHARP_BOOLEAN_PRINTED_CALLS) — an identifier, a `this.` member (safeBool is `bool?`,
+    // isArray is an instance method) or an unlisted callee is not provably bool in the printed
+    // tree. A leading `!` and parentheses around the whole text keep the property, and both
+    // keep the text a complete primary expression, so dropping the wrapper cannot re-associate
+    // with the `((bool) X) ? :` ternary printer. A `&&`/`||` composite qualifies through its
+    // leading operand (the printer wraps each operand in isTrue), which covers the nested
+    // `isTrue(isTrue(a) && isTrue(b))` shape.
+    csharpPrintedConditionIsBoolean(text: string): boolean {
+        const trimmed = text.trim();
+        if (trimmed.length === 0) {
+            return false;
+        }
+        if (this.csharpTextHasTopLevelConditional(trimmed)) {
+            return false;
+        }
+        if (trimmed.startsWith('(') && (this.csharpMatchingParenIndex(trimmed, 0) === trimmed.length - 1)) {
+            return this.csharpPrintedConditionIsBoolean(trimmed.substring(1, trimmed.length - 1));
+        }
+        if (trimmed.startsWith('!')) {
+            return this.csharpPrintedConditionIsBoolean(trimmed.substring(1));
+        }
+        const printedCall = /^([A-Za-z_]\w*)\(/.exec(trimmed);
+        return (printedCall !== null) && (CSHARP_BOOLEAN_PRINTED_CALLS.indexOf(printedCall[1]) >= 0);
     }
 
     printDeleteExpression(node, identation) {
