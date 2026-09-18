@@ -1804,3 +1804,176 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('if (inOp(this.options, key))');
     });
 });
+
+describe('csharp helper removal: parseInt / parseFloat / mod / prefix `-x`', () => {
+    // the printer names the C# kind of int-range literals, `.length` and a few call results
+    // itself; the locals the embedding build layer retypes come back through
+    // csharpExpressionTypeResolver — these tests stub that resolver with a name map
+    // (same pattern as the numeric-comparison block above)
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('parseInt of an integer string literal folds to the Int64 box it returns', () => {
+        const input =
+        "const a = parseInt('8');\n" +
+        "const b = parseInt('12');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = 8L;');
+        expect(output).toContain('object b = 12L;');
+        expect(output).not.toContain('parseInt(');
+    });
+    test('parseInt floors a numeric literal into the same Int64 box', () => {
+        const input =
+        "const a = parseInt(2.7);\n" +
+        "const b = parseInt(-3.7);";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = 2L;');
+        expect(output).toContain('object b = (-4L);');
+    });
+    test('parseFloat of a literal folds to the double box it returns', () => {
+        const input =
+        "const a = parseFloat(1);\n" +
+        "const b = parseFloat('1.5');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = 1.0;');
+        expect(output).toContain('object b = 1.5;');
+        expect(output).not.toContain('parseFloat(');
+    });
+    test('a literal the helper does not read as that number keeps the helper', () => {
+        const input =
+        "const a = parseInt('1.5');\n" + // a point reads with the CURRENT culture
+        "const b = parseInt('99999999999999999999');\n" + // round - overflow answers null
+        "const c = parseFloat('abc');\n" +
+        "const d = parseFloat('1e3');\n" + // not the plain decimal spelling
+        "const e = parseInt('');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = parseInt("1.5");');
+        expect(output).toContain('object b = parseInt("99999999999999999999");');
+        expect(output).toContain('object c = parseFloat("abc");');
+        expect(output).toContain('object d = parseFloat("1e3");');
+        expect(output).toContain('object e = parseInt("");');
+    });
+    test('parseInt / parseFloat of a declared numeric local convert in place', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(items: any[], ms: number) {\n" +
+        "        const len = items.length;\n" +
+        "        const p = parseInt(len);\n" +
+        "        const f = parseFloat(ms);\n" +
+        "        return [p, f];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ len: 'int', ms: 'Int64' }, input);
+        expect(output).toContain('int len = getArrayLength(items);');
+        expect(output).toContain('object p = ((Int64)len);');
+        expect(output).toContain('object f = ((double)ms);');
+        expect(output).not.toContain('parseInt(');
+        expect(output).not.toContain('parseFloat(');
+    });
+    test('a declared double passes through parseFloat unchanged', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(fl: number) {\n" +
+        "        const p = parseFloat(fl);\n" +
+        "        return p;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ fl: 'double' }, input);
+        expect(output).toContain('object p = fl;');
+        expect(output).not.toContain('parseFloat(');
+    });
+    test('an object / nullable / double operand keeps the parse helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(box: any, n64: number, d: number) {\n" +
+        "        const a = parseFloat(box);\n" +
+        "        const b = parseInt(box);\n" +
+        "        const c = parseFloat(n64);\n" +
+        "        const e = parseInt(d);\n" +
+        "        return [a, b, c, e];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ box: 'object', n64: 'Int64?', d: 'double' }, input);
+        expect(output).toContain('object a = parseFloat(box);');
+        expect(output).toContain('object b = parseInt(box);');
+        expect(output).toContain('object c = parseFloat(n64);'); // a null box converts to 0
+        expect(output).toContain('object e = parseInt(d);'); // NaN / overflow answer null
+    });
+    test('a declared function named parseInt is not the runtime helper', () => {
+        const input =
+        "function parseInt(s) {\n" +
+        "    return 2;\n" +
+        "}\n" +
+        "const a = parseInt('8');";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('parseInt("8")');
+    });
+    test('mod of an int dividend and a nonzero literal divisor prints the native remainder', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(items: any[]) {\n" +
+        "        for (let i = 0; i < items.length; i++) {\n" +
+        "            const r = i % 2;\n" +
+        "        }\n" +
+        "        return 1;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ i: 'int' }, input);
+        expect(output).toContain('object r = ((Int64)i % 2L);');
+        expect(output).not.toContain('mod(');
+    });
+    test('an unprovable dividend or divisor keeps mod', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a: number, b: number, box: any, big: number, dbl: number) {\n" +
+        "        const w = a % b;\n" + // a local divisor can be 0
+        "        const x = box % 2;\n" + // object dividend
+        "        const y = big % 2;\n" + // Int64 rounds through double above 2^53
+        "        const z = a % 0;\n" + // a zero divisor changes the thrown exception
+        "        const u = dbl % 2;\n" + // double remainder converts back with rounding
+        "        return [w, x, y, z, u];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ a: 'int', b: 'int', box: 'object', big: 'Int64', dbl: 'double' }, input);
+        expect(output).toContain('object w = mod(a, b);');
+        expect(output).toContain('object x = mod(box, 2);');
+        expect(output).toContain('object y = mod(big, 2);');
+        expect(output).toContain('object z = mod(a, 0);');
+        expect(output).toContain('object u = mod(dbl, 2);');
+    });
+    test('prefix `-` on a declared numeric local negates it in place', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a: number) {\n" +
+        "        const b = -a;\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ a: 'Int64' }, input);
+        // the typed prefixUnaryNeg overload is `a = -a; return a;`
+        expect(output).toContain('object b = (a = -a);');
+        expect(output).not.toContain('prefixUnaryNeg');
+    });
+    test('an object / nullable operand keeps prefixUnaryNeg', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(box: any, n64: number) {\n" +
+        "        const a = -box;\n" +
+        "        const b = -n64;\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ box: 'object', n64: 'Int64?' }, input);
+        expect(output).toContain('object a = prefixUnaryNeg(ref box);');
+        expect(output).toContain('object b = prefixUnaryNeg(ref n64);');
+    });
+    test('a literal operand prints the plain unary minus', () => {
+        const output = transpiler.transpileCSharp("const a = -1;").content;
+        expect(output).toContain('object a = -1;');
+    });
+});

@@ -198,6 +198,69 @@ const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks',
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
+// ==== native parseInt / parseFloat / mod / prefix `-x` ====
+//
+// parseInt / parseFloat / mod / prefixUnaryNeg are runtime helpers whose answer depends on the
+// runtime type of their boxes. Every emission below replaces the call only where the printer can
+// name the exact value the helper returns; every other shape keeps the helper.
+
+// the numeric literal spellings this printer re-reads: decimal digits with an optional fraction
+// (a hex or separator literal prints characters the C# compiler would read differently)
+const CSHARP_DECIMAL_LITERAL = /^[0-9]+(\.[0-9]+)?$/;
+
+// the C# source of a double literal holding exactly `value`: String() is the shortest
+// round-trip spelling, and a whole number needs a fraction or an exponent to stay a double
+function csharpDoubleLiteral(value) {
+    if (!Number.isFinite(value)) {
+        return undefined;
+    }
+    const text = String(value);
+    return (text.indexOf('.') >= 0 || text.indexOf('e') >= 0) ? text : text + '.0';
+}
+
+// the numeric value of a literal operand: a plain literal or one under a unary minus
+function csharpLiteralNumericValue(node) {
+    if (ts.isNumericLiteral(node)) {
+        return CSHARP_DECIMAL_LITERAL.test(node.text) ? Number(node.text) : undefined;
+    }
+    if (ts.isPrefixUnaryExpression(node) && (node.operator === ts.SyntaxKind.MinusToken) && ts.isNumericLiteral(node.operand)
+        && CSHARP_DECIMAL_LITERAL.test(node.operand.text)) {
+        return -Number(node.operand.text);
+    }
+    return undefined;
+}
+
+// `parseInt(<literal>)` boxes Convert.ToInt64(Math.Floor(Convert.ToDouble(a))): a digits-only
+// string reads as the same number in every culture, so both readings fold into one Int64 literal
+function csharpParseIntLiteralArgument(arg) {
+    if (ts.isStringLiteral(arg)) {
+        if (!/^[0-9]+$/.test(arg.text)) {
+            return undefined; // a sign, a point or an exponent is read with the CURRENT culture
+        }
+        const value = Number(arg.text);
+        return Number.isSafeInteger(value) ? `${value}L` : undefined;
+    }
+    const numeric = csharpLiteralNumericValue(arg);
+    if (numeric === undefined) {
+        return undefined;
+    }
+    const floored = Math.floor(numeric);
+    if (!Number.isSafeInteger(floored)) {
+        return undefined;
+    }
+    return (floored < 0) ? `(${floored}L)` : `${floored}L`;
+}
+
+// `parseFloat(<literal>)` boxes Convert.ToDouble(a, InvariantCulture): a plain decimal string
+// and a numeric literal both read as the nearest double, the value the literal spells
+function csharpParseFloatLiteralArgument(arg) {
+    if (ts.isStringLiteral(arg)) {
+        return CSHARP_DECIMAL_LITERAL.test(arg.text) ? csharpDoubleLiteral(Number(arg.text)) : undefined;
+    }
+    const numeric = csharpLiteralNumericValue(arg);
+    return (numeric === undefined) ? undefined : csharpDoubleLiteral(numeric);
+}
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -1073,6 +1136,103 @@ export class CSharpTranspiler extends BaseTranspiler {
         return leftText + ' ' + token + ' ' + rightText;
     }
 
+    // `parseInt(...)` / `parseFloat(...)` print the runtime helper call; the folds below replace
+    // it with the exact box the helper returns, everything else falls through to the printer
+    printCallExpression(node, identation) {
+        const nativeParse = this.csharpNativeParseCall(node);
+        if (nativeParse !== undefined) {
+            return nativeParse;
+        }
+        return super.printCallExpression(node, identation);
+    }
+
+    csharpNativeParseCall(node) {
+        if (node?.kind !== ts.SyntaxKind.CallExpression || !ts.isIdentifier(node.expression)) {
+            return undefined;
+        }
+        const callee = node.expression.escapedText as string;
+        if ((callee !== 'parseInt') && (callee !== 'parseFloat')) {
+            return undefined;
+        }
+        const args = node.arguments;
+        if (args === undefined || args.length !== 1) {
+            return undefined;
+        }
+        if (!this.csharpCalleeIsGlobalFunction(node.expression)) {
+            return undefined; // a locally declared function of the same name is not the helper
+        }
+        const literal = (callee === 'parseInt') ? csharpParseIntLiteralArgument(args[0]) : csharpParseFloatLiteralArgument(args[0]);
+        if (literal !== undefined) {
+            return literal;
+        }
+        return this.csharpNativeParseCallOnDeclaredLocal(callee, args[0]);
+    }
+
+    // the global `parseInt` / `parseFloat` live in the TS lib chain; a declaration anywhere else
+    // means the call prints a different function than the runtime helper
+    csharpCalleeIsGlobalFunction(node): boolean {
+        let declarations;
+        try {
+            declarations = this.getChecker().getSymbolAtLocation(node)?.declarations ?? [];
+        } catch (e) {
+            return true; // in-memory program without a checker: the name is all there is
+        }
+        return declarations.every((declaration) => declaration.getSourceFile().fileName.indexOf('typescript') > -1);
+    }
+
+    // `parseFloat(x)` / `parseInt(x)` on a local the printer declares numeric: the helper's
+    // Convert.ToDouble(x, invariant) is exactly the conversion the box already carries, so the
+    // call is an identity for `double` and a widening for the integer kinds. An Int64 operand of
+    // parseInt (rounded through double above 2^53), a double one (NaN / overflow answer null) and
+    // every nullable or `object` local (a null box converts to 0) keep the helper.
+    csharpNativeParseCallOnDeclaredLocal(callee, arg) {
+        if (arg?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const kind = this.csharpExpressionTypeOf(arg);
+        if (CSHARP_NUMERIC_KINDS.indexOf(kind) < 0) {
+            return undefined;
+        }
+        const text = this.printNode(arg, 0);
+        if (callee === 'parseFloat') {
+            return (kind === 'double') ? text : `((double)${text})`;
+        }
+        return (kind === 'int') ? `((Int64)${text})` : undefined;
+    }
+
+    // `a % b` prints `mod(a, b)`: the helper reads both boxes as double, takes the double
+    // remainder and converts it back to Int64. An Int32 dividend and a nonzero integer literal
+    // divisor are exact as double, so the native Int64 remainder is the same boxed Int64. An
+    // Int64 dividend (the helper rounds it above 2^53) and a divisor that could be 0 (the helper
+    // throws an OverflowException there, the operator a DivideByZeroException) keep the helper.
+    csharpNativeModExpression(left, right, leftText) {
+        if (left?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        if (this.csharpExpressionTypeOf(left) !== 'int') {
+            return undefined;
+        }
+        const divisor = csharpLiteralNumericValue(right);
+        if ((divisor === undefined) || !Number.isSafeInteger(divisor) || (divisor === 0)) {
+            return undefined;
+        }
+        return `((Int64)${leftText} % ${divisor}L)`;
+    }
+
+    // `-x` prints `prefixUnaryNeg(ref x)`, whose typed overloads negate the local in place and
+    // return the same boxed value (`a = -a; return a;`): a local declared int / Int64 / double
+    // binds one of those, so the assignment expression is the identical emission. Every other
+    // operand keeps the helper's runtime type dispatch (and its null answer).
+    csharpNativeNegatedLocal(operand, leftSide) {
+        if (operand?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        if (CSHARP_NUMERIC_KINDS.indexOf(this.csharpExpressionTypeOf(operand)) < 0) {
+            return undefined;
+        }
+        return `(${leftSide} = -${leftSide})`;
+    }
+
     // the printed receiver whose C# static type is a known collection: a local this
     // printer declared with a concrete type (csharpTypedLocals), or a hand-written
     // BaseExchange field. undefined keeps the runtime helper, since the printer cannot
@@ -1270,6 +1430,12 @@ export class CSharpTranspiler extends BaseTranspiler {
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
+            if (op === ts.SyntaxKind.PercentToken) {
+                const nativeMod = this.csharpNativeModExpression(left, right, leftText);
+                if (nativeMod !== undefined) {
+                    return nativeMod;
+                }
+            }
             return `${open}${leftText}, ${rightText}${close}`;
         }
 
@@ -2187,9 +2353,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         const leftSide = this.printNode(operand, 0);
         if (operator === ts.SyntaxKind.PlusToken) {
             return `prefixUnaryPlus(ref ${leftSide})`;
-        } else {
-            return `prefixUnaryNeg(ref ${leftSide})`;
         }
+        const nativeNegation = this.csharpNativeNegatedLocal(operand, leftSide);
+        if (nativeNegation !== undefined) {
+            return nativeNegation;
+        }
+        return `prefixUnaryNeg(ref ${leftSide})`;
     }
 
     // `isTrue(x)` is the identity function on a C# bool (`isTrue` returns a bool unchanged),
