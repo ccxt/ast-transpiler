@@ -5313,6 +5313,11 @@ ${tryBodyBlock}
         // printer's own table stays the only source of the Go type
         case ts.SyntaxKind.AsExpression:
             return this.goIndexableTypeOf(node.expression, printed);
+        // `(x as Dict)['k']` prints `x["k"]`: the assertion is a compile-time hint in
+        // TypeScript, so the receiver is typed exactly like the bare expression — the
+        // printer's own table stays the only source of the Go type
+        case ts.SyntaxKind.AsExpression:
+            return this.goIndexableTypeOf(node.expression, printed);
         case ts.SyntaxKind.ObjectLiteralExpression:
             return 'map[string]any';
         case ts.SyntaxKind.ArrayLiteralExpression:
