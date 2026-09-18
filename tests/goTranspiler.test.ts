@@ -1591,6 +1591,75 @@ describe('go native element assignment', () => {
         expect(output).toContain('x["a"] = 1');
         expect(output).not.toContain('AddElementToObject');
     });
+    test('a Safe*-boxed string key reads the declared map through the nil guard', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const fees = {};\n" +
+        "        const code = this.safeString (item, 'code');\n" +
+        "        return fees[code];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // GetValue derefs a Safe*-boxed key and answers nil for a nil key; the guard
+        // reproduces both around the very same map index
+        expect(output).toContain("var code *string = this.SafeString(item, \"code\")");
+        expect(output).toContain("return func() any {\n\t\tif code == nil {\n\t\t\treturn nil\n\t\t}\n\t\treturn fees[*code]\n\t}()");
+        expect(output).not.toContain("GetValue(fees");
+    });
+    test('the nil-guarded read hands the later chain steps to the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const fees = {};\n" +
+        "        const code = this.safeString (item, 'code');\n" +
+        "        return fees[code]['x'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("return GetValue(func() any {\n\t\tif code == nil {\n\t\t\treturn nil\n\t\t}\n\t\treturn fees[*code]\n\t}(), \"x\")");
+    });
+    test('a boxed key that is not a `*string` keeps GetValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const fees = {};\n" +
+        "        const ts = this.safeInteger (item, 't');\n" +
+        "        return fees[ts];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var ts *int64 = this.SafeInteger(item, \"t\")");
+        expect(output).toContain("GetValue(fees, ts)");
+    });
+    test('a boxed string key on a receiver that stays `any` keeps GetValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item, m) {\n" +
+        "        const code = this.safeString (item, 'code');\n" +
+        "        return m[code];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("GetValue(m, code)");
+    });
+    test('a boxed string key on an assignment target keeps the element write', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const fees = {};\n" +
+        "        const code = this.safeString (item, 'code');\n" +
+        "        fees[code] = 1;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("AddElementToObject(fees, code, 1)");
+    });
     test('a local the reject filters demoted to any keeps GetValue', () => {
         const input =
         "function f() {\n" +
