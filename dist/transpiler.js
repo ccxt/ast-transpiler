@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8885,9 +8885,178 @@ var JavaTranspiler = class extends BaseTranspiler {
   isNullishLiteral(node) {
     return node?.kind === ts6.SyntaxKind.NullKeyword || node?.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined";
   }
+  // ---- numeric operand kinds (java-15) -----------------------------------
+  // Helpers.isEqual compares two numeric operands by value: two integers through
+  // toLong, a Double/Float member through toDouble, a class mismatch as false. Two
+  // operands of the SAME numeric kind therefore compare natively — `a == b` for two
+  // Java primitives, Objects.equals for a box, whose class the kind pins down. The
+  // kind comes from the printer's own print rule for the node, never the printed text.
+  // the Java kind a decimal numeric literal prints with: an integer literal prints as
+  // `N` (int) or `NL` (long, printNumericLiteral's suffix), a '.'/exponent literal as a
+  // Java double. TypeScript normalizes the literal text (`1e3` -> `1000`, `0x10` ->
+  // `16`, `100.0` -> `100`), so node.text is exactly what prints.
+  javaEqualityLiteralKind(node) {
+    if (!node || !ts6.isNumericLiteral(node)) {
+      return void 0;
+    }
+    return /[.eE]/.test(node.text) ? "double" : this.javaIntegerLiteralKind(node);
+  }
+  // `x.length` on a checker-proven String/List receiver prints a native int
+  // (((String)x).length() / ((List<?>)x).size(), see javaLengthKind). Every other
+  // receiver prints Helpers.getArrayLength, whose value is not an int.
+  javaNativeLengthKind(node) {
+    if (node?.kind !== ts6.SyntaxKind.PropertyAccessExpression || node.name.escapedText !== "length") {
+      return void 0;
+    }
+    return this.javaLengthKind(node.expression) !== void 0 ? "int" : void 0;
+  }
+  // `for (var i = <int literal>; ...; i++)`: javac infers a primitive int counter, so
+  // every read of it — not only the loop condition the comparison rule sees — is a
+  // native int. ++/-- keep it int and the counter cannot hold another box.
+  isJavaPrimitiveCounterReference(node) {
+    if (!node || node.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    const checker = this.getChecker();
+    const symbol = checker.getSymbolAtLocation(node);
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (!declaration || declaration.kind !== ts6.SyntaxKind.VariableDeclaration || !ts6.isIdentifier(declaration.name)) {
+      return false;
+    }
+    const list = declaration.parent;
+    const forStatement = list?.parent;
+    if (!list || !forStatement || forStatement.kind !== ts6.SyntaxKind.ForStatement || forStatement.initializer !== list) {
+      return false;
+    }
+    if (list.declarations?.length !== 1 || this.javaIntegerLiteralKind(declaration.initializer) === void 0) {
+      return false;
+    }
+    const incrementor = forStatement.incrementor;
+    if (!incrementor || incrementor.kind !== ts6.SyntaxKind.PostfixUnaryExpression && incrementor.kind !== ts6.SyntaxKind.PrefixUnaryExpression || incrementor.operator !== ts6.SyntaxKind.PlusPlusToken && incrementor.operator !== ts6.SyntaxKind.MinusMinusToken || incrementor.operand?.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    const incrementorSymbol = checker.getSymbolAtLocation(incrementor.operand);
+    return incrementorSymbol === void 0 || symbol === void 0 || incrementorSymbol === symbol;
+  }
+  // the box a printed local carries: the kind of its declaration's initializer, kept
+  // only while every write in the declaring function writes the same kind (D2 scan).
+  // A `const` declaration has no write to scan.
+  javaLocalNumberKind(node, depth) {
+    if (!node || node.kind !== ts6.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const symbol = this.getChecker().getSymbolAtLocation(node);
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (!declaration || declaration.kind !== ts6.SyntaxKind.VariableDeclaration || !ts6.isIdentifier(declaration.name)) {
+      return void 0;
+    }
+    const kind = this.javaPrintedNumberKind(declaration.initializer, depth + 1);
+    if (kind === void 0) {
+      return void 0;
+    }
+    const isConst = (declaration.parent?.flags & ts6.NodeFlags.Const) !== 0;
+    if (!isConst && !this.javaWritesKeepNumberKind(declaration, symbol, kind)) {
+      return void 0;
+    }
+    return kind;
+  }
+  // true when every assignment to the symbol inside its function writes the same
+  // numeric kind; a compound assignment (`x += 1` prints Helpers.add) changes the box.
+  javaWritesKeepNumberKind(declaration, symbol, kind) {
+    const owner = this.enclosingFunctionLike(declaration);
+    if (owner === void 0) {
+      return false;
+    }
+    let safe = true;
+    const visit = (node) => {
+      if (!safe) {
+        return;
+      }
+      if (ts6.isBinaryExpression(node)) {
+        const op = node.operatorToken.kind;
+        if (this.isAssignmentOperator(op) && this.expressionReferencesSymbol(node.left, symbol)) {
+          if (op !== ts6.SyntaxKind.EqualsToken || this.javaPrintedNumberKind(node.right, 0) !== kind) {
+            safe = false;
+            return;
+          }
+        }
+      } else if ((node.kind === ts6.SyntaxKind.ForOfStatement || node.kind === ts6.SyntaxKind.ForInStatement) && this.expressionReferencesSymbol(node.initializer, symbol)) {
+        safe = false;
+        return;
+      } else if ((ts6.isPrefixUnaryExpression(node) || ts6.isPostfixUnaryExpression(node)) && (node.operator === ts6.SyntaxKind.PlusPlusToken || node.operator === ts6.SyntaxKind.MinusMinusToken) && kind !== "int" && this.expressionReferencesSymbol(node.operand, symbol)) {
+        safe = false;
+        return;
+      }
+      ts6.forEachChild(node, visit);
+    };
+    ts6.forEachChild(owner, visit);
+    return safe;
+  }
+  expressionReferencesSymbol(node, symbol) {
+    if (node === void 0 || symbol === void 0) {
+      return false;
+    }
+    if (node.kind === ts6.SyntaxKind.Identifier && this.getChecker().getSymbolAtLocation(node) === symbol) {
+      return true;
+    }
+    let found = false;
+    const visit = (child) => {
+      if (found) {
+        return;
+      }
+      if (child.kind === ts6.SyntaxKind.Identifier && this.getChecker().getSymbolAtLocation(child) === symbol) {
+        found = true;
+        return;
+      }
+      ts6.forEachChild(child, visit);
+    };
+    ts6.forEachChild(node, visit);
+    return found;
+  }
+  enclosingFunctionLike(node) {
+    let current = node?.parent;
+    while (current) {
+      if (ts6.isFunctionLike(current)) {
+        return current;
+      }
+      current = current.parent;
+    }
+    return void 0;
+  }
+  // box/primitive kind of an operand the printer prints as a native number, or undefined
+  // when the printed value could be any box (a call, a parameter, an `any` local)
+  javaPrintedNumberKind(node, depth = 0) {
+    const literalKind = this.javaEqualityLiteralKind(node);
+    if (literalKind !== void 0) {
+      return literalKind;
+    }
+    const lengthKind = this.javaNativeLengthKind(node);
+    if (lengthKind !== void 0) {
+      return lengthKind;
+    }
+    if (this.isJavaPrimitiveCounterReference(node)) {
+      return "int";
+    }
+    const arithmeticKind = this.javaNativeArithmeticKind(node);
+    if (arithmeticKind !== void 0) {
+      return arithmeticKind;
+    }
+    return depth < 2 ? this.javaLocalNumberKind(node, depth) : void 0;
+  }
+  // numeric equality operand: the checker proves a plain number and the printed Java
+  // value carries a known kind. Aliases (Int/Num), unions and `any` stay with the
+  // helper, like in the arithmetic rule.
+  javaEqualityNumberKind(node) {
+    if (this.javaScalarFamily(node) !== "number") {
+      return void 0;
+    }
+    return this.javaPrintedNumberKind(node);
+  }
   // ==/===/!=/!== become java.util.Objects.equals once the checker proves one operand is
   // a string, a boolean or the null/undefined literal: for those Helpers.isEqual reduces
-  // to Objects.equals (value compare, class-strict, no numeric promotion). Numbers stay.
+  // to Objects.equals (value compare, class-strict, no numeric promotion). Two operands
+  // the checker types as plain numbers compare natively when their printed Java kinds
+  // match (java-15): the helper's numeric paths are the same value compare.
   printNativeEqualityIfProvable(node, leftText, rightText) {
     const op = node.operatorToken.kind;
     const negated = op === ts6.SyntaxKind.ExclamationEqualsToken || op === ts6.SyntaxKind.ExclamationEqualsEqualsToken;
@@ -8899,11 +9068,26 @@ var JavaTranspiler = class extends BaseTranspiler {
     const rightFamily = this.equalityOperandFamily(checker?.getTypeAtLocation(node.right));
     const leftProved = leftFamily !== void 0 && (leftFamily !== "null" || this.isNullishLiteral(node.left));
     const rightProved = rightFamily !== void 0 && (rightFamily !== "null" || this.isNullishLiteral(node.right));
-    if (!leftProved && !rightProved) {
-      return void 0;
+    if (leftProved || rightProved) {
+      const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+      return negated ? `!${equalCall}` : equalCall;
     }
-    const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
-    return negated ? `!${equalCall}` : equalCall;
+    const leftKind = this.javaEqualityNumberKind(node.left);
+    const rightKind = this.javaEqualityNumberKind(node.right);
+    if (leftKind !== void 0 && leftKind === rightKind) {
+      if (this.javaOperandPrintsPrimitiveNumber(node.left) && this.javaOperandPrintsPrimitiveNumber(node.right)) {
+        return `(${leftText} ${negated ? "!=" : "=="} ${rightText})`;
+      }
+      const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+      return negated ? `!${equalCall}` : equalCall;
+    }
+    return void 0;
+  }
+  // true when the printer prints the operand as a Java primitive (a decimal literal, a
+  // native .length/.size(), a for counter or a nested native arithmetic node) rather
+  // than as the Object-declared box every other local gets
+  javaOperandPrintsPrimitiveNumber(node) {
+    return this.javaEqualityLiteralKind(node) !== void 0 || this.javaNativeLengthKind(node) !== void 0 || this.isJavaPrimitiveCounterReference(node) || this.javaNativeArithmeticKind(node) !== void 0;
   }
   // `x[k] = v` prints the runtime helper by default. Helpers.addElementToObject
   // exists for receivers the printer cannot type (Lists, arbitrary objects via
