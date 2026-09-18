@@ -154,6 +154,35 @@ const JAVA_PRECISE_BOOLEAN_STATICS: Set<string> = new Set([
     'stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe',
 ]);
 
+// ===== `this.<name>(...)` calls whose Java return is a boolean =====
+//
+// The printer erases every TS return annotation to `Object` (DEFAULT_RETURN_TYPE), so a
+// condition wrapping one of these calls in Helpers.isTrue re-tests a value the port's
+// hand-written Java base already returns as a boolean. The Java declaration is the proof:
+// these methods are hand-written in java/lib/src/main/java/io/github/ccxt/BaseExchange.java,
+// above the "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT" delimiter, with exactly
+// these returns -- and a Java override must be covariant, so no generated venue method can
+// widen them (census: no ts/src/exchanges, pro or prediction file declares any of them).
+const JAVA_THIS_BOOLEAN_METHODS = new Set<string>([
+    'inArray',              // public boolean inArray (Object elem, Object list2)
+    'isArray',              // public boolean isArray (Object a)
+    'isEmpty',              // public boolean isEmpty (Object a)
+    'valueIsDefined',       // public boolean valueIsDefined (Object value)
+    'isJsonEncodedObject',  // public boolean isJsonEncodedObject (Object str)
+    'isBinaryMessage',      // public boolean isBinaryMessage (Object message)
+]);
+
+// The boolean accessors that are GENERATED below the delimiter (`Object safeBool (...)`) hand
+// the caller's own `defaultValue` back untouched whenever the found value is not a Boolean,
+// so the box is Boolean-or-null only when the call's default argument is absent or a boolean
+// literal (same proof as build/java-local-types.js HANDLE_ELEMENT_TYPES.defaultArg).
+// Value = the index of that default argument in the printed call.
+const JAVA_THIS_BOOLEAN_BOX_METHODS: { [name: string]: number } = {
+    'safeBool': 2,
+    'safeBool2': 3,
+    'safeBoolN': 2,
+};
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -2799,6 +2828,77 @@ export class JavaTranspiler extends BaseTranspiler {
         return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
     }
 
+    // the checker's view of the value a condition holds: BooleanLike is the plain `boolean`
+    // (`boolean` itself carries the Boolean bit; the `boolean | undefined` of an accessor with
+    // a default is a union of BooleanLiteral + Undefined and does not), while a union whose
+    // every member is boolean/nullish is the nullable box
+    javaBooleanValueKind(node): 'boolean' | 'nullableBoolean' | undefined {
+        const type = this.getChecker().getTypeAtLocation(node);
+        const flags = type?.flags ?? 0;
+        if (flags & ts.TypeFlags.BooleanLike) {
+            return 'boolean';
+        }
+        if ((flags & ts.TypeFlags.Union) === 0) {
+            return undefined;
+        }
+        const members = (type as any).types ?? [];
+        const booleanishMembers = ts.TypeFlags.BooleanLike | ts.TypeFlags.Null
+            | ts.TypeFlags.Undefined | ts.TypeFlags.Void;
+        const allBooleanish = members.length > 0
+            && members.every((member) => (((member as any).flags ?? 0) & booleanishMembers) !== 0);
+        return allBooleanish ? 'nullableBoolean' : undefined;
+    }
+
+    // mirrors printWrappedUnknownThisProperty: a `this.<name>(...)` call the checker cannot
+    // resolve prints `Helpers.callDynamically(this, "<name>", ...)`, whose Java return is Object
+    javaCalleeResolves(node): boolean {
+        let signature;
+        try {
+            signature = this.getChecker().getResolvedSignature(node);
+        } catch (e) {
+            return false;
+        }
+        return signature?.declaration !== undefined;
+    }
+
+    // the boolean the printed Java of a `this.<name>(...)` call already carries, from the
+    // hand-written base declarations in JAVA_THIS_BOOLEAN_METHODS / the box proof in
+    // JAVA_THIS_BOOLEAN_BOX_METHODS. undefined: not a direct boolean call, keep the wrapper.
+    javaCallBooleanKind(node): 'boolean' | 'nullableBoolean' | undefined {
+        if (node?.kind !== ts.SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const kind = this.javaBooleanValueKind(node);
+        if (kind === undefined || !this.javaCalleeResolves(node)) {
+            return undefined;
+        }
+        const name = callee.name?.escapedText as string;
+        if (JAVA_THIS_BOOLEAN_METHODS.has(name)) {
+            // the hand-written declaration is the only source of the primitive return: a
+            // non-base `this.<name>(...)` is a different method, printed `Object`
+            return kind === 'boolean' ? 'boolean' : undefined;
+        }
+        const defaultArgumentIndex = JAVA_THIS_BOOLEAN_BOX_METHODS[name];
+        if (defaultArgumentIndex === undefined) {
+            return undefined;
+        }
+        const defaultArgument = node.arguments?.[defaultArgumentIndex];
+        // a nullish literal reaches the Java accessor as null (the printer drops a trailing
+        // `undefined` in the optional tail), and null is what an absent argument yields
+        const defaultIsNullish = defaultArgument === undefined
+            || defaultArgument.kind === ts.SyntaxKind.NullKeyword
+            || (defaultArgument.kind === ts.SyntaxKind.Identifier && defaultArgument.escapedText === 'undefined');
+        const defaultIsBoolean = defaultIsNullish
+            || defaultArgument?.kind === ts.SyntaxKind.TrueKeyword
+            || defaultArgument?.kind === ts.SyntaxKind.FalseKeyword;
+        return defaultIsBoolean ? 'nullableBoolean' : undefined;
+    }
+
     // the printer already emits these conditions as Java `boolean` (the comparison helpers,
     // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
     // Helpers.isTrue would only re-test a value the checker proves is boolean
@@ -3057,6 +3157,15 @@ export class JavaTranspiler extends BaseTranspiler {
         const wrapperFree = this.javaBooleanWrapperFreeCondition(node);
         if (wrapperFree !== undefined) {
             return this.getIden(identation) + wrapperFree;
+        }
+        const callKind = this.javaCallBooleanKind(node);
+        if (callKind === 'boolean') {
+            return this.getIden(identation) + this.printNode(node, 0);
+        }
+        if (callKind === 'nullableBoolean') {
+            // Helpers.isTrue(box) on a Boolean-or-null box is Boolean.TRUE.equals(box): null
+            // and FALSE test false, TRUE tests true
+            return this.getIden(identation) + `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
         }
         return super.printCondition(node, identation);
     }
