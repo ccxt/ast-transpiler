@@ -1706,7 +1706,49 @@ export class RustTranspiler extends BaseTranspiler {
             return this.printPrefixUnaryExpression(node, identation);
         }
         const expression = this.printNode(node, 0);
-        return `${this.getIden(identation)}is_true(&${expression})`;
+        return `${this.getIden(identation)}is_true(&${this.printTruthyArgument(expression)})`;
+    }
+
+    // The argument of a `is_true(&…)` sink, with the printer's `Value::Bool(…)`
+    // box peeled when it spans the whole argument: `IsTruthy for Value` unboxes
+    // `Value::Bool(b)` back to `b`, so the sink is the identity on the bool the
+    // box wraps. `is_true` is the one sink that takes a native `bool`, so the
+    // argument prints bare. The `is_true(` marker stays for the post-passes.
+    printTruthyArgument(expression: string): string {
+        const inner = this.peelValueBoolBox(this.stripOuterParens(expression));
+        // parens kept: `is_true(&a == b)` would re-associate the argument.
+        return inner === undefined ? expression : `(${inner})`;
+    }
+
+    // `assert(<cond>, <msgs>)` — the test harness' `assert<T: Truthy>` takes a
+    // native `bool` (`impl Truthy for bool`), so a whole-argument
+    // `Value::Bool(…)` box prints bare there too. The message list is untouched.
+    printAssertCall(node, identation, parsedArgs) {
+        const [first, rest] = this.splitFirstArgument(parsedArgs);
+        const inner = this.peelValueBoolBox(this.stripOuterParens(first));
+        return inner === undefined ? `assert(${parsedArgs})` : `assert((${inner})${rest})`;
+    }
+
+    // Splits an already-printed argument list after its first top-level `,`.
+    splitFirstArgument(parsedArgs: string): [string, string] {
+        let depth = 0;
+        for (let i = 0; i < parsedArgs.length; i++) {
+            const char = parsedArgs[i];
+            if (char === '"') {
+                i++;
+                while (i < parsedArgs.length && parsedArgs[i] !== '"') {
+                    if (parsedArgs[i] === '\\') i++;
+                    i++;
+                }
+                continue;
+            }
+            if (char === '(' || char === '[' || char === '{') depth++;
+            else if (char === ')' || char === ']' || char === '}') depth--;
+            else if (char === ',' && depth === 0) {
+                return [parsedArgs.slice(0, i), parsedArgs.slice(i)];
+            }
+        }
+        return [parsedArgs, ''];
     }
 
     // Bool-position text for a comparison: the native payload compare (already
