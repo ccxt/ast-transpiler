@@ -1801,6 +1801,87 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
     });
 });
 
+// U55: `isEqual (x, null)` -> `x == null` for an operand whose emitted declaration the
+// embedding classifier names a typed reference / nullable scalar (csharpNullComparisonTypeOf).
+// The helper's first two guards are the C# null test itself, so the native operator is the same
+// comparison; a non-nullable value scalar does not compile with `== null` and every operand the
+// hook cannot name keeps the helper.
+describe('csharp null-literal comparisons instead of the isEqual wrapper', () => {
+    const withNullTypes = (types, input) => {
+        transpiler.csharpTranspiler.csharpNullComparisonTypeOf = (node) => types[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            delete transpiler.csharpTranspiler.csharpNullComparisonTypeOf;
+        }
+    };
+    // `a` is a number-typed operand: the base printer keeps the helper for it (a TS number
+    // may be a C# value scalar), which is exactly the operand the hook has to answer for
+    const nullCheckInput =
+        "function f (a: number) {\n" +
+        "    const noA = a === undefined;\n" +
+        "    const hasA = a !== undefined;\n" +
+        "    return [noA, hasA];\n" +
+        "}";
+    test('a nullable-scalar declaration prints the native null test', () => {
+        const output = withNullTypes({ a: 'Int64?' }, nullCheckInput);
+        expect(output).toContain("bool noA = (a == null);");
+        expect(output).toContain("bool hasA = (a != null);");
+        expect(output).not.toContain("isEqual(a, null)");
+    });
+    test('the same input without the hook keeps the helper (untyped emission)', () => {
+        const output = transpiler.transpileCSharp(nullCheckInput).content;
+        expect(output).toContain("isEqual(a, null)");
+        expect(output).toContain("!isEqual(a, null)");
+        expect(output).not.toContain("(a == null)");
+        expect(output).not.toContain("(a != null)");
+    });
+    test('typed references print the native null test', () => {
+        for (const type of [ 'string', 'string?', 'IDictionary<string, object>', 'IList<object>', 'List<object>', 'Dictionary<string, object>', 'ccxt.pro.ArrayCache', 'double?' ]) {
+            const output = withNullTypes({ a: type }, nullCheckInput);
+            expect(output).toContain("bool noA = (a == null);");
+            expect(output).toContain("bool hasA = (a != null);");
+        }
+    });
+    test('object, var, a non-nullable scalar and an unknown operand keep the helper', () => {
+        for (const type of [ 'object', 'var', 'Int64', 'bool', 'double', 'int', undefined ]) {
+            const output = withNullTypes({ a: type }, nullCheckInput);
+            expect(output).toContain("isEqual(a, null)");
+            expect(output).not.toContain("(a == null)");
+        }
+    });
+    test('a null literal on the left prints the same native null test', () => {
+        const output = withNullTypes({ a: 'Int64?' },
+        "function f (a: number) {\n" +
+        "    const missing = undefined === a;\n" +
+        "    return missing;\n" +
+        "}");
+        expect(output).toContain("bool missing = (a == null);");
+    });
+    test('a non-identifier operand keeps the helper', () => {
+        const output = withNullTypes({},
+        "function f () {\n" +
+        "    const x = this.markets === undefined;\n" +
+        "    return x;\n" +
+        "}");
+        expect(output).toContain("isEqual(this.markets, null)");
+    });
+    test('the string-literal rule is unaffected by the null hook', () => {
+        transpiler.csharpTranspiler.csharpLocalTypeOf = (node) => (node?.escapedText === 's' ? 'string?' : undefined);
+        try {
+            const output = transpiler.transpileCSharp(
+            "function f (s: string) {\n" +
+            "    const isAbc = s === 'abc';\n" +
+            "    return isAbc;\n" +
+            "}").content;
+            expect(output).toContain('s == "abc"');
+            expect(output).not.toContain('isEqual(s, "abc")');
+        } finally {
+            delete transpiler.csharpTranspiler.csharpLocalTypeOf;
+        }
+    });
+});
+
 describe('csharp native numeric comparisons', () => {
     // the printer names the C# kind of int-range literals, `.length` and a few call results
     // itself; locals it leaves `object` (or that the embedding build layer retypes) come back
