@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6807,10 +6807,12 @@ ${this.getIden(level)}}()`;
       this.goStatementLevel = previousLevel;
     }
   }
-  // `key in obj` on a Go map[string]any with a string key. The two-value map read is
-  // a statement, hence the func literal: a present-but-nil value is ok=true, exactly
-  // like InOp's map case. InOp also answers false for a nil/number key and covers
-  // sync.Map/orderbook receivers, so anything else keeps the helper.
+  // `key in obj` on a Go map[string]any whose key is a Go string. The two-value map
+  // read is a statement, hence the func literal: a present-but-nil value is ok=true,
+  // exactly like InOp's map case. A `*string` key is the string InOp's derefScalar
+  // resolves, with the nil pointer answering false like derefScalar's nil key. InOp
+  // also answers false for a nil/number key and covers sync.Map/orderbook receivers,
+  // so anything else keeps the helper.
   printInlineInOp(dictNode, keyNode, dictText, keyText) {
     if (dictText.includes("\n") || keyText.includes("\n")) {
       return void 0;
@@ -6819,7 +6821,18 @@ ${this.getIden(level)}}()`;
       return void 0;
     }
     if (this.goPrintedTypeOfExpression(keyNode, keyText) !== "string") {
-      return void 0;
+      if (keyNode?.kind !== ts5.SyntaxKind.Identifier || this.goDeclaredTypeOfIdentifier(keyNode) !== "*string") {
+        return void 0;
+      }
+      const level2 = this.goStatementLevel;
+      const body = this.getIden(level2 + 1);
+      return `func() bool {
+${body}if ${keyText} == nil {
+${this.getIden(level2 + 2)}return false
+${body}}
+${body}_, ok := ${dictText}[*${keyText}]
+${body}return ok
+${this.getIden(level2)}}()`;
     }
     const read = `_, ok := ${dictText}[${keyText}]`;
     if (11 + read.length + 2 + "return ok".length <= 100) {

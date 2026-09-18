@@ -3032,10 +3032,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
     }
 
-    // `key in obj` on a Go map[string]any with a string key. The two-value map read is
-    // a statement, hence the func literal: a present-but-nil value is ok=true, exactly
-    // like InOp's map case. InOp also answers false for a nil/number key and covers
-    // sync.Map/orderbook receivers, so anything else keeps the helper.
+    // `key in obj` on a Go map[string]any whose key is a Go string. The two-value map
+    // read is a statement, hence the func literal: a present-but-nil value is ok=true,
+    // exactly like InOp's map case. A `*string` key is the string InOp's derefScalar
+    // resolves, with the nil pointer answering false like derefScalar's nil key. InOp
+    // also answers false for a nil/number key and covers sync.Map/orderbook receivers,
+    // so anything else keeps the helper.
     printInlineInOp(dictNode, keyNode, dictText: string, keyText: string): string | undefined {
         if (dictText.includes('\n') || keyText.includes('\n')) {
             return undefined;
@@ -3044,7 +3046,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         if (this.goPrintedTypeOfExpression(keyNode, keyText) !== 'string') {
-            return undefined;
+            // InOp runs derefScalar over both operands: a `*string` key is the pointed-to
+            // string, and a nil pointer is a nil key, i.e. false. Only an identifier may be
+            // repeated by the guard — any other expression would be evaluated twice.
+            if ((keyNode?.kind !== ts.SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(keyNode) !== '*string')) {
+                return undefined;
+            }
+            const level = this.goStatementLevel;
+            const body = this.getIden(level + 1);
+            return `func() bool {\n${body}if ${keyText} == nil {\n${this.getIden(level + 2)}return false\n${body}}\n${body}_, ok := ${dictText}[*${keyText}]\n${body}return ok\n${this.getIden(level)}}()`;
         }
         // funcBody() keeps the literal on one line while `func() bool` (11 columns) plus
         // the two statements and their `; ` separator fit in 100 columns
