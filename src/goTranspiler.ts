@@ -3146,6 +3146,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node.kind === ts.SyntaxKind.NumericLiteral) {
             return this.goNumericLiteralKind(node);
         }
+        if (this.goIsSignedNumericLiteral(node)) {
+            return this.goNumericLiteralKind(node);
+        }
         if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
             return this.goOperandNumericKind(node.expression, this.printNode(node.expression, 0));
         }
@@ -3177,8 +3180,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     // an untyped Go constant: the integer forms adopt any numeric kind, the
-    // floating-point ones only fit float64
+    // floating-point ones only fit float64. A signed literal is the same constant:
+    // the printer writes `-1` as text, never through OpNeg's box.
     goNumericLiteralKind(node): string | undefined {
+        if (this.goIsSignedNumericLiteral(node)) {
+            return this.goNumericLiteralKind(node.operand);
+        }
         const text = node?.text;
         if (text === undefined) {
             return undefined;
@@ -3192,10 +3199,39 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // `-1` / `+1.5` as written: a sign on a numeric literal, the only prefix-unary
+    // shape that reaches a comparison as a constant rather than as OpNeg(...)
+    goIsSignedNumericLiteral(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.PrefixUnaryExpression) {
+            return false;
+        }
+        if ((node.operator !== ts.SyntaxKind.MinusToken) && (node.operator !== ts.SyntaxKind.PlusToken)) {
+            return false;
+        }
+        return node.operand?.kind === ts.SyntaxKind.NumericLiteral;
+    }
+
+    // a numeric constant operand: an integer/float literal, with an optional sign
+    goIsNumericConstant(node): boolean {
+        return (node?.kind === ts.SyntaxKind.NumericLiteral) || this.goIsSignedNumericLiteral(node);
+    }
+
+    // the constant's value with its sign; NaN for anything but a numeric constant
+    goNumericConstantValue(node): number {
+        if (this.goIsSignedNumericLiteral(node)) {
+            const value = Number(node.operand.text.replaceAll('_', ''));
+            return (node.operator === ts.SyntaxKind.MinusToken) ? -value : value;
+        }
+        if (node?.kind !== ts.SyntaxKind.NumericLiteral) {
+            return Number.NaN;
+        }
+        return Number(node.text.replaceAll('_', ''));
+    }
+
     // a constant only joins a comparison when its value is representable in the
     // other operand's kind: `0.5` is not an int, and neither is 1e400 (infinity)
     goLiteralFitsKind(node, kind: string): boolean {
-        const value = Number(node?.text?.replaceAll('_', ''));
+        const value = this.goNumericConstantValue(node);
         if (!Number.isFinite(value)) {
             return false;
         }
@@ -3211,10 +3247,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (leftKind === rightKind) {
             return leftKind;
         }
-        if ((left?.kind === ts.SyntaxKind.NumericLiteral) && (right?.kind !== ts.SyntaxKind.NumericLiteral)) {
+        if (this.goIsNumericConstant(left) && !this.goIsNumericConstant(right)) {
             return this.goLiteralFitsKind(left, rightKind) ? rightKind : undefined;
         }
-        if ((right?.kind === ts.SyntaxKind.NumericLiteral) && (left?.kind !== ts.SyntaxKind.NumericLiteral)) {
+        if (this.goIsNumericConstant(right) && !this.goIsNumericConstant(left)) {
             return this.goLiteralFitsKind(right, leftKind) ? leftKind : undefined;
         }
         return undefined;
@@ -3222,14 +3258,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // `<` `>` `<=` `>=` between two operands the checker proves to be numbers of the
     // same Go kind is exactly the comparison the helper performs, minus the interface
-    // round-trip, so the call carries no information. Everything else — `any` boxes,
-    // pointers, mixed kinds, strings — keeps the helper. float64 keeps
-    // IsLessThan/IsLessThanOrEqual: the helper answers true whenever an operand is
-    // NaN while Go (and JS) answer false, and only those two operators differ.
+    // round-trip, so the call carries no information. A `*int64` / `*float64` operand
+    // joins them with its deref written out, and the helper's nil predicate with it.
+    // Everything else — `any` boxes, mixed kinds, strings — keeps the helper. float64
+    // keeps IsLessThan/IsLessThanOrEqual: the helper answers true whenever an operand
+    // is NaN while Go (and JS) answer false, and only those two operators differ.
     printInlineOrderedComparison(left, right, leftText: string, rightText: string, op): string | undefined {
         const operator = ORDERED_COMPARISON_OPERATORS[op];
         if (operator === undefined) {
             return undefined;
+        }
+        const leftPointee = this.goOrderedComparisonPointerKind(left);
+        const rightPointee = this.goOrderedComparisonPointerKind(right);
+        if ((leftPointee !== undefined) || (rightPointee !== undefined)) {
+            return this.printPointerOrderedComparison(left, right, leftText, rightText, operator, leftPointee, rightPointee);
         }
         const leftKind = this.goOperandNumericKind(left, leftText);
         const rightKind = this.goOperandNumericKind(right, rightText);
@@ -3246,6 +3288,250 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         return `(${leftText} ${operator} ${rightText})`;
+    }
+
+    // the pointee kind of a `*int64` / `*float64` **identifier** operand. Only a local
+    // the printer itself declared as that pointer qualifies: a call would be repeated by
+    // the nil test, and an `any` box holds a value the printer cannot name.
+    goOrderedComparisonPointerKind(node): string | undefined {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const declared = this.goDeclaredTypeOfIdentifier(node);
+        if ((declared !== '*int64') && (declared !== '*float64')) {
+            return undefined;
+        }
+        return declared.substring(1);
+    }
+
+    // an ordered comparison with a `*int64` / `*float64` operand on at least one side.
+    // The helper derefs both sides and answers its own predicate when one of them is
+    // nil, so the native form has to spell that predicate out; an enclosing
+    // `x !== undefined` guard — the printer writes it as the Go `x != nil` test —
+    // removes it for that side instead.
+    printPointerOrderedComparison(left, right, leftText: string, rightText: string, operator: string, leftPointee: string | undefined, rightPointee: string | undefined): string | undefined {
+        const leftKind = (leftPointee === undefined) ? this.goOperandNumericKind(left, leftText) : leftPointee;
+        const rightKind = (rightPointee === undefined) ? this.goOperandNumericKind(right, rightText) : rightPointee;
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        const kind = this.goComparisonKind(left, leftKind, right, rightKind);
+        if (kind === undefined) {
+            return undefined;
+        }
+        // NaN is a float64 to the helper too: `<` / `<=` answer true for it while Go
+        // answers false, so those two operators keep the call exactly as phase-1 does
+        if ((kind === 'float64') && ((operator === '<') || (operator === '<='))) {
+            return undefined;
+        }
+        const leftNil = (leftPointee !== undefined) && !this.goHasEnclosingNilGuard(left);
+        const rightNil = (rightPointee !== undefined) && !this.goHasEnclosingNilGuard(right);
+        // a nil test short-circuits the operand on the other side, so that side has to
+        // be free of calls for the helper's single evaluation to stay unobservable
+        if (leftNil && (rightPointee === undefined) && !this.goIsPureComparisonOperand(right)) {
+            return undefined;
+        }
+        if (rightNil && (leftPointee === undefined) && !this.goIsPureComparisonOperand(left)) {
+            return undefined;
+        }
+        const lv = (leftPointee === undefined) ? leftText : `*${leftText}`;
+        const rv = (rightPointee === undefined) ? rightText : `*${rightText}`;
+        if (!leftNil && !rightNil) {
+            return `(${lv} ${operator} ${rv})`;
+        }
+        // every arm below answers what the helper answers when a side is nil:
+        // `a != nil && b == nil` for `>`/`>=`, `a == nil && b != nil` for `<`/`<=`
+        if (leftNil && !rightNil) {
+            if (operator === '>') {
+                return `(${leftText} != nil && ${lv} > ${rv})`;
+            }
+            if (operator === '>=') {
+                return `(${leftText} != nil && ${lv} >= ${rv})`;
+            }
+            const sign = (operator === '<') ? '<' : '<=';
+            return `(${leftText} == nil || ${lv} ${sign} ${rv})`;
+        }
+        if (!leftNil && rightNil) {
+            if (operator === '>') {
+                return `(${rightText} == nil || ${lv} > ${rv})`;
+            }
+            if (operator === '>=') {
+                return `(${rightText} == nil || ${lv} >= ${rv})`;
+            }
+            const sign = (operator === '<') ? '<' : '<=';
+            return `(${rightText} != nil && ${lv} ${sign} ${rv})`;
+        }
+        if (operator === '>') {
+            return `(${leftText} != nil && (${rightText} == nil || ${lv} > ${rv}))`;
+        }
+        if (operator === '>=') {
+            return `(${rightText} == nil || (${leftText} != nil && ${lv} >= ${rv}))`;
+        }
+        if (operator === '<') {
+            return `(${rightText} != nil && (${leftText} == nil || ${lv} < ${rv}))`;
+        }
+        return `(${leftText} == nil || (${rightText} != nil && ${lv} <= ${rv}))`;
+    }
+
+    // `x !== undefined` / `x != null` on that identifier: the printer writes the Go
+    // `x != nil` test for it, so an enclosing one proves the pointer present
+    goIsNonNilTestOf(node, ident): boolean {
+        if (node?.kind !== ts.SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const op = node.operatorToken?.kind;
+        if ((op !== ts.SyntaxKind.ExclamationEqualsToken) && (op !== ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+            return false;
+        }
+        return (this.goIsSameSymbol(node.left, ident) && this.goIsNilLiteral(node.right))
+            || (this.goIsSameSymbol(node.right, ident) && this.goIsNilLiteral(node.left));
+    }
+
+    // a null/undefined literal, or any expression the checker types as one
+    goIsNilLiteral(node): boolean {
+        if ((node?.kind === ts.SyntaxKind.NullKeyword) || (node?.kind === ts.SyntaxKind.UndefinedKeyword)) {
+            return true;
+        }
+        return (node?.kind === ts.SyntaxKind.Identifier) && (this.goScalarFamily(node) === 'nil');
+    }
+
+    goIsSameSymbol(a, b): boolean {
+        if ((a?.kind !== ts.SyntaxKind.Identifier) || (b?.kind !== ts.SyntaxKind.Identifier)) {
+            return false;
+        }
+        try {
+            const checker = this.getChecker();
+            const leftSymbol = checker.getSymbolAtLocation(a);
+            return (leftSymbol !== undefined) && (leftSymbol === checker.getSymbolAtLocation(b));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // true when the enclosing control flow already proves the identifier non-nil at this
+    // node: an earlier conjunct of an `&&` chain, or the condition of a wrapping
+    // if/loop/ternary whose branch contains the node. A local rebound anywhere in its
+    // function never counts — the guard may be dead by the time the comparison runs.
+    goHasEnclosingNilGuard(ident): boolean {
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(ident)?.valueDeclaration;
+        } catch (e) {
+            return false;
+        }
+        if (this.goLocalIsRebound(this.goEnclosingFunction(declaration ?? ident), ident)) {
+            return false;
+        }
+        let child = ident;
+        let parent = ident?.parent;
+        while (parent !== undefined) {
+            const kind = parent.kind;
+            if ((kind === ts.SyntaxKind.ParenthesizedExpression) || (kind === ts.SyntaxKind.VariableStatement)
+                || (kind === ts.SyntaxKind.ExpressionStatement) || (kind === ts.SyntaxKind.Block)
+                || (kind === ts.SyntaxKind.ReturnStatement) || (kind === ts.SyntaxKind.ElementAccessExpression)
+                || (kind === ts.SyntaxKind.CallExpression) || (kind === ts.SyntaxKind.PropertyAccessExpression)
+                || (kind === ts.SyntaxKind.ObjectLiteralExpression) || (kind === ts.SyntaxKind.PropertyAssignment)
+                || (kind === ts.SyntaxKind.ArrayLiteralExpression) || (kind === ts.SyntaxKind.AwaitExpression)
+                || (kind === ts.SyntaxKind.CaseClause) || (kind === ts.SyntaxKind.SwitchStatement)
+                || (kind === ts.SyntaxKind.DoStatement) || (kind === ts.SyntaxKind.LabeledStatement)) {
+                // the guard still dominates everything below such a wrapper
+                child = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (kind === ts.SyntaxKind.BinaryExpression) {
+                const op = parent.operatorToken?.kind;
+                if ((op === ts.SyntaxKind.AmpersandAmpersandToken) && (child === parent.right)
+                    && this.goConditionProvesNonNil(parent.left, ident)) {
+                    return true;
+                }
+                // `a || b` and a left conjunct are evaluated before the guard, so they
+                // prove nothing; the guard of an enclosing construct still applies
+                child = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (kind === ts.SyntaxKind.IfStatement) {
+                if ((child === parent.thenStatement) && this.goConditionProvesNonNil(parent.expression, ident)) {
+                    return true;
+                }
+                child = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (kind === ts.SyntaxKind.WhileStatement) {
+                if ((child === parent.statement) && this.goConditionProvesNonNil(parent.expression, ident)) {
+                    return true;
+                }
+                child = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (kind === ts.SyntaxKind.ForStatement) {
+                if ((child === parent.statement) && this.goConditionProvesNonNil(parent.condition, ident)) {
+                    return true;
+                }
+                child = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (kind === ts.SyntaxKind.ConditionalExpression) {
+                if ((child === parent.whenTrue) && this.goConditionProvesNonNil(parent.condition, ident)) {
+                    return true;
+                }
+                child = parent;
+                parent = parent.parent;
+                continue;
+            }
+            // functions, classes and everything else the scan does not model: the
+            // guard cannot be carried across
+            return false;
+        }
+        return false;
+    }
+
+    // the whole condition, or any conjunct of its `&&` chain, is the non-nil test
+    goConditionProvesNonNil(condition, ident): boolean {
+        const inner = this.goUnwrapParenthesizedNode(condition);
+        if (inner === undefined) {
+            return false;
+        }
+        if (this.goIsNonNilTestOf(inner, ident)) {
+            return true;
+        }
+        if (inner.kind !== ts.SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        if (inner.operatorToken?.kind !== ts.SyntaxKind.AmpersandAmpersandToken) {
+            return false;
+        }
+        return this.goConditionProvesNonNil(inner.left, ident) || this.goConditionProvesNonNil(inner.right, ident);
+    }
+
+    goUnwrapParenthesizedNode(node) {
+        let current = node;
+        while (current?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    // an operand a short-circuit may skip without any observable difference: no calls,
+    // no assignments, nothing the helper would have evaluated exactly once
+    goIsPureComparisonOperand(node): boolean {
+        switch (node?.kind) {
+        case ts.SyntaxKind.Identifier:
+        case ts.SyntaxKind.NumericLiteral:
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+        case ts.SyntaxKind.PropertyAccessExpression:
+            return true;
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            return (node.operator === ts.SyntaxKind.MinusToken) && this.goIsPureComparisonOperand(node.operand);
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goIsPureComparisonOperand(node.expression);
+        }
+        return false;
     }
 
     // Go's printer never wraps an already parenthesised expression: gofmt prints a
