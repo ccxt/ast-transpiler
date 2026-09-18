@@ -1228,6 +1228,71 @@ export class JavaTranspiler extends BaseTranspiler {
         return required;
     }
 
+    // non-tuple array reads: the Java representation is java.util.List (the printer maps every
+    // array type to one), but neither the receiver nor the index is bounded statically, so the
+    // read keeps the helper's null / off-range outcomes.
+    isJavaArrayStructureType(type) {
+        if (type === undefined) {
+            return false;
+        }
+        const excludedFlags = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Union
+            | ts.TypeFlags.Intersection | ts.TypeFlags.Undefined | ts.TypeFlags.Null
+            | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional | ts.TypeFlags.Never;
+        if ((type.flags & excludedFlags) !== 0) {
+            return false;
+        }
+        const checker = this.getChecker();
+        if (checker.isTupleType(type)) {
+            return false; // handled by the tuple branch, where the bound is provable
+        }
+        return checker.isArrayType(type);
+    }
+
+    // the null-safe element read prints its receiver once per guard; only a reference whose
+    // printed Java has no side effects (identifier, `this`/`this.field` chain) may repeat it.
+    javaSideEffectFreeReference(node) {
+        if (node === undefined) {
+            return false;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.Identifier:
+        case ts.SyntaxKind.ThisKeyword:
+            return true;
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.javaSideEffectFreeReference(node.expression);
+        case ts.SyntaxKind.PropertyAccessExpression:
+            return this.javaSideEffectFreeReference(node.expression);
+        default:
+            return false;
+        }
+    }
+
+    // receivers whose printed elements the ccxt post-pass types as String FROM the helper call
+    // (`x.split(sep)` and string-literal array producers): those locals narrow to String only
+    // while the read prints `Helpers.GetValue(`, so their reads keep the helper.
+    javaStringElementsReceiver(node) {
+        if (!ts.isIdentifier(node)) {
+            return false;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
+            return false;
+        }
+        const initializer = declaration.initializer;
+        if (initializer === undefined) {
+            return false;
+        }
+        if (ts.isCallExpression(initializer) && ts.isPropertyAccessExpression(initializer.expression)) {
+            return initializer.expression.name?.escapedText === 'split';
+        }
+        if (ts.isArrayLiteralExpression(initializer)) {
+            return initializer.elements.length > 0 && initializer.elements.every((element) =>
+                element.kind === ts.SyntaxKind.StringLiteral
+                || element.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral);
+        }
+        return false;
+    }
+
     isLeftSideOfAssignment(node) {
         const parent = node.parent;
         if (parent?.kind !== ts.SyntaxKind.BinaryExpression || parent.left !== node) {
@@ -1317,15 +1382,30 @@ export class JavaTranspiler extends BaseTranspiler {
             const target = this.printNode(node.expression, 0);
             return `((java.util.Map<String, Object>)${target}).get(${this.printNode(key, 0)})`;
         }
-        if (!this.isJavaListStructureType(type)) {
-            return undefined;
-        }
         const index = Number(key.text);
-        if (!Number.isInteger(index) || index < 0 || index >= this.tupleRequiredElementCount(type)) {
+        if (!Number.isInteger(index) || index < 0) {
             return undefined;
         }
+        if (this.isJavaListStructureType(type)) {
+            if (index >= this.tupleRequiredElementCount(type)) {
+                return undefined;
+            }
+            const target = this.printNode(node.expression, 0);
+            return `((java.util.List<Object>)${target}).get(${this.printNode(key, 0)})`;
+        }
+        if (!this.isJavaArrayStructureType(type)) {
+            return undefined;
+        }
+        if (!this.javaSideEffectFreeReference(node.expression) || this.javaStringElementsReceiver(node.expression)) {
+            return undefined;
+        }
+        // `Helpers.GetValue` returns null for a null receiver and off range; List.get
+        // throws on both, so the native read carries both guards. `||` short-circuits and
+        // the receiver is side-effect free, so it is evaluated as often as before.
         const target = this.printNode(node.expression, 0);
-        return `((java.util.List<Object>)${target}).get(${this.printNode(key, 0)})`;
+        const list = `((java.util.List<?>)${target})`;
+        const keyText = this.printNode(key, 0);
+        return `(${target} == null || ${keyText} >= ${list}.size() ? null : ${list}.get(${keyText}))`;
     }
 
     printElementAccessExpression(node, identation) {

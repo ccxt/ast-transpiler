@@ -2856,7 +2856,7 @@ describe('checker-typed element access: Helpers.GetValue -> native Map/List acce
         expect(output).toContain("Helpers.GetValue(tup, 4)");
     });
 
-    test('non-tuple array reads keep the helper (get() would throw out of range)', () => {
+    test('non-tuple array reads go native behind the null / off-range guard', () => {
         const input =
         "class T {\n" +
         "    test(arr: number[], symbols: string[]): void {\n" +
@@ -2867,8 +2867,83 @@ describe('checker-typed element access: Helpers.GetValue -> native Map/List acce
         "    something(...args: any[]): void {}\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.GetValue(arr, 0)");
-        expect(output).toContain("Helpers.GetValue(symbols, 1)");
+        expect(output).toContain("(arr == null || 0 >= ((java.util.List<?>)arr).size() ? null : ((java.util.List<?>)arr).get(0))");
+        expect(output).toContain("(symbols == null || 1 >= ((java.util.List<?>)symbols).size() ? null : ((java.util.List<?>)symbols).get(1))");
+        expect(output).not.toContain("Helpers.GetValue(arr, 0)");
+        expect(output).not.toContain("Helpers.GetValue(symbols, 1)");
+    });
+
+    test('the guard keeps both helper outcomes: a null receiver and an off-range index still yield null', () => {
+        const input =
+        "class T {\n" +
+        "    test(arr: number[]): void {\n" +
+        "        const a = arr[0];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // a bare get() throws on both paths the helper turns into null
+        expect(output).not.toContain("(arr).get(0)");
+        expect(output).toContain("arr == null");
+        expect(output).toContain("((java.util.List<?>)arr).size()");
+    });
+
+    test('a receiver with side effects keeps the helper (single evaluation)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const a = this.list()[0];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    list(): number[] {\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(this.list(), 0)");
+    });
+
+    test('a split-produced receiver keeps the helper (the ccxt post-pass types the local from it)', () => {
+        const input =
+        "class T {\n" +
+        "    test(name: string): void {\n" +
+        "        const parts = name.split('.');\n" +
+        "        const root = parts[0];\n" +
+        "        this.something(root);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(parts, 0)");
+    });
+
+    test('a non-literal index on a proven array keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(arr: number[], i: number): void {\n" +
+        "        const a = arr[i];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(arr, i)");
+    });
+
+    test('the out-of-range tuple index still keeps the helper', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(tup: [any, D]): void {\n" +
+        "        const b = tup[4];\n" +
+        "        this.something(b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(tup, 4)");
     });
 
     test('element writes keep the base emission (only reads go native)', () => {
