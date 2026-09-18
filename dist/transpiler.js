@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11702,9 +11702,6 @@ ${classMethods}
     const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
     if (outOfOrder)
       return outOfOrder;
-    const nativeParse = this.printNativeParseCall(node);
-    if (nativeParse !== void 0)
-      return nativeParse;
     return super.printCallExpression(node, identation);
   }
   printThisKeyword(node, identation) {
@@ -11848,57 +11845,6 @@ ${classMethods}
       return void 0;
     const key = this.escapeRustStringLiteral(keyText);
     return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
-  }
-  /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
-   *  `str::parse` would; undefined when the fold is not obviously exact. */
-  foldParsedStringLiteral(name, text) {
-    const t = text.trim();
-    if (name === "parseInt") {
-      if (!/^[+-]?[0-9]+$/.test(t))
-        return void 0;
-      const value2 = BigInt(t.replace(/^\+/, "") || "0");
-      if (value2 < -9223372036854775808n || value2 > 9223372036854775807n)
-        return void 0;
-      return `Value::Int(${value2.toString()})`;
-    }
-    if (!/^[+-]?[0-9]+(?:\.[0-9]+)?$/.test(t))
-      return void 0;
-    const value = Number(t);
-    if (!Number.isFinite(value) || Object.is(value, -0))
-      return void 0;
-    if (!/^-?[0-9]+(?:\.[0-9]+)?$/.test(String(value)))
-      return void 0;
-    return `Value::Float(${String(value)})`;
-  }
-  /** `parseInt(x)` / `parseFloat(x)` with a single checker-proven string argument
-   *  become the runtime helper's own match with native `str::parse`; every other
-   *  argument shape keeps the helper call the ccxt post-pass rewrites. */
-  printNativeParseCall(node) {
-    const callee = node.expression;
-    if (!ts7.isIdentifier(callee))
-      return void 0;
-    const name = String(callee.escapedText);
-    const helper = _RustTranspiler.RUST_PARSE_HELPERS[name];
-    if (helper === void 0)
-      return void 0;
-    if (node.arguments.length !== 1)
-      return void 0;
-    const arg = node.arguments[0];
-    const type = this.getCheckedTypeOf(arg);
-    if (type === void 0 || !this.isStringType(type.flags))
-      return void 0;
-    if (ts7.isStringLiteralLike(arg)) {
-      const folded = this.foldParsedStringLiteral(name, arg.text);
-      if (folded !== void 0)
-        return folded;
-    }
-    const argText = this.printNode(arg, 0).trim();
-    if (!argText || argText.startsWith("&"))
-      return void 0;
-    if (helper === "i64") {
-      return `(match &${argText} { Value::Str(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), Value::Int(__parse_n) => Value::Int(*__parse_n), Value::Float(__parse_f) => Value::Int(*__parse_f as i64), _ => Value::Null })`;
-    }
-    return `(match &${argText} { Value::Str(__parse_s) => __parse_s.trim().parse::<f64>().map(Value::Float).unwrap_or(Value::Null), Value::Float(__parse_f) => Value::Float(*__parse_f), Value::Int(__parse_n) => Value::Float(*__parse_n as f64), _ => Value::Null })`;
   }
   isNodeInsideNode(node, container) {
     return node.pos >= container.pos && node.end <= container.end;
@@ -12518,12 +12464,6 @@ _RustTranspiler.MUT_SELF_METHODS = /* @__PURE__ */ new Set([
   "fetch",
   "send_evm_transaction"
 ]);
-/** Global parse helpers that go native (`str::parse`) on a proven string arg,
- *  keyed to the rust integer/float type their runtime helper parses into. */
-_RustTranspiler.RUST_PARSE_HELPERS = {
-  parseInt: "i64",
-  parseFloat: "f64"
-};
 _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.EqualsEqualsToken,
   SyntaxKind4.EqualsEqualsEqualsToken,
