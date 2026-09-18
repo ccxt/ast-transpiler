@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -10661,6 +10661,31 @@ var parserConfig6 = {
   "TRUE_KEYWORD": "Value::Bool(true)",
   "FALSE_KEYWORD": "Value::Bool(false)"
 };
+var RUST_DECLARED_DICT_LOCALS = {
+  /** value the resolver answers for a proven Dict local */
+  DICT: "dict",
+  /** printed `self.<callee>` -> index of its `optionalArgs` parameter.
+   *  `safe_dict*` returns `optional_args[0]` whenever the key holds a non-Dict. */
+  SAFE_CALLEES: {
+    safe_dict_k: 2,
+    safe_dict: 2,
+    safe_dict_n: 2,
+    safe_dict2: 3
+  },
+  /** `&mut` receivers whose writes land inside the container, so a Dict local
+   *  stays a Dict (`add_element_to_object` / `append_to_array` no-op on a
+   *  non-container, `set_value` / `remove` write a key). */
+  KIND_PRESERVING_MUTATORS: /* @__PURE__ */ new Set([
+    "add_element_to_object",
+    "append_to_array",
+    "set_value",
+    "remove",
+    "get_value_mut"
+  ])
+};
+function rustIsAssignmentOperator(kind) {
+  return kind === _typescript2.default.SyntaxKind.EqualsToken || kind >= _typescript2.default.SyntaxKind.PlusEqualsToken && kind <= _typescript2.default.SyntaxKind.CaretEqualsToken;
+}
 var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig6, _nullishCoalesce(config["parser"], () => ( {})));
@@ -11532,6 +11557,293 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     }
     return peeled !== void 0 ? peeled : inner;
+  }
+  /** All `let x: Value = <dict-proven initialiser>` declarations of the current
+   *  source file, keyed by local name in declaration order. */
+  rustDeclaredDictLocals() {
+    const src = this.getSrc();
+    if (this.declaredDictLocalsCache === void 0 || this.declaredDictLocalsCache.src !== src) {
+      let table;
+      try {
+        table = this.collectRustDeclaredDictLocals(src);
+      } catch (e) {
+        table = /* @__PURE__ */ new Map();
+      }
+      this.declaredDictLocalsCache = { src, table };
+    }
+    return this.declaredDictLocalsCache.table;
+  }
+  /** Printer hook for the helper-removal units: the proven kind of a declared
+   *  local, or undefined when the local is not proven Dict at every use.
+   *  Accepts the receiver node of the helper call (identifier, `x['k']` chain,
+   *  `this.x` chain) or the declaration itself. */
+  rustDeclaredLocalTypeResolver(node) {
+    const entry = this.rustDeclaredLocalEntry(node);
+    return entry === void 0 ? void 0 : entry.kind;
+  }
+  /** The table entry a use site resolves to (the declaration whose binding the
+   *  use refers to, proven), or undefined. */
+  rustDeclaredLocalEntry(node) {
+    if (node === void 0)
+      return void 0;
+    const name = _typescript2.default.isVariableDeclaration(node) ? node.name.text : this.rootPlaceText(node);
+    if (name === void 0)
+      return void 0;
+    const entries = this.rustDeclaredDictLocals().get(name);
+    if (entries === void 0)
+      return void 0;
+    const start = node.getStart();
+    const identifier = this.rustDeclaredLocalIdentifier(node);
+    const symbol = identifier === void 0 ? void 0 : this.rustSymbolOf(identifier);
+    let best;
+    for (const entry of entries) {
+      if (entry.start > start || !entry.alwaysDict || !entry.stable)
+        continue;
+      const scope = this.rustEnclosingFunction(entry.declaration);
+      if (scope !== void 0 && !this.isNodeInsideNode(node, scope))
+        continue;
+      if (identifier !== void 0) {
+        const entrySymbol = this.rustSymbolOf(entry.declaration.name);
+        if (symbol !== void 0 && entrySymbol !== void 0 && symbol !== entrySymbol)
+          continue;
+      }
+      if (best === void 0 || entry.start > best.start)
+        best = entry;
+    }
+    return best;
+  }
+  /** The identifier at the head of a place (`x`, `x['k']`, `this.x` is not a
+   *  local) — the node the resolver matches against the table. */
+  rustDeclaredLocalIdentifier(node) {
+    let current = node;
+    while (current !== void 0) {
+      if (_typescript2.default.isIdentifier(current))
+        return current;
+      if (_typescript2.default.isElementAccessExpression(current) || _typescript2.default.isPropertyAccessExpression(current)) {
+        if (current.expression.kind === SyntaxKind4.ThisKeyword)
+          return void 0;
+        current = current.expression;
+        continue;
+      }
+      if (_typescript2.default.isParenthesizedExpression(current) || _typescript2.default.isNonNullExpression(current)) {
+        current = current.expression;
+        continue;
+      }
+      return void 0;
+    }
+    return void 0;
+  }
+  /** Binding symbol of an identifier, or undefined when the checker cannot
+   *  answer (ByContent probes without a class context, for instance). */
+  rustSymbolOf(node) {
+    try {
+      return this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  /** True when this identifier is a use of the given declaration's binding.
+   *  Without a checker answer the callers stay conservative (reject). */
+  rustIdentifierRefersToDeclaration(node, declaration) {
+    const symbol = this.rustSymbolOf(node);
+    const declarationSymbol = this.rustSymbolOf(declaration.name);
+    if (symbol === void 0 || declarationSymbol === void 0)
+      return false;
+    return symbol === declarationSymbol;
+  }
+  /** Census of the current source file's table, for reports and tests. */
+  rustDeclaredDictLocalCensus() {
+    let declarators = 0, dict = 0, alwaysDict = 0, kindUnstable = 0, retypeEligible = 0;
+    for (const entries of this.rustDeclaredDictLocals().values()) {
+      for (const entry of entries) {
+        declarators++;
+        if (entry.alwaysDict)
+          alwaysDict++;
+        if (entry.alwaysDict && entry.stable)
+          dict++;
+        if (entry.alwaysDict && !entry.stable)
+          kindUnstable++;
+        if (entry.alwaysDict && entry.stable && entry.uses.other === 0)
+          retypeEligible++;
+      }
+    }
+    return { declarators, dict, alwaysDict, kindUnstable, retypeEligible };
+  }
+  collectRustDeclaredDictLocals(src) {
+    const candidates = [];
+    const collect = (node) => {
+      if (_typescript2.default.isVariableDeclaration(node) && node.initializer !== void 0 && node.name.kind === SyntaxKind4.Identifier) {
+        const info = this.rustDictInitializerInfo(node.initializer);
+        if (info !== void 0) {
+          candidates.push({ declaration: node, name: String(node.name.escapedText), source: info.source, defaultNode: info.defaultNode });
+        }
+      }
+      _typescript2.default.forEachChild(node, collect);
+    };
+    _typescript2.default.forEachChild(src, collect);
+    candidates.sort((a, b) => a.declaration.getStart() - b.declaration.getStart());
+    const table = /* @__PURE__ */ new Map();
+    for (const candidate of candidates) {
+      const declaration = candidate.declaration;
+      const start = declaration.getStart();
+      const alwaysDict = this.rustDictProvenExpression(candidate.defaultNode, table, start);
+      const scan = this.rustDictLocalWriteScan(declaration, candidate.name, table);
+      const entries = _nullishCoalesce(table.get(candidate.name), () => ( []));
+      entries.push({
+        kind: RUST_DECLARED_DICT_LOCALS.DICT,
+        name: candidate.name,
+        source: candidate.source,
+        alwaysDict,
+        stable: scan.stable,
+        uses: scan.uses,
+        declaration,
+        start
+      });
+      table.set(candidate.name, entries);
+    }
+    return table;
+  }
+  /** The Dict-proven initialiser shape of a declaration, or undefined. */
+  rustDictInitializerInfo(node) {
+    if (_typescript2.default.isObjectLiteralExpression(node)) {
+      return { source: "value_map", defaultNode: node };
+    }
+    if (_typescript2.default.isParenthesizedExpression(node) || _typescript2.default.isAsExpression(node) || _typescript2.default.isNonNullExpression(node)) {
+      return this.rustDictInitializerInfo(node.expression);
+    }
+    if (!_typescript2.default.isCallExpression(node))
+      return void 0;
+    const callee = this.rustSafeDictCallee(node);
+    if (callee === void 0)
+      return void 0;
+    return { source: callee, defaultNode: node.arguments[RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES[callee]] };
+  }
+  /** Printed `safe_dict*` callee name of `self.<name>(..)`, or undefined. */
+  rustSafeDictCallee(node) {
+    const expression = node.expression;
+    if (!_typescript2.default.isPropertyAccessExpression(expression) || expression.expression.kind !== SyntaxKind4.ThisKeyword) {
+      return void 0;
+    }
+    const printed = this.toSnakeCaseName(expression.name.text);
+    return RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES[printed] === void 0 ? void 0 : printed;
+  }
+  /** True when the expression can only be a Dict at run time: an object
+   *  literal, a `safe_dict*` call with a Dict-proven default, an element of a
+   *  one-element literal default, or an already-proven local. */
+  rustDictProvenExpression(node, table, useStart) {
+    if (node === void 0)
+      return false;
+    if (_typescript2.default.isObjectLiteralExpression(node))
+      return true;
+    if (_typescript2.default.isParenthesizedExpression(node) || _typescript2.default.isAsExpression(node) || _typescript2.default.isNonNullExpression(node)) {
+      return this.rustDictProvenExpression(node.expression, table, useStart);
+    }
+    if (_typescript2.default.isArrayLiteralExpression(node)) {
+      return node.elements.length === 1 && this.rustDictProvenExpression(node.elements[0], table, useStart);
+    }
+    if (_typescript2.default.isIdentifier(node)) {
+      const entries = _nullishCoalesce(table.get(node.text), () => ( []));
+      return entries.some((entry) => {
+        if (!entry.alwaysDict || entry.start > useStart)
+          return false;
+        const scope = this.rustEnclosingFunction(entry.declaration);
+        return scope === void 0 || this.isNodeInsideNode(node, scope);
+      });
+    }
+    const info = this.rustDictInitializerInfo(node);
+    return info !== void 0 && this.rustDictProvenExpression(info.defaultNode, table, useStart);
+  }
+  /** D2 scan over the enclosing function: an assignment of a non-Dict-proven
+   *  value would let the kind change. Every other write path the printer emits
+   *  for a local is kind-preserving (`x['k'] = v` -> `add_element_to_object`,
+   *  `x.push(v)` -> `append_to_array`, `delete x[k]` -> `remove`, nested
+   *  `x['a']['b'] = v` -> `get_value_mut`/`set_value`). A *different* binding of
+   *  the same name (sibling block, parameter) is not this local and does not
+   *  count; when the checker cannot separate the two bindings the scan stays
+   *  conservative and rejects. */
+  rustDictLocalWriteScan(declaration, name, table) {
+    const uses = { elementAccess: 0, mutHelper: 0, other: 0 };
+    let stable = true;
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0)
+      return { stable, uses };
+    const declarationSymbol = this.rustSymbolOf(declaration.name);
+    const visit = (node) => {
+      if (!stable)
+        return;
+      if (node !== declaration && this.rustBindsName(node, name)) {
+        const otherSymbol = this.rustSymbolOf(node.name);
+        if (declarationSymbol === void 0 || otherSymbol === void 0 || otherSymbol === declarationSymbol) {
+          stable = false;
+          return;
+        }
+      }
+      if (node.kind === SyntaxKind4.Identifier && node.escapedText === name && node !== declaration.name && this.rustIdentifierRefersToDeclaration(node, declaration)) {
+        this.rustDictLocalClassifyUse(node, uses);
+      }
+      if (_typescript2.default.isBinaryExpression(node) && rustIsAssignmentOperator(node.operatorToken.kind) && this.rustAssignmentWritesWholeLocal(node.left, declaration) && !this.rustDictProvenExpression(node.right, table, declaration.getStart())) {
+        stable = false;
+        return;
+      }
+      if ((_typescript2.default.isForOfStatement(node) || _typescript2.default.isForInStatement(node)) && this.rustAssignmentWritesWholeLocal(node.initializer, declaration)) {
+        stable = false;
+        return;
+      }
+      _typescript2.default.forEachChild(node, visit);
+    };
+    _typescript2.default.forEachChild(scope, visit);
+    return { stable, uses };
+  }
+  /** True when this assignment target writes the local ITSELF (`x = ..`,
+   *  `[x, y] = ..`, `({x} = ..)`), as opposed to a write *into* it
+   *  (`x['k'] = ..`, kind-preserving). */
+  rustAssignmentWritesWholeLocal(left, declaration) {
+    if (_typescript2.default.isIdentifier(left)) {
+      return this.rustIdentifierRefersToDeclaration(left, declaration);
+    }
+    if (_typescript2.default.isParenthesizedExpression(left)) {
+      return this.rustAssignmentWritesWholeLocal(left.expression, declaration);
+    }
+    if (_typescript2.default.isArrayLiteralExpression(left)) {
+      return left.elements.some((element) => this.rustAssignmentWritesWholeLocal(element, declaration));
+    }
+    if (_typescript2.default.isObjectLiteralExpression(left)) {
+      return left.properties.some((property) => {
+        if (!_typescript2.default.isShorthandPropertyAssignment(property))
+          return false;
+        return this.rustAssignmentWritesWholeLocal(property.name, declaration);
+      });
+    }
+    return false;
+  }
+  /** One use of a dict-proven local: an element-access chain (`x['k']`, also
+   *  the `x['k'] = v` write), a kind-preserving mutator (`x.push(v)`,
+   *  `delete x[k]`), or something that would need the local to still be a
+   *  `Value`. */
+  rustDictLocalClassifyUse(node, uses) {
+    let current = node;
+    let parent = current.parent;
+    if (parent !== void 0 && (_typescript2.default.isElementAccessExpression(parent) || _typescript2.default.isPropertyAccessExpression(parent)) && parent.expression === current) {
+      current = parent;
+      while (current.parent !== void 0 && (_typescript2.default.isElementAccessExpression(current.parent) || _typescript2.default.isPropertyAccessExpression(current.parent)) && current.parent.expression === current) {
+        current = current.parent;
+      }
+      if (_typescript2.default.isElementAccessExpression(current)) {
+        uses.elementAccess++;
+        return;
+      }
+      uses.other++;
+      return;
+    }
+    if (parent !== void 0 && _typescript2.default.isCallExpression(parent) && _typescript2.default.isPropertyAccessExpression(parent.expression) && parent.expression.expression === current && parent.expression.name.text === "push") {
+      uses.mutHelper++;
+      return;
+    }
+    if (parent !== void 0 && _typescript2.default.isDeleteExpression(parent)) {
+      uses.mutHelper++;
+      return;
+    }
+    uses.other++;
   }
   printPropertyDeclaration(node, identation) {
     const name = this.printNode(node.name, 0);
@@ -13601,5 +13913,6 @@ var TranspileProgramBatch = class {
 
 
 
-exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.alignGoTrailingComments = alignGoTrailingComments; exports.default = Transpiler;
+
+exports.RUST_DECLARED_DICT_LOCALS = RUST_DECLARED_DICT_LOCALS; exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.alignGoTrailingComments = alignGoTrailingComments; exports.default = Transpiler;
 //# sourceMappingURL=transpiler.cjs.map
