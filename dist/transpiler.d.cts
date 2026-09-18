@@ -551,6 +551,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsDictionaryType(type: any): boolean;
     csharpIsArrayType(type: any): boolean;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
+    csharpDeclaredDictInExpression(key: any, obj: any): string | undefined;
+    csharpDeclaredStringKey(key: any): string | undefined;
     csharpNativeLengthExpression(expression: any): string | undefined;
     csharpStringLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -599,6 +601,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     csharpLocalTypeOf(node: any): string | undefined;
+    csharpDeclaredDictReceiverType(node: any): string | undefined;
     csharpReceiverIsDeclaredList(receiver: any): boolean;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;

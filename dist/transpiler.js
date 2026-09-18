@@ -3733,21 +3733,50 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // dictionary/string values. Every other shape keeps the inOp helper
   csharpNativeInExpression(key, obj) {
     const checker = this.getChecker();
-    if (!this.isStringType(checker.getTypeAtLocation(key).flags)) {
+    if (this.isStringType(checker.getTypeAtLocation(key).flags) && this.csharpIsDictionaryType(checker.getTypeAtLocation(obj))) {
+      const receiver = this.csharpNativeReceiver(obj);
+      if (receiver !== void 0 && receiver.type.indexOf("Dictionary<") >= 0) {
+        const printedKey = this.csharpNativeStringKey(key);
+        if (printedKey !== void 0) {
+          return `${receiver.text}.ContainsKey(${printedKey})`;
+        }
+      }
+    }
+    return this.csharpDeclaredDictInExpression(key, obj);
+  }
+  // `key in obj` on a local whose EMITTED declaration is a dictionary this printer cannot name
+  // itself: build/csharp-local-types.js retypes those declarations after printing and answers
+  // csharpDeclaredDictReceiverType. inOp's dict branch (`obj != null && key != null && obj.ContainsKey(key)`)
+  // is exactly `obj?.ContainsKey(key) == true` for a key that is already a C# string.
+  csharpDeclaredDictInExpression(key, obj) {
+    if (obj?.kind !== ts4.SyntaxKind.Identifier) {
       return void 0;
     }
-    if (!this.csharpIsDictionaryType(checker.getTypeAtLocation(obj))) {
+    const declared = typeof this.csharpDeclaredDictReceiverType === "function" ? this.csharpDeclaredDictReceiverType(obj) : void 0;
+    if (declared === void 0 || declared.indexOf("Dictionary<") < 0) {
       return void 0;
     }
-    const receiver = this.csharpNativeReceiver(obj);
-    if (receiver === void 0 || receiver.type.indexOf("Dictionary<") < 0) {
-      return void 0;
-    }
-    const printedKey = this.csharpNativeStringKey(key);
+    const printedKey = this.csharpNativeStringKey(key) ?? this.csharpDeclaredStringKey(key);
     if (printedKey === void 0) {
       return void 0;
     }
-    return `${receiver.text}.ContainsKey(${printedKey})`;
+    const receiver = this.printNode(obj, 0);
+    if (ts4.isStringLiteralLike(key)) {
+      return `(${receiver}?.ContainsKey(${printedKey}) == true)`;
+    }
+    if (ts4.isIdentifier(key)) {
+      return `((${printedKey} != null) && (${receiver}?.ContainsKey(${printedKey}) == true))`;
+    }
+    return void 0;
+  }
+  // the key of the rule above, when the printer's own tables name no string for it but the
+  // embedding build layer's record does (the same hook the isEqual twin reads)
+  csharpDeclaredStringKey(key) {
+    if (key?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const type = typeof this.csharpLocalTypeOf === "function" ? this.csharpLocalTypeOf(key) : void 0;
+    return type === "string" || type === "string?" ? this.printNode(key, 0) : void 0;
   }
   // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
   // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
@@ -4604,6 +4633,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the printer printed it, so the printer cannot see that rewrite on its own. Undefined by
   // default: the untyped emission is unchanged (every caller above keeps the helper form).
   csharpLocalTypeOf(node) {
+    return void 0;
+  }
+  // The emitted declaration type of a local read the embedding build layer retypes AFTER
+  // printing (ccxt: build/csharp-local-types.js): the dict type for the `key in x` rule,
+  // undefined for every receiver it does not retype. Undefined by default.
+  csharpDeclaredDictReceiverType(node) {
     return void 0;
   }
   // is this receiver expression, as printed, a local declared List<object> /
