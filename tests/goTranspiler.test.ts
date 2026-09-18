@@ -1575,6 +1575,256 @@ describe('go ordered comparisons inline to native operators', () => {
     });
 });
 
+describe('go ordered comparisons with signed literals and pointer locals', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    const pointerStubs =
+        "    safeInteger(a, b, c = undefined) { return a; }\n" +
+        "    safeFloat(a, b, c = undefined) { return a; }\n";
+    test('a signed integer literal joins an int operand', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (arr) {\n" +
+        "        const n = arr.length;\n" +
+        "        return [ n > -1, n < -1, n <= -2, n >= -3 ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return []any{(n > -1), (n < -1), (n <= -2), (n >= -3)}");
+        expect(output).not.toContain("IsGreaterThan(n, -1)");
+    });
+    test('a signed float literal joins a float64 operand and keeps the helper on an int', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (v, arr) {\n" +
+        "        const g = Math.floor(v);\n" +
+        "        const n = arr.length;\n" +
+        "        return [ g >= -0.5, g > -1.5, n < -1.5 ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(g >= -0.5)");
+        expect(output).toContain("(g > -1.5)");
+        expect(output).toContain("IsLessThan(n, -1.5)");
+    });
+    test('a *int64 local against an integer literal writes the helper nil test out', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        return x > 0;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var x *int64 = this.SafeInteger(item, \"x\")");
+        expect(output).toContain("return (x != nil && *x > 0)");
+        expect(output).not.toContain("IsGreaterThan(x, 0)");
+    });
+    test('an enclosing `!== undefined` guard drops the nil test', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        if (x !== undefined) {\n" +
+        "            return x > 0;\n" +
+        "        }\n" +
+        "        return false;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("if x != nil {");
+        expect(output).toContain("return (*x > 0)");
+        expect(output).not.toContain("IsGreaterThan(x, 0)");
+    });
+    test('a guard earlier in the same `&&` chain drops the nil test', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        return x !== undefined && x > 0;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return (x != nil) && (*x > 0)");
+        expect(output).not.toContain("IsGreaterThan(x, 0)");
+    });
+    test('a literal against an unguarded pointer mirrors the helper nil predicate', () => {
+        // a non-nil left operand is *greater* than nil, so `>`/`>=` answer true there
+        // while `<`/`<=` answer false — the arms below are exactly that
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        return [ 5 > x, 5 < x, 5 >= x, 5 <= x ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return []any{(x == nil || 5 > *x), (x != nil && 5 < *x), (x == nil || 5 >= *x), (x != nil && 5 <= *x)}");
+        expect(output).not.toContain("IsGreaterThan(5, x)");
+    });
+    test('two unguarded pointers mirror the helper nil predicate', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const a = this.safeInteger (item, 'a');\n" +
+        "        const b = this.safeInteger (item, 'b');\n" +
+        "        return [ a > b, a >= b, a < b, a <= b ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return []any{(a != nil && (b == nil || *a > *b)), (b == nil || (a != nil && *a >= *b)), (b != nil && (a == nil || *a < *b)), (a == nil || (b != nil && *a <= *b))}");
+        expect(output).not.toContain("IsGreaterThan(a, b)");
+    });
+    test('two guarded pointers compare their derefs', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const a = this.safeInteger (item, 'a');\n" +
+        "        const b = this.safeInteger (item, 'b');\n" +
+        "        if (a !== undefined && b !== undefined) {\n" +
+        "            return [ a > b, a >= b, a < b, a <= b ];\n" +
+        "        }\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("if (a != nil) && (b != nil) {");
+        expect(output).toContain("return []any{(*a > *b), (*a >= *b), (*a < *b), (*a <= *b)}");
+        expect(output).not.toContain("IsGreaterThan(a, b)");
+    });
+    test('one guarded pointer only writes the other side nil test', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const a = this.safeInteger (item, 'a');\n" +
+        "        const b = this.safeInteger (item, 'b');\n" +
+        "        if (a !== undefined) {\n" +
+        "            return a > b;\n" +
+        "        }\n" +
+        "        return false;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return (b == nil || *a > *b)");
+        expect(output).not.toContain("IsGreaterThan(a, b)");
+    });
+    test('a rebound pointer local keeps an explicit nil test', () => {
+        // the guard may be dead by the time the comparison runs, so only the nil test
+        // inside the comparison proves it
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        let x = this.safeInteger (item, 'x');\n" +
+        "        if (x !== undefined) {\n" +
+        "            x = this.safeInteger (item, 'y');\n" +
+        "            return x > 3;\n" +
+        "        }\n" +
+        "        return false;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return (x != nil && *x > 3)");
+        expect(output).not.toContain("(*x > 3)");
+    });
+    test('a guard does not cross a callback boundary', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        if (x !== undefined) {\n" +
+        "            return [ 1 ].map ((y) => x > y);\n" +
+        "        }\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsGreaterThan(x, y)");
+    });
+    test('a *float64 pointer inlines `>`/`>=` and keeps `<`/`<=`', () => {
+        // the helper answers true for a NaN operand on `<` / `<=`, Go answers false
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeFloat (item, 'x');\n" +
+        "        return [ x !== undefined && x > 3, x !== undefined && x >= 3, x !== undefined && x < 3, x !== undefined && x <= 3 ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(*x > 3)");
+        expect(output).toContain("(*x >= 3)");
+        expect(output).toContain("IsLessThan(x, 3)");
+        expect(output).toContain("IsLessThanOrEqual(x, 3)");
+    });
+    test('an any box holding a pointer keeps the helper', () => {
+        // D2: the printer demotes the local because a later write of another type
+        // reaches it, so the compiler no longer knows it holds a *int64
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        let x = this.safeInteger (item, 'x');\n" +
+        "        if (x === undefined) {\n" +
+        "            x = 0;\n" +
+        "        }\n" +
+        "        return x > 3;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var x any = this.SafeInteger(item, \"x\")");
+        expect(output).toContain("IsGreaterThan(x, 3)");
+    });
+    test('a pointer against an `any` operand or another kind keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item, arr, since) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        const n = arr.length;\n" +
+        "        return [ x > since, x > n ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsGreaterThan(x, since)");
+        expect(output).toContain("IsGreaterThan(x, n)");
+    });
+    test('an unguarded call operand keeps the helper', () => {
+        // the nil test would short-circuit the call the helper evaluates once
+        const input =
+        "class Exchange {\n" +
+        pointerStubs +
+        "    f (item) {\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        return this.safeInteger (item, 'y') < x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsLessThan(this.SafeInteger(item, \"y\"), x)");
+    });
+    test('a signed literal joins a helper call whose Go type is known', () => {
+        const input =
+        "class T {\n" +
+        "    f (arr) {\n" +
+        "        return GetLength(arr) > -1;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("return (GetLength(arr) > -1)");
+        expect(output).not.toContain("IsGreaterThan(GetLength(arr), -1)");
+    });
+});
+
 describe('go native element assignment', () => {
     // the printer indents nested call expressions; gofmt collapses that downstream
     const squash = (output: string) => output.replace(/ +/g, ' ');
