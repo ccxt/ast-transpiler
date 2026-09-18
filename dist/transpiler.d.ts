@@ -494,7 +494,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpLocalTypes: WeakMap<ts.Node, string>;
     csharpGuardIndex: WeakMap<ts.Node, Map<string, any[]>>;
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
-    csharpDeclaredLocalTypeResolver?: (declaration: any) => string | undefined;
     csharpTypedLocals: WeakMap<ts.Node, string>;
     constructor(config?: {});
     initConfig(): void;
@@ -507,8 +506,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
-    csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
-    csharpDeclaredCollectionType(expression: any): string | undefined;
     csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
     csharpGuardAdmitsRead(guard: any, read: any): boolean;
     csharpInGuardsOf(func: any): Map<string, any[]>;
