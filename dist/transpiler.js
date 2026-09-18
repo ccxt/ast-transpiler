@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4763,16 +4763,8 @@ var GO_BOOL_FIELDS = /* @__PURE__ */ new Set([
   "this.EnableRateLimit",
   "this.ReduceFees",
   "this.SubstituteCommonCurrencyCodes",
-  "this.IsSandboxModeEnabled",
-  // `public newUpdates: boolean` in ts/src/base/Exchange.ts; the hand-written
-  // struct field is the `NewUpdates bool` read by every WS loop
-  "this.NewUpdates"
+  "this.IsSandboxModeEnabled"
 ]);
-var GO_BOOL_CALL_NAMES_NATIVE = [
-  "this.IsEmpty",
-  "this.IsJsonEncodedObject",
-  "this.IsBinaryMessage"
-];
 var GO_ANY_BOX_CALLS = [
   "GetValue",
   "Ternary",
@@ -6926,11 +6918,7 @@ ${this.getIden(level)}}()`;
     if (this.goTypeOfInitializer(node, printed) === "bool") {
       return printed;
     }
-    if (GO_BOOL_FIELDS.has(printed)) {
-      return printed;
-    }
-    const callee = this.goPrintedCallee(printed);
-    return callee !== void 0 && GO_BOOL_CALL_NAMES_NATIVE.indexOf(callee) >= 0 ? printed : void 0;
+    return GO_BOOL_FIELDS.has(printed) ? printed : void 0;
   }
   // gofmt prints the condition of every `if`/`for`/`switch` through
   // go/printer/nodes.go controlClause() -> stripParens(): the single outermost,
