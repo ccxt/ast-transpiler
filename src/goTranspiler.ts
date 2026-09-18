@@ -2395,6 +2395,63 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.goScalarFamilyOfType(type, true);
     }
 
+    // true when this operand is a *parameter* the printer leaves in an `any` box whose
+    // TypeScript type is an array or an object (`Strings`, `Market`, `NullableDict`,
+    // `object[]`, `object`): such a value is a Go map/slice, never a pointer, so a nil
+    // test needs no helper. Only parameters qualify: a local can box a `*sync.Map` an
+    // accessor returned, and a nil *sync.Map inside `any` is not `== nil` in Go.
+    goObjectBoxParameter(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        if (symbol?.valueDeclaration?.kind !== ts.SyntaxKind.Parameter) {
+            return false;
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        return this.goTypeIsNilComparableObject(type);
+    }
+
+    // an object type whose Go value is a map/slice, or a union of such a type with
+    // undefined/null. `any`, functions and class instances are excluded: their Go
+    // value may be an identity-bearing pointer
+    goTypeIsNilComparableObject(type): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            let seen = false;
+            for (const member of type.types) {
+                if (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) {
+                    continue;
+                }
+                if (!this.goTypeIsNilComparableObject(member)) {
+                    return false;
+                }
+                seen = true;
+            }
+            return seen;
+        }
+        if (!(type.flags & (ts.TypeFlags.Object | ts.TypeFlags.NonPrimitive))) {
+            return false;
+        }
+        if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) {
+            return false;
+        }
+        const declaration = type.symbol?.valueDeclaration ?? type.symbol?.declarations?.[0];
+        return declaration?.kind !== ts.SyntaxKind.ClassDeclaration;
+    }
+
     // the callee name of a printed call, e.g. `this.SafeDict(x, 0, {})` → `this.SafeDict`
     goPrintedCallee(printedValue: string): string | undefined {
         let value = printedValue.trim();
@@ -3287,6 +3344,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
         }
         if (rBox && (lFam === 'nil') && (rNilFam !== undefined) && (rNilFam !== 'number')) {
+            return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+        }
+        // a parameter whose TypeScript type is an array or an object (`Strings`, `Market`,
+        // `NullableDict`, `object[]`): the Go box holds a map/slice or an untyped nil, not a
+        // pointer — the optional arguments arrive through GetArg, which unwraps the typed nil
+        // pointers the wrappers pass, so `x == nil` is exactly IsEqual(x, nil)
+        const lObjParam = (lNilFam === undefined) && lBox && this.goObjectBoxParameter(left);
+        const rObjParam = (rNilFam === undefined) && rBox && this.goObjectBoxParameter(right);
+        if (lObjParam && (rFam === 'nil')) {
+            return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        if (rObjParam && (lFam === 'nil')) {
             return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
         }
         // a string or bool literal: only a value of that very type is equal in both

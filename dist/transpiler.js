@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6438,6 +6438,61 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return this.goScalarFamilyOfType(type, true);
   }
+  // true when this operand is a *parameter* the printer leaves in an `any` box whose
+  // TypeScript type is an array or an object (`Strings`, `Market`, `NullableDict`,
+  // `object[]`, `object`): such a value is a Go map/slice, never a pointer, so a nil
+  // test needs no helper. Only parameters qualify: a local can box a `*sync.Map` an
+  // accessor returned, and a nil *sync.Map inside `any` is not `== nil` in Go.
+  goObjectBoxParameter(node) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    if (symbol?.valueDeclaration?.kind !== ts5.SyntaxKind.Parameter) {
+      return false;
+    }
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    return this.goTypeIsNilComparableObject(type);
+  }
+  // an object type whose Go value is a map/slice, or a union of such a type with
+  // undefined/null. `any`, functions and class instances are excluded: their Go
+  // value may be an identity-bearing pointer
+  goTypeIsNilComparableObject(type) {
+    if (type === void 0) {
+      return false;
+    }
+    if (type.flags & ts5.TypeFlags.Union) {
+      let seen = false;
+      for (const member of type.types) {
+        if (member.flags & (ts5.TypeFlags.Undefined | ts5.TypeFlags.Null | ts5.TypeFlags.Void)) {
+          continue;
+        }
+        if (!this.goTypeIsNilComparableObject(member)) {
+          return false;
+        }
+        seen = true;
+      }
+      return seen;
+    }
+    if (!(type.flags & (ts5.TypeFlags.Object | ts5.TypeFlags.NonPrimitive))) {
+      return false;
+    }
+    if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) {
+      return false;
+    }
+    const declaration = type.symbol?.valueDeclaration ?? type.symbol?.declarations?.[0];
+    return declaration?.kind !== ts5.SyntaxKind.ClassDeclaration;
+  }
   // the callee name of a printed call, e.g. `this.SafeDict(x, 0, {})` → `this.SafeDict`
   goPrintedCallee(printedValue) {
     let value = printedValue.trim();
@@ -7198,6 +7253,14 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
     }
     if (rBox && lFam === "nil" && rNilFam !== void 0 && rNilFam !== "number") {
+      return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+    }
+    const lObjParam = lNilFam === void 0 && lBox && this.goObjectBoxParameter(left);
+    const rObjParam = rNilFam === void 0 && rBox && this.goObjectBoxParameter(right);
+    if (lObjParam && rFam === "nil") {
+      return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+    }
+    if (rObjParam && lFam === "nil") {
       return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
     }
     const isLiteral = (node) => {
