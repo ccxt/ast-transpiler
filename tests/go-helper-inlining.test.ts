@@ -146,6 +146,71 @@ describe('go `key in obj` -> map membership', () => {
         const output = transpile(ts);
         expect(output).toContain('InOp(m, k)');
     });
+    // InOp derefs both operands (`derefScalar`): a *string key is the pointed-to
+    // string and a nil pointer is a nil key, i.e. false
+    const pointerKeyFixture = (body: string) =>
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    safeInteger(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        body +
+        "    }\n" +
+        "}";
+    test('a *string key prints the guarded deref read', () => {
+        const ts = pointerKeyFixture(
+        "        const m = { 'a': 1 }\n" +
+        "        for (let i = 0; i < 2; i++) {\n" +
+        "            const sym = this.safeString(item, 'symbol')\n" +
+        "            if (sym in m) {\n" +
+        "                return 1\n" +
+        "            }\n" +
+        "        }\n");
+        const output = transpile(ts);
+        expect(output).toContain('if func() bool {\n\t\t\tif sym == nil {\n\t\t\t\treturn false\n\t\t\t}\n\t\t\t_, ok := m[*sym]\n\t\t\treturn ok\n\t\t}() {');
+        expect(output).not.toContain('InOp(');
+    });
+    test('a *string key keeps the statement indentation in a declaration', () => {
+        const ts = pointerKeyFixture(
+        "        const m = { 'a': 1 }\n" +
+        "        const k = this.safeString(item, 'k')\n" +
+        "        const has = !(k in m)\n" +
+        "        return has\n");
+        const output = transpile(ts);
+        expect(output).toContain('var has bool = !(func() bool {\n\t\tif k == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*k]\n\t\treturn ok\n\t}())');
+        expect(output).not.toContain('InOp(');
+    });
+    test('a *string key operand of || keeps its parentheses', () => {
+        const ts = pointerKeyFixture(
+        "        const m = { 'a': 1 }\n" +
+        "        const k = this.safeString(item, 'k')\n" +
+        "        const other = this.safeString(item, 'o')\n" +
+        "        if ((k in m) || (other in m)) {\n" +
+        "            return 1\n" +
+        "        }\n");
+        const output = transpile(ts);
+        expect(output).toContain('if (func() bool {\n\t\tif k == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*k]\n\t\treturn ok\n\t}()) || (func() bool {\n\t\tif other == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*other]\n\t\treturn ok\n\t}()) {');
+        expect(output).not.toContain('InOp(');
+    });
+    test('a *int64 key keeps InOp', () => {
+        const ts = pointerKeyFixture(
+        "        const m = { 'a': 1 }\n" +
+        "        const n = this.safeInteger(item, 'n')\n" +
+        "        if (n in m) {\n" +
+        "            return 1\n" +
+        "        }\n");
+        const output = transpile(ts);
+        expect(output).toContain('InOp(m, n)');
+    });
+    test('a *string key on an any-typed dict keeps InOp', () => {
+        const ts = pointerKeyFixture(
+        "        let m: any = item\n" +
+        "        const k = this.safeString(item, 'k')\n" +
+        "        if (k in m) {\n" +
+        "            return 1\n" +
+        "        }\n");
+        const output = transpile(ts);
+        expect(output).toContain('InOp(m, k)');
+    });
 });
 
 describe('go unary minus -> -x', () => {
