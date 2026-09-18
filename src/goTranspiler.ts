@@ -2191,6 +2191,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
     // when the type is any/unknown/a union of several families
     goScalarFamily(node): string | undefined {
+        // TypeScript narrows `x !== undefined && x === 'v'` to `string`, but the Go
+        // local is still the `any` box the declaration printed; when that box holds
+        // a *T helper result, `==` against a string is never true in Go
+        if (node?.kind === ts.SyntaxKind.Identifier && this.goDeclaredTypeOfIdentifier(node) === undefined) {
+            let decl;
+            try {
+                decl = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+            } catch (e) {
+                decl = undefined;
+            }
+            if (this.goAnyLocalHoldsPointer(decl)) {
+                return undefined;
+            }
+        }
         let type;
         try {
             type = this.getChecker().getTypeAtLocation(node);
@@ -2247,7 +2261,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             // the printer names a Go type for this local/`:=` initializer, so the
             // value is not behind an interface
-            return this.goDeclaredTypeOfIdentifier(node) === undefined;
+            if (this.goDeclaredTypeOfIdentifier(node) !== undefined) {
+                return false;
+            }
+            // an `any` local initialised from a *T helper (`var x any = this.SafeString(…)`)
+            // boxes the pointer itself: a nil *string inside `any` is not `== nil` in Go,
+            // so only the deref-aware helper compares it correctly
+            return !this.goAnyLocalHoldsPointer(decl);
         }
         if (node?.kind === ts.SyntaxKind.CallExpression) {
             if (this.goTypeOfInitializer(node, printedText) !== undefined) {
@@ -2256,6 +2276,57 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0;
         }
         return false;
+    }
+
+    // true when an `any`-typed local can hold a *T helper result: its initializer or a
+    // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
+    goAnyLocalHoldsPointerCache = new Map<any, boolean>();
+    goAnyLocalHoldsPointer(decl): boolean {
+        if (decl?.kind !== ts.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        if (this.goAnyLocalHoldsPointerCache.has(decl)) {
+            return this.goAnyLocalHoldsPointerCache.get(decl);
+        }
+        // the callee is read from the AST, never printed: printing an operand would
+        // re-enter the equality classifier that asks this question
+        const isPointerInit = (expr): boolean => {
+            while (expr?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+                expr = expr.expression;
+            }
+            if (expr?.kind !== ts.SyntaxKind.CallExpression) {
+                return false;
+            }
+            const callee = expr.expression;
+            if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+                return false;
+            }
+            const name = callee.name?.escapedText;
+            if (typeof name !== 'string' || name.length === 0) {
+                return false;
+            }
+            const goType = GO_HELPER_RETURN_TYPES['this.' + name.charAt(0).toUpperCase() + name.substring(1)];
+            return (typeof goType === 'string') && goType.startsWith('*');
+        };
+        let holds = isPointerInit(decl.initializer);
+        if (!holds) {
+            const name = decl.name.escapedText;
+            const scope = this.goEnclosingFunction(decl);
+            const visit = (n) => {
+                if (holds) { return; }
+                if (n.kind === ts.SyntaxKind.BinaryExpression && n.operatorToken.kind === ts.SyntaxKind.EqualsToken
+                    && n.left?.kind === ts.SyntaxKind.Identifier && n.left.escapedText === name && isPointerInit(n.right)) {
+                    holds = true;
+                    return;
+                }
+                ts.forEachChild(n, visit);
+            };
+            if (scope !== undefined) {
+                ts.forEachChild(scope, visit);
+            }
+        }
+        this.goAnyLocalHoldsPointerCache.set(decl, holds);
+        return holds;
     }
 
     goScalarFamilyOfType(type, allowNil = false): string | undefined {
