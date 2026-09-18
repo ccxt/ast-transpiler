@@ -1013,6 +1013,14 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeConcat(node: any): boolean;
     javaProvableNumericKind(node: any): string | undefined;
     javaNativeArithmeticKind(node: any): string | undefined;
+    javaBaseTimeLongCall(node: any): boolean;
+    javaIntForCounter(node: any): boolean;
+    javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
+    javaLengthIntRead(node: any): boolean;
+    javaWidenedNumericKind(node: any): any;
+    javaWidenedAddKind(node: any): any;
+    printWidenedNativeAdd(left: any, right: any, leftText: any, rightText: any): string;
+    javaPrintWidenedOperand(kind: any, resultKind: any, node: any, text: any): any;
     javaPrintOperandAsLong(node: any, text: any): any;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
