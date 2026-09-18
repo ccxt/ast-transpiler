@@ -3690,3 +3690,94 @@ class Exchange {
         expect(output).toContain('if (!(e is CustomError))');
     });
 });
+
+
+describe('csharp helper removal: reads of the hand-written has/options/urls dictionaries', () => {
+    test('a literal-key read of has/options tests the key and keeps the null a missing key reads', () => {
+        const input =
+        "class Exchange {\n" +
+        "    has: Dictionary<boolean> = {};\n" +
+        "    options: Dict = {};\n" +
+        "    main() {\n" +
+        "        if (this.has['fetchTrades'] !== undefined) { return 1; }\n" +
+        "        return this.options['timeDifference'];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // both fields are declared concrete dictionaries in Exchange.Options.cs, so their own
+        // members print what the helper computes: the indexer only runs when the key is there
+        expect(output).toContain('(this.has.ContainsKey("fetchTrades") ? this.has["fetchTrades"] : null)');
+        expect(output).toContain('(this.options.ContainsKey("timeDifference") ? this.options["timeDifference"] : null)');
+        expect(output).not.toContain('getValue(this.has,');
+        expect(output).not.toContain('getValue(this.options,');
+    });
+    test('a literal-key read of the object-typed urls field carries the helper\'s dictionary cast', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        return this.urls['demo'];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // `urls` is declared `object`: the same (IDictionary<string, object>) cast the helper
+        // body applies to its box, on both the key test and the indexer
+        expect(output).toContain('(((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
+        expect(output).not.toContain('getValue(this.urls,');
+    });
+    test('a non-literal key and a numeric key keep the helper on these fields', () => {
+        const input =
+        "class Exchange {\n" +
+        "    has: Dictionary<boolean> = {};\n" +
+        "    options: Dict = {};\n" +
+        "    main(key) {\n" +
+        "        const a = this.has[key];\n" +
+        "        const b = this.options[3];\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // only a literal key can be proven a C# string / is comparable to ContainsKey
+        expect(output).toContain('getValue(this.has, key)');
+        expect(output).toContain('getValue(this.options, 3)');
+    });
+    test('other hand-written fields of the same class keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    markets: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        return this.markets['BTC/USDT'];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // `markets`/`tickers`/... are other units: this rule names has/options/urls only
+        expect(output).toContain('getValue(this.markets, "BTC/USDT")');
+    });
+    test('a guard-proven read of urls still prints the bare indexer', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        if ('apiBackup' in this.urls) { return this.urls['apiBackup']; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the guard proves the key is there: no key test is needed, the read stays as it was
+        expect(output).toContain('return ((IDictionary<string,object>)this.urls)["apiBackup"];');
+        expect(output).not.toContain('ContainsKey("apiBackup") ?');
+    });
+    test('a nested read keeps the helper on the outer access and reads the inner one natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urls: { [key: string]: any } = {};\n" +
+        "    main(endpoint) {\n" +
+        "        return this.urls['api'][endpoint];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the inner 'api' read is a field read; the outer key is an identifier, so the helper
+        // still picks the endpoint the way the runtime helper does
+        expect(output).toContain('getValue((((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
+    });
+});
