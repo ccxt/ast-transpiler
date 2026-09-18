@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10283,7 +10283,56 @@ var JavaTranspiler = class extends BaseTranspiler {
   printJsonStringifyCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.json(${parsedArg})`;
   }
-  printPromiseAllCall(_node, _identation, parsedArg = void 0) {
+  // `await Promise.all ([e1, ..., en])` whose every element is checker-typed `Promise<...>`:
+  // CompletableFuture.allOf waits for exactly those futures, so the reflective
+  // Helpers.promiseAll loop (List cast, `instanceof` filter, get() collection) adds nothing.
+  // Result discarded -> allOf alone (await appends `.join()`); result used -> allOf plus a
+  // thenApply that collects the resolved values; that step joins each element again, so it is
+  // only emitted for `const`-bound locals (re-printing a call would run it twice).
+  printNativePromiseAllCall(node) {
+    const awaitNode = node?.parent;
+    if (awaitNode?.kind !== ts6.SyntaxKind.AwaitExpression) {
+      return void 0;
+    }
+    const listNode = node.arguments?.[0];
+    if (listNode?.kind !== ts6.SyntaxKind.ArrayLiteralExpression) {
+      return void 0;
+    }
+    const elements = listNode.elements;
+    const checker = this.getChecker();
+    for (const element of elements) {
+      if (element.kind === ts6.SyntaxKind.SpreadElement || !this.isPromiseType(checker.getTypeAtLocation(element))) {
+        return void 0;
+      }
+    }
+    const printed = elements.map((element) => this.printNode(element));
+    const futureCast = `((${this.PROMISE_TYPE_KEYWORD}<?>) `;
+    const casted = printed.map((element) => `${futureCast}${element})`);
+    const allOf = `${this.PROMISE_TYPE_KEYWORD}.allOf(${casted.join(", ")})`;
+    if (awaitNode.parent?.kind === ts6.SyntaxKind.ExpressionStatement) {
+      return allOf;
+    }
+    if (elements.length === 0 || !elements.every((element) => this.isConstBoundIdentifier(element)) || printed.indexOf("promiseAllValue") !== -1) {
+      return void 0;
+    }
+    const collected = casted.map((element) => `${element}.join()`).join(", ");
+    const collectList = `${this.ARRAY_OPENING_TOKEN}${collected}${this.ARRAY_CLOSING_TOKEN}`;
+    return `${allOf}.thenApply(promiseAllValue -> ${collectList})`;
+  }
+  // a `const`-bound local is assigned exactly once, so the printed java local is
+  // effectively final (a lambda can capture it) and re-reading it joins the same future
+  isConstBoundIdentifier(node) {
+    if (node.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    return declaration?.kind === ts6.SyntaxKind.VariableDeclaration && (ts6.getCombinedNodeFlags(declaration) & ts6.NodeFlags.Const) === ts6.NodeFlags.Const;
+  }
+  printPromiseAllCall(node, identation, parsedArg = void 0) {
+    const nativeCall = this.printNativePromiseAllCall(node);
+    if (nativeCall !== void 0) {
+      return nativeCall;
+    }
     return `Helpers.promiseAll(${parsedArg})`;
   }
   printMathFloorCall(_node, _identation, parsedArg = void 0) {
