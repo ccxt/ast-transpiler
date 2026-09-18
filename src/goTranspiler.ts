@@ -4577,6 +4577,10 @@ ${tryBodyBlock}
         }
         switch (node.kind) {
         case ts.SyntaxKind.ParenthesizedExpression:
+        // a type assertion prints as its operand (printAsExpression hands the operand
+        // back), so the operand's Go type still governs the read: `(this.fees as Dict)['x']`
+        // is the element access on `this.fees`, whose Go type decides the index
+        case ts.SyntaxKind.AsExpression:
             return this.goIndexableTypeOf(node.expression, printed);
         // `(x as Dict)['k']` prints `x["k"]`: the assertion is a compile-time hint in
         // TypeScript, so the receiver is typed exactly like the bare expression — the

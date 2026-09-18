@@ -1779,6 +1779,48 @@ describe('go native element assignment', () => {
         expect(output).toContain('return m["a"]');
         expect(output).not.toContain('GetValue(');
     });
+    test('a type assertion on a typed map local reads the map natively', () => {
+        const input =
+        "function f() {\n" +
+        "    const request = {};\n" +
+        "    return (request as Dict)['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the assertion is not printed: the receiver is the same Go map the unasserted
+        // `request['a']` prints, so the read is native too
+        expect(output).toContain("var request map[string]any =");
+        expect(output).toContain('return request["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('a parenthesised assertion unwraps the same way', () => {
+        const input =
+        "function f() {\n" +
+        "    const request = {};\n" +
+        "    return ((request as Dict))['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the source's own inner parens are kept (same as `((request))['a']`), the read is native
+        expect(output).toContain('(request)["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('only the first step of an asserted chain is native, the rest stay GetValue', () => {
+        const input =
+        "function f() {\n" +
+        "    const request = {};\n" +
+        "    return (request as Dict)['a']['b'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(request["a"], "b")');
+    });
+    test('an asserted receiver boxed in any keeps GetValue', () => {
+        const input =
+        "function f(m) {\n" +
+        "    return (m as Dict)['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the assertion alone cannot name a Go map: the receiver prints `any`
+        expect(output).toContain('GetValue(m, "a")');
+    });
     test('the native index accepts a Go string key, not just a literal', () => {
         const input =
         "function f() {\n" +
