@@ -1056,13 +1056,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printInsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
-    printArrayIsArrayCall(node: any, _identation: any, parsedArg?: any): string;
-    printNativeArrayIsArray(node: any, parsedArg: any): string;
-    javaPrimaryIsArrayOperand(node: any): boolean;
-    javaOperandType(operand: any): ts.Type;
-    javaArrayLiteralDropsNothing(node: any, depth?: number): boolean;
-    javaScalarType(type: any, depth?: number): boolean;
-    javaNonArrayType(type: any, depth?: number): boolean;
+    printArrayIsArrayCall(_node: any, _identation: any, parsedArg?: any): string;
     printObjectKeysCall(_node: any, _identation: any, parsedArg?: any): string;
     printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonParseCall(_node: any, _identation: any, parsedArg?: any): string;

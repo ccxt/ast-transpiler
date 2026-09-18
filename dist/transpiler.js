@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8396,8 +8396,6 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
-var JAVA_SCALAR_TYPE_FLAGS = ts6.TypeFlags.String | ts6.TypeFlags.StringLiteral | ts6.TypeFlags.Number | ts6.TypeFlags.NumberLiteral | ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral | ts6.TypeFlags.BigInt | ts6.TypeFlags.BigIntLiteral | ts6.TypeFlags.Enum | ts6.TypeFlags.EnumLiteral | ts6.TypeFlags.ESSymbol | ts6.TypeFlags.UniqueESSymbol;
-var JAVA_NULLISH_TYPE_FLAGS = ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void | ts6.TypeFlags.Never;
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -10262,91 +10260,16 @@ var JavaTranspiler = class extends BaseTranspiler {
     const signature = this.getIden(identation) + modifiers + returnType + methodToken + name + "(" + parsedArgs + ")";
     return this.printNodeCommentsIfAny(node, identation, signature);
   }
-  // `Array.isArray(x)` prints `(x instanceof java.util.List)` — the helper answers
-  // false for null (not an instance of anything) and true for a List, which is the
-  // same answer for every operand the printer types as a Java object. The helper
-  // only stays where the operand prints as a Java array (a rest-parameter reference:
-  // the helper's `getClass().isArray()` branch is true there) or as a final Java
-  // class, on which `instanceof List` is not convertible.
-  printArrayIsArrayCall(node, _identation, parsedArg = void 0) {
-    const native = this.printNativeArrayIsArray(node, parsedArg);
-    return native === void 0 ? `Helpers.isArray(${parsedArg})` : native;
-  }
-  printNativeArrayIsArray(node, parsedArg) {
-    const operand = node?.arguments?.[0];
-    if (operand === void 0 || parsedArg === void 0) {
-      return void 0;
-    }
-    if (node.parent !== void 0 && ts6.isExpressionStatement(node.parent)) {
-      return void 0;
-    }
-    if (ts6.isArrayLiteralExpression(operand)) {
-      return this.javaArrayLiteralDropsNothing(operand) ? "true" : void 0;
-    }
-    if (!this.javaPrimaryIsArrayOperand(operand)) {
-      return void 0;
-    }
-    const type = this.javaOperandType(operand);
-    if (operand.kind === ts6.SyntaxKind.Identifier && this.javaNonArrayType(type)) {
-      return "false";
-    }
-    if (this.isVarargsArrayReference(operand)) {
-      return void 0;
-    }
-    if (this.javaScalarType(type)) {
-      return void 0;
-    }
-    return `(${parsedArg} instanceof java.util.List)`;
-  }
-  // Operand shapes whose print is a primary expression: `instanceof` binds tighter than the
-  // low-precedence operators, so a ternary/binary operand would re-parse, and a constructor
-  // or cast print can be a final Java class on which `instanceof List` is not convertible.
-  javaPrimaryIsArrayOperand(node) {
-    const kind = node.kind;
-    return kind === ts6.SyntaxKind.Identifier || kind === ts6.SyntaxKind.PropertyAccessExpression || kind === ts6.SyntaxKind.ElementAccessExpression || kind === ts6.SyntaxKind.CallExpression;
-  }
-  javaOperandType(operand) {
-    try {
-      return this.getChecker().getTypeAtLocation(operand);
-    } catch (e) {
-      return void 0;
-    }
-  }
-  // literals and identifiers have nothing an array-literal wrapper could skip by dropping
-  javaArrayLiteralDropsNothing(node, depth = 0) {
-    if (depth > 4) {
-      return false;
-    }
-    return node.elements.every((element) => ts6.isStringLiteral(element) || ts6.isNumericLiteral(element) || element.kind === ts6.SyntaxKind.TrueKeyword || element.kind === ts6.SyntaxKind.FalseKeyword || element.kind === ts6.SyntaxKind.NullKeyword || element.kind === ts6.SyntaxKind.Identifier || ts6.isArrayLiteralExpression(element) && this.javaArrayLiteralDropsNothing(element, depth + 1));
-  }
-  // types whose Java print is a scalar final class (`instanceof java.util.List` is not
-  // convertible on them): the scalar family, and unions made only of scalars/nulls
-  javaScalarType(type, depth = 0) {
-    if (type === void 0 || type === null || depth > 3) {
-      return false;
-    }
-    const flags = type.flags;
-    if (flags & ts6.TypeFlags.Union) {
-      const parts = type.types ?? [];
-      return parts.length > 0 && parts.every((part) => this.javaScalarType(part, depth + 1));
-    }
-    return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
-  }
-  // types that provably never hold a List: every scalar (Java String/Long/Double/Boolean
-  // answer false) and the nullish types (JS Array.isArray(null) is false)
-  javaNonArrayType(type, depth = 0) {
-    if (type === void 0 || type === null || depth > 3) {
-      return false;
-    }
-    const flags = type.flags;
-    if (flags & ts6.TypeFlags.Union) {
-      const parts = type.types ?? [];
-      return parts.length > 0 && parts.every((part) => this.javaNonArrayType(part, depth + 1));
-    }
-    if ((flags & JAVA_NULLISH_TYPE_FLAGS) !== 0) {
-      return true;
-    }
-    return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
+  // Route through Helpers so consumers control semantics (thread-safety,
+  // null-handling, type coercion) in one place — same pattern as
+  // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
+  // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
+  // forced any downstream that needed different semantics (e.g. synchronized
+  // map access in concurrent code) to post-process the generated Java with
+  // regex — which only catches the bare-identifier argument shape and misses
+  // property-access (`this.x`) and element-access (`obj[k]`) arguments.
+  printArrayIsArrayCall(_node, _identation, parsedArg = void 0) {
+    return `Helpers.isArray(${parsedArg})`;
   }
   printObjectKeysCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.objectKeys(${parsedArg})`;
