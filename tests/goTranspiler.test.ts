@@ -824,7 +824,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("AppendToArray(&promises, this.FetchTicker(GetValue(symbols, i)))");
+        expect(output).toContain("promises = append(promises, this.FetchTicker(GetValue(symbols, i)))");
         expect(output).toContain("results := (<-promiseAll(promises))");
         expect(output).not.toContain("Spawn");
     });
@@ -2358,8 +2358,110 @@ describe('go gofmt-clean native shapes', () => {
             "}\n";
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("request[\"type\"] = this.Id + \"_\" + this.Id");
-        expect(output).toContain("AppendToArray(&auth, this.Id+\"=\"+this.Id)");
+        expect(output).toContain("auth = append(auth, this.Id+\"=\"+this.Id)");
         expect(output).toContain("[]any{\"a\", \"client-or\" + \"der-id\"}");
         expect(output).toContain("Slice(this.Id, idx+1, nil)");
+    });
+});
+
+// `x.push(v)` on a local the printer declared `[]any` prints the native
+// `x = append(x, v)`; every other receiver keeps AppendToArray(&x, v), which needs the
+// local to stay an `any` box (a *[]any does not fit the helper's *any parameter).
+describe('go .push -> append on a declared []any local', () => {
+    test('a statement push on an array-literal local appends natively', () => {
+        const input =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const x = []\n" +
+        "        x.push (a)\n" +
+        "        return x\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var x []any = []any{}");
+        expect(output).toContain("x = append(x, a)");
+        expect(output).not.toContain("AppendToArray(");
+    });
+    test('a push feeding an awaited promiseAll local appends natively', () => {
+        const input =
+        "class Test {\n" +
+        "    async fetchOne (s: string): Promise<any> { return {}; }\n" +
+        "    async f (symbols: string[]) {\n" +
+        "        const promises = [];\n" +
+        "        for (let i = 0; i < symbols.length; i++) {\n" +
+        "            promises.push (this.fetchOne (symbols[i]));\n" +
+        "        }\n" +
+        "        const results = await Promise.all (promises);\n" +
+        "        return results;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var promises []any = []any{}");
+        expect(output).toContain("promises = append(promises, this.FetchOne(GetValue(symbols, i)))");
+        expect(output).toContain("results := (<-promiseAll(promises))");
+    });
+    test('a later write of a different type keeps the box and the helper', () => {
+        const input =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        let x = []\n" +
+        "        x.push (a)\n" +
+        "        x = this.parseJson (a)\n" +
+        "        return x\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var x any = []any{}");
+        expect(output).toContain("AppendToArray(&x, a)");
+    });
+    test('a push whose value is read keeps the box and the helper', () => {
+        const input =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const x = []\n" +
+        "        const n = x.push (a)\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var x any = []any{}");
+        expect(output).toContain("AppendToArray(&x, a)");
+    });
+    test('a spread push keeps the box and the helper', () => {
+        const input =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const x = []\n" +
+        "        x.push (a)\n" +
+        "        x.push (...a)\n" +
+        "        return x\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var x any = []any{}");
+        expect(output).toContain("AppendToArray(&x, a)");
+    });
+    test('a push onto a []string helper result keeps the box and the helper', () => {
+        const input =
+        "class Test {\n" +
+        "    f (market: string) {\n" +
+        "        const parts = market.split ('/')\n" +
+        "        parts.push ('x')\n" +
+        "        return parts\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var parts any = Split(market, \"/\")");
+        expect(output).toContain("AppendToArray(&parts, \"x\")");
+    });
+    test('a push onto a parameter keeps the helper', () => {
+        const input =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        a.push (1)\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("AppendToArray(&a, 1)");
     });
 });

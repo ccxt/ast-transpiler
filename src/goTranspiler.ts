@@ -1370,6 +1370,43 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return shadowed;
     }
 
+    // the shape `x.push(v)` that both the native emission and the declaration's safety
+    // scan accept: the printed `x = append(x, v)` is a statement, so a value position or
+    // a multi-argument/spread call still needs the helper
+    goIsNativeAppendShape(receiverNode, pushNode): boolean {
+        if (receiverNode?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        if (pushNode?.parent?.kind !== ts.SyntaxKind.ExpressionStatement) {
+            return false;
+        }
+        if ((pushNode.questionDotToken !== undefined) || (pushNode.expression?.questionDotToken !== undefined)) {
+            return false;
+        }
+        const access = pushNode.expression;
+        if ((access?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (access.expression !== receiverNode)
+            || (access.name?.escapedText !== 'push')) {
+            return false;
+        }
+        const args = pushNode.arguments;
+        return (args?.length === 1) && (args[0].kind !== ts.SyntaxKind.SpreadElement);
+    }
+
+    // `x.push(v)` on a local the printer declared `[]any` prints the native
+    // `x = append(x, v)`, or undefined to keep AppendToArray(&x, v). An `any` box holding
+    // the slice keeps the helper: `&x` is a *any there, while a declared []any local would
+    // pass a *[]any the helper's parameter does not accept.
+    goNativeAppendReceiver(pushNode): string | undefined {
+        const receiver = pushNode?.expression?.expression;
+        if (!this.goIsNativeAppendShape(receiver, pushNode)) {
+            return undefined;
+        }
+        if (this.goDeclaredTypeOfIdentifier(receiver) !== '[]any') {
+            return undefined;
+        }
+        return this.printNode(receiver, 0);
+    }
+
     // reject the refinement when something downstream needs the local to stay `any`:
     // `x.push(v)` prints `AppendToArray(&x, v)` (a *T is not a *any) and a later
     // assignment of a value with another concrete type would stop compiling
@@ -1384,8 +1421,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 const parent = n.parent;
                 if (parent?.kind === ts.SyntaxKind.PropertyAccessExpression && parent.expression === n
                     && parent.name?.escapedText === 'push') {
-                    safe = false; // AppendToArray(&x, ...)
-                    return;
+                    // a []any local appends natively, so its receiver may be typed; every
+                    // other push shape keeps the helper and with it the box
+                    if ((goType !== '[]any') || !this.goIsNativeAppendShape(n, parent.parent)) {
+                        safe = false; // AppendToArray(&x, ...)
+                        return;
+                    }
                 }
                 if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name === n) {
                     return; // a sibling block-scoped declaration; it gets its own type
@@ -3784,6 +3825,11 @@ ${this.getIden(identation)}${returnStatement}`;
         let returnValue = '';
         let returnRandName = name;
         parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
+        // a `[]any` local is the slice itself, so it appends natively
+        const nativeReceiver = this.goNativeAppendReceiver(node);
+        if (nativeReceiver !== undefined) {
+            return `${nativeReceiver} = append(${nativeReceiver}, ${parsedArg})`;
+        }
         // a map/slice index or a GetValue box is not addressable: copy it into a local first
         if (name?.startsWith('GetValue') || /[\]\)]$/.test(name ?? '')) {
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
