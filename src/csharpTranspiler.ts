@@ -238,6 +238,29 @@ const CSHARP_NATIVE_DICTIONARY_TYPES = [ 'Dictionary<string, object>', 'IDiction
 // units (cs-09 fields, cs-10 response/result/balance locals, ...)
 const CSHARP_NATIVE_MARKET_RECEIVERS = [ 'market' ];
 
+// callees hand-written in cs/ccxt/base whose C# signature returns a non-nullable `bool` and that
+// have no TS method declaration to read a return annotation from: the imported function-properties
+// (`public bool isEmpty(object a)` in Exchange.cs, `isJsonEncodedObject` in Exchange.Functions.cs,
+// `isBinaryMessage`) and Precise's hand-written string comparisons (Exchange.Precise.cs). The
+// printed callee text is the key, so a call the printer rewrites (callDynamically) never matches.
+const CSHARP_BOOL_CALLEES_NATIVE: { [name: string]: boolean } = {
+    'this.isEmpty': true,
+    'this.isJsonEncodedObject': true,
+    'this.isBinaryMessage': true,
+    'Precise.stringGt': true,
+    'Precise.stringGe': true,
+    'Precise.stringLt': true,
+    'Precise.stringLe': true,
+    'Precise.stringEq': true,
+    'Precise.stringEquals': true,
+};
+
+// TS base methods the C# port hand-writes with a signature of its own: the TS return annotation
+// is `boolean` (ts/src/base/Exchange.ts) but the C# method bound by `this.<name>(...)` returns
+// something else — `object isDictionary(object value)` in Exchange.Generic.cs — so the isTrue
+// wrapper has to stay whatever the annotation says
+const CSHARP_HANDWRITTEN_CALLEES_NATIVE = [ 'isDictionary' ];
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -2646,10 +2669,61 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpLocalTypes.get(declaration) === 'bool';
     }
 
+    // the printed callee text of a method call the printer can name statically: `this.<name>` and
+    // `<Ident>.<name>`. A deeper receiver (`a.b.c(...)`) or a plain function call stays undefined —
+    // the hand-written-callee proof must know exactly which callee the emitted text binds
+    csharpCalleeName_Native(node): string | undefined {
+        const expression = node?.expression;
+        if (expression?.kind !== ts.SyntaxKind.PropertyAccessExpression) {
+            return undefined;
+        }
+        const receiver = expression.expression;
+        const name = expression.name?.escapedText as string;
+        if (receiver?.kind === ts.SyntaxKind.ThisKeyword) {
+            return 'this.' + name;
+        }
+        if (receiver?.kind === ts.SyntaxKind.Identifier) {
+            return (receiver.escapedText as string) + '.' + name;
+        }
+        return undefined;
+    }
+
+    // cs-14: `isTrue(<call>)` is the identity on a C# bool, so it can go bare when the call's own
+    // C# signature is that non-nullable `bool`. Beyond the declared-return tables: (a) callees
+    // hand-written in cs/ccxt/base with a `bool` signature (CSHARP_BOOL_CALLEES_NATIVE), and (b) a
+    // `this.<name>(...)` whose TS declaration the generator itself prints — the method definition
+    // is spelled by the same csharpBooleanReturnType this asks, so declaration and call cannot
+    // disagree. Hand-written C# overrides of such names (CSHARP_HANDWRITTEN_CALLEES_NATIVE) and
+    // callees the printer renders as `callDynamically` (object) keep the wrapper.
+    csharpBoolCall_Native(node): boolean {
+        const callee = this.csharpCalleeName_Native(node);
+        if (callee !== undefined && CSHARP_BOOL_CALLEES_NATIVE[callee] === true) {
+            return true;
+        }
+        if (callee === undefined || callee.indexOf('this.') !== 0) {
+            return false;
+        }
+        if (CSHARP_HANDWRITTEN_CALLEES_NATIVE.indexOf(callee.substring('this.'.length)) > -1) {
+            return false;
+        }
+        if (!this.csharpCalleeResolves(node)) {
+            return false;
+        }
+        const signature = this.getChecker().getResolvedSignature(node);
+        const declaration = signature?.declaration;
+        // a bodiless overload signature (`safeBool (…, defaultValue: boolean): boolean` next to a
+        // `boolean | undefined` implementation) states only that overload's type, while C# binds
+        // the single implementation: its `bool?` must not lose the wrapper
+        if (declaration?.kind !== ts.SyntaxKind.MethodDeclaration || declaration.body === undefined) {
+            return false;
+        }
+        return this.csharpBooleanReturnType(declaration) === 'bool';
+    }
+
     // calls the printer gives a concrete bool signature (inArray, valueIsDefined, startsWith,
     // Array.isArray, ...); safeBool and friends are `bool?` / `object` and keep the wrapper
     csharpCallPrintsBool(node): boolean {
-        return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === 'bool');
+        return this.csharpIsCheckedBoolean(node) && ((this.csharpCallReturnType(node) === 'bool') || this.csharpBoolCall_Native(node));
     }
 
     // same emission as the base implementation except for the bare-bool branch: the node is
