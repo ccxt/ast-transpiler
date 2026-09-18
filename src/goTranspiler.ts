@@ -306,6 +306,16 @@ function goBracketBalance (code: string): number {
     return depth;
 }
 
+// the return type the printer's own immediately-called func literal carries
+// (`func() T { … }()`), or undefined when the text is not one or T is an `any` box
+function goFuncLiteralReturnType (value: string): string | undefined {
+    const literal = /^func\(\) ([\w.[\]]*) \{/.exec(value);
+    if ((literal === null) || !value.endsWith('}()') || (literal[1] === 'any')) {
+        return undefined;
+    }
+    return literal[1];
+}
+
 // index of the first `//` outside strings and comments, or -1. The state is carried across lines
 // because `/* */` comments and `-quoted strings can span them (a `//` inside a string literal is
 // data, e.g. the `https://` of an endpoint, and must not be taken for a comment)
@@ -1137,10 +1147,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             value = value.substring(1, value.length - 1).trim();
         }
         const open = value.indexOf('(');
-        // the native `key in obj` emission is an immediately-called func literal that
-        // returns a Go bool, so it needs no EvalTruthy round-trip either
-        if (value.startsWith('func() bool {') && value.endsWith('}()')) {
-            return 'bool';
+        // the printer's own emissions are immediately-called func literals: the native
+        // `key in obj` returns a Go bool (no EvalTruthy round-trip), and a ternary whose
+        // arms print as one scalar returns that scalar — both name the value natively
+        const literalType = goFuncLiteralReturnType(value);
+        if ((literalType !== undefined) && (GO_TYPE_NAMES.indexOf(literalType) >= 0)) {
+            return literalType;
         }
         // the nil-guarded `indexOf` literal holds the same Go int GetIndexOf returned
         if (value.startsWith('func() int {') && value.endsWith('}()')) {
@@ -3005,8 +3017,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // Go has no ternary operator. The func literal returns the same branch value the
     // helper would and prints the condition the same way; it evaluates only the branch
-    // TypeScript would take, while Ternary receives both already evaluated.
-    printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined {
+    // TypeScript would take, while Ternary receives both already evaluated. Both arms
+    // printing as one and the same Go scalar names it (`func() string`), so the literal
+    // carries the value itself instead of an `any` box.
+    printInlineTernary(condition: string, whenTrue: string, whenFalse: string, resultType: string = undefined): string | undefined {
         if (condition.includes('\n')) {
             return undefined;
         }
@@ -3016,7 +3030,57 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const level = this.goStatementLevel;
         const body = this.getIden(level + 1);
         const branch = this.getIden(level + 2);
-        return `func() any {\n${body}if ${this.goStripControlClauseParens(condition)} {\n${branch}return ${whenTrue}\n${body}}\n${body}return ${whenFalse}\n${this.getIden(level)}}()`;
+        return `func() ${resultType ?? 'any'} {\n${body}if ${this.goStripControlClauseParens(condition)} {\n${branch}return ${whenTrue}\n${body}}\n${body}return ${whenFalse}\n${this.getIden(level)}}()`;
+    }
+
+    // the Go scalar an arm already prints a VALUE of, or undefined while the arm is an
+    // `any` box. Only proofs of the printed text itself count: a literal, a local the
+    // printer declares with that type, or a call whose own Go signature returns it. A
+    // box the classifier can name (`Subtract(...)`, `this.ParseToInt(...)`) is not a
+    // type a `return` can carry, so those arms keep the `any` literal.
+    goTernaryArmType(node, printedText: string): string | undefined {
+        const text = this.goUnwrapPrintedParens(printedText);
+        const inner = (node?.kind === ts.SyntaxKind.ParenthesizedExpression) ? node.expression : node;
+        switch (inner?.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return 'string';
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return 'bool';
+        case ts.SyntaxKind.NumericLiteral:
+            // an integer literal is an untyped constant of Go default type `int`; a
+            // fraction/exponent makes it a float64 constant
+            if (/^[0-9]+$/.test(inner.text)) {
+                return 'int';
+            }
+            return (/^[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?$/.test(inner.text) || /^[0-9]+[eE][+-]?[0-9]+$/.test(inner.text)) ? 'float64' : undefined;
+        case ts.SyntaxKind.Identifier:
+            return this.goLocalStaticType(inner); // declared `var x T = …` (never `:=`)
+        }
+        // a nested ternary prints the printer's own typed literal, whose return type is
+        // the arm's type as well
+        const literalType = goFuncLiteralReturnType(text);
+        if (literalType !== undefined) {
+            return literalType;
+        }
+        const open = text.indexOf('(');
+        if (open <= 0 || !this.isWholePrintedCall(text, open)) {
+            return undefined;
+        }
+        const goType = GO_HELPER_RETURN_TYPES[text.substring(0, open)];
+        return ((goType === undefined) || goType.startsWith('*')) ? undefined : goType;
+    }
+
+    // the one Go scalar both arms print as, or undefined when the literal keeps the `any`
+    // box: only GO_TYPE_NAMES are nameable, and a pointer/`any` arm (or two different
+    // types) is not a type the literal could return
+    goTernaryResultType(whenTrueNode, whenTrue: string, whenFalseNode, whenFalse: string): string | undefined {
+        const whenTrueType = this.goTernaryArmType(whenTrueNode, whenTrue);
+        if ((typeof whenTrueType !== 'string') || (whenTrueType === 'any') || (GO_TYPE_NAMES.indexOf(whenTrueType) < 0)) {
+            return undefined;
+        }
+        return (this.goTernaryArmType(whenFalseNode, whenFalse) === whenTrueType) ? whenTrueType : undefined;
     }
 
     // stripParens() applied to a printed condition text (see goControlClauseParens)
@@ -4758,7 +4822,9 @@ ${this.getIden(identation)}${returnStatement}`;
     printConditionalExpression(node, identation) {
         const condition = this.goWithExprDepth(1, () => this.printCondition(node.condition, 0));
         if (!condition.includes('\n')) {
-            const inlined = this.printInlineTernary(condition, this.goPrintTernaryBranch(node.whenTrue, 2), this.goPrintTernaryBranch(node.whenFalse, 1));
+            const whenTrue = this.goPrintTernaryBranch(node.whenTrue, 2);
+            const whenFalse = this.goPrintTernaryBranch(node.whenFalse, 1);
+            const inlined = this.printInlineTernary(condition, whenTrue, whenFalse, this.goTernaryResultType(node.whenTrue, whenTrue, node.whenFalse, whenFalse));
             if (inlined !== undefined) {
                 return inlined;
             }

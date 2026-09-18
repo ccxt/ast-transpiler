@@ -1393,7 +1393,7 @@ describe('go inline equality', () => {
         // a parenthesized operand the printer types inlines too: the ternary becomes a
         // func literal with the bare Go bool condition, laid out the way gofmt prints a
         // func literal holding an `if` (its control clause loses the parentheses)
-        expect(output).toContain("var picked any = func() any {\n\t\tif isWsProxyDefined {\n\t\t\treturn 1\n\t\t}\n\t\treturn 2\n\t}()");
+        expect(output).toContain("var picked int = func() int {\n\t\tif isWsProxyDefined {\n\t\t\treturn 1\n\t\t}\n\t\treturn 2\n\t}()");
         expect(output).not.toContain("Ternary(");
         expect(output).toContain("if s != nil && *s != \"\" {");
         // an `any` operand still needs the helper, parentheses or not
@@ -2825,7 +2825,7 @@ describe('go redundant parentheses', () => {
         "    return a;\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("func() any {\n\t\tif x == \"delivery\" {\n\t\t\treturn \"yes\"\n\t\t}\n\t\treturn \"no\"\n\t}()");
+        expect(output).toContain("func() string {\n\t\tif x == \"delivery\" {\n\t\t\treturn \"yes\"\n\t\t}\n\t\treturn \"no\"\n\t}()");
         expect(output).not.toContain("Ternary(((x == \"delivery\")");
     });
     test('parentheses that are not redundant stay: call arguments and operand pairs', () => {
@@ -3205,8 +3205,8 @@ describe('go gofmt-clean native shapes', () => {
             "\t\t\t\treturn x\n" +
             "\t\t\t}\n" +
             "\t\t\treturn \"y\"\n" +
-            "\t\t}(), func() any {\n");
-        expect(output).toContain("\t\t\"side\": func() any {\n\t\t\tif EvalTruthy(isMaker) {\n\t\t\t\treturn \"buy\"\n\t\t\t}\n\t\t\treturn \"sell\"\n\t\t}(),\n\t\t\"z\": 1,\n");
+            "\t\t}(), func() string {\n");
+        expect(output).toContain("\t\t\"side\": func() string {\n\t\t\tif EvalTruthy(isMaker) {\n\t\t\t\treturn \"buy\"\n\t\t\t}\n\t\t\treturn \"sell\"\n\t\t}(),\n\t\t\"z\": 1,\n");
         expect(output).not.toContain("Ternary(");
     });
     test('a native in-op literal stays on one line only while it fits gofmt\'s 100 columns', () => {
@@ -3454,5 +3454,131 @@ describe('go string concat chains -> native +', () => {
         expect(output).toContain('var typeVar *string = this.SafeString2(params, "type", "future")');
         expect(output).toContain('return *typeVar + "_" + this.Uuid()');
         expect(output).not.toContain('Add(');
+    });
+});
+
+describe('go ternary func literal typing', () => {
+    // Ternary(c, a, b) prints as the lazy func literal; when both arms print as one and
+    // the same Go scalar the literal names it (`func() string`), so the value leaves the
+    // literal untyped-free instead of boxed in `any`. A pointer/`any`/mixed pair, or two
+    // arms of a non-scalar type, keeps the `any` box.
+    const inst = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+    const ternaryGo = (ts: string) => inst.transpileGo(ts).content;
+
+    test('both arms string literals name the type on the literal and on the declaration', () => {
+        const input =
+        "function f (a: boolean) {\n" +
+        "    const b = a ? 'x' : 'y';\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b string = func() string {\n\t\tif EvalTruthy(a) {\n\t\t\treturn \"x\"\n\t\t}\n\t\treturn \"y\"\n\t}()");
+        expect(output).not.toContain('Ternary(');
+    });
+    test('two arms of one declared local type stay typed', () => {
+        const input =
+        "function f (a: boolean) {\n" +
+        "    let x: string = 'p';\n" +
+        "    let y: string = 'q';\n" +
+        "    const b = a ? x : y;\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b string = func() string {\n\t\tif EvalTruthy(a) {\n\t\t\treturn x\n\t\t}\n\t\treturn y\n\t}()");
+    });
+    test('a bool pair prints func() bool', () => {
+        const input =
+        "function f (a: boolean, c: any) {\n" +
+        "    const b = a ? true : (c === 1);\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b bool = func() bool {\n\t\tif EvalTruthy(a) {\n\t\t\treturn true\n\t\t}\n\t\treturn (IsEqual(c, 1))\n\t}()");
+    });
+    test('an int64 pair from two typed calls prints func() int64', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    seconds (): number { return 2; }\n" +
+        "    f (a: boolean) {\n" +
+        "        const b = a ? this.milliseconds() : this.seconds();\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b int64 = func() int64 {\n\t\tif EvalTruthy(a) {\n\t\t\treturn this.Milliseconds()\n\t\t}\n\t\treturn this.Seconds()\n\t}()");
+    });
+    test('a nested literal is parenthesised and keeps its own type', () => {
+        const input =
+        "function f (a: boolean, c: boolean) {\n" +
+        "    const b = a ? (c ? 'x' : 'y') : 'z';\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b string = func() string {\n\t\tif EvalTruthy(a) {\n\t\t\treturn (func() string {");
+        expect(output).not.toContain('Ternary(');
+    });
+    test('a call argument and a map value print the typed literal', () => {
+        const call =
+        "class T {\n" +
+        "    f (a: boolean): any {\n" +
+        "        return a ? 'x' : 'y';\n" +
+        "    }\n" +
+        "}\n";
+        expect(ternaryGo(call)).toContain("\treturn func() string {\n\t\tif EvalTruthy(a) {\n\t\t\treturn \"x\"\n\t\t}\n\t\treturn \"y\"\n\t}()");
+        const map =
+        "function f (a: boolean) {\n" +
+        "    return { 'k': a ? 'x' : 'y' };\n" +
+        "}\n";
+        expect(ternaryGo(map)).toContain("\t\t\"k\": func() string {");
+    });
+    test('arms of a non-scalar type keep the any box', () => {
+        const input =
+        "function f (a: boolean) {\n" +
+        "    const b = a ? { 'k': 1 } : { 'k': 2 };\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b any = func() any {\n\t\tif EvalTruthy(a) {\n\t\t\treturn map[string]any{");
+        expect(output).not.toContain('func() map[string]any');
+    });
+    test('an arm the printer cannot type keeps the any box', () => {
+        const input =
+        "function f (a: boolean, c: any) {\n" +
+        "    const b = a ? 'x' : c;\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b any = func() any {\n\t\tif EvalTruthy(a) {\n\t\t\treturn \"x\"\n\t\t}\n\t\treturn c\n\t}()");
+        expect(output).not.toContain('func() string');
+    });
+    test('an arm that is an any-returning helper call keeps the any box', () => {
+        // `Subtract(now, year)` returns `any`: a classifier may know the box holds an
+        // int64, but a `return` cannot carry that name — only the printer's own
+        // signature table (ToUpper, this.Seconds, ParseInt, …) proves a static type
+        const input =
+        "class T {\n" +
+        "    seconds (): number { return 1; }\n" +
+        "    f (a: boolean) {\n" +
+        "        const year = 31104000;\n" +
+        "        const now = this.seconds();\n" +
+        "        const start = a ? (now - year) : 1;\n" +
+        "        return start;\n" +
+        "    }\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("var start any = func() any {");
+        expect(output).toContain("return (Subtract(now, year))");
+    });
+    test('a later write of another type demotes the declaration back to any', () => {
+        const input =
+        "function f (a: boolean, c: any) {\n" +
+        "    let b = a ? 'x' : 'y';\n" +
+        "    b = c;\n" +
+        "    return b;\n" +
+        "}\n";
+        const output = ternaryGo(input);
+        expect(output).toContain("\tvar b any = func() string {");
+        expect(output).toContain("\tb = c\n");
     });
 });
