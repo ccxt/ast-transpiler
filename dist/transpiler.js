@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -5691,14 +5691,28 @@ func New${this.capitalize(this.className)}() *${this.className} {
       if (leftType !== "string" || rightType !== "string" || op !== ts5.SyntaxKind.PlusToken) {
         return void 0;
       }
-      return { "goType": "string", "text": leftText.trim() + " + " + rightText.trim() };
+      return { "goType": "string", "text": this.goNativeBinaryText(node, "+", leftText, rightText) };
     }
     const goType = this.goNativeIntResultType(op, leftType, rightType, node.right);
     if (goType === void 0) {
       return void 0;
     }
-    const symbol = this.SupportedKindNames[op];
-    return { goType, "text": this.goNativeOperandText(node.left, leftText) + " " + symbol + " " + this.goNativeOperandText(node.right, rightText) };
+    return { goType, "text": this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+  }
+  // the operator line gofmt prints for a natively emitted arithmetic expression: the
+  // blanks follow go/printer's cutoff at the current depth, and a binary operand is
+  // re-printed at the expression's own depth (a same-precedence left operand, or the
+  // parentheses the printer wraps it in, which undo the one level the operand adds)
+  goNativeBinaryText(node, symbol, leftText, rightText) {
+    const operandText = (operand, printed) => {
+      const isBinary = operand?.kind === ts5.SyntaxKind.BinaryExpression;
+      const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
+      return this.goNativeOperandText(operand, text);
+    };
+    const left = operandText(node.left, leftText);
+    const right = operandText(node.right, rightText);
+    const separator = this.goBinarySeparator(symbol, right, node.left, node.right);
+    return left + separator + symbol + separator + right;
   }
   // `x += y` prints `x = Add(x, y)`; the compound operator is equivalent while
   // both sides hold a concrete Go type that can never make the helper return nil
@@ -6295,7 +6309,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
-      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, rhs) : void 0;
+      const nativeRhs = right.kind === ts5.SyntaxKind.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs;
+      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs) : void 0;
       if (native !== void 0) {
         return native;
       }
@@ -6694,10 +6709,40 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // helper would and prints the condition the same way; it evaluates only the branch
   // TypeScript would take, while Ternary receives both already evaluated.
   printInlineTernary(condition, whenTrue, whenFalse) {
-    if (condition.includes("\n") || whenTrue.includes("\n") || whenFalse.includes("\n")) {
+    if (condition.includes("\n")) {
       return void 0;
     }
-    return `func() any { if ${condition} { return ${whenTrue} }; return ${whenFalse} }()`;
+    const level = this.goStatementLevel;
+    const body = this.getIden(level + 1);
+    const branch = this.getIden(level + 2);
+    return `func() any {
+${body}if ${this.goStripControlClauseParens(condition)} {
+${branch}return ${whenTrue}
+${body}}
+${body}return ${whenFalse}
+${this.getIden(level)}}()`;
+  }
+  // stripParens() applied to a printed condition text (see goControlClauseParens)
+  goStripControlClauseParens(text) {
+    for (; ; ) {
+      const inner = this.goEnclosedExpression(text);
+      if (inner === void 0) {
+        return text;
+      }
+      text = inner;
+    }
+  }
+  // a multi-line branch (a nested ternary, a composite literal) is laid out relative to
+  // the `return` statement that holds it: inside the `if` for whenTrue (two levels below
+  // the statement), the literal's body for whenFalse (one level)
+  goPrintTernaryBranch(node, levels) {
+    const previousLevel = this.goStatementLevel;
+    this.goStatementLevel = previousLevel + levels;
+    try {
+      return this.goWithExprDepth(1, () => this.printNode(node, 0));
+    } finally {
+      this.goStatementLevel = previousLevel;
+    }
   }
   // `key in obj` on a Go map[string]any with a string key. The two-value map read is
   // a statement, hence the func literal: a present-but-nil value is ok=true, exactly
@@ -6713,7 +6758,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (this.goPrintedTypeOfExpression(keyNode, keyText) !== "string") {
       return void 0;
     }
-    return `func() bool { _, ok := ${dictText}[${keyText}]; return ok }()`;
+    const read = `_, ok := ${dictText}[${keyText}]`;
+    if (11 + read.length + 2 + "return ok".length <= 100) {
+      return `func() bool { ${read}; return ok }()`;
+    }
+    const level = this.goStatementLevel;
+    return `func() bool {
+${this.getIden(level + 1)}${read}
+${this.getIden(level + 1)}return ok
+${this.getIden(level)}}()`;
   }
   // OpNeg boxes `-val.Int()` / `-val.Float()`, i.e. an int64 or a float64, and nil
   // for anything else. `-x` reproduces that exactly only for an operand that already
@@ -7504,7 +7557,7 @@ ${this.getIden(identation)}${returnStatement}`;
   printArrayLiteralExpression(node, identation = 0) {
     let arrayOpen = this.ARRAY_OPENING_TOKEN;
     const elems = node.elements;
-    const elements = node.elements.map((e) => this.printNode(e, identation).trim()).join(", ");
+    const elements = node.elements.map((e) => this.goWithExprDepth(1, () => this.printNode(e, identation)).trim()).join(", ");
     if (elems.length > 0) {
       const first = elems[0];
       if (first.kind === ts5.SyntaxKind.CallExpression) {
@@ -7571,9 +7624,19 @@ ${this.getIden(identation)}${returnStatement}`;
   printNumberIsIntegerCall(node, identation, parsedArg) {
     return `IsInt(${parsedArg})`;
   }
+  // the base printer prints a method-call argument at the statement's depth; the
+  // emitted Go call has two or more arguments, which go/printer lays out one level
+  // deeper (a native `a + b` argument then drops its blanks)
+  goPrintCallArgument(argument, printedText) {
+    if (argument?.kind !== ts5.SyntaxKind.BinaryExpression || printedText === void 0) {
+      return printedText;
+    }
+    return this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(argument, 0)).trimStart();
+  }
   printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
     let returnValue = "";
     let returnRandName = name;
+    parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
     if (name?.startsWith("GetValue") || /[\]\)]$/.test(name ?? "")) {
       returnRandName = "retRes" + this.getLineBasedSuffix(node);
       returnValue = `${returnRandName} := ${name}
@@ -7630,6 +7693,8 @@ ${this.getIden(identation)}`;
     return `assert(${parsedArgs})`;
   }
   printSliceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
+    parsedArg2 = this.goPrintCallArgument(node.arguments?.[1], parsedArg2);
     if (parsedArg2 === void 0) {
       parsedArg2 = "nil";
     }
@@ -7683,13 +7748,15 @@ ${this.getIden(identation)}`;
   //     }
   // }
   printConditionalExpression(node, identation) {
-    const condition = this.printCondition(node.condition, 0);
+    const condition = this.goWithExprDepth(1, () => this.printCondition(node.condition, 0));
+    if (!condition.includes("\n")) {
+      const inlined = this.printInlineTernary(condition, this.goPrintTernaryBranch(node.whenTrue, 2), this.goPrintTernaryBranch(node.whenFalse, 1));
+      if (inlined !== void 0) {
+        return inlined;
+      }
+    }
     const whenTrue = this.printNode(node.whenTrue, 0);
     const whenFalse = this.printNode(node.whenFalse, 0);
-    const inlined = this.printInlineTernary(condition, whenTrue, whenFalse);
-    if (inlined !== void 0) {
-      return inlined;
-    }
     return `Ternary(${condition}, ${whenTrue}, ${whenFalse})`;
   }
   printDeleteExpression(node, identation) {

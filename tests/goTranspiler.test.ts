@@ -1226,9 +1226,9 @@ describe('go inline equality', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         // a parenthesized operand the printer types inlines too: the ternary becomes a
-        // func literal with the bare Go bool condition (parentheses kept, as the
-        // operator still parses the same way) instead of the Ternary helper
-        expect(output).toContain("var picked any = func() any { if (isWsProxyDefined) { return 1 }; return 2 }()");
+        // func literal with the bare Go bool condition, laid out the way gofmt prints a
+        // func literal holding an `if` (its control clause loses the parentheses)
+        expect(output).toContain("var picked any = func() any {\n\t\tif isWsProxyDefined {\n\t\t\treturn 1\n\t\t}\n\t\treturn 2\n\t}()");
         expect(output).not.toContain("Ternary(");
         expect(output).toContain("if s != nil && *s != \"\" {");
         // an `any` operand still needs the helper, parentheses or not
@@ -1625,7 +1625,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Add(Add(this.Id + \" does not support \", t), \" market\")");
+        // inside a two-argument call the native `+` sits one level deep: gofmt drops its blanks
+        expect(output).toContain("Add(Add(this.Id+\" does not support \", t), \" market\")");
     });
     test('int64 local minus an integer literal is a bare Go subtraction', () => {
         const input =
@@ -1928,7 +1929,7 @@ describe('go redundant parentheses', () => {
         "    return a;\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("func() any { if (x == \"delivery\") { return \"yes\" }; return \"no\" }()");
+        expect(output).toContain("func() any {\n\t\tif x == \"delivery\" {\n\t\t\treturn \"yes\"\n\t\t}\n\t\treturn \"no\"\n\t}()");
         expect(output).not.toContain("Ternary(((x == \"delivery\")");
     });
     test('parentheses that are not redundant stay: call arguments and operand pairs', () => {
@@ -2273,5 +2274,71 @@ describe('gofmt binary expression spacing', () => {
         expect(transpiler.transpileGo('const x = a + b;').content).toBe('var x any = Add(a, b)');
         expect(transpiler.transpileGo('const x = a + b * c;').content).toBe('var x any = Add(a, Multiply(b, c))');
         expect(transpiler.transpileGo('let z = 1; z = a + b;').content).toBe('var z any = 1\nz = Add(a, b)');
+    });
+});
+
+describe('go gofmt-clean native shapes', () => {
+    const transpiler = new Transpiler({ verbose: false, go: { uncamelcaseIdentifiers: false } });
+    test('a ternary func literal is laid out like gofmt prints it, nested literals relative to their return', () => {
+        const input =
+            "class Exchange {\n" +
+            "    foo(isMaker: boolean, x: any) {\n" +
+            "        const a = isMaker ? { 'k': 1 } : { 'k': 2 };\n" +
+            "        if (isMaker) {\n" +
+            "            return this.bar(isMaker ? x : 'y', isMaker ? 'maker' : 'taker');\n" +
+            "        }\n" +
+            "        return { 'side': isMaker ? 'buy' : 'sell', 'z': 1 };\n" +
+            "    }\n" +
+            "    bar(a: any, b: any) { return a; }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain(
+            "\tvar a any = func() any {\n" +
+            "\t\tif EvalTruthy(isMaker) {\n" +
+            "\t\t\treturn map[string]any{\n" +
+            "\t\t\t\t\"k\": 1,\n" +
+            "\t\t\t}\n" +
+            "\t\t}\n" +
+            "\t\treturn map[string]any{\n" +
+            "\t\t\t\"k\": 2,\n" +
+            "\t\t}\n" +
+            "\t}()\n");
+        expect(output).toContain(
+            "\t\treturn this.Bar(func() any {\n" +
+            "\t\t\tif EvalTruthy(isMaker) {\n" +
+            "\t\t\t\treturn x\n" +
+            "\t\t\t}\n" +
+            "\t\t\treturn \"y\"\n" +
+            "\t\t}(), func() any {\n");
+        expect(output).toContain("\t\t\"side\": func() any {\n\t\t\tif EvalTruthy(isMaker) {\n\t\t\t\treturn \"buy\"\n\t\t\t}\n\t\t\treturn \"sell\"\n\t\t}(),\n\t\t\"z\": 1,\n");
+        expect(output).not.toContain("Ternary(");
+    });
+    test('a native in-op literal stays on one line only while it fits gofmt\'s 100 columns', () => {
+        const short = "function f(obj: any) { const d: { [k: string]: any } = {}; return 'k' in d; }";
+        expect(transpiler.transpileGo(short).content).toContain("func() bool { _, ok := d[\"k\"]; return ok }()");
+        const long = "function f() { const dictionaryWithAVeryLongName: { [k: string]: any } = {}; return 'someQuiteLongLookupKeyNameThatOverflowsTheWidthLimit' in dictionaryWithAVeryLongName; }";
+        expect(transpiler.transpileGo(long).content).toContain("func() bool {\n\t\t_, ok := dictionaryWithAVeryLongName[\"someQuiteLongLookupKeyNameThatOverflowsTheWidthLimit\"]\n\t\treturn ok\n\t}()");
+    });
+    test('native arithmetic drops its blanks one level inside a call, keeps them in a plain assignment', () => {
+        const input =
+            "class T {\n" +
+            "    id: string = 'test';\n" +
+            "    milliseconds (): number { return 1; }\n" +
+            "    f (params: any) {\n" +
+            "        const request: { [k: string]: any } = {};\n" +
+            "        request['type'] = this.id + '_' + this.id;\n" +
+            "        const auth: string[] = [];\n" +
+            "        auth.push(this.id + '=' + this.id);\n" +
+            "        const parts = [ 'a', 'client-or' + 'der-id' ];\n" +
+            "        const idx = this.milliseconds();\n" +
+            "        const rest = this.id.slice(idx + 1);\n" +
+            "        return [ request, auth, parts, rest ];\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("request[\"type\"] = this.Id + \"_\" + this.Id");
+        expect(output).toContain("AppendToArray(&auth, this.Id+\"=\"+this.Id)");
+        expect(output).toContain("[]any{\"a\", \"client-or\" + \"der-id\"}");
+        expect(output).toContain("Slice(this.Id, idx+1, nil)");
     });
 });

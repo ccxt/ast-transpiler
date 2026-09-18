@@ -748,6 +748,7 @@ declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         text: string;
     } | undefined;
+    goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
@@ -801,6 +802,8 @@ declare class GoTranspiler extends BaseTranspiler {
     sliceLengthTypes: string[];
     printInlineArrayLength(expression: any, printedText: string): string | undefined;
     printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined;
+    goStripControlClauseParens(text: string): string;
+    goPrintTernaryBranch(node: any, levels: number): string;
     printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
     comparisonHelpers: string[];
     printInlineOpNeg(node: any, printedText: string): string | undefined;
@@ -862,6 +865,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printMathRoundCall(node: any, identation: any, parsedArg?: any): string;
     printMathCeilCall(node: any, identation: any, parsedArg?: any): string;
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
+    goPrintCallArgument(argument: any, printedText: string | undefined): string | undefined;
     printArrayPushCall(node: CallExpression, identation: number, name?: string | undefined, parsedArg?: string | undefined): string;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
