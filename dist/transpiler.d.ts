@@ -541,14 +541,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeStringKey(key: any): string | undefined;
     csharpIsDictionaryType(type: any): boolean;
     csharpIsArrayType(type: any): boolean;
-    csharpNullableDictionaryType(type: any): boolean;
-    csharpIsAnyValuedDictionaryType(type: any): boolean;
-    csharpDictionaryParamsBag(node: any): boolean;
-    csharpNameWrittenBefore(node: any, name: string): boolean;
-    csharpNativeDictionaryReceiver(obj: any): {
-        text: string;
-        nullTest?: string;
-    } | undefined;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
     csharpNativeLengthExpression(expression: any): string | undefined;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
