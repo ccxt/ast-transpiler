@@ -2363,3 +2363,108 @@ describe('go gofmt-clean native shapes', () => {
         expect(output).toContain("Slice(this.Id, idx+1, nil)");
     });
 });
+
+describe('go native string operations (strings.*)', () => {
+    // the helper takes `any` and re-derives the same string at runtime, so a proven Go string
+    // operand can go straight to the stdlib call; the file-level print declares the import
+    const nativeCalls = (output: string) => output.match(/strings\.[A-Za-z]+\(/g) ?? [];
+    test('a declared string local receiver emits strings.Split and declares the package once', () => {
+        const input =
+        "function f () {\n" +
+        "    const s: string = 'a,b';\n" +
+        "    const parts = s.split(',');\n" +
+        "    const other = s.split(';');\n" +
+        "    return [ parts, other ];\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('import "strings"');
+        expect(output).toContain('var s string = "a,b"');
+        // the declared []string the printer gives a Split-initialised local still holds
+        expect(output).toContain('var parts []string = strings.Split(s, ",")');
+        expect(output).toContain('strings.Split(s, ";")');
+        expect(output.match(/import "strings"/g)?.length).toBe(1);
+        expect(output).not.toMatch(/(?<![.\w])Split\(/);
+    });
+    test('a string literal receiver emits the stdlib call too', () => {
+        const input = "function f () { return 'a-b'.split('-'); }\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('strings.Split("a-b", "-")');
+        expect(output).not.toMatch(/(?<![.\w])Split\(/);
+    });
+    test('join, upper/lower and the prefix/suffix predicates go native on proven strings', () => {
+        const input =
+        "function f () {\n" +
+        "    const s: string = 'a-b';\n" +
+        "    const parts = s.split('-');\n" +
+        "    const joined = parts.join('|');\n" +
+        "    const u = s.toUpperCase();\n" +
+        "    const l = u.toLowerCase();\n" +
+        "    const pre = s.startsWith('a');\n" +
+        "    const suf = s.endsWith('b');\n" +
+        "    return [ parts, joined, u, l, pre, suf ];\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // a []string local: the helper would ToString every element of a []any, this receiver is typed
+        expect(output).toContain('var parts []string = strings.Split(s, "-")');
+        expect(output).toContain('var joined string = strings.Join(parts, "|")');
+        expect(output).toContain('var u string = strings.ToUpper(s)');
+        expect(output).toContain('var l string = strings.ToLower(u)');
+        expect(output).toContain('strings.HasPrefix(s, "a")');
+        expect(output).toContain('strings.HasSuffix(s, "b")');
+        expect(output).not.toMatch(/(?<![.\w])(Join|ToUpper|ToLower|StartsWith|EndsWith)\(/);
+    });
+    test('replace keeps JS first-occurrence semantics, replaceAll every occurrence', () => {
+        const input =
+        "function f () {\n" +
+        "    const s: string = 'a-b-c';\n" +
+        "    const first = s.replace('-', '_');\n" +
+        "    const every = s.replaceAll('-', '_');\n" +
+        "    return [ first, every ];\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // the boxed helper cannot tell the two apart (ReplaceAll for every argument), so the
+        // native pair is also the only emission that reproduces the TS source exactly
+        expect(output).toContain('strings.Replace(s, "-", "_", 1)');
+        expect(output).toContain('strings.ReplaceAll(s, "-", "_")');
+        expect(output).not.toMatch(/(?<![.\w])Replace\(/);
+    });
+    test('a receiver the printer cannot prove as a Go string keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (symbol) {\n" +
+        "        const parts = symbol.split('-');\n" +
+        "        const upper = symbol.toUpperCase();\n" +
+        "        const pre = symbol.startsWith('a');\n" +
+        "        return [ parts, upper, pre ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // a Go method parameter is printed `any`, so the operand holds an interface, not a string
+        expect(output).toContain("func (this *Exchange) Main(symbol any) any {");
+        expect(output).toContain('var parts []string = Split(symbol, "-")');
+        expect(output).toContain('var upper string = ToUpper(symbol)');
+        expect(output).toContain('StartsWith(symbol, "a")');
+        expect(output).not.toContain('import "strings"');
+    });
+    test('a []any receiver and a regex pattern keep the helper', () => {
+        const input =
+        "function f (params) {\n" +
+        "    const items = [ 'a', 'b' ];\n" +
+        "    const joined = items.join('+');\n" +
+        "    const replaced = 'a-b'.replace(/-/, '_');\n" +
+        "    return [ joined, replaced ];\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // the helper ToStrings every element of a []any; the native call needs a []string
+        expect(output).toContain('var items []any = []any{"a", "b"}');
+        expect(output).toContain('= Join(items, "+")');
+        // a regex pattern is a pattern, never the Go string the helper's ToString would build
+        expect(output).toMatch(/(?<![.\w])Replace\("a-b",/);
+        expect(output).not.toContain('import "strings"');
+    });
+    test('the strings package is not declared when no native call was emitted', () => {
+        const output = transpiler.transpileGo("function f () { return 1; }\n").content;
+        expect(output).not.toContain('import "strings"');
+        expect(nativeCalls(output).length).toBe(0);
+    });
+});
