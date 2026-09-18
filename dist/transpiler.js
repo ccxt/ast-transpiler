@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2752,24 +2752,6 @@ var CSHARP_NATIVE_COMPARISON_TOKENS = {
   [ts4.SyntaxKind.LessThanEqualsToken]: "<=",
   [ts4.SyntaxKind.GreaterThanEqualsToken]: ">="
 };
-var CSHARP_ASSIGNMENT_OPERATOR_KINDS = [
-  ts4.SyntaxKind.EqualsToken,
-  ts4.SyntaxKind.PlusEqualsToken,
-  ts4.SyntaxKind.MinusEqualsToken,
-  ts4.SyntaxKind.AsteriskEqualsToken,
-  ts4.SyntaxKind.AsteriskAsteriskEqualsToken,
-  ts4.SyntaxKind.SlashEqualsToken,
-  ts4.SyntaxKind.PercentEqualsToken,
-  ts4.SyntaxKind.LessThanLessThanEqualsToken,
-  ts4.SyntaxKind.GreaterThanGreaterThanEqualsToken,
-  ts4.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
-  ts4.SyntaxKind.AmpersandEqualsToken,
-  ts4.SyntaxKind.BarEqualsToken,
-  ts4.SyntaxKind.CaretEqualsToken,
-  ts4.SyntaxKind.BarBarEqualsToken,
-  ts4.SyntaxKind.AmpersandAmpersandEqualsToken,
-  ts4.SyntaxKind.QuestionQuestionEqualsToken
-];
 var CSHARP_NATIVE_FIELDS = {
   "options": "ConcurrentDictionary<string, object>",
   "features": "Dictionary<string, object>",
@@ -3023,7 +3005,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const isStringKey = ts4.isStringLiteralLike(argumentExpression);
     const isNumberKey = ts4.isNumericLiteral(argumentExpression);
     if (!isStringKey && !isNumberKey) {
-      return this.csharpLoopIndexListRead(expression, argumentExpression);
+      return void 0;
     }
     const key = argumentExpression.text;
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -3061,174 +3043,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
     }
     return false;
-  }
-  // the read is `recv[i]` with `i` the counter of an enclosing `for (...; i < recv.length; ...)`:
-  // that condition is the range proof for every pass of the body, so the indexer hands back the
-  // very box the helper returns and the helper's out-of-range null branch is unreachable. Both
-  // operands must already print as the C# types the indexer binds: an object-element list
-  // receiver and an `int` counter. Every other shape keeps the helper.
-  csharpLoopIndexListRead(expression, argumentExpression) {
-    if (!ts4.isIdentifier(expression) || !ts4.isIdentifier(argumentExpression)) {
-      return void 0;
-    }
-    const receiverType = this.csharpExpressionTypeOf(expression);
-    if (receiverType === void 0 || !this.csharpTypeIsList(receiverType)) {
-      return void 0;
-    }
-    if (this.csharpExpressionTypeOf(argumentExpression) !== "int") {
-      return void 0;
-    }
-    const loop = this.csharpCounterRangeLoop(argumentExpression, expression);
-    if (loop === void 0) {
-      return void 0;
-    }
-    if (!this.csharpCounterUnwrittenIn(loop.statement, argumentExpression) || !this.csharpReceiverIntactIn(loop.statement, expression)) {
-      return void 0;
-    }
-    return `${this.printNode(expression, 0)}[${this.printNode(argumentExpression, 0)}]`;
-  }
-  // the enclosing `for` whose condition is `<counter> < <recv>.length` and whose header declares
-  // that counter: the condition held on entry to this pass and nothing in between moved off it
-  csharpCounterRangeLoop(counter, receiver) {
-    let node = counter;
-    while (node.parent !== void 0) {
-      const parent = node.parent;
-      if (ts4.isFunctionLike(parent)) {
-        return void 0;
-      }
-      if (ts4.isForStatement(parent) && this.csharpContains(parent.statement, counter) && this.csharpForBoundsCounter(parent, counter, receiver)) {
-        return parent;
-      }
-      node = parent;
-    }
-    return void 0;
-  }
-  csharpForBoundsCounter(loop, counter, receiver) {
-    const condition = this.csharpUnparenthesized(loop.condition);
-    if (condition?.kind !== ts4.SyntaxKind.BinaryExpression || condition.operatorToken.kind !== ts4.SyntaxKind.LessThanToken) {
-      return false;
-    }
-    const left = this.csharpUnparenthesized(condition.left);
-    const right = this.csharpUnparenthesized(condition.right);
-    if (!ts4.isIdentifier(left) || !ts4.isPropertyAccessExpression(right) || right.name?.escapedText !== "length") {
-      return false;
-    }
-    const receiverExpression = this.csharpUnparenthesized(right.expression);
-    if (!ts4.isIdentifier(receiverExpression) || !this.csharpCounterStartsAtZero(loop, counter) || !this.csharpCounterAdvances(loop, counter)) {
-      return false;
-    }
-    const declaration = this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration;
-    const checker = this.getChecker();
-    return declaration !== void 0 && checker.getSymbolAtLocation(left)?.valueDeclaration === declaration && checker.getSymbolAtLocation(receiverExpression)?.valueDeclaration === checker.getSymbolAtLocation(receiver)?.valueDeclaration;
-  }
-  // `for (let i = <literal >= 0>; ...)` — a negative start would index below the list
-  csharpCounterStartsAtZero(loop, counter) {
-    const initializer = loop.initializer;
-    if (initializer?.kind !== ts4.SyntaxKind.VariableDeclarationList || initializer.declarations.length !== 1) {
-      return false;
-    }
-    const declaration = initializer.declarations[0];
-    if (!ts4.isIdentifier(declaration.name) || !ts4.isNumericLiteral(declaration.initializer)) {
-      return false;
-    }
-    return Number(declaration.initializer.text) >= 0 && this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration === declaration;
-  }
-  // the header moves the counter forward: a decrement could leave a negative index behind
-  csharpCounterAdvances(loop, counter) {
-    const declaration = this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration;
-    const incrementor = this.csharpUnparenthesized(loop.incrementor);
-    if (incrementor === void 0 || declaration === void 0) {
-      return false;
-    }
-    if (incrementor.kind === ts4.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts4.SyntaxKind.PrefixUnaryExpression) {
-      return incrementor.operator === ts4.SyntaxKind.PlusPlusToken && this.getChecker().getSymbolAtLocation(incrementor.operand)?.valueDeclaration === declaration;
-    }
-    if (incrementor.kind === ts4.SyntaxKind.BinaryExpression && incrementor.operatorToken.kind === ts4.SyntaxKind.PlusEqualsToken) {
-      return this.getChecker().getSymbolAtLocation(incrementor.left)?.valueDeclaration === declaration && ts4.isNumericLiteral(incrementor.right) && Number(incrementor.right.text) >= 0;
-    }
-    return false;
-  }
-  // a write to the counter in the body invalidates the bound the condition proved
-  csharpCounterUnwrittenIn(range, counter) {
-    const declaration = this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration;
-    if (declaration === void 0) {
-      return false;
-    }
-    let written = false;
-    this.csharpWalkIdentifiers(range, (identifier) => {
-      if (written || !this.csharpIsSameDeclaration(identifier, declaration)) {
-        return;
-      }
-      const parent = identifier.parent;
-      if (ts4.isBinaryExpression(parent) && parent.left === identifier) {
-        written = CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0;
-      } else if ((ts4.isPrefixUnaryExpression(parent) || ts4.isPostfixUnaryExpression(parent)) && parent.operand === identifier) {
-        written = true;
-      } else if (ts4.isDeleteExpression(parent)) {
-        written = true;
-      }
-    });
-    return !written;
-  }
-  // the condition's `<recv>.length` still proves the range only while the list is intact: inside
-  // the body the receiver may be read (element reads, its own `.length`) and nothing else
-  csharpReceiverIntactIn(range, receiver) {
-    const declaration = this.getChecker().getSymbolAtLocation(receiver)?.valueDeclaration;
-    if (declaration === void 0) {
-      return false;
-    }
-    let intact = true;
-    this.csharpWalkIdentifiers(range, (identifier) => {
-      if (!intact || !this.csharpIsSameDeclaration(identifier, declaration)) {
-        return;
-      }
-      const parent = identifier.parent;
-      if (ts4.isPropertyAccessExpression(parent) && parent.expression === identifier && parent.name?.escapedText === "length") {
-        return;
-      }
-      if (ts4.isElementAccessExpression(parent) && parent.expression === identifier && !this.csharpIsWriteTarget(parent)) {
-        return;
-      }
-      intact = false;
-    });
-    return intact;
-  }
-  csharpIsSameDeclaration(identifier, declaration) {
-    return this.getChecker().getSymbolAtLocation(identifier)?.valueDeclaration === declaration;
-  }
-  csharpWalkIdentifiers(node, visit) {
-    if (node === void 0) {
-      return;
-    }
-    if (ts4.isIdentifier(node)) {
-      visit(node);
-    }
-    ts4.forEachChild(node, (child) => this.csharpWalkIdentifiers(child, visit));
-  }
-  // `x[i] = v` / `x[i]++` / `delete x[i]` change the receiver in place
-  csharpIsWriteTarget(node) {
-    let value = node;
-    while (value.parent !== void 0 && ts4.isParenthesizedExpression(value.parent)) {
-      value = value.parent;
-    }
-    const parent = value.parent;
-    if (parent === void 0) {
-      return false;
-    }
-    if (ts4.isBinaryExpression(parent) && parent.left === value) {
-      return CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0;
-    }
-    if ((ts4.isPrefixUnaryExpression(parent) || ts4.isPostfixUnaryExpression(parent)) && parent.operand === value) {
-      return true;
-    }
-    return ts4.isDeleteExpression(parent);
-  }
-  csharpUnparenthesized(node) {
-    let value = node;
-    while (value !== void 0 && value.kind === ts4.SyntaxKind.ParenthesizedExpression) {
-      value = value.expression;
-    }
-    return value;
   }
   csharpGuardAdmitsRead(guard, read) {
     const negated = this.csharpGuardIsNegated(guard);
