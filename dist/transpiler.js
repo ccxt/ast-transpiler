@@ -6554,11 +6554,33 @@ var parserConfig5 = {
   INFER_VAR_TYPE: false,
   INFER_ARG_TYPE: false
 };
+var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
+  const kinds = ts6.SyntaxKind;
+  const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
+  return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
+})();
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
     super(config);
     this.varListFromObjectLiterals = {};
+    // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
+    // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
+    // Helpers.isInstance and the native `&&` / `||`
+    this.javaBooleanOperators = [
+      ts6.SyntaxKind.EqualsEqualsToken,
+      ts6.SyntaxKind.EqualsEqualsEqualsToken,
+      ts6.SyntaxKind.ExclamationEqualsToken,
+      ts6.SyntaxKind.ExclamationEqualsEqualsToken,
+      ts6.SyntaxKind.LessThanToken,
+      ts6.SyntaxKind.LessThanEqualsToken,
+      ts6.SyntaxKind.GreaterThanToken,
+      ts6.SyntaxKind.GreaterThanEqualsToken,
+      ts6.SyntaxKind.AmpersandAmpersandToken,
+      ts6.SyntaxKind.BarBarToken,
+      ts6.SyntaxKind.InKeyword,
+      ts6.SyntaxKind.InstanceOfKeyword
+    ];
     // Per-function analysis results. Populated by analyzeFinalVars at the start of
     // printFunctionBody and consumed during printing of the same function body.
     this.usageToFinalName = /* @__PURE__ */ new WeakMap();
@@ -6990,6 +7012,266 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return `${this.getVarClassIfAny(node)}-${this.getVarMethodIfAny(node)}-${varName}`;
   }
+  // Static operand family of one side of an equality, undefined when the checker proves
+  // nothing usable. Null/undefined union members are folded away: Objects.equals handles
+  // those exactly like the helper, so `string | undefined` still counts as string.
+  equalityOperandFamily(type) {
+    if (type === void 0 || type === null) {
+      return void 0;
+    }
+    const flags = type.flags;
+    if (flags & ts6.TypeFlags.Intersection) {
+      return void 0;
+    }
+    if (flags & ts6.TypeFlags.Union) {
+      if (flags & ts6.TypeFlags.Boolean) {
+        return "boolean";
+      }
+      const families = new Set((type.types ?? []).map((t) => this.equalityOperandFamily(t)));
+      families.delete(void 0);
+      families.delete("null");
+      return families.size === 1 ? families.values().next().value : void 0;
+    }
+    if (flags & (ts6.TypeFlags.String | ts6.TypeFlags.StringLiteral)) {
+      return "string";
+    }
+    if (flags & (ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral)) {
+      return "boolean";
+    }
+    if (flags & (ts6.TypeFlags.Null | ts6.TypeFlags.Undefined | ts6.TypeFlags.Void)) {
+      return "null";
+    }
+    return void 0;
+  }
+  // The null/undefined literal: its Java text is `null`, so Objects.equals(x, null)
+  // is literally the identity test Helpers.isEqual performs on that operand.
+  isNullishLiteral(node) {
+    return node?.kind === ts6.SyntaxKind.NullKeyword || node?.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined";
+  }
+  // ==/===/!=/!== become java.util.Objects.equals once the checker proves one operand is
+  // a string, a boolean or the null/undefined literal: for those Helpers.isEqual reduces
+  // to Objects.equals (value compare, class-strict, no numeric promotion). Numbers stay.
+  printNativeEqualityIfProvable(node, leftText, rightText) {
+    const op = node.operatorToken.kind;
+    const negated = op === ts6.SyntaxKind.ExclamationEqualsToken || op === ts6.SyntaxKind.ExclamationEqualsEqualsToken;
+    if (!negated && op !== ts6.SyntaxKind.EqualsEqualsToken && op !== ts6.SyntaxKind.EqualsEqualsEqualsToken) {
+      return void 0;
+    }
+    const checker = this.getChecker();
+    const leftFamily = this.equalityOperandFamily(checker?.getTypeAtLocation(node.left));
+    const rightFamily = this.equalityOperandFamily(checker?.getTypeAtLocation(node.right));
+    const leftProved = leftFamily !== void 0 && (leftFamily !== "null" || this.isNullishLiteral(node.left));
+    const rightProved = rightFamily !== void 0 && (rightFamily !== "null" || this.isNullishLiteral(node.right));
+    if (!leftProved && !rightProved) {
+      return void 0;
+    }
+    const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+    return negated ? `!${equalCall}` : equalCall;
+  }
+  // `x[k] = v` prints the runtime helper by default. Helpers.addElementToObject
+  // exists for receivers the printer cannot type (Lists, arbitrary objects via
+  // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
+  // printed only when the checker excludes all of those.
+  elementWriteTargetsMap(container, base, keys) {
+    if (!ts6.isStringLiteral(keys[keys.length - 1])) {
+      return false;
+    }
+    if (ts6.isPropertyAccessExpression(base) && base.expression.kind === ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    return this.isDictionaryType(container);
+  }
+  isDictionaryType(node) {
+    try {
+      const checker = this.getChecker();
+      const type = checker.getTypeAtLocation(node);
+      return this.isDictionaryTsType(type, checker, 0);
+    } catch (e) {
+      return false;
+    }
+  }
+  // A TS dictionary (`{ [key: string]: any }`, i.e. ccxt's Dict) is a Map on every
+  // print and run path. Arrays, class instances and unknown types are not, so they
+  // keep the helper.
+  isDictionaryTsType(type, checker, depth) {
+    if (!type || depth > 3) {
+      return false;
+    }
+    const flags = type.flags;
+    if (flags & ts6.TypeFlags.Union) {
+      const parts = type.types ?? [];
+      return parts.length > 0 && parts.every((t) => this.isDictionaryTsType(t, checker, depth + 1));
+    }
+    if (!(flags & ts6.TypeFlags.Object)) {
+      return false;
+    }
+    try {
+      if (checker.isArrayType(type) || checker.isTupleType(type)) {
+        return false;
+      }
+      return checker.getIndexTypeOfType(type, ts6.IndexKind.String) !== void 0;
+    } catch (e) {
+      return false;
+    }
+  }
+  // -------------------------------------------------------------------
+  // helper removal: native emission when the checker proves the printed
+  // operand is a Java numeric primitive / List / Map
+  // -------------------------------------------------------------------
+  // int/long kind of a literal as printNumericLiteral emits it. Fraction and
+  // exponent forms are Java doubles and a double can hold NaN, which the
+  // comparison helpers order differently (`NaN < x` is true there), so those
+  // never become a native comparison.
+  javaIntegerLiteralKind(node) {
+    if (!node || !ts6.isNumericLiteral(node)) {
+      return void 0;
+    }
+    const text = node.text;
+    if (text.indexOf(".") !== -1 || text.indexOf("e") !== -1 || text.indexOf("E") !== -1) {
+      return void 0;
+    }
+    return Number(text) > 2147483647 ? "long" : "int";
+  }
+  // A rest parameter is a Java varargs array, not a List, so a List cast on it
+  // would throw ClassCastException; simple identifier aliases are followed too.
+  isVarargsArrayReference(node, depth = 0) {
+    if (!node || depth > 4 || node.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    const symbol = this.getChecker().getSymbolAtLocation(node);
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (!declaration) {
+      return false;
+    }
+    if (declaration.dotDotDotToken !== void 0) {
+      return true;
+    }
+    const initializer = declaration.initializer;
+    if (initializer && ts6.isIdentifier(initializer)) {
+      return this.isVarargsArrayReference(initializer, depth + 1);
+    }
+    return false;
+  }
+  // checker proof that the value is printed as a java.util.List: TS arrays and
+  // tuples become ArrayList, ReadonlyArray only adds a readonly modifier
+  isJavaListType(type) {
+    if (!type) {
+      return false;
+    }
+    const checker = this.getChecker();
+    if (checker.isArrayType(type) || checker.isTupleType(type)) {
+      return true;
+    }
+    return type.target?.symbol?.escapedName === "ReadonlyArray";
+  }
+  // `.length` is a Java int for exactly these two receivers; every other
+  // receiver keeps Helpers.getArrayLength, whose result type is not proven
+  javaLengthKind(expression) {
+    const type = this.getChecker().getTypeAtLocation(expression);
+    if (this.isStringType(type.flags)) {
+      return "String";
+    }
+    if (this.isJavaListType(type) && !this.isVarargsArrayReference(expression)) {
+      return "List";
+    }
+    return void 0;
+  }
+  // shared by printLengthProperty and transformPropertyAcessExpressionIfNeeded
+  printJavaLength(expression, leftSide) {
+    const kind = this.javaLengthKind(expression);
+    if (kind === "String") {
+      return `((String)${leftSide}).length()`;
+    }
+    if (kind === "List") {
+      return `((java.util.List<?>)${leftSide}).size()`;
+    }
+    return `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+  }
+  // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the
+  // Object initializer into `var`, so javac infers a primitive counter there,
+  // and only ++/-- writes keep it primitive
+  isJavaPrimitiveForCounter(node) {
+    if (node.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    const comparison = node.parent;
+    if (!comparison || comparison.kind !== ts6.SyntaxKind.BinaryExpression) {
+      return false;
+    }
+    const forStatement = comparison.parent;
+    if (!forStatement || forStatement.kind !== ts6.SyntaxKind.ForStatement || forStatement.condition !== comparison) {
+      return false;
+    }
+    const initializer = forStatement.initializer;
+    if (!initializer || initializer.kind !== ts6.SyntaxKind.VariableDeclarationList) {
+      return false;
+    }
+    const declarations = initializer.declarations ?? [];
+    if (declarations.length !== 1) {
+      return false;
+    }
+    const declaration = declarations[0];
+    if (!ts6.isIdentifier(declaration.name) || declaration.name.escapedText !== node.escapedText) {
+      return false;
+    }
+    if (this.javaIntegerLiteralKind(declaration.initializer) === void 0) {
+      return false;
+    }
+    const counterSymbol = this.getChecker().getSymbolAtLocation(node);
+    const declarationSymbol = this.getChecker().getSymbolAtLocation(declaration.name);
+    if (counterSymbol !== void 0 && declarationSymbol !== void 0 && counterSymbol !== declarationSymbol) {
+      return false;
+    }
+    const incrementor = forStatement.incrementor;
+    if (!incrementor || incrementor.operand?.kind !== ts6.SyntaxKind.Identifier || incrementor.operand.escapedText !== node.escapedText) {
+      return false;
+    }
+    return incrementor.kind === ts6.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts6.SyntaxKind.PrefixUnaryExpression;
+  }
+  // Java primitive kind of a comparison operand; undefined keeps the helper
+  javaPrimitiveOperandKind(node) {
+    const literalKind = this.javaIntegerLiteralKind(node);
+    if (literalKind !== void 0) {
+      return literalKind;
+    }
+    if (this.isJavaPrimitiveForCounter(node)) {
+      return "int";
+    }
+    if (node.kind === ts6.SyntaxKind.PropertyAccessExpression && node.name.escapedText === "length") {
+      return this.javaLengthKind(node.expression) !== void 0 ? "int" : void 0;
+    }
+    return void 0;
+  }
+  // checker proof that the value is printed as a java.util.HashMap: TS object
+  // shapes (interfaces, object literals, aliases) become HashMaps, while class
+  // instances are real Java objects and arrays/unions are not proven here
+  isJavaMapType(type) {
+    if (!type || (type.flags & ts6.TypeFlags.Object) === 0) {
+      return false;
+    }
+    const checker = this.getChecker();
+    if (checker.isArrayType(type) || checker.isTupleType(type)) {
+      return false;
+    }
+    if (type.getCallSignatures().length > 0) {
+      return false;
+    }
+    const declarations = type.getSymbol()?.declarations ?? [];
+    return !declarations.some((declaration) => declaration.kind === ts6.SyntaxKind.ClassDeclaration || declaration.getSourceFile().fileName.indexOf("typescript") > -1);
+  }
+  // string keys (plain, literal or a union of literals) print as Java Strings
+  isJavaStringType(type) {
+    if (!type) {
+      return false;
+    }
+    if (this.isStringType(type.flags)) {
+      return true;
+    }
+    if ((type.flags & ts6.TypeFlags.Union) === 0) {
+      return false;
+    }
+    return type.types.every((member) => this.isStringType(member.flags));
+  }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
     const right = node.right;
@@ -7047,14 +7329,31 @@ var JavaTranspiler = class extends BaseTranspiler {
       prefixes = prefixes ? prefixes : "";
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
+      if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
+        return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${lastKey}, ${rhs})`;
+      }
       return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (op === ts6.SyntaxKind.InKeyword) {
+      const objectType = this.getChecker().getTypeAtLocation(right);
+      const keyType = this.getChecker().getTypeAtLocation(left);
+      if (this.isJavaMapType(objectType) && this.isJavaStringType(keyType)) {
+        return `((java.util.Map<?, ?>)${this.printNode(right, 0)}).containsKey(${this.printNode(left, 0)})`;
+      }
       return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+    }
+    if (op === ts6.SyntaxKind.LessThanToken || op === ts6.SyntaxKind.GreaterThanToken || op === ts6.SyntaxKind.LessThanEqualsToken || op === ts6.SyntaxKind.GreaterThanEqualsToken) {
+      if (this.javaPrimitiveOperandKind(left) !== void 0 && this.javaPrimitiveOperandKind(right) !== void 0) {
+        return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
+      }
     }
     if (op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
       const leftText = this.printNode(left, 0);
       const rightText = this.printNode(right, 0);
+      const inlined = this.printInlineHelperArithmetic(left, right, leftText, rightText, op);
+      if (inlined !== void 0) {
+        return inlined;
+      }
       if (op === ts6.SyntaxKind.PlusEqualsToken) {
         return `${leftText} = Helpers.add(${leftText}, ${rightText})`;
       }
@@ -7062,11 +7361,266 @@ var JavaTranspiler = class extends BaseTranspiler {
         return `${leftText} = Helpers.subtract(${leftText}, ${rightText})`;
       }
       const wrapper = this.binaryExpressionsWrappers[op];
+      const nativeEquality = this.printNativeEqualityIfProvable(node, leftText, rightText);
+      if (nativeEquality !== void 0) {
+        return nativeEquality;
+      }
       const open = wrapper[0];
       const close = wrapper[1];
       return `${open}${leftText}, ${rightText}${close}`;
     }
     return void 0;
+  }
+  // dict-shaped values are Map<String, Object> in the Java port: raw HashMap/ConcurrentHashMap
+  // or a types.TypedMap view (AbstractMap<String, Object> over the raw payload). Proven by the
+  // checker (string index signature, or an interface/alias declared in the base types file).
+  isJavaMapStructureType(type) {
+    if (type === void 0) {
+      return false;
+    }
+    const excludedFlags = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Union | ts6.TypeFlags.Intersection | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Never;
+    if ((type.flags & excludedFlags) !== 0) {
+      return false;
+    }
+    const checker = this.getChecker();
+    if (checker.isArrayType(type) || checker.isTupleType(type)) {
+      return false;
+    }
+    if (type.getStringIndexType() !== void 0) {
+      return true;
+    }
+    const symbol = type.aliasSymbol ?? type.symbol;
+    const declaration = symbol?.declarations?.[0];
+    const fileName = declaration?.getSourceFile?.()?.fileName;
+    return fileName !== void 0 && /(^|\/)ts\/src\/base\/types\.ts$/.test(fileName);
+  }
+  // tuples are List<Object> in the Java port (types.TypedList). Only an index inside the
+  // tuple's required elements goes native: .get(i) throws out of range where the helper
+  // returns null, so non-tuple array reads (any[], string[], ...) keep the helper.
+  isJavaListStructureType(type) {
+    if (type === void 0) {
+      return false;
+    }
+    const excludedFlags = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Union | ts6.TypeFlags.Intersection | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Never;
+    if ((type.flags & excludedFlags) !== 0) {
+      return false;
+    }
+    return this.getChecker().isTupleType(type);
+  }
+  tupleRequiredElementCount(type) {
+    const flags = type?.target?.elementFlags ?? type?.elementFlags ?? [];
+    let required = 0;
+    for (const flag of flags) {
+      if (flag !== ts6.ElementFlags.Optional && flag !== ts6.ElementFlags.Rest) {
+        required++;
+      } else {
+        break;
+      }
+    }
+    return required;
+  }
+  isLeftSideOfAssignment(node) {
+    const parent = node.parent;
+    if (parent?.kind !== ts6.SyntaxKind.BinaryExpression || parent.left !== node) {
+      return false;
+    }
+    return JAVA_ASSIGNMENT_OPERATOR_KINDS.has(parent.operatorToken.kind);
+  }
+  // `x[k]` reads: emit the native container accessor when the checker proves the Java
+  // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
+  printCheckerTypedElementAccessRead(node) {
+    const key = node.argumentExpression;
+    const isStringKey = ts6.isStringLiteralLike(key);
+    const isNumberKey = ts6.isNumericLiteral(key);
+    if (!isStringKey && !isNumberKey) {
+      return void 0;
+    }
+    if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0) {
+      return void 0;
+    }
+    if (this.isLeftSideOfAssignment(node)) {
+      return void 0;
+    }
+    const type = this.getChecker().getTypeAtLocation(node.expression);
+    if (isStringKey) {
+      if (!this.isJavaMapStructureType(type)) {
+        return void 0;
+      }
+      const target2 = this.printNode(node.expression, 0);
+      return `((java.util.Map<String, Object>)${target2}).get(${this.printNode(key, 0)})`;
+    }
+    if (!this.isJavaListStructureType(type)) {
+      return void 0;
+    }
+    const index = Number(key.text);
+    if (!Number.isInteger(index) || index < 0 || index >= this.tupleRequiredElementCount(type)) {
+      return void 0;
+    }
+    const target = this.printNode(node.expression, 0);
+    return `((java.util.List<Object>)${target}).get(${this.printNode(key, 0)})`;
+  }
+  printElementAccessExpression(node, identation) {
+    const native = this.printCheckerTypedElementAccessRead(node);
+    if (native !== void 0) {
+      return native;
+    }
+    return super.printElementAccessExpression(node, identation);
+  }
+  // ---- helper-family inlining: `+ - * / += -=` ---------------------------
+  // `x + y` normally prints Helpers.add, `- * /` print Helpers.subtract/multiply/
+  // divide, and `+=`/`-=` print `x = Helpers.add/subtract(...)`. They print native
+  // Java when BOTH operands are checker-typed in the same non-nullable scalar family
+  // and the printed operands carry the matching Java kind, so the native expression
+  // has the helper's boxed result kind and value on every path.
+  // the TypeScript scalar family of a binary operand: plain `string`/`number` and
+  // their literals only. The nullable aliases (Str/Int/Num/Bool), unions and `any`
+  // can hold undefined at runtime, which the helpers absorb.
+  javaScalarFamily(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    if (type === void 0 || type.aliasSymbol !== void 0) {
+      return void 0;
+    }
+    const flags = type.flags;
+    if (flags === ts6.TypeFlags.String || flags === ts6.TypeFlags.StringLiteral) {
+      return "string";
+    }
+    if (flags === ts6.TypeFlags.Number || flags === ts6.TypeFlags.NumberLiteral) {
+      return "number";
+    }
+    return void 0;
+  }
+  // true when the printed Java for this operand is statically a String: a string
+  // literal, or a nested `+` this rule prints as a native concat (so every native
+  // concat is anchored by a literal and Java concatenates the other side).
+  javaProvableString(node) {
+    if (node === void 0) {
+      return false;
+    }
+    switch (node.kind) {
+      case ts6.SyntaxKind.StringLiteral:
+      case ts6.SyntaxKind.NoSubstitutionTemplateLiteral:
+        return true;
+      case ts6.SyntaxKind.ParenthesizedExpression:
+        return this.javaProvableString(node.expression);
+      case ts6.SyntaxKind.BinaryExpression:
+        return this.javaNativeConcat(node);
+    }
+    return false;
+  }
+  // does this `+` node print as a native concat (both sides plain string, one side a
+  // provable String)? Mirrors printInlineHelperArithmetic so callers can reason about
+  // the printed text of a nested concat.
+  javaNativeConcat(node) {
+    if (node?.operatorToken?.kind !== ts6.SyntaxKind.PlusToken) {
+      return false;
+    }
+    if (this.javaScalarFamily(node.left) !== "string" || this.javaScalarFamily(node.right) !== "string") {
+      return false;
+    }
+    return this.javaProvableString(node.left) || this.javaProvableString(node.right);
+  }
+  // the Java kind a numeric operand provably prints with: decimal integer literal ->
+  // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
+  // natively -> that node's kind. Anything else (hex/binary literals, negative
+  // literals printed as Helpers.opNeg, calls, identifiers) stays undefined.
+  javaProvableNumericKind(node) {
+    if (node === void 0) {
+      return void 0;
+    }
+    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      return this.javaProvableNumericKind(node.expression);
+    }
+    if (ts6.isNumericLiteral(node)) {
+      const text = node.text;
+      if (/^0[xXbBoO]/.test(text)) {
+        return void 0;
+      }
+      return /[.eE]/.test(text) ? "double" : "long";
+    }
+    if (node.kind === ts6.SyntaxKind.BinaryExpression) {
+      return this.javaNativeArithmeticKind(node);
+    }
+    return void 0;
+  }
+  // the kind of the native arithmetic this rule prints for `+ - * /`, or undefined when
+  // the node keeps the helper. Mirrors printInlineHelperArithmetic operand-for-operand
+  // so callers can reason about the printed text of a nested arithmetic operand.
+  javaNativeArithmeticKind(node) {
+    const op = node?.operatorToken?.kind;
+    const isPlus = op === ts6.SyntaxKind.PlusToken;
+    const isMinus = op === ts6.SyntaxKind.MinusToken;
+    const isMultiply = op === ts6.SyntaxKind.AsteriskToken;
+    const isDivide = op === ts6.SyntaxKind.SlashToken;
+    if (!isPlus && !isMinus && !isMultiply && !isDivide) {
+      return void 0;
+    }
+    if (this.javaScalarFamily(node.left) !== "number" || this.javaScalarFamily(node.right) !== "number") {
+      return void 0;
+    }
+    const leftKind = this.javaProvableNumericKind(node.left);
+    const rightKind = this.javaProvableNumericKind(node.right);
+    if (leftKind === void 0 || leftKind !== rightKind) {
+      return void 0;
+    }
+    if (isDivide) {
+      return "double";
+    }
+    if (isMultiply && leftKind === "double") {
+      return void 0;
+    }
+    return leftKind;
+  }
+  // integer literals print as Java `int`; the helpers normalize Integer to Long before
+  // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
+  // result identical
+  javaPrintOperandAsLong(node, text) {
+    if (!ts6.isNumericLiteral(node) || /[.eE]/.test(node.text)) {
+      return text;
+    }
+    return /L$/.test(text) ? text : text + "L";
+  }
+  // the native form of a helper-family binary operator, or undefined to keep the helper
+  printInlineHelperArithmetic(left, right, leftText, rightText, op) {
+    const isPlus = op === ts6.SyntaxKind.PlusToken || op === ts6.SyntaxKind.PlusEqualsToken;
+    const isMinus = op === ts6.SyntaxKind.MinusToken || op === ts6.SyntaxKind.MinusEqualsToken;
+    const isMultiply = op === ts6.SyntaxKind.AsteriskToken;
+    const isDivide = op === ts6.SyntaxKind.SlashToken;
+    if (!isPlus && !isMinus && !isMultiply && !isDivide) {
+      return void 0;
+    }
+    const leftFamily = this.javaScalarFamily(left);
+    const rightFamily = this.javaScalarFamily(right);
+    if (isPlus && leftFamily === "string" && rightFamily === "string") {
+      if (!(this.javaProvableString(left) || this.javaProvableString(right))) {
+        return void 0;
+      }
+      const concat = `(${leftText} + ${rightText})`;
+      return op === ts6.SyntaxKind.PlusEqualsToken ? `${leftText} = ${concat}` : concat;
+    }
+    if (op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken) {
+      return void 0;
+    }
+    if (leftFamily !== "number" || rightFamily !== "number") {
+      return void 0;
+    }
+    const leftKind = this.javaProvableNumericKind(left);
+    const rightKind = this.javaProvableNumericKind(right);
+    if (leftKind === void 0 || leftKind !== rightKind) {
+      return void 0;
+    }
+    if (isDivide) {
+      return `(((double) ${leftText}) / ((double) ${rightText}))`;
+    }
+    if (isMultiply && leftKind === "double") {
+      return void 0;
+    }
+    const operator = isPlus ? "+" : isMinus ? "-" : "*";
+    return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
   }
   getObjectLiteralFromCallExpressionArguments(node) {
     const res = [];
@@ -7600,7 +8154,7 @@ var JavaTranspiler = class extends BaseTranspiler {
           expression
         );
         this.warnIfAnyType(node, type.flags, leftSide, "length");
-        rawExpression = this.isStringType(type.flags) ? `((String)${leftSide}).length()` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+        rawExpression = this.printJavaLength(expression, leftSide);
         break;
       }
       case "push":
@@ -7620,6 +8174,42 @@ var JavaTranspiler = class extends BaseTranspiler {
       return this.UNDEFINED_TOKEN;
     }
     return void 0;
+  }
+  // Unpacks one optional parameter. Native array access replaces Helpers.getArg
+  // when the initializer is a pure literal; the null check keeps the helper's
+  // contract that a null varargs array reads like an empty one.
+  printOptionalArgInit(paramName, index, initializer) {
+    const defaultValue = this.printNode(initializer, 0);
+    if (!this.isPureInitializer(initializer)) {
+      return `Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${defaultValue});`;
+    }
+    return `Object ${paramName} = optionalArgs != null && optionalArgs.length > ${index} ? optionalArgs[${index}] : ${defaultValue};`;
+  }
+  // Pure = evaluating the initializer has no effect and cannot throw, so
+  // skipping it when the argument was supplied cannot change behavior.
+  isPureInitializer(node) {
+    switch (node?.kind) {
+      case ts6.SyntaxKind.NullKeyword:
+      case ts6.SyntaxKind.TrueKeyword:
+      case ts6.SyntaxKind.FalseKeyword:
+      case ts6.SyntaxKind.StringLiteral:
+      case ts6.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts6.SyntaxKind.NumericLiteral:
+        return true;
+      case ts6.SyntaxKind.Identifier:
+        return node.escapedText === "undefined";
+      case ts6.SyntaxKind.ArrayLiteralExpression:
+        return node.elements.every((element) => this.isPureInitializer(element));
+      case ts6.SyntaxKind.ObjectLiteralExpression:
+        return node.properties.every((property) => ts6.isPropertyAssignment(property) && this.isPureInitializer(property.initializer));
+      case ts6.SyntaxKind.ParenthesizedExpression:
+      case ts6.SyntaxKind.AsExpression:
+      case ts6.SyntaxKind.TypeAssertionExpression:
+      case ts6.SyntaxKind.NonNullExpression:
+        return this.isPureInitializer(node.expression);
+      default:
+        return false;
+    }
   }
   printFunctionBody(node, identation) {
     const savedVarList = this.varListFromObjectLiterals;
@@ -7650,7 +8240,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (initializer) {
         const index = i + offSetIndex;
         const paramName = this.printNode(param.name, 0);
-        initParams.push(`Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)});`);
+        initParams.push(this.printOptionalArgInit(paramName, index, initializer));
       } else {
         offSetIndex--;
       }
@@ -7934,8 +8524,40 @@ var JavaTranspiler = class extends BaseTranspiler {
   printReplaceCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
   }
-  printReplaceAllCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+  printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    const pattern = this.stringLiteralArgument(node?.arguments?.[0]);
+    const replacement = this.stringLiteralArgument(node?.arguments?.[1]);
+    const receiver = this.sideEffectFreeReceiver(node?.expression);
+    if (pattern !== void 0 && replacement !== void 0 && receiver) {
+      return `(${name} == null ? null : ((String)${name}).replace(${pattern}, ${replacement}))`;
+    }
     return `Helpers.replaceAll((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
+  }
+  // Printed form of a non-empty string-literal argument with no escapes, or undefined when the
+  // argument is not a literal, prints with an escape sequence, or is the empty pattern.
+  stringLiteralArgument(argument) {
+    if (argument === void 0 || !ts6.isStringLiteral(argument)) {
+      return void 0;
+    }
+    const printed = this.printNode(argument, 0);
+    return /^"[^"\\]+"$/.test(printed) ? printed : void 0;
+  }
+  // True for receivers that read a value without calling anything: `x`, `x.y`, `this.x`,
+  // `(x as string)` and parenthesised forms of those. Guards the double read of the ternary.
+  sideEffectFreeReceiver(expression) {
+    if (expression === void 0) {
+      return false;
+    }
+    if (ts6.isParenthesizedExpression(expression) || ts6.isAsExpression(expression) || ts6.isTypeAssertionExpression(expression)) {
+      return this.sideEffectFreeReceiver(expression.expression);
+    }
+    if (ts6.isIdentifier(expression) || expression.kind === ts6.SyntaxKind.ThisKeyword) {
+      return true;
+    }
+    if (ts6.isPropertyAccessExpression(expression)) {
+      return this.sideEffectFreeReceiver(expression.expression);
+    }
+    return false;
   }
   printPadEndCall(_node, _identation, name, parsedArg, parsedArg2) {
     return `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
@@ -7950,7 +8572,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const leftSide = this.printNode(node.expression, 0);
     const type = this.getChecker().getTypeAtLocation(node.expression);
     this.warnIfAnyType(node, type.flags, leftSide, "length");
-    return this.isStringType(type.flags) ? `((String)${leftSide}).length()` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+    return this.printJavaLength(node.expression, leftSide);
   }
   // For ++/--, prefer native Java operators rather than the C# ref-helpers
   printPostFixUnaryExpression(node, identation) {
@@ -7974,6 +8596,33 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `Helpers.opNeg(${leftSide})`;
     }
     return super.printPrefixUnaryExpression(node, identation);
+  }
+  javaBooleanCondition(node) {
+    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      return this.javaBooleanCondition(node.expression);
+    }
+    if (node.kind === ts6.SyntaxKind.PrefixUnaryExpression) {
+      return node.operator === ts6.SyntaxKind.ExclamationToken && this.javaBooleanCondition(node.operand);
+    }
+    if (node.kind !== ts6.SyntaxKind.BinaryExpression) {
+      return false;
+    }
+    return this.javaBooleanOperators.includes(node.operatorToken.kind);
+  }
+  // the printer already emits these conditions as Java `boolean` (the comparison helpers,
+  // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
+  // Helpers.isTrue would only re-test a value the checker proves is boolean
+  javaConditionPrintsBoolean(node) {
+    if (!this.javaBooleanCondition(node)) {
+      return false;
+    }
+    return (this.getChecker().getTypeAtLocation(node).flags & ts6.TypeFlags.Boolean) !== 0;
+  }
+  printCondition(node, identation) {
+    if (this.javaConditionPrintsBoolean(node)) {
+      return this.getIden(identation) + this.printNode(node, 0);
+    }
+    return super.printCondition(node, identation);
   }
   printConditionalExpression(node, _identation) {
     const condition = this.printCondition(node.condition, 0);

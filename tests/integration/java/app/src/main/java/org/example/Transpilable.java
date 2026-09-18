@@ -24,8 +24,8 @@ class Test
 
     public void functionWithOptionals(Object a, Object... optionalArgs)
     {
-        Object c = Helpers.getArg(optionalArgs, 0, null);
-        Object d = Helpers.getArg(optionalArgs, 1, 1);
+        Object c = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;
+        Object d = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : 1;
         System.out.println(a);
         if (Helpers.isTrue(!Helpers.isEqual(c, null)))
         {
@@ -158,8 +158,8 @@ class Test
 
     public void funcWithParams(Object... optionalArgs)
     {
-        Object a = Helpers.getArg(optionalArgs, 0, null);
-        Object parameters = Helpers.getArg(optionalArgs, 1, new java.util.HashMap<String, Object>() {{}});
+        Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;
+        Object parameters = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : new java.util.HashMap<String, Object>() {{}};
         if (Helpers.isTrue(Helpers.isArray(a)))
         {
             System.out.println(Helpers.getArrayLength(a));
