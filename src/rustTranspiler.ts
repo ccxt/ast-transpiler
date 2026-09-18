@@ -585,7 +585,10 @@ export class RustTranspiler extends BaseTranspiler {
             const parts: ts.Type[] = (type as any).types ?? [];
             return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
         }
-        return this.getChecker().isArrayType(type)
+        // A `null`/`undefined` member boxes as `Value::Null`, whose `len()` is
+        // the same number the helper's fallthrough returns for it.
+        return (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0
+            || this.getChecker().isArrayType(type)
             || this.getChecker().isTupleType(type)
             || this.isStringType(type.flags);
     }
@@ -596,6 +599,94 @@ export class RustTranspiler extends BaseTranspiler {
             return `Value::Int(${receiver}.len() as i64)`;
         }
         return `get_array_length(&${receiver})`;
+    }
+
+    // ── native string search / slicing ───────────────────────────────────────
+    // `x.indexOf(y)` and `x.slice(a, b)` on a receiver the checker proves is a
+    // string print native `str` code instead of the runtime helper. The printed
+    // receiver is a `Value`, so the payload is reached through the same
+    // `as_str()` the native equality rules use; a `Value::Null` receiver takes
+    // the helper's `-1` / `Value::Null` branch through the same `Option`.
+
+    /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
+    rustSliceLiteralBound(node): number | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (ts.isNumericLiteral(node)) {
+            const value = Number(node.text);
+            return Number.isSafeInteger(value) ? value : undefined;
+        }
+        if (ts.isPrefixUnaryExpression(node) && node.operator === SyntaxKind.MinusToken &&
+            ts.isNumericLiteral(node.operand)) {
+            const value = Number(node.operand.text);
+            return Number.isSafeInteger(value) ? -value : undefined;
+        }
+        return undefined;
+    }
+
+    // `slice` clamps like JS: a non-negative bound is capped at the length, a
+    // negative one counts from the end and is floored at 0.
+    rustSliceClampedIndex(value: number): string {
+        return value < 0 ? `(__l - ${-value}).max(0)` : `__l.min(${value})`;
+    }
+
+    // `x.indexOf("lit")` on a proven string receiver: `str::find` is exactly
+    // the helper's `Value::Str` arm (byte index, `-1` when absent).
+    printNativeStringIndexOf(node, receiverText: string): string | undefined {
+        if (node === undefined || !ts.isCallExpression(node) ||
+            !ts.isPropertyAccessExpression(node.expression) || node.arguments?.length !== 1) {
+            return undefined;
+        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') {
+            return undefined;
+        }
+        const needle = node.arguments[0];
+        if (!ts.isStringLiteral(needle) && !ts.isNoSubstitutionTemplateLiteral(needle)) {
+            return undefined;
+        }
+        if (typeof receiverText !== 'string' || receiverText.includes('\n')) {
+            return undefined;
+        }
+        const literal = this.escapeRustStringLiteral(needle.text);
+        return `Value::Int(${receiverText}.as_str().and_then(|__s| __s.find("${literal}")).map(|__i| __i as i64).unwrap_or(-1))`;
+    }
+
+    // `x.slice(a)` / `x.slice(a, b)` with literal bounds on a proven string
+    // receiver: the helper's char-vector clamps are inlined, so the emission
+    // returns the same string (and `Value::Null` for a null receiver).
+    printNativeStringSlice(node, receiverText: string): string | undefined {
+        if (node === undefined || !ts.isCallExpression(node) ||
+            !ts.isPropertyAccessExpression(node.expression)) {
+            return undefined;
+        }
+        const args = node.arguments ?? [];
+        if (args.length === 0 || args.length > 2) {
+            return undefined;
+        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') {
+            return undefined;
+        }
+        if (typeof receiverText !== 'string' || receiverText.includes('\n')) {
+            return undefined;
+        }
+        const start = this.rustSliceLiteralBound(args[0]);
+        if (start === undefined) {
+            return undefined;
+        }
+        let end = '__l';
+        if (args[1] !== undefined && args[1].kind !== SyntaxKind.NullKeyword && args[1].kind !== SyntaxKind.UndefinedKeyword) {
+            const bound = this.rustSliceLiteralBound(args[1]);
+            if (bound === undefined) {
+                return undefined;
+            }
+            end = this.rustSliceClampedIndex(bound);
+        }
+        const begin = this.rustSliceClampedIndex(start);
+        return `${receiverText}.as_str().map(|__s| { let __c: Vec<char> = __s.chars().collect();` +
+            ` let __l = __c.len() as i64; let __i = ${begin}; let __j = ${end};` +
+            ` if __i <= __j { __c[__i as usize..__j as usize].iter().collect::<String>() } else { String::new() } })` +
+            `.map(Value::Str).unwrap_or(Value::Null)`;
     }
 
     // Object-typed values are Dicts at runtime, so `key in obj` is a plain
@@ -2696,6 +2787,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
+        const native = this.printNativeStringIndexOf(node, name);
+        if (native !== undefined) {
+            return native;
+        }
         return `get_index_of(&${name}, &${parsedArg})`;
     }
 
@@ -2752,6 +2847,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        const native = this.printNativeStringSlice(node, name);
+        if (native !== undefined) {
+            return native;
+        }
         const arg2 = parsedArg2 ?? 'Value::Null';
         return `slice(&${name}, &${parsedArg}, &${arg2})`;
     }

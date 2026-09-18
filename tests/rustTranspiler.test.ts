@@ -1910,3 +1910,79 @@ describe('rust declared-Dict locals', () => {
         expect(output).toContain('crate::value::get_value_k(&config, "noCoin")');
     });
 });
+
+describe('rust native string search and slicing', () => {
+    const stringMethod = (body: string, params = 'a: string') =>
+        `class A {\n    run(${params}) {\n${body}\n    }\n}`;
+
+    test('indexOf with a literal needle on a proven string is native', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');")).content;
+        expect(output).toContain('return Value::Int(a.as_str().and_then(|__s| __s.find("/")).map(|__i| __i as i64).unwrap_or(-1));');
+        expect(output).not.toContain('get_index_of');
+    });
+
+    test('a nullable string receiver keeps the -1 branch through as_str', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf(':');", 'a: string | undefined')).content;
+        expect(output).toContain('Value::Int(a.as_str().and_then(|__s| __s.find(":")).map(|__i| __i as i64).unwrap_or(-1))');
+        expect(output).not.toContain('get_index_of');
+    });
+
+    test('an unproven receiver keeps the helper', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: any')).content;
+        expect(output).toContain('get_index_of(&a, &Value::Str("/".to_string()))');
+    });
+
+    test('an array receiver keeps the helper (the helper scans it)', () => {
+        const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: string[]')).content;
+        expect(output).toContain('get_index_of(&a, &Value::Str("/".to_string()))');
+    });
+
+    test('a non-literal needle keeps the helper', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: string')).content;
+        expect(output).toContain('get_index_of(&a, &b)');
+    });
+
+    test('an escaped literal needle keeps its escapes', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.indexOf("\\n");')).content;
+        expect(output).toContain('__s.find("\\n")');
+    });
+
+    test('slice with a single negative literal bound is native', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(-64);', 'a: string')).content;
+        expect(output).toContain('let __i = (__l - 64).max(0); let __j = __l;');
+        expect(output).not.toContain('slice(&');
+    });
+
+    test('slice with two literal bounds clamps both ends', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(2, 4);')).content;
+        expect(output).toContain('let __i = __l.min(2); let __j = __l.min(4);');
+        expect(output).not.toContain('slice(&');
+    });
+
+    test('slice with a negative end counts from the end', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(2, -1);')).content;
+        expect(output).toContain('let __i = __l.min(2); let __j = (__l - 1).max(0);');
+    });
+
+    test('slice keeps the helper for an expression bound', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(0, b);', 'a: string, b: number')).content;
+        expect(output).toContain('slice(&a, &Value::Int(0), &b)');
+    });
+
+    test('slice keeps the helper for an unproven receiver', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.slice(0, 2);', 'a: any')).content;
+        expect(output).toContain('slice(&a, &Value::Int(0), &Value::Int(2))');
+    });
+
+    test('length on a nullable array or string is native', () => {
+        const arrayOutput = transpiler.transpileRust(stringMethod('        return a.length;', 'a: string[] | undefined')).content;
+        expect(arrayOutput).toContain('return Value::Int(a.len() as i64);');
+        const stringOutput = transpiler.transpileRust(stringMethod('        return a.length;', 'a: string | undefined')).content;
+        expect(stringOutput).toContain('return Value::Int(a.len() as i64);');
+    });
+
+    test('length on an unproven receiver keeps the helper', () => {
+        const output = transpiler.transpileRust(stringMethod('        return a.length;', 'a: any')).content;
+        expect(output).toContain('get_array_length(&a)');
+    });
+});
