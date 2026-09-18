@@ -2147,6 +2147,90 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain('bool has = (inOp(keys, "k"));');
     });
+    // U60: `k in x` where the emitted declaration of x is a dictionary the printer cannot name
+    // itself (build/csharp-local-types.js retypes it AFTER printing) -- the printer asks the
+    // csharpDeclaredDictReceiverType hook. inOp's dictionary branch is
+    // `(obj != null) && (key != null) && obj.ContainsKey(key)`, so the emission carries the
+    // null-safe receiver read and, for a possibly-null identifier key, the helper's own guard.
+    test('a `k in x` receiver no hook names keeps inOp byte-identically', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(a: any) {\n" +
+        "        const merged = a;\n" +
+        "        if ('k' in merged) { return 1; }\n" +
+        "        if (a in merged) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (inOp(merged, "k"))');
+        expect(output).toContain('if (inOp(merged, a))');
+        expect(output).not.toContain('merged?.ContainsKey');
+    });
+    test('csharpDeclaredDictReceiverType naming the receiver a dictionary emits ContainsKey', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.escapedText === 'merged' ? 'Dictionary<string, object>' : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    main(a: any) {\n" +
+            "        const merged = a;\n" +
+            "        if ('k' in merged) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n";
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('if ((merged?.ContainsKey("k") == true))');
+            expect(output).not.toContain('inOp(merged');
+        } finally {
+            delete csharp.csharpDeclaredDictReceiverType;
+        }
+    });
+    test('an identifier key gets the helper null guard back', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.escapedText === 'merged' ? 'IDictionary<string, object>' : undefined);
+        csharp.csharpLocalTypeOf = (node: any) => (node?.escapedText === 'code' ? 'string?' : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    main(a: any, code: any) {\n" +
+            "        const merged = a;\n" +
+            "        if (code in merged) { return 1; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n";
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('if (((code != null) && (merged?.ContainsKey(code) == true)))');
+            expect(output).not.toContain('inOp(merged');
+        } finally {
+            delete csharp.csharpDeclaredDictReceiverType;
+            delete csharp.csharpLocalTypeOf;
+        }
+    });
+    test('a non-dictionary hook answer, a foreign receiver and an unnameable key keep inOp', () => {
+        const csharp: any = (transpiler as any).csharpTranspiler;
+        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.escapedText === 'merged' ? 'List<object>' : undefined);
+        try {
+            const input =
+            "class Exchange {\n" +
+            "    main(a: any, b: any) {\n" +
+            "        const merged = a;\n" +
+            "        if ('k' in merged) { return 1; }\n" +
+            "        if ('k' in this.safeDict(a, 'x')) { return 2; }\n" +
+            "        if (b in merged) { return 3; }\n" +
+            "        return 0;\n" +
+            "    }\n" +
+            "}\n";
+            const output = transpiler.transpileCSharp(input).content;
+            // the hook answers a list for `merged`: not a ContainsKey receiver
+            expect(output).toContain('if (inOp(merged, "k"))');
+            expect(output).not.toContain('merged?.ContainsKey');
+            // a call receiver is never one of the hook's locals, and `b` is no C# string key
+            expect(output).toContain('if (inOp(merged, b))');
+        } finally {
+            delete csharp.csharpDeclaredDictReceiverType;
+        }
+    });
     test('a string-typed parameter key keeps inOp: the printed C# parameter is object', () => {
         const input =
         "class Exchange {\n" +

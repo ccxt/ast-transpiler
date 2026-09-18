@@ -1571,22 +1571,58 @@ export class CSharpTranspiler extends BaseTranspiler {
     // dictionary/string values. Every other shape keeps the inOp helper
     csharpNativeInExpression(key, obj): string | undefined {
         const checker = this.getChecker();
-        if (!this.isStringType(checker.getTypeAtLocation(key).flags)) {
+        if (this.isStringType(checker.getTypeAtLocation(key).flags) && this.csharpIsDictionaryType(checker.getTypeAtLocation(obj))) {
+            const receiver = this.csharpNativeReceiver(obj);
+            // only a dictionary C# type carries ContainsKey (IList<object> keeps the helper)
+            if (receiver !== undefined && receiver.type.indexOf('Dictionary<') >= 0) {
+                const printedKey = this.csharpNativeStringKey(key);
+                if (printedKey !== undefined) {
+                    return `${receiver.text}.ContainsKey(${printedKey})`;
+                }
+            }
+        }
+        // a receiver the embedding build layer retypes AFTER printing: the checker may see
+        // `any` on it, so the branch above cannot fire (see csharpDeclaredDictInExpression)
+        return this.csharpDeclaredDictInExpression(key, obj);
+    }
+
+    // `key in obj` on a local whose EMITTED declaration is a dictionary this printer cannot name
+    // itself: build/csharp-local-types.js retypes those declarations after printing and answers
+    // csharpDeclaredDictReceiverType. inOp's dict branch (`obj != null && key != null && obj.ContainsKey(key)`)
+    // is exactly `obj?.ContainsKey(key) == true` for a key that is already a C# string.
+    csharpDeclaredDictInExpression(key, obj): string | undefined {
+        if (obj?.kind !== ts.SyntaxKind.Identifier) {
             return undefined;
         }
-        if (!this.csharpIsDictionaryType(checker.getTypeAtLocation(obj))) {
+        const declared = (typeof this.csharpDeclaredDictReceiverType === 'function') ? this.csharpDeclaredDictReceiverType(obj) : undefined;
+        if ((declared === undefined) || (declared.indexOf('Dictionary<') < 0)) {
             return undefined;
         }
-        const receiver = this.csharpNativeReceiver(obj);
-        // only a dictionary C# type carries ContainsKey (IList<object> keeps the helper)
-        if (receiver === undefined || receiver.type.indexOf('Dictionary<') < 0) {
-            return undefined;
-        }
-        const printedKey = this.csharpNativeStringKey(key);
+        const printedKey = this.csharpNativeStringKey(key) ?? this.csharpDeclaredStringKey(key);
         if (printedKey === undefined) {
             return undefined;
         }
-        return `${receiver.text}.ContainsKey(${printedKey})`;
+        const receiver = this.printNode(obj, 0);
+        if (ts.isStringLiteralLike(key)) {
+            return `(${receiver}?.ContainsKey(${printedKey}) == true)`;
+        }
+        // an identifier key may hold null, where a bare ContainsKey throws ArgumentNullException:
+        // the helper's own null guard is emitted back. Undefined by default, so an untyped run is
+        // byte-identical (a receiver no hook names keeps the helper call).
+        if (ts.isIdentifier(key)) {
+            return `((${printedKey} != null) && (${receiver}?.ContainsKey(${printedKey}) == true))`;
+        }
+        return undefined;
+    }
+
+    // the key of the rule above, when the printer's own tables name no string for it but the
+    // embedding build layer's record does (the same hook the isEqual twin reads)
+    csharpDeclaredStringKey(key): string | undefined {
+        if (key?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const type = (typeof this.csharpLocalTypeOf === 'function') ? this.csharpLocalTypeOf(key) : undefined;
+        return ((type === 'string') || (type === 'string?')) ? this.printNode(key, 0) : undefined;
     }
 
     // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
@@ -2792,6 +2828,13 @@ export class CSharpTranspiler extends BaseTranspiler {
     // helper emission is byte-identical. The result is parenthesised because the printer
     // embeds a subexpression's text in receivers and arguments, where `+` binds looser.
     csharpNativeStringConcat(left, right, leftText: string, rightText: string): string | undefined {
+        return undefined;
+    }
+
+    // The emitted declaration type of a local read the embedding build layer retypes AFTER
+    // printing (ccxt: build/csharp-local-types.js): the dict type for the `key in x` rule,
+    // undefined for every receiver it does not retype. Undefined by default.
+    csharpDeclaredDictReceiverType(node): string | undefined {
         return undefined;
     }
 

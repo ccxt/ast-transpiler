@@ -496,7 +496,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpGuardIndex: WeakMap<ts.Node, Map<string, any[]>>;
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
     csharpTypedLocals: WeakMap<ts.Node, string>;
-    csharpParamTypes: WeakMap<ts.Node, string>;
     stringReceiverTypes: WeakMap<ts.Node, string>;
     conditionOperandTypes: WeakMap<ts.Node, string>;
     constructor(config?: {});
@@ -508,8 +507,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     csharpDeclaredReceiverType(node: any): string | undefined;
-    csharpPrintedParamType(receiver: any): string | undefined;
-    csharpReceiverIsDeclaredDictionary(expression: any): boolean;
     csharpDictionaryElementWriteTarget(node: any): string | undefined;
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
@@ -526,19 +523,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpAlwaysExits(statement: any): boolean;
     csharpContains(outer: any, inner: any): boolean;
     csharpElementAccessReceiverIsList(node: any): boolean;
-    csharpListIndexReadTypes(node: any): {
-        receiver: string;
-        index: string;
-    } | undefined;
-    csharpListIndexRead(node: any): string | undefined;
-    csharpIndexIsLoopBounded(read: any, receiver: any, index: any): boolean;
-    csharpIdentifierSymbol(node: any): any;
-    csharpForBoundsIndex(forStatement: any, read: any, receiverSymbol: any, indexSymbol: any): boolean;
-    csharpLengthReceiverIdentifier(node: any): any;
-    csharpIndexBoundIsVoided(body: any, receiverSymbol: any, indexSymbol: any): boolean;
-    csharpReceiverUseKeepsBound(node: any): boolean;
-    csharpIdentifierIsWritten(node: any): boolean;
-    csharpIsAssignmentOperator(kind: any): boolean;
     csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
     csharpElementAccessTypedReceiver(node: any): string | undefined;
     printTypedDictElementAccessIfAny(node: any): string;
@@ -567,6 +551,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsDictionaryType(type: any): boolean;
     csharpIsArrayType(type: any): boolean;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
+    csharpDeclaredDictInExpression(key: any, obj: any): string | undefined;
+    csharpDeclaredStringKey(key: any): string | undefined;
     csharpNativeLengthExpression(expression: any): string | undefined;
     csharpStringLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -615,7 +601,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     csharpLocalTypeOf(node: any): string | undefined;
-    csharpNativeStringConcat(left: any, right: any, leftText: string, rightText: string): string | undefined;
+    csharpDeclaredDictReceiverType(node: any): string | undefined;
     csharpReceiverIsDeclaredList(receiver: any): boolean;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
