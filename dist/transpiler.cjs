@@ -11037,7 +11037,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       value = `Value::Bool(${value})`;
     }
     const insert = (val) => `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyLiteral[1]}.to_string(), ${val}); }`;
-    if (receiver.isField ? /\bself\b/.test(value) : new RegExp(`\\b${name}\\.clone\\(\\)|&\\s*${name}\\b`).test(value)) {
+    const readsReceiver = receiver.isField ? /\bself\b/.test(value) : new RegExp(`\\b${name}\\b`).test(value);
+    if (readsReceiver) {
       return `{ let __be_tmp = ${value}; ${insert("__be_tmp")} }`;
     }
     const trimmed = value.trim();

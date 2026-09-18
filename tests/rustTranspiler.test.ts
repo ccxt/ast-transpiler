@@ -1356,6 +1356,12 @@ describe('rust native dict inserts', () => {
         expect(output).not.toContain('add_element_to_object(&mut result');
     });
 
+    test('a call passing the receiver as an arg is hoisted too', () => {
+        const ts = 'const params: { [key: string]: any } = {};\nparams["auth"] = this.createAuth(params);';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('{ let __be_tmp = self.createAuth(params); if let Value::Dict(__d) = &mut params { std::sync::Arc::make_mut(__d).insert("auth".to_string(), __be_tmp); } }');
+    });
+
     test('a bool-typed value operand is boxed in Value::Bool', () => {
         const ts = 'const result: { [key: string]: any } = {};\nconst a: any = 1;\nresult["k"] = (a === 1);';
         const output = transpiler.transpileRust(ts).content;

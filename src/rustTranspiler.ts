@@ -558,10 +558,11 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const insert = (val: string) =>
             `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyLiteral[1]}.to_string(), ${val}); }`;
-        // Same temp-hoist the ccxt borrow-conflict pass applies to the helper
-        // call: the value operand may read the receiver it is written into.
-        if (receiver.isField ? /\bself\b/.test(value)
-            : new RegExp(`\\b${name}\\.clone\\(\\)|&\\s*${name}\\b`).test(value)) {
+        // Any mention of the receiver in the value operand reads it while the
+        // write holds the `&mut` — ccxt's splitAddElementBorrowConflicts pass
+        // hoists on the same signal, so mirror it with a temp binding.
+        const readsReceiver = receiver.isField ? /\bself\b/.test(value) : new RegExp(`\\b${name}\\b`).test(value);
+        if (readsReceiver) {
             return `{ let __be_tmp = ${value}; ${insert('__be_tmp')} }`;
         }
         const trimmed = value.trim();
