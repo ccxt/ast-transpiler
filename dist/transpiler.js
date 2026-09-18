@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9412,172 +9412,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return leftKind;
   }
-  // ---- widened native add (`+` only) ------------------------------------
-  // Helpers.add normalizes every Integer to Long first, boxes Long for two integral
-  // operands and Double when either operand is a Double (null in -> null out), so a
-  // native `+` over operands that are provably numeric AND non-null reproduces the
-  // same box on every path. A boxed local the printer cannot prove is NOT accepted:
-  // it may hold null, which the helper absorbs and the native operator would NPE.
-  // `this.milliseconds()` / `this.seconds()`: the hand-written Java declares both
-  // `public Long` over a primitive time value, so the box is never null. An unresolved
-  // call (or a venue override) prints Object/callDynamically and keeps the helper —
-  // only a signature resolving into the base time mixin or the Date.now lib chain is
-  // the hand-written Long accessor.
-  javaBaseTimeLongCall(node) {
-    if (node?.kind !== ts6.SyntaxKind.CallExpression) {
-      return false;
-    }
-    const callee = node.expression;
-    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
-      return false;
-    }
-    const name = callee.name?.escapedText;
-    if (name !== "milliseconds" && name !== "seconds") {
-      return false;
-    }
-    let declaration;
-    try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
-    } catch (e) {
-      declaration = void 0;
-    }
-    if (declaration === void 0) {
-      return false;
-    }
-    const fileName = declaration.getSourceFile?.()?.fileName ?? "";
-    return /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]time\.ts$/.test(fileName) || /(^|[\\/])lib\.[^\\/]*\.d\.ts$/.test(fileName);
-  }
-  // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the emitted
-  // `Object i = 0` initializer to `var i = 0`, so javac types the counter int. The
-  // counter is widened explicitly by javaPrintWidenedOperand, and no `=`/compound
-  // assignment may write it (that value would be a box / a widened long).
-  javaIntForCounter(node) {
-    if (node?.kind !== ts6.SyntaxKind.Identifier) {
-      return false;
-    }
-    const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration;
-    if (declaration === void 0 || !ts6.isVariableDeclaration(declaration)) {
-      return false;
-    }
-    const declarationList = declaration.parent;
-    if (declarationList === void 0 || !ts6.isVariableDeclarationList(declarationList) || declarationList.declarations.length !== 1) {
-      return false;
-    }
-    const forStatement = declarationList.parent;
-    if (forStatement === void 0 || forStatement.kind !== ts6.SyntaxKind.ForStatement || forStatement.initializer !== declarationList) {
-      return false;
-    }
-    if (this.javaIntegerLiteralKind(declaration.initializer) !== "int") {
-      return false;
-    }
-    return this.javaCounterHasNoBoxWrite(node, symbol);
-  }
-  // no `=`/compound assignment anywhere in the enclosing function writes this counter;
-  // `++`/`--` keep the primitive int, any other operator would not
-  javaCounterHasNoBoxWrite(node, symbol) {
-    let scope = node.parent;
-    while (scope !== void 0 && !ts6.isFunctionLike(scope) && scope.kind !== ts6.SyntaxKind.SourceFile) {
-      scope = scope.parent;
-    }
-    if (scope === void 0) {
-      return false;
-    }
-    let safe = true;
-    const visit = (current) => {
-      if (!safe || current === void 0) {
-        return;
-      }
-      if (ts6.isIdentifier(current) && this.getChecker().getSymbolAtLocation(current) === symbol) {
-        const parent = current.parent;
-        if (parent !== void 0 && ts6.isBinaryExpression(parent) && parent.left === current && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(parent.operatorToken.kind)) {
-          safe = false;
-          return;
-        }
-      }
-      ts6.forEachChild(current, visit);
-    };
-    ts6.forEachChild(scope, visit);
-    return safe;
-  }
-  // `x.length` on a String/List receiver prints `((String)x).length()` /
-  // `((java.util.List<?>)x).size()` — a Java int on every path printJavaLength takes
-  javaLengthIntRead(node) {
-    if (node?.kind !== ts6.SyntaxKind.PropertyAccessExpression || node.name?.escapedText !== "length") {
-      return false;
-    }
-    return this.javaLengthKind(node.expression) !== void 0;
-  }
-  // the Java numeric kind of one `+` operand: the literal proofs above plus the
-  // non-null base-tier Long accessors, primitive int for-counters and String/List
-  // length reads. Undefined keeps the helper.
-  javaWidenedNumericKind(node) {
-    if (node === void 0) {
-      return void 0;
-    }
-    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
-      return this.javaWidenedNumericKind(node.expression);
-    }
-    const literalKind = this.javaIntegerLiteralKind(node);
-    if (literalKind !== void 0) {
-      return literalKind;
-    }
-    if (ts6.isNumericLiteral(node)) {
-      if (/^0[xXbBoO]/.test(node.text)) {
-        return void 0;
-      }
-      return /[.eE]/.test(node.text) ? "double" : void 0;
-    }
-    if (this.javaBaseTimeLongCall(node)) {
-      return "long";
-    }
-    if (this.javaIntForCounter(node)) {
-      return "int";
-    }
-    if (this.javaLengthIntRead(node)) {
-      return "int";
-    }
-    if (node.kind === ts6.SyntaxKind.BinaryExpression && node.operatorToken.kind === ts6.SyntaxKind.PlusToken) {
-      return this.javaWidenedAddKind(node);
-    }
-    return this.javaNativeArithmeticKind(node);
-  }
-  // the kind of a nested native `+` this rule prints, or undefined when it keeps the helper
-  javaWidenedAddKind(node) {
-    const leftKind = this.javaWidenedNumericKind(node.left);
-    const rightKind = this.javaWidenedNumericKind(node.right);
-    if (leftKind === void 0 || rightKind === void 0) {
-      return void 0;
-    }
-    return leftKind === "double" || rightKind === "double" ? "double" : "long";
-  }
-  // the native form of a numeric `+`, or undefined to keep Helpers.add
-  printWidenedNativeAdd(left, right, leftText, rightText) {
-    const leftKind = this.javaWidenedNumericKind(left);
-    const rightKind = this.javaWidenedNumericKind(right);
-    if (leftKind === void 0 || rightKind === void 0) {
-      return void 0;
-    }
-    const resultKind = leftKind === "double" || rightKind === "double" ? "double" : "long";
-    const leftOperand = this.javaPrintWidenedOperand(leftKind, resultKind, left, leftText);
-    const rightOperand = this.javaPrintWidenedOperand(rightKind, resultKind, right, rightText);
-    return `(${leftOperand} + ${rightOperand})`;
-  }
-  // an int operand is widened to long explicitly: `i + 1` would box an Integer where
-  // Helpers.add hands back a Long, and an all-int sum wraps where the helper's long
-  // does not. Integer literals print long; a Double result needs no widening.
-  javaPrintWidenedOperand(kind, resultKind, node, text) {
-    if (kind === "double") {
-      return text;
-    }
-    if (kind === "long" || ts6.isNumericLiteral(node)) {
-      return this.javaPrintOperandAsLong(node, text);
-    }
-    if (resultKind === "long") {
-      return `((long) ${text})`;
-    }
-    return text;
-  }
   // integer literals print as Java `int`; the helpers normalize Integer to Long before
   // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
   // result identical
@@ -9610,9 +9444,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (leftFamily !== "number" || rightFamily !== "number") {
       return void 0;
-    }
-    if (op === ts6.SyntaxKind.PlusToken) {
-      return this.printWidenedNativeAdd(left, right, leftText, rightText);
     }
     const leftKind = this.javaProvableNumericKind(left);
     const rightKind = this.javaProvableNumericKind(right);
