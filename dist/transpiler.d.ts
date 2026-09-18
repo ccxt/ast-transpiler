@@ -1138,11 +1138,6 @@ declare class RustTranspiler extends BaseTranspiler {
     typeOfNodeIfAny(node: ts.Node): ts.Type | undefined;
     isValueLengthType(type: ts.Type | undefined): boolean;
     printArrayLength(node: any, identation: any, leftExpr?: any): string;
-    private static readonly RUST_TYPE_PREDICATE_PATTERNS;
-    isDeclaredValueIdentifier(node: any): boolean;
-    isDeclaredValuePlace(node: any): boolean;
-    valuePlaceRoot(node: any): any;
-    nativeValuePredicateText(kind: string, operandNode: any, printedOperand: string): string | undefined;
     isDictShapedType(type: ts.Type | undefined): boolean;
     printNativeInOperator(key: any, obj: any): string;
     foldNegateLiteral(operandText: string): string | undefined;
