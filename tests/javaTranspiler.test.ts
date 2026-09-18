@@ -4417,6 +4417,148 @@ describe('java replaceAll native emission', () => {
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
+
+    // java-18: `-`/`*`/`/` on a local the embedding layer declares `Long`/`Double` print
+    // natively; the embedding layer (build/java-local-types.js) installs the resolver, so
+    // the tests below fake it with a name table.
+    const withNumericLocals = (javaTypes: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaExpressionTypeResolver;
+        printer.javaExpressionTypeResolver = (node: any) => javaTypes[node.escapedText];
+        try {
+            body();
+        } finally {
+            printer.javaExpressionTypeResolver = previous;
+        }
+    };
+
+    test('a Long-declared local subtracts an integer literal natively', () => {
+        withNumericLocals({ now: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const now: number = this.milliseconds();\n" +
+            "        const x = now - 7776000000;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = (now - 7776000000L);');
+            expect(output).not.toContain('Helpers.subtract(');
+        });
+    });
+
+    test('two Long-declared locals multiply natively', () => {
+        withNumericLocals({ a: 'Long', b: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const a: number = this.milliseconds();\n" +
+            "        const b: number = this.milliseconds();\n" +
+            "        const x = a * b;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = (a * b);');
+            expect(output).not.toContain('Helpers.multiply(');
+        });
+    });
+
+    test('a Double-declared local divides natively as a double division', () => {
+        withNumericLocals({ ratio: 'Double' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const ratio: number = this.milliseconds();\n" +
+            "        const x = ratio / 1000;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = (((double) ratio) / ((double) 1000));');
+            expect(output).not.toContain('Helpers.divide(');
+        });
+    });
+
+    test('a nullable local keeps the subtract helper (a null box would NPE)', () => {
+        withNumericLocals({ until: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        let until: number | undefined = undefined;\n" +
+            "        const x = until - 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.subtract(until, 1);');
+        });
+    });
+
+    test('a Double-declared local keeps multiply (an integral double product re-boxes as Long)', () => {
+        withNumericLocals({ ratio: 'Double' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const ratio: number = this.milliseconds();\n" +
+            "        const x = ratio * 2;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = Helpers.multiply(ratio, 2);');
+        });
+    });
+
+    test('a declared numeric local never turns `+` native (java-13/14 own Add)', () => {
+        withNumericLocals({ now: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const now: number = this.milliseconds();\n" +
+            "        const x = now + 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = Helpers.add(now, 1);');
+        });
+    });
+
+    test('a cast operand keeps the helper', () => {
+        withNumericLocals({ now: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const now: number = this.milliseconds();\n" +
+            "        const x = (now as number) - 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.subtract(now, 1);');
+        });
+    });
+
+    test('a captured object-literal local keeps the helper (it prints as an Object finalX)', () => {
+        withNumericLocals({ time: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const time: number = this.milliseconds();\n" +
+            "        const request = { 'start_timestamp': time - 8, 'end_timestamp': time };\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.subtract(finalTime, 8)');
+        });
+    });
+
+    test('without the embedding layer table a numeric local keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const now: number = this.milliseconds();\n" +
+        "        const x = now - 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.subtract(now, 1);');
+    });
 });
 
 describe('falsy-wrapper removal: boolean identifiers and Array.isArray', () => {
