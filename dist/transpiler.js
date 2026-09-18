@@ -5592,6 +5592,32 @@ func New${this.capitalize(this.className)}() *${this.className} {
       this.goLocalTypeResolution.delete(declaration);
     }
   }
+  // `x := <init>` takes the Go type the printed initializer itself produces. The
+  // printer annotates nothing on that form (a `for` initializer), so only the two
+  // literal shapes with a decidable Go default type are named here: an untyped
+  // integer constant is `int`, a floating-point one `float64`. An integer constant
+  // Go would not fit into `int` is left alone (Go infers `int64`/untyped there),
+  // and every other initializer keeps the helper call.
+  goInferredLocalStaticType(node) {
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.initializer === void 0) {
+      return void 0;
+    }
+    const declarationList = declaration.parent;
+    if (declarationList?.kind !== ts5.SyntaxKind.VariableDeclarationList || declarationList.parent?.kind === ts5.SyntaxKind.FirstStatement) {
+      return void 0;
+    }
+    const kind = this.goNumericLiteralKind(declaration.initializer);
+    if (kind === "int" && !this.goLiteralFitsKind(declaration.initializer, "int")) {
+      return void 0;
+    }
+    return kind;
+  }
   // `this.<field>` read of a hand-written BaseExchange string field
   goStringFieldStaticType(node, printedText) {
     const match = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
@@ -5615,7 +5641,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case ts5.SyntaxKind.BinaryExpression:
         return this.goNativeArithmetic(node)?.goType;
       case ts5.SyntaxKind.Identifier:
-        return this.goLocalStaticType(node);
+        return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node);
       case ts5.SyntaxKind.PropertyAccessExpression:
         return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
     }

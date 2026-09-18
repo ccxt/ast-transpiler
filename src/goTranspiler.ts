@@ -1175,6 +1175,34 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
     }
 
+    // `x := <init>` takes the Go type the printed initializer itself produces. The
+    // printer annotates nothing on that form (a `for` initializer), so only the two
+    // literal shapes with a decidable Go default type are named here: an untyped
+    // integer constant is `int`, a floating-point one `float64`. An integer constant
+    // Go would not fit into `int` is left alone (Go infers `int64`/untyped there),
+    // and every other initializer keeps the helper call.
+    goInferredLocalStaticType(node): string | undefined {
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
+            return undefined;
+        }
+        const declarationList = declaration.parent;
+        if (declarationList?.kind !== ts.SyntaxKind.VariableDeclarationList
+            || declarationList.parent?.kind === ts.SyntaxKind.FirstStatement) {
+            return undefined; // the `var x <T> = …` form the printer writes a type on
+        }
+        const kind = this.goNumericLiteralKind(declaration.initializer);
+        if ((kind === 'int') && !this.goLiteralFitsKind(declaration.initializer, 'int')) {
+            return undefined;
+        }
+        return kind;
+    }
+
     // `this.<field>` read of a hand-written BaseExchange string field
     goStringFieldStaticType(node, printedText: string): string | undefined {
         const match = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
@@ -1241,7 +1269,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case ts.SyntaxKind.BinaryExpression:
             return this.goNativeArithmetic(node)?.goType;
         case ts.SyntaxKind.Identifier:
-            return this.goLocalStaticType(node);
+            return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node);
         case ts.SyntaxKind.PropertyAccessExpression:
             // `a.length` / `s.replace(...)` print as helper calls, `this.Id` as a field
             return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
