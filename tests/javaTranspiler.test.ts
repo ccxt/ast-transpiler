@@ -2912,6 +2912,148 @@ describe('checker-typed element access: Helpers.GetValue -> native Map/List acce
     });
 });
 
+describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")', () => {
+    // the checker-typed rule above needs a dict-shaped TS type. The local-typing passes
+    // (build/java-local-types.js) retype declarations the checker leaves boxed, and they
+    // hand the emitted declaration type to the printer; a read of such a local prints the
+    // accessor with no cast, because the declaration already carries the type. Without a
+    // consumer the resolver is absent and every read keeps the helper byte-identically.
+    const MAP_TYPE = 'java.util.Map<String, Object>';
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('declared map receiver reads native with no cast', () => {
+        const input =
+        "class T {\\n" +
+        "    test(x: any): void {\\n" +
+        "        const a = x['k'];\\n" +
+        "        this.something(a);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object a = x.get("k");');
+            expect(output).not.toContain('Helpers.GetValue(x, "k")');
+            expect(output).not.toContain('((java.util.Map<String, Object>)x).get');
+        });
+    });
+
+    test('no consumer installed: the helper stays', () => {
+        const input =
+        "class T {\\n" +
+        "    test(x: any): void {\\n" +
+        "        const a = x['k'];\\n" +
+        "        this.something(a);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(x, "k")');
+        expect(output).not.toContain('x.get("k")');
+    });
+
+    test('a non-map declared type keeps the helper', () => {
+        const input =
+        "class T {\\n" +
+        "    test(x: any): void {\\n" +
+        "        const a = x['k'];\\n" +
+        "        this.something(a);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        for (const type of [ 'Object', 'java.util.List<Object>', 'String' ]) {
+            withResolver(() => type, () => {
+                const output = transpiler.transpileJava(input).content;
+                expect(output).toContain('Helpers.GetValue(x, "k")');
+            });
+        }
+        // the HashMap spelling is the same box: the accessor binds with no cast
+        withResolver(() => 'HashMap<String, Object>', () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object a = x.get("k");');
+        });
+    });
+
+    test('non-literal keys and non-identifier receivers keep the helper', () => {
+        const keys =
+        "class T {\\n" +
+        "    test(x: any, k: string): void {\\n" +
+        "        const a = x[k];\\n" +
+        "        this.something(a);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        const field =
+        "class T {\\n" +
+        "    foo: any;\\n" +
+        "    test(): void {\\n" +
+        "        const a = this.foo['k'];\\n" +
+        "        this.something(a);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        withResolver(() => MAP_TYPE, () => {
+            expect(transpiler.transpileJava(keys).content).toContain('Helpers.GetValue(x, k)');
+            expect(transpiler.transpileJava(field).content).toContain('Helpers.GetValue(this.foo, "k")');
+        });
+    });
+
+    test('a re-assigned local captured as finalX keeps the helper (finalX is Object)', () => {
+        const input =
+        "class T {\\n" +
+        "    test(p: boolean): void {\\n" +
+        "        let x = { 'a': 1 };\\n" +
+        "        if (p) {\\n" +
+        "            x = { 'a': 2 };\\n" +
+        "        }\\n" +
+        "        const y = { 'v': x['a'] };\\n" +
+        "        this.something(x, y);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('final Object finalX = x;');
+            expect(output).toContain('Helpers.GetValue(finalX, "a")');
+            expect(output).not.toContain('finalX.get(');
+        });
+    });
+
+    test('the container of a nested write indexes natively, the steps above it keep the helper', () => {
+        const input =
+        "class T {\\n" +
+        "    test(x: any, v: number): void {\\n" +
+        "        x['a']['b'] = v;\\n" +
+        "        x['c']['d']['e'] = v;\\n" +
+        "        x['f'] = v;\\n" +
+        "        this.something(x);\\n" +
+        "    }\\n" +
+        "    something(...args: any[]): void {}\\n" +
+        "}"
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            // first step of each chain is a read of the declared map
+            expect(output).toContain('Helpers.addElementToObject(x.get("a"), "b", v);');
+            expect(output).toContain('Helpers.addElementToObject(Helpers.GetValue(x.get("c"), "d"), "e", v);');
+            // a single-key write is not a chain: java-12's family, untouched here
+            expect(output).toContain('Helpers.addElementToObject(x, "f", v);');
+        });
+        // without a consumer every step is the helper again
+        const baseline = transpiler.transpileJava(input).content;
+        expect(baseline).toContain('Helpers.addElementToObject(Helpers.GetValue(x, "a"), "b", v);');
+        expect(baseline).toContain('Helpers.addElementToObject(Helpers.GetValue(Helpers.GetValue(x, "c"), "d"), "e", v);');
+    });
+});
+
 describe('java helper-family inlining (+ - * / += -=)', () => {
     test('string + string with one statically-String operand prints a native concat', () => {
         const input =
