@@ -2756,8 +2756,110 @@ describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
         expect(output).toContain("Helpers.isEqual(n, 1)");
         expect(output).toContain("Helpers.isEqual(n, n)");
         expect(output).toContain("Helpers.isEqual(o, o)");
-        expect(output).toContain("Helpers.isEqual(1, 2)");
+        // two int literals print two Java primitives, so the constant pair is native (java-15)
+        expect(output).toContain("(1 == 2)");
         expect(output).not.toContain("java.util.Objects.equals");
+    });
+});
+
+describe('java numeric equality (Helpers.isEqual -> native compare, java-15)', () => {
+    // Helpers.isEqual compares two numeric operands by value, so a pair whose printed Java
+    // operands are primitives of one numeric kind prints the native operator, and a pair of
+    // equal-kind boxes prints Objects.equals (whose class the kind pins down).
+    test('a checker-proven string/List length compares with the native operator', () => {
+        const input =
+        "function f (s: string, xs: number[]) {\n" +
+        "    const a = s.length === 0;\n" +
+        "    const b = xs.length === 1;\n" +
+        "    const c = xs.length !== 2;\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(((String)s).length() == 0)");
+        expect(output).toContain("(((java.util.List<?>)xs).size() == 1)");
+        expect(output).toContain("(((java.util.List<?>)xs).size() != 2)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('a length-typed local compares with Objects.equals (its box is an Integer)', () => {
+        const input =
+        "function f (xs: number[]) {\n" +
+        "    const n = xs.length;\n" +
+        "    return n === 0;\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object n = ((java.util.List<?>)xs).size();");
+        expect(output).toContain("java.util.Objects.equals(n, 0)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('a local re-assigned a different numeric kind keeps the helper (D2 scan)', () => {
+        const input =
+        "function f (xs: number[]) {\n" +
+        "    let n = xs.length;\n" +
+        "    if (n === 0) { n = 0.5; }\n" +
+        "    return n === 0;\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isEqual(n, 0)");
+    });
+
+    test('a local re-assigned the same kind still compares natively', () => {
+        const input =
+        "function f (xs: number[], ys: number[]) {\n" +
+        "    let n = xs.length;\n" +
+        "    n = ys.length;\n" +
+        "    return n === 0;\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Objects.equals(n, 0)");
+    });
+
+    test('a for-loop counter compares with the native operator', () => {
+        const input =
+        "function f (xs: number[]) {\n" +
+        "    for (let i = 0; i < xs.length; i++) {\n" +
+        "        if (i === 0) { return i; }\n" +
+        "    }\n" +
+        "    return 0;\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(i == 0)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('a boxed double keeps the helper (-0.0/0.0), a literal pair compares natively', () => {
+        const input =
+        "function f (xs: number[]) {\n" +
+        "    const rate = 0.5;\n" +
+        "    const n = xs.length;\n" +
+        "    const a = rate === 0.5;\n" +
+        "    const b = 1.5 === 0.5;\n" +
+        "    const c = n === 0.5;\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        // Double.equals separates -0.0 from 0.0 while the helper's toDouble compare does not
+        expect(output).toContain("Helpers.isEqual(rate, 0.5)");
+        expect(output).toContain("(1.5 == 0.5)");
+        // a mixed int/double pair keeps the helper (the box classes differ)
+        expect(output).toContain("Helpers.isEqual(n, 0.5)");
+    });
+
+    test('operands the checker does not prove a plain number keep the helper', () => {
+        const input =
+        "function f (xs: number[], o: any, n: number | undefined) {\n" +
+        "    const d: Dict = { 'k': xs.length };\n" +
+        "    const a = xs['length'] === 0;\n" +
+        "    const b = o === 0;\n" +
+        "    const c = n === 0;\n" +
+        "    const e = (xs as any).length === 0;\n" +
+        "    return [ d, a, b, c, e ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isEqual(o, 0)");
+        expect(output).toContain("Helpers.isEqual(n, 0)");
+        expect(output).not.toContain("Helpers.isEqual(xs, 0)");
     });
 });
 

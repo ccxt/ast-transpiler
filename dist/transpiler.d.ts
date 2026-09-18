@@ -988,7 +988,17 @@ declare class JavaTranspiler extends BaseTranspiler {
     getVarKey(node: any): string;
     equalityOperandFamily(type: any): string | undefined;
     isNullishLiteral(node: any): boolean;
+    javaEqualityLiteralKind(node: any): "int" | "double" | "long";
+    javaNativeLengthKind(node: any): string;
+    isJavaPrimitiveCounterReference(node: any): boolean;
+    javaLocalNumberKind(node: any, depth: any): any;
+    javaWritesKeepNumberKind(declaration: any, symbol: any, kind: any): boolean;
+    expressionReferencesSymbol(node: any, symbol: any): boolean;
+    enclosingFunctionLike(node: any): ts.SignatureDeclaration;
+    javaPrintedNumberKind(node: any, depth?: number): any;
+    javaEqualityNumberKind(node: any): any;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
+    javaOperandPrintsPrimitiveNumber(node: any): boolean;
     elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
     isDictionaryType(node: any): boolean;
     isDictionaryTsType(type: any, checker: any, depth: number): boolean;
