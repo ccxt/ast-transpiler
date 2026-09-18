@@ -177,6 +177,27 @@ const CSHARP_NATIVE_COMPARISON_TOKENS = {
     [ts.SyntaxKind.GreaterThanEqualsToken]: '>=',
 };
 
+// every binary operator that writes its left operand (typescript6 has no First/LastAssignmentOperator
+// range to test against), used by the element-access loop guards below
+const CSHARP_ASSIGNMENT_OPERATOR_KINDS = [
+    ts.SyntaxKind.EqualsToken,
+    ts.SyntaxKind.PlusEqualsToken,
+    ts.SyntaxKind.MinusEqualsToken,
+    ts.SyntaxKind.AsteriskEqualsToken,
+    ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+    ts.SyntaxKind.SlashEqualsToken,
+    ts.SyntaxKind.PercentEqualsToken,
+    ts.SyntaxKind.LessThanLessThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.AmpersandEqualsToken,
+    ts.SyntaxKind.BarEqualsToken,
+    ts.SyntaxKind.CaretEqualsToken,
+    ts.SyntaxKind.BarBarEqualsToken,
+    ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+    ts.SyntaxKind.QuestionQuestionEqualsToken,
+];
+
 // hand-written BaseExchange fields whose C# declaration already is a concrete
 // dictionary/list (cs/ccxt/base/Exchange.Options.cs): a read of the field carries
 // that static type, so its own members (`Count`, `ContainsKey`) replace the helper
@@ -508,7 +529,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const isStringKey = ts.isStringLiteralLike(argumentExpression);
         const isNumberKey = ts.isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
-            return undefined; // only literal keys can be proven present
+            return this.csharpLoopIndexListRead(expression, argumentExpression); // counter proven in range by its loop
         }
         const key = (argumentExpression as any).text;
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -547,6 +568,190 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
         }
         return false;
+    }
+
+    // the read is `recv[i]` with `i` the counter of an enclosing `for (...; i < recv.length; ...)`:
+    // that condition is the range proof for every pass of the body, so the indexer hands back the
+    // very box the helper returns and the helper's out-of-range null branch is unreachable. Both
+    // operands must already print as the C# types the indexer binds: an object-element list
+    // receiver and an `int` counter. Every other shape keeps the helper.
+    csharpLoopIndexListRead(expression, argumentExpression): string | undefined {
+        if (!ts.isIdentifier(expression) || !ts.isIdentifier(argumentExpression)) {
+            return undefined;
+        }
+        const receiverType = this.csharpExpressionTypeOf(expression);
+        if (receiverType === undefined || !this.csharpTypeIsList(receiverType)) {
+            return undefined;
+        }
+        if (this.csharpExpressionTypeOf(argumentExpression) !== 'int') {
+            return undefined; // a boxed/Int64/double index does not bind the List indexer
+        }
+        const loop = this.csharpCounterRangeLoop(argumentExpression, expression);
+        if (loop === undefined) {
+            return undefined;
+        }
+        if (!this.csharpCounterUnwrittenIn(loop.statement, argumentExpression) ||
+            !this.csharpReceiverIntactIn(loop.statement, expression)) {
+            return undefined; // the bound the header proved no longer holds at this read
+        }
+        return `${this.printNode(expression, 0)}[${this.printNode(argumentExpression, 0)}]`;
+    }
+
+    // the enclosing `for` whose condition is `<counter> < <recv>.length` and whose header declares
+    // that counter: the condition held on entry to this pass and nothing in between moved off it
+    csharpCounterRangeLoop(counter, receiver) {
+        let node: any = counter;
+        while (node.parent !== undefined) {
+            const parent: any = node.parent;
+            if (ts.isFunctionLike(parent)) {
+                return undefined; // a closure runs when the counter may already have moved on
+            }
+            if (ts.isForStatement(parent) && this.csharpContains(parent.statement, counter) && this.csharpForBoundsCounter(parent, counter, receiver)) {
+                return parent;
+            }
+            node = parent;
+        }
+        return undefined;
+    }
+
+    csharpForBoundsCounter(loop, counter, receiver): boolean {
+        const condition = this.csharpUnparenthesized(loop.condition);
+        if (condition?.kind !== ts.SyntaxKind.BinaryExpression || condition.operatorToken.kind !== ts.SyntaxKind.LessThanToken) {
+            return false;
+        }
+        const left = this.csharpUnparenthesized(condition.left);
+        const right = this.csharpUnparenthesized(condition.right);
+        if (!ts.isIdentifier(left) || !ts.isPropertyAccessExpression(right) || right.name?.escapedText !== 'length') {
+            return false;
+        }
+        const receiverExpression = this.csharpUnparenthesized(right.expression);
+        if (!ts.isIdentifier(receiverExpression) || !this.csharpCounterStartsAtZero(loop, counter) || !this.csharpCounterAdvances(loop, counter)) {
+            return false;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration;
+        const checker = this.getChecker();
+        return declaration !== undefined &&
+            checker.getSymbolAtLocation(left)?.valueDeclaration === declaration &&
+            checker.getSymbolAtLocation(receiverExpression)?.valueDeclaration === checker.getSymbolAtLocation(receiver)?.valueDeclaration;
+    }
+
+    // `for (let i = <literal >= 0>; ...)` — a negative start would index below the list
+    csharpCounterStartsAtZero(loop, counter): boolean {
+        const initializer: any = loop.initializer;
+        if (initializer?.kind !== ts.SyntaxKind.VariableDeclarationList || initializer.declarations.length !== 1) {
+            return false;
+        }
+        const declaration: any = initializer.declarations[0];
+        if (!ts.isIdentifier(declaration.name) || !ts.isNumericLiteral(declaration.initializer)) {
+            return false;
+        }
+        return Number(declaration.initializer.text) >= 0 && this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration === declaration;
+    }
+
+    // the header moves the counter forward: a decrement could leave a negative index behind
+    csharpCounterAdvances(loop, counter): boolean {
+        const declaration = this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration;
+        const incrementor: any = this.csharpUnparenthesized(loop.incrementor);
+        if (incrementor === undefined || declaration === undefined) {
+            return false;
+        }
+        if (incrementor.kind === ts.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+            return incrementor.operator === ts.SyntaxKind.PlusPlusToken &&
+                this.getChecker().getSymbolAtLocation(incrementor.operand)?.valueDeclaration === declaration;
+        }
+        if (incrementor.kind === ts.SyntaxKind.BinaryExpression && incrementor.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) {
+            return this.getChecker().getSymbolAtLocation(incrementor.left)?.valueDeclaration === declaration &&
+                ts.isNumericLiteral(incrementor.right) && Number(incrementor.right.text) >= 0;
+        }
+        return false;
+    }
+
+    // a write to the counter in the body invalidates the bound the condition proved
+    csharpCounterUnwrittenIn(range, counter): boolean {
+        const declaration = this.getChecker().getSymbolAtLocation(counter)?.valueDeclaration;
+        if (declaration === undefined) {
+            return false;
+        }
+        let written = false;
+        this.csharpWalkIdentifiers(range, (identifier: any) => {
+            if (written || !this.csharpIsSameDeclaration(identifier, declaration)) {
+                return;
+            }
+            const parent: any = identifier.parent;
+            if (ts.isBinaryExpression(parent) && parent.left === identifier) {
+                written = CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0;
+            } else if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && parent.operand === identifier) {
+                written = true;
+            } else if (ts.isDeleteExpression(parent)) {
+                written = true;
+            }
+        });
+        return !written;
+    }
+
+    // the condition's `<recv>.length` still proves the range only while the list is intact: inside
+    // the body the receiver may be read (element reads, its own `.length`) and nothing else
+    csharpReceiverIntactIn(range, receiver): boolean {
+        const declaration = this.getChecker().getSymbolAtLocation(receiver)?.valueDeclaration;
+        if (declaration === undefined) {
+            return false;
+        }
+        let intact = true;
+        this.csharpWalkIdentifiers(range, (identifier: any) => {
+            if (!intact || !this.csharpIsSameDeclaration(identifier, declaration)) {
+                return;
+            }
+            const parent: any = identifier.parent;
+            if (ts.isPropertyAccessExpression(parent) && parent.expression === identifier && parent.name?.escapedText === 'length') {
+                return;
+            }
+            if (ts.isElementAccessExpression(parent) && parent.expression === identifier && !this.csharpIsWriteTarget(parent)) {
+                return;
+            }
+            intact = false;
+        });
+        return intact;
+    }
+
+    csharpIsSameDeclaration(identifier, declaration): boolean {
+        return this.getChecker().getSymbolAtLocation(identifier)?.valueDeclaration === declaration;
+    }
+
+    csharpWalkIdentifiers(node, visit) {
+        if (node === undefined) {
+            return;
+        }
+        if (ts.isIdentifier(node)) {
+            visit(node);
+        }
+        ts.forEachChild(node, (child: any) => this.csharpWalkIdentifiers(child, visit));
+    }
+
+    // `x[i] = v` / `x[i]++` / `delete x[i]` change the receiver in place
+    csharpIsWriteTarget(node): boolean {
+        let value: any = node;
+        while (value.parent !== undefined && ts.isParenthesizedExpression(value.parent)) {
+            value = value.parent;
+        }
+        const parent: any = value.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        if (ts.isBinaryExpression(parent) && parent.left === value) {
+            return CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0;
+        }
+        if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && parent.operand === value) {
+            return true;
+        }
+        return ts.isDeleteExpression(parent);
+    }
+
+    csharpUnparenthesized(node) {
+        let value: any = node;
+        while (value !== undefined && value.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            value = value.expression;
+        }
+        return value;
     }
 
     csharpGuardAdmitsRead(guard, read): boolean {

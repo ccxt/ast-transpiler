@@ -1804,3 +1804,74 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('if (inOp(this.options, key))');
     });
 });
+
+describe('csharp loop-index element reads', () => {
+    // the printed C# type of both the receiver and the counter is what decides whether the List
+    // indexer binds; a local the printer leaves `object` (or that the embedding build layer
+    // retypes) comes back through csharpExpressionTypeResolver — these tests stub that resolver
+    // with a name map, exactly like the numeric-comparison block above
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const loop = (body: string, bound = 'list.length') =>
+        "class Exchange {\n" +
+        "    main(d: { [key: string]: any }) {\n" +
+        "        const list = Object.keys(d);\n" +
+        "        for (let i = 0; i < " + bound + "; i++) {\n" +
+        "            " + body + "\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+    test('a list receiver and an int counter print the indexer', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const symbol = list[i];"));
+        expect(output).toContain('object symbol = list[i];');
+        expect(output).not.toContain('getValue(list, i)');
+    });
+    test('a read inside an object literal prints the indexer too', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const row = { \"id\": list[i] };"));
+        expect(output).toContain('{ "id", list[i] }');
+        expect(output).not.toContain('getValue(list, i)');
+    });
+    test('a counter the build layer cannot retype keeps the helper', () => {
+        // `object i` does not bind the List indexer (the ccxt layer refuses the retype whenever
+        // the counter has a use it cannot vet)
+        const output = withKinds({ list: 'List<object>', i: 'object' }, loop("const symbol = list[i];"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('an object receiver keeps the helper', () => {
+        const output = withKinds({ list: 'object', i: 'int' }, loop("const symbol = list[i];"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('no resolver keeps the helper: the printer alone never names the counter', () => {
+        const output = transpiler.transpileCSharp(loop("const symbol = list[i];")).content;
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a bound that is not this receiver\'s length keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const symbol = list[i];", '10'));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a mutated receiver keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("const symbol = list[i]; list.pop();"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a counter written inside the body keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("i = i + 1; const symbol = list[i];"));
+        expect(output).toContain('object symbol = getValue(list, i);');
+    });
+    test('a read inside a closure keeps the helper', () => {
+        const output = withKinds({ list: 'List<object>', i: 'int' }, loop("this.foo (() => list[i]);"));
+        expect(output).toContain('() => getValue(list, i)');
+    });
+    test('a decrementing header keeps the helper', () => {
+        const input =
+        "class Exchange { main(d: { [key: string]: any }) { const list = Object.keys(d);" +
+        " for (let i = 1; i < list.length; i--) { const symbol = list[i]; } } }";
+        const output = withKinds({ list: 'List<object>', i: 'int' }, input);
+        expect(output).toContain('getValue(list, i)');
+    });
+});
