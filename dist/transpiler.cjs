@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -9357,14 +9357,15 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // the Java kind a numeric operand provably prints with: decimal integer literal ->
   // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
-  // natively -> that node's kind. Anything else (hex/binary literals, negative
-  // literals printed as Helpers.opNeg, calls, identifiers) stays undefined.
-  javaProvableNumericKind(node) {
+  // natively -> that node's kind, a local the embedding layer retyped `Long`/`Double`
+  // -> that kind. Anything else (hex/binary literals, negative literals printed as
+  // Helpers.opNeg, calls, untyped locals) stays undefined.
+  javaProvableNumericKind(node, allowDeclaredLocals = true) {
     if (node === void 0) {
       return void 0;
     }
     if (node.kind === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
-      return this.javaProvableNumericKind(node.expression);
+      return this.javaProvableNumericKind(node.expression, allowDeclaredLocals);
     }
     if (_typescript2.default.isNumericLiteral(node)) {
       const text = node.text;
@@ -9373,15 +9374,57 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       return /[.eE]/.test(text) ? "double" : "long";
     }
+    if (node.kind === _typescript2.default.SyntaxKind.Identifier) {
+      return allowDeclaredLocals ? this.javaDeclaredNumericLocalKind(node) : void 0;
+    }
     if (node.kind === _typescript2.default.SyntaxKind.BinaryExpression) {
-      return this.javaNativeArithmeticKind(node);
+      return this.javaNativeArithmeticKind(node, allowDeclaredLocals);
     }
     return void 0;
   }
+  // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed
+  // numeric, but a null box would NPE where the helpers return null, so the checker must
+  // see a plain non-nullable number here (the nullable aliases and `any` are excluded; a
+  // narrowed use that still reads a `number` is a real guard in the printed Java).
+  javaDeclaredNumericLocalKind(node) {
+    const resolver = this.javaExpressionTypeResolver;
+    if (typeof resolver !== "function") {
+      return void 0;
+    }
+    if (!this.javaOperandIsNonNullNumber(node)) {
+      return void 0;
+    }
+    let javaType;
+    try {
+      javaType = resolver(node);
+    } catch (e) {
+      return void 0;
+    }
+    if (javaType === "Long") {
+      return "long";
+    }
+    if (javaType === "Double") {
+      return "double";
+    }
+    return void 0;
+  }
+  // the checker type is the plain non-nullable `number` (TypeFlags.Number, no alias):
+  // `Int`/`Num`/`any` and unions hold undefined at runtime, which the helpers absorb
+  javaOperandIsNonNullNumber(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    return type !== void 0 && type.aliasSymbol === void 0 && type.flags === _typescript2.default.TypeFlags.Number;
+  }
   // the kind of the native arithmetic this rule prints for `+ - * /`, or undefined when
   // the node keeps the helper. Mirrors printInlineHelperArithmetic operand-for-operand
-  // so callers can reason about the printed text of a nested arithmetic operand.
-  javaNativeArithmeticKind(node) {
+  // so callers can reason about the printed text of a nested arithmetic operand;
+  // `allowDeclaredLocals=false` asks for a kind that does not rely on a retyped local
+  // anywhere in the subtree (`+` never consumes one — java-13/14 own Add).
+  javaNativeArithmeticKind(node, allowDeclaredLocals = true) {
     const op = _optionalChain([node, 'optionalAccess', _458 => _458.operatorToken, 'optionalAccess', _459 => _459.kind]);
     const isPlus = op === _typescript2.default.SyntaxKind.PlusToken;
     const isMinus = op === _typescript2.default.SyntaxKind.MinusToken;
@@ -9393,18 +9436,32 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaScalarFamily(node.left) !== "number" || this.javaScalarFamily(node.right) !== "number") {
       return void 0;
     }
-    const leftKind = this.javaProvableNumericKind(node.left);
-    const rightKind = this.javaProvableNumericKind(node.right);
-    if (leftKind === void 0 || leftKind !== rightKind) {
+    const childAllows = allowDeclaredLocals && !isPlus;
+    const leftKind = this.javaProvableNumericKind(node.left, childAllows);
+    const rightKind = this.javaProvableNumericKind(node.right, childAllows);
+    return this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+  }
+  // the kind of the native operator emitted for a proven pair, or undefined when the
+  // pair keeps the helper. The helper's branch for the pair IS this operator: `/` is
+  // always a double division (TS `/` is float division and divide never returns a long);
+  // `-` boxes long for a long/long pair and double when either side is double; `*` only
+  // on long pairs, since multiply re-boxes an integral double product as Long; `+` keeps
+  // phase-1's equal-kind rule.
+  javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind) {
+    if (leftKind === void 0 || rightKind === void 0) {
       return void 0;
     }
     if (isDivide) {
       return "double";
     }
-    if (isMultiply && leftKind === "double") {
-      return void 0;
+    const hasDouble = leftKind === "double" || rightKind === "double";
+    if (isMultiply) {
+      return hasDouble ? void 0 : "long";
     }
-    return leftKind;
+    if (isPlus) {
+      return leftKind === rightKind ? leftKind : void 0;
+    }
+    return hasDouble ? "double" : "long";
   }
   // integer literals print as Java `int`; the helpers normalize Integer to Long before
   // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
@@ -9439,16 +9496,15 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (leftFamily !== "number" || rightFamily !== "number") {
       return void 0;
     }
-    const leftKind = this.javaProvableNumericKind(left);
-    const rightKind = this.javaProvableNumericKind(right);
-    if (leftKind === void 0 || leftKind !== rightKind) {
+    const childAllows = !isPlus;
+    const leftKind = this.javaProvableNumericKind(left, childAllows);
+    const rightKind = this.javaProvableNumericKind(right, childAllows);
+    const pairKind = this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+    if (pairKind === void 0) {
       return void 0;
     }
     if (isDivide) {
       return `(((double) ${leftText}) / ((double) ${rightText}))`;
-    }
-    if (isMultiply && leftKind === "double") {
-      return void 0;
     }
     const operator = isPlus ? "+" : isMinus ? "-" : "*";
     return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;

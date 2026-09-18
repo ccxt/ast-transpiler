@@ -79,6 +79,11 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
 
 export class JavaTranspiler extends BaseTranspiler {
 
+    // the embedding build layer (build/java-local-types.js) installs this: it names the
+    // Java type of a local whose printed declaration line it rewrote (`Long`/`Double`).
+    // The arithmetic rule reads it for identifier operands only.
+    javaExpressionTypeResolver?: (node) => string | undefined;
+
     countRequiredParameters(declaration) {
         // parameters with no default, no question token and no rest are required positionally
         const params = declaration?.parameters ?? [];
@@ -1225,14 +1230,15 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // the Java kind a numeric operand provably prints with: decimal integer literal ->
     // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
-    // natively -> that node's kind. Anything else (hex/binary literals, negative
-    // literals printed as Helpers.opNeg, calls, identifiers) stays undefined.
-    javaProvableNumericKind(node): string | undefined {
+    // natively -> that node's kind, a local the embedding layer retyped `Long`/`Double`
+    // -> that kind. Anything else (hex/binary literals, negative literals printed as
+    // Helpers.opNeg, calls, untyped locals) stays undefined.
+    javaProvableNumericKind(node, allowDeclaredLocals = true): string | undefined {
         if (node === undefined) {
             return undefined;
         }
         if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
-            return this.javaProvableNumericKind(node.expression);
+            return this.javaProvableNumericKind(node.expression, allowDeclaredLocals);
         }
         if (ts.isNumericLiteral(node)) {
             const text = node.text;
@@ -1241,16 +1247,60 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             return /[.eE]/.test(text) ? 'double' : 'long';
         }
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            return allowDeclaredLocals ? this.javaDeclaredNumericLocalKind(node) : undefined;
+        }
         if (node.kind === ts.SyntaxKind.BinaryExpression) {
-            return this.javaNativeArithmeticKind(node);
+            return this.javaNativeArithmeticKind(node, allowDeclaredLocals);
         }
         return undefined;
     }
 
+    // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed
+    // numeric, but a null box would NPE where the helpers return null, so the checker must
+    // see a plain non-nullable number here (the nullable aliases and `any` are excluded; a
+    // narrowed use that still reads a `number` is a real guard in the printed Java).
+    javaDeclaredNumericLocalKind(node): string | undefined {
+        const resolver = this.javaExpressionTypeResolver;
+        if (typeof resolver !== 'function') {
+            return undefined;
+        }
+        if (!this.javaOperandIsNonNullNumber(node)) {
+            return undefined;
+        }
+        let javaType;
+        try {
+            javaType = resolver(node);
+        } catch (e) {
+            return undefined;
+        }
+        if (javaType === 'Long') {
+            return 'long';
+        }
+        if (javaType === 'Double') {
+            return 'double';
+        }
+        return undefined;
+    }
+
+    // the checker type is the plain non-nullable `number` (TypeFlags.Number, no alias):
+    // `Int`/`Num`/`any` and unions hold undefined at runtime, which the helpers absorb
+    javaOperandIsNonNullNumber(node): boolean {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        return type !== undefined && type.aliasSymbol === undefined && type.flags === ts.TypeFlags.Number;
+    }
+
     // the kind of the native arithmetic this rule prints for `+ - * /`, or undefined when
     // the node keeps the helper. Mirrors printInlineHelperArithmetic operand-for-operand
-    // so callers can reason about the printed text of a nested arithmetic operand.
-    javaNativeArithmeticKind(node): string | undefined {
+    // so callers can reason about the printed text of a nested arithmetic operand;
+    // `allowDeclaredLocals=false` asks for a kind that does not rely on a retyped local
+    // anywhere in the subtree (`+` never consumes one — java-13/14 own Add).
+    javaNativeArithmeticKind(node, allowDeclaredLocals = true): string | undefined {
         const op = node?.operatorToken?.kind;
         const isPlus = op === ts.SyntaxKind.PlusToken;
         const isMinus = op === ts.SyntaxKind.MinusToken;
@@ -1262,18 +1312,33 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaScalarFamily(node.left) !== 'number' || this.javaScalarFamily(node.right) !== 'number') {
             return undefined;
         }
-        const leftKind = this.javaProvableNumericKind(node.left);
-        const rightKind = this.javaProvableNumericKind(node.right);
-        if (leftKind === undefined || leftKind !== rightKind) {
+        const childAllows = allowDeclaredLocals && !isPlus;
+        const leftKind = this.javaProvableNumericKind(node.left, childAllows);
+        const rightKind = this.javaProvableNumericKind(node.right, childAllows);
+        return this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+    }
+
+    // the kind of the native operator emitted for a proven pair, or undefined when the
+    // pair keeps the helper. The helper's branch for the pair IS this operator: `/` is
+    // always a double division (TS `/` is float division and divide never returns a long);
+    // `-` boxes long for a long/long pair and double when either side is double; `*` only
+    // on long pairs, since multiply re-boxes an integral double product as Long; `+` keeps
+    // phase-1's equal-kind rule.
+    javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind): string | undefined {
+        if (leftKind === undefined || rightKind === undefined) {
             return undefined;
         }
         if (isDivide) {
             return 'double';
         }
-        if (isMultiply && leftKind === 'double') {
-            return undefined;
+        const hasDouble = (leftKind === 'double') || (rightKind === 'double');
+        if (isMultiply) {
+            return hasDouble ? undefined : 'long';
         }
-        return leftKind;
+        if (isPlus) {
+            return (leftKind === rightKind) ? leftKind : undefined;
+        }
+        return hasDouble ? 'double' : 'long';
     }
 
     // integer literals print as Java `int`; the helpers normalize Integer to Long before
@@ -1312,19 +1377,18 @@ export class JavaTranspiler extends BaseTranspiler {
         if (leftFamily !== 'number' || rightFamily !== 'number') {
             return undefined;
         }
-        const leftKind = this.javaProvableNumericKind(left);
-        const rightKind = this.javaProvableNumericKind(right);
-        if (leftKind === undefined || leftKind !== rightKind) {
+        // `+` keeps phase-1's literal-only rule (java-13/14 own Add): its operands must not
+        // derive from a retyped local anywhere below
+        const childAllows = !isPlus;
+        const leftKind = this.javaProvableNumericKind(left, childAllows);
+        const rightKind = this.javaProvableNumericKind(right, childAllows);
+        const pairKind = this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+        if (pairKind === undefined) {
             return undefined;
         }
         if (isDivide) {
             // TS `/` is always float division and Helpers.divide never returns a long
             return `(((double) ${leftText}) / ((double) ${rightText}))`;
-        }
-        if (isMultiply && leftKind === 'double') {
-            // Helpers.multiply re-boxes an integral double product as Long, so a native
-            // double product would change the boxed kind
-            return undefined;
         }
         const operator = isPlus ? '+' : (isMinus ? '-' : '*');
         return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
