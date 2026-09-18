@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -10601,7 +10601,7 @@ var parserConfig6 = {
   "ELSEIF_TOKEN": "else if",
   "OBJECT_OPENING": "{",
   "OBJECT_CLOSING": "}",
-  "ARRAY_OPENING_TOKEN": "Value::List(vec![",
+  "ARRAY_OPENING_TOKEN": "Value::from(vec![",
   "ARRAY_CLOSING_TOKEN": "])",
   "PROPERTY_ASSIGNMENT_TOKEN": ":",
   "VAR_TOKEN": "let mut",
@@ -12179,7 +12179,7 @@ ${this.getIden(identation)}})`;
   }
   printArrayLiteralExpression(node, identation) {
     const elements = node.elements.map((e) => this.printNode(e, 0)).join(", ");
-    return `Value::List(vec![${elements}])`;
+    return `Value::from(vec![${elements}])`;
   }
   printDeleteExpression(node, identation) {
     const object = this.printNode(node.expression.expression, 0);

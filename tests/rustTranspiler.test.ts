@@ -115,10 +115,32 @@ describe('rust transpiling tests', () => {
     test('array literal', () => {
         const ts = "const x = [1,2,3];"
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::List(vec![');
+        expect(output).toContain('Value::from(vec![');
+        expect(output).not.toContain('Value::List(');
         expect(output).toContain('Value::Int(1)');
         expect(output).toContain('Value::Int(2)');
         expect(output).toContain('Value::Int(3)');
+    });
+
+    test('empty array literal', () => {
+        const ts = "const x = [];"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::from(vec![])');
+        expect(output).not.toContain('Value::List(');
+    });
+
+    test('nested array literal', () => {
+        const ts = "const x = [[1],[]];"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::from(vec![Value::from(vec![Value::Int(1)]), Value::from(vec![])])');
+        expect(output).not.toContain('Value::List(');
+    });
+
+    test('array literal as a call argument', () => {
+        const ts = "const x = this.foo([1,2]);"
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.foo(Value::from(vec![Value::Int(1), Value::Int(2)]))');
+        expect(output).not.toContain('Value::List(');
     });
 
     test('array length', () => {
