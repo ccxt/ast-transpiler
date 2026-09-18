@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -4757,8 +4757,16 @@ var GO_BOOL_FIELDS = /* @__PURE__ */ new Set([
   "this.EnableRateLimit",
   "this.ReduceFees",
   "this.SubstituteCommonCurrencyCodes",
-  "this.IsSandboxModeEnabled"
+  "this.IsSandboxModeEnabled",
+  // `public newUpdates: boolean` in ts/src/base/Exchange.ts; the hand-written
+  // struct field is the `NewUpdates bool` read by every WS loop
+  "this.NewUpdates"
 ]);
+var GO_BOOL_CALL_NAMES_NATIVE = [
+  "this.IsEmpty",
+  "this.IsJsonEncodedObject",
+  "this.IsBinaryMessage"
+];
 var GO_ANY_BOX_CALLS = [
   "GetValue",
   "Ternary",
@@ -6912,7 +6920,11 @@ ${this.getIden(level)}}()`;
     if (this.goTypeOfInitializer(node, printed) === "bool") {
       return printed;
     }
-    return GO_BOOL_FIELDS.has(printed) ? printed : void 0;
+    if (GO_BOOL_FIELDS.has(printed)) {
+      return printed;
+    }
+    const callee = this.goPrintedCallee(printed);
+    return callee !== void 0 && GO_BOOL_CALL_NAMES_NATIVE.indexOf(callee) >= 0 ? printed : void 0;
   }
   // gofmt prints the condition of every `if`/`for`/`switch` through
   // go/printer/nodes.go controlClause() -> stripParens(): the single outermost,
