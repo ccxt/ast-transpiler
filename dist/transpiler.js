@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10352,93 +10352,11 @@ var JavaTranspiler = class extends BaseTranspiler {
   printAssertCall(_node, _identation, parsedArgs) {
     return `assert(${parsedArgs})`;
   }
-  printSliceCall(node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    const nativeCall = this.nativeSliceCallIfProvable(node, name);
-    if (nativeCall !== void 0) {
-      return nativeCall;
-    }
+  printSliceCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     if (parsedArg2 === void 0) {
       parsedArg2 = "null";
     }
     return `Helpers.slice(${name}, ${parsedArg}, ${parsedArg2})`;
-  }
-  // Integer value of a slice bound that is an integer literal (`18`, `-64`); anything
-  // else (expression, float, exponent, out of int range) keeps the helper — the Java
-  // helper converts its bounds with toInt, and a double cannot be clamped with the
-  // integer Math.min/Math.max of the native form.
-  javaSliceLiteralBound(node) {
-    if (node === void 0) {
-      return void 0;
-    }
-    if (ts6.isNumericLiteral(node)) {
-      const text = String(node.text);
-      if (text.indexOf(".") !== -1 || text.indexOf("e") !== -1 || text.indexOf("E") !== -1) {
-        return void 0;
-      }
-      const value = Number(text);
-      return value <= 2147483647 ? value : void 0;
-    }
-    if (ts6.isPrefixUnaryExpression(node) && node.operator === ts6.SyntaxKind.MinusToken) {
-      const inner = this.javaSliceLiteralBound(node.operand);
-      return inner === void 0 ? void 0 : -inner;
-    }
-    return void 0;
-  }
-  // JS slice clamps a literal bound into [0, length]: a non-negative bound is min
-  // (bound, length), a negative one counts from the end (max (length - |bound|, 0)).
-  // `0` stays `0` because the length of a String/List is never negative.
-  javaSliceBoundExpression(value, length) {
-    if (value === 0) {
-      return "0";
-    }
-    return value > 0 ? `Math.min(${value}, ${length})` : `Math.max(${length} - ${-value}, 0)`;
-  }
-  // `x.slice (a, b)` -> substring/subList when the checker proves the receiver prints
-  // as a String/List AND every bound is an integer literal: Java's substring/subList
-  // throw where JS clamps, so only the literal bounds can be clamped with Math.min /
-  // Math.max before the call. The null guard keeps the helper's null -> null result,
-  // and it is only emitted for a side-effect-free receiver (identifier or property
-  // access), which may be read two or three times.
-  nativeSliceCallIfProvable(node, name) {
-    const args = node?.arguments ?? [];
-    if (args.length < 1 || args.length > 2) {
-      return void 0;
-    }
-    const start = this.javaSliceLiteralBound(args[0]);
-    if (start === void 0) {
-      return void 0;
-    }
-    const hasEnd = args.length === 2;
-    const end = hasEnd ? this.javaSliceLiteralBound(args[1]) : void 0;
-    if (hasEnd && end === void 0) {
-      return void 0;
-    }
-    const receiverExpression = ts6.isPropertyAccessExpression(node?.expression) ? node.expression.expression : void 0;
-    if (!this.sideEffectFreeReceiver(receiverExpression)) {
-      return void 0;
-    }
-    let kind;
-    try {
-      const type = this.getChecker().getTypeAtLocation(receiverExpression);
-      if (this.isStringType(type.flags)) {
-        kind = "String";
-      } else if (this.isJavaListType(type) && !this.isVarargsArrayReference(receiverExpression)) {
-        kind = "List";
-      } else {
-        return void 0;
-      }
-    } catch (e) {
-      return void 0;
-    }
-    const cast = kind === "String" ? `((String)${name})` : `((java.util.List<Object>)${name})`;
-    const length = kind === "String" ? `${cast}.length()` : `${cast}.size()`;
-    const startText = this.javaSliceBoundExpression(start, length);
-    const endText = hasEnd ? this.javaSliceBoundExpression(end, length) : length;
-    const ordered = start === 0 || !hasEnd || start >= 0 && end >= 0 && start <= end || start < 0 && end < 0 && start <= end;
-    const fromText = ordered ? startText : `Math.min(${startText}, ${endText})`;
-    const argumentsText = hasEnd || kind === "List" ? `${fromText}, ${endText}` : fromText;
-    const method = kind === "String" ? "substring" : "subList";
-    return `(${name} == null ? null : ${cast}.${method}(${argumentsText}))`;
   }
   printReplaceCall(_node, _identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;

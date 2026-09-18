@@ -1084,10 +1084,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printReverseCall(_node: any, _identation: any, name?: any): string;
     printPopCall(_node: any, _identation: any, name?: any): string;
     printAssertCall(_node: any, _identation: any, parsedArgs: any): string;
-    printSliceCall(node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
-    javaSliceLiteralBound(node: any): any;
-    javaSliceBoundExpression(value: any, length: any): string;
-    nativeSliceCallIfProvable(node: any, name: any): string;
+    printSliceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     stringLiteralArgument(argument: any): string;
