@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2752,7 +2752,6 @@ var CSHARP_NATIVE_COMPARISON_TOKENS = {
   [ts4.SyntaxKind.LessThanEqualsToken]: "<=",
   [ts4.SyntaxKind.GreaterThanEqualsToken]: ">="
 };
-var CSHARP_MINMAX_NATIVE_KINDS = ["int", "Int64"];
 var CSHARP_NATIVE_FIELDS = {
   "options": "ConcurrentDictionary<string, object>",
   "features": "Dictionary<string, object>",
@@ -3249,9 +3248,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const parsedArg2 = this.printNode(args[1], 0);
         switch (expressionText) {
           case "Math.min":
-            return this.csharpNativeMathMinMax(node, "Min", parsedArg1, parsedArg2) ?? `mathMin(${parsedArg1}, ${parsedArg2})`;
+            return `mathMin(${parsedArg1}, ${parsedArg2})`;
           case "Math.max":
-            return this.csharpNativeMathMinMax(node, "Max", parsedArg1, parsedArg2) ?? `mathMax(${parsedArg1}, ${parsedArg2})`;
+            return `mathMax(${parsedArg1}, ${parsedArg2})`;
           case "Math.pow":
             return `Math.Pow(Convert.ToDouble(${parsedArg1}), Convert.ToDouble(${parsedArg2}))`;
         }
@@ -3476,16 +3475,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the TypeScript checker must see two plain numbers: `any` (could be a string box) and a
   // nullable union (the helper orders null, C# would throw) both keep the runtime helper
   csharpOperandsAreNumbers(node) {
-    return this.csharpOperandIsPlainNumber(node.left) && this.csharpOperandIsPlainNumber(node.right);
-  }
-  csharpOperandIsPlainNumber(operand) {
-    let flags;
-    try {
-      flags = this.getChecker().getTypeAtLocation(operand)?.flags;
-    } catch (e) {
-      return false;
-    }
-    return flags === ts4.TypeFlags.Number || flags === ts4.TypeFlags.NumberLiteral;
+    const isNumber = (operand) => {
+      let flags;
+      try {
+        flags = this.getChecker().getTypeAtLocation(operand)?.flags;
+      } catch (e) {
+        return false;
+      }
+      return flags === ts4.TypeFlags.Number || flags === ts4.TypeFlags.NumberLiteral;
+    };
+    return isNumber(node.left) && isNumber(node.right);
   }
   // `<`, `>`, `<=`, `>=` on two operands of the same proven C# number kind print natively:
   // the helper compares the two boxes with the conversions the operator applies, and only
@@ -3509,44 +3508,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const leftText = this.printNode(node.left, 0).trim();
     const rightText = this.printNode(node.right, 0).trim();
     return leftText + " " + token + " " + rightText;
-  }
-  // `Math.min (a, b)` / `Math.max (a, b)`: mathMin/mathMax read both boxes through
-  // Convert.ToDouble and return an ORIGINAL one (null when either side is null), Math.Min/Max
-  // the extremum of one numeric kind. Native only when both operands are declared integers of
-  // the same kind, the checker sees two plain numbers and the value lands where a primitive
-  // stands in for the box; every other shape keeps the helper.
-  csharpNativeMathMinMax(node, name, parsedArg1, parsedArg2) {
-    const args = node.arguments;
-    if (args?.length !== 2 || !this.csharpMinMaxResultIsPlainValue(node)) {
-      return void 0;
-    }
-    const leftKind = this.csharpExpressionTypeOf(args[0]);
-    if (leftKind === void 0 || leftKind !== this.csharpExpressionTypeOf(args[1]) || CSHARP_MINMAX_NATIVE_KINDS.indexOf(leftKind) < 0) {
-      return void 0;
-    }
-    if (!this.csharpOperandIsPlainNumber(args[0]) || !this.csharpOperandIsPlainNumber(args[1])) {
-      return void 0;
-    }
-    return "Math." + name + "(" + parsedArg1 + ", " + parsedArg2 + ")";
-  }
-  // the positions that take the primitive as the helper's box: assignment, argument,
-  // dictionary/list value, return and ternary arm all box an int the same way. A receiver, an
-  // `as`/`!` wrapper and the printer's hard `(string)` casts (throw / `delete`) do not.
-  csharpMinMaxResultIsPlainValue(node) {
-    if (this.csharpIsClassThrowArgument(node) || this.csharpIsDeleteKey(node)) {
-      return false;
-    }
-    let parent = node.parent;
-    while (parent !== void 0 && ts4.isParenthesizedExpression(parent)) {
-      parent = parent.parent;
-    }
-    if (parent === void 0) {
-      return false;
-    }
-    if ((ts4.isPropertyAccessExpression(parent) || ts4.isElementAccessExpression(parent) || ts4.isCallExpression(parent)) && parent.expression === node) {
-      return false;
-    }
-    return parent.kind !== ts4.SyntaxKind.AsExpression && parent.kind !== ts4.SyntaxKind.TypeAssertionExpression && parent.kind !== ts4.SyntaxKind.NonNullExpression;
   }
   // the printed receiver whose C# static type is a known collection: a local this
   // printer declared with a concrete type (csharpTypedLocals), or a hand-written
