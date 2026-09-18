@@ -1096,7 +1096,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
     javaBooleanCondition(node: any): any;
-    javaConditionPrintsBoolean(node: any): boolean;
+    javaPreciseBooleanCall(node: any): any;
+    javaConditionPrintsBoolean(node: any): any;
     printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;
     printDeleteExpression(node: any, _identation: any): string;
