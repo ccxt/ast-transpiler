@@ -939,6 +939,13 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the Go type the printed expression already produces; '*string' / '*int64'
     // helpers box a nilable pointer, so those keep the helper call as well
     goStringCallStaticType(node, printedText: string): string | undefined {
+        // the operator needs the printed expression's *static* Go type. A helper whose
+        // Go signature returns `any` (GetValue, Ternary, ...) prints an interface box even
+        // when a classifier can name the value inside it — that value only becomes
+        // typed through an assertion at a declaration, never inline as an operand.
+        if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) {
+            return undefined;
+        }
         const goType = this.goTypeOfInitializer(node, printedText);
         return ('string' === goType || 'int' === goType || 'int64' === goType) ? goType : undefined;
     }

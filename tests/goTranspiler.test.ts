@@ -1007,6 +1007,32 @@ describe('go inline equality', () => {
         expect(output).not.toContain("ConcatString");
         expect(output).not.toContain("AddNumber");
     });
+    test('a classifier that types an any-box read at its declaration does not make the operand native', () => {
+        // ccxt installs goTypeOfInitializer hooks that name the value inside `GetValue(keys, i)`
+        // (a []string element) so the *declaration* can assert it; the printed operand is
+        // still an interface box, so `"a:" + keys[i]` must keep the helper
+        const hooked = new Transpiler({ 'verbose': false });
+        const printer: any = hooked.goTranspiler;
+        const upstream = printer.goTypeOfInitializer;
+        printer.goTypeOfInitializer = function (initializer, printedValue) {
+            const known = upstream.call(this, initializer, printedValue);
+            if (known !== undefined) {
+                return known;
+            }
+            return /^GetValue\(keys, i\)$/.test((printedValue ?? '').trim()) ? 'string' : undefined;
+        };
+        const input =
+        "function f (symbols: any) {\n" +
+        "    const keys = Object.keys (symbols);\n" +
+        "    for (let i = 0; i < keys.length; i++) {\n" +
+        "        const hash = 'myTrades:' + keys[i];\n" +
+        "        const key = keys[i];\n" +
+        "    }\n" +
+        "}\n"
+        const output = hooked.transpileGo(input).content;
+        expect(output).toContain("var hash any = Add(\"myTrades:\", GetValue(keys, i))");
+        expect(output).toContain("var key string = GetValue(keys, i)");
+    });
     test('truthiness is inlined for locals whose Go type the printer declared', () => {
         const input =
         "class T {\n" +
