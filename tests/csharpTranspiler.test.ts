@@ -3781,3 +3781,115 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         expect(output).toContain('getValue((((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
     });
 });
+
+describe('cs-10: literal-key reads on declared collection locals go native', () => {
+    test('a dictionary local reads its key natively, answering null where GetValue does', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market) {\n" +
+        "        const result = this.extend({}, market);\n" +
+        "        const spot = result['spot'];\n" +
+        "        return spot;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Dictionary<string, object> result = this.extend(");
+        expect(output).toContain('object spot = (result != null && result.ContainsKey("spot") ? result["spot"] : null);');
+    });
+    test('a list local reads its index natively with the helper` own bounds test', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const rows = this.safeList(item, 'rows');\n" +
+        "        const first = rows[0];\n" +
+        "        const second = rows[1];\n" +
+        "        return [first, second];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("List<object> rows = this.safeList(");
+        expect(output).toContain('object first = (rows != null && 0 < rows.Count ? rows[0] : null);');
+        expect(output).toContain('object second = (rows != null && 1 < rows.Count ? rows[1] : null);');
+    });
+    test('the element-write container chain reads natively too', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market) {\n" +
+        "        const result = this.extend({}, market);\n" +
+        "        result['a']['b'] = 1;\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((IDictionary<string,object>)(result != null && result.ContainsKey("a") ? result["a"] : null))["b"] = 1;');
+    });
+    test('readers without a declared collection type keep getValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
+        "    main(market, item) {\n" +
+        "        const result = this.extend({}, market);\n" +
+        "        const rows = this.safeList(item, 'rows');\n" +
+        "        const untyped = this.safeValue(item, 'x');\n" +
+        "        const a = untyped['k'];\n" +
+        "        const b = result[0];\n" +
+        "        const c = rows['a'];\n" +
+        "        const d = rows[0];\n" +
+        "        const e = rows[1.5];\n" +
+        "        return [a, b, c, d, e];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        // an `object` local is not a declared collection
+        expect(output).toContain('object a = getValue(untyped, "k");');
+        // a dictionary index and a list key have no native twin
+        expect(output).toContain('object b = getValue(result, 0);');
+        expect(output).toContain('object c = getValue(rows, "a");');
+        // a declared list does read natively
+        expect(output).toContain('object d = (rows != null && 0 < rows.Count ? rows[0] : null);');
+        // ...but not through a non-integer index
+        expect(output).toContain('object e = getValue(rows, 1.5);');
+    });
+    test('a receiver reassigned in the function keeps getValue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(market, other) {\n" +
+        "        let result = this.extend({}, market);\n" +
+        "        result = other;\n" +
+        "        const spot = result['spot'];\n" +
+        "        return spot;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object spot = getValue(result, "spot");');
+    });
+    test('a declaration type recorded by the embedding layer feeds the same rule', () => {
+        // the printed declaration stays `object`; the resolver names the type it was emitted with,
+        // so the read only goes native while that proof is installed
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const untyped = this.safeValue(item, 'x');\n" +
+        "        const y = untyped['k'];\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}\n";
+        transpiler.csharpTranspiler.csharpDeclaredLocalTypeResolver = (declaration) => (declaration.name?.escapedText === 'untyped') ? 'Dictionary<string, object>' : undefined;
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("object untyped = this.safeValue(item, \"x\");");
+            expect(output).toContain('object y = (untyped != null && untyped.ContainsKey("k") ? untyped["k"] : null);');
+        } finally {
+            transpiler.csharpTranspiler.csharpDeclaredLocalTypeResolver = undefined;
+        }
+        const fallback = transpiler.transpileCSharp(input).content;
+        expect(fallback).toContain('object y = getValue(untyped, "k");');
+    });
+});
