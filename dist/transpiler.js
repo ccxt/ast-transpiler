@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9363,8 +9363,8 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // the Java kind a numeric operand provably prints with: decimal integer literal ->
   // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
-  // natively -> that node's kind. Anything else (hex/binary literals, a `-<literal>`
-  // prefix node, calls, identifiers) stays undefined.
+  // natively -> that node's kind. Anything else (hex/binary literals, negative
+  // literals printed as Helpers.opNeg, calls, identifiers) stays undefined.
   javaProvableNumericKind(node) {
     if (node === void 0) {
       return void 0;
@@ -10421,59 +10421,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return `${leftSide}++`;
   }
-  // the identifier declared by a `for (var i = <int literal>; ...; i++)` header: the
-  // printer writes that initializer as `var`, so javac infers a primitive int and the
-  // ++/-- increment keeps it one
-  javaPrimitiveCounter(node) {
-    if (node?.kind !== ts6.SyntaxKind.Identifier) {
-      return false;
-    }
-    const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
-    if (declaration === void 0 || !ts6.isVariableDeclaration(declaration) || !ts6.isIdentifier(declaration.name)) {
-      return false;
-    }
-    if (declaration.name.escapedText !== node.escapedText || declaration.initializer === void 0) {
-      return false;
-    }
-    const list = declaration.parent;
-    if (list?.kind !== ts6.SyntaxKind.VariableDeclarationList || list.declarations.length !== 1) {
-      return false;
-    }
-    const forStatement = list.parent;
-    if (forStatement?.kind !== ts6.SyntaxKind.ForStatement || forStatement.initializer !== list) {
-      return false;
-    }
-    if (this.javaIntegerLiteralKind(declaration.initializer) === void 0) {
-      return false;
-    }
-    const incrementor = forStatement.incrementor;
-    return incrementor?.kind === ts6.SyntaxKind.PostfixUnaryExpression && incrementor.operand?.kind === ts6.SyntaxKind.Identifier && incrementor.operand.escapedText === node.escapedText;
-  }
-  // `-x` prints as the plain Java operator when the printed operand is already a
-  // primitive: a decimal numeric literal or a nested `+ - * /` this rule prints
-  // natively (long/double), a `for (var i = <int literal>` counter or a `.length`
-  // read (int). Helpers.opNeg negates exactly the box it receives (Integer ->
-  // Integer, Long -> Long, Double -> Double) and maps null to null, so every boxed
-  // local (Object / Long / Double) keeps the helper.
-  javaNativeNegation(node) {
-    if (node === void 0) {
-      return false;
-    }
-    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
-      return this.javaNativeNegation(node.expression);
-    }
-    if (ts6.isNumericLiteral(node)) {
-      return this.javaProvableNumericKind(node) !== void 0;
-    }
-    if (node.kind === ts6.SyntaxKind.BinaryExpression) {
-      return this.javaNativeArithmeticKind(node) !== void 0;
-    }
-    if (this.javaPrimitiveCounter(node)) {
-      return true;
-    }
-    return node.kind === ts6.SyntaxKind.PropertyAccessExpression && node.name.escapedText === "length" && this.javaLengthKind(node.expression) !== void 0;
-  }
   printPrefixUnaryExpression(node, identation) {
     const { operand, operator } = node;
     if (operator === ts6.SyntaxKind.ExclamationToken) {
@@ -10483,9 +10430,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (operator === ts6.SyntaxKind.PlusToken) {
       return `+(${leftSide})`;
     } else if (operator === ts6.SyntaxKind.MinusToken) {
-      if (this.javaNativeNegation(operand)) {
-        return `-${leftSide}`;
-      }
       return `Helpers.opNeg(${leftSide})`;
     }
     return super.printPrefixUnaryExpression(node, identation);
