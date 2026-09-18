@@ -1508,6 +1508,116 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
     });
 });
 
+// cs-14: a call whose own C# signature is a non-nullable `bool` needs no isTrue round-trip either —
+// the wrapper is the identity on a bool. The C# signature is proven either by the TS declaration
+// the generator prints itself (`this.<name>(...)`, same csharpBooleanReturnType as the definition)
+// or by the hand-written-callee table (callees cs/ccxt/base declares with a bool signature and no
+// TS annotation to read: Precise's comparisons, the imported isEmpty/isJsonEncodedObject props).
+describe('isTrue is dropped for a call whose C# signature is a non-nullable bool (cs-14)', () => {
+    test('a `this.` method declared `: boolean` goes bare, including under ! and ||', () => {
+        const input =
+        "class T {\n" +
+        "    isLinear (type: string): boolean { return type === 'linear'; }\n" +
+        "    isInverse (type: string): boolean { return type === 'inverse'; }\n" +
+        "    f (type: string, p) {\n" +
+        "        if (this.isLinear(type)) { return 1; }\n" +
+        "        if (!this.isInverse(type)) { return 2; }\n" +
+        "        if (this.isLinear(type) || this.isInverse(type)) { return 3; }\n" +
+        "        if (this.isLinear(type) && p) { return 4; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (this.isLinear(type))");
+        expect(output).toContain("if (!this.isInverse(type))");
+        expect(output).toContain("if (this.isLinear(type) || this.isInverse(type))");
+        expect(output).toContain("if (this.isLinear(type) && isTrue(p))");
+    });
+    test('an un-annotated override of a `: boolean` method inherits the parent type', () => {
+        const input =
+        "class B {\n" +
+        "    flag (a: any): boolean { return true; }\n" +
+        "}\n" +
+        "class T extends B {\n" +
+        "    flag (a) { return false; }\n" +
+        "    f (a) { if (this.flag(a)) { return 1; } }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("public override bool flag(object a)");
+        expect(output).toContain("if (this.flag(a))");
+    });
+    test('the table covers hand-written static callees (Precise comparisons)', () => {
+        const input =
+        "class Precise {\n" +
+        "    static stringGt (a: any, b: any): boolean { return true; }\n" +
+        "    static stringAdd (a: any, b: any): any { return a; }\n" +
+        "}\n" +
+        "class T {\n" +
+        "    f (a, b) {\n" +
+        "        if (Precise.stringGt(a, b)) { return 1; }\n" +
+        "        if (!Precise.stringGt(a, b)) { return 2; }\n" +
+        "        return Precise.stringAdd(a, b);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (Precise.stringGt(a, b))");
+        expect(output).toContain("if (!Precise.stringGt(a, b))");
+        expect(output).toContain("Precise.stringAdd(a, b)");
+    });
+    test('the table covers a `bool isEmpty(...)` reached through a this property', () => {
+        const input =
+        "const isEmpty = (a: any[]) => { return a.length === 0; };\n" +
+        "class T {\n" +
+        "    isEmpty = isEmpty;\n" +
+        "    f (a) { if (this.isEmpty(a)) { return 1; } }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (this.isEmpty(a))");
+        expect(output).not.toContain("isTrue");
+    });
+    test('a bodiless (interface-merged) declaration keeps the wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    isInverse (type: string): boolean { return true; }\n" +
+        "    f (type) {\n" +
+        "        if (this.isInverse(type)) { return 1; }\n" +
+        "        if (this.isLinear(type)) { return 2; }\n" +
+        "    }\n" +
+        "}\n" +
+        "interface T {\n" +
+        "    isLinear (type: string): boolean;\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (this.isInverse(type))");
+        expect(output).toContain("if (isTrue(this.isLinear(type)))");
+    });
+    test('a hand-written C# shadow and other receivers keep the wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    isDictionary (value: any): boolean { return true; }\n" +
+        "    check (a: any): boolean { return true; }\n" +
+        "    f (v, o) {\n" +
+        "        if (this.isDictionary(v)) { return 1; }\n" +
+        "        if (this.check(v)) { return 2; }\n" +
+        "        if (o.check(v)) { return 3; }\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (isTrue(this.isDictionary(v)))");
+        expect(output).toContain("if (this.check(v))");
+        expect(output).toContain("if (isTrue(o.check(v)))");
+    });
+    test('a this-property call the printer cannot resolve keeps the wrapper', () => {
+        const input =
+        "const isEmpty = (a: any[]) => { return a.length === 0; };\n" +
+        "class T {\n" +
+        "    isEmpty = isEmpty;\n" +
+        "    f (a) { if (this.filterClosed(a)) { return 1; } }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (isTrue(callDynamically(this, "filterClosed", new object[] { a })))');
+    });
+});
+
 // `a === b` / `a !== b` print the native operator instead of isEqual whenever both
 // operands are C# values of one scalar family, or one side is null/undefined and the
 // other is a type `== null` compiles for.
