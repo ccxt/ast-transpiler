@@ -953,6 +953,7 @@ declare class GoTranspiler extends BaseTranspiler {
 }
 
 declare class JavaTranspiler extends BaseTranspiler {
+    javaExpressionTypeResolver?: (node: any) => string | undefined;
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): string;
     binaryExpressionsWrappers: any;
@@ -1010,6 +1011,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printElementAccessExpression(node: any, identation: any): any;
     javaScalarFamily(node: any): string | undefined;
     javaProvableString(node: any): boolean;
+    javaResolvedString(node: any): boolean;
     javaNativeConcat(node: any): boolean;
     javaProvableNumericKind(node: any): string | undefined;
     javaNativeArithmeticKind(node: any): string | undefined;

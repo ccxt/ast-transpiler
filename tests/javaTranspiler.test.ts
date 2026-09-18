@@ -3226,6 +3226,86 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         expect(output).toContain('Object y = Helpers.add(n, 1);');
     });
 });
+describe('java string-concat chains anchored by a declared String', () => {
+    // the printer names only literals and its own native concats itself; locals whose
+    // emitted Java declaration is `String x = ` (the embedding build layer's retyping)
+    // and calls to hand-written `public String` runtime methods come back through
+    // javaExpressionTypeResolver — these tests stub that resolver with a name map
+    const withStrings = (strings, input) => {
+        transpiler.javaTranspiler.javaExpressionTypeResolver = (node) => strings[node?.escapedText];
+        try {
+            return transpiler.transpileJava(input).content;
+        } finally {
+            transpiler.javaTranspiler.javaExpressionTypeResolver = undefined;
+        }
+    };
+    test('two checker-typed string locals chain natively when one is a declared String', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: string, b: string): void {\n" +
+        "        const x = a + b;\n" +
+        "        const y = a + b + a;\n" +
+        "    }\n" +
+        "}"
+        const output = withStrings({ 'a': 'String' }, input);
+        expect(output).toContain('Object x = (a + b);');
+        expect(output).toContain('Object y = ((a + b) + a);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+    test('a String anchor on the right side is enough', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: string, b: string): void {\n" +
+        "        const x = a + b;\n" +
+        "    }\n" +
+        "}"
+        const output = withStrings({ 'b': 'String' }, input);
+        expect(output).toContain('Object x = (a + b);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+    test('no resolver verdict keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: string, b: string): void {\n" +
+        "        const x = a + b;\n" +
+        "    }\n" +
+        "}"
+        expect(withStrings({}, input)).toContain('Object x = Helpers.add(a, b);');
+        expect(transpiler.transpileJava(input).content).toContain('Object x = Helpers.add(a, b);');
+    });
+    test('a resolver verdict of another Java type keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: string, b: string): void {\n" +
+        "        const x = a + b;\n" +
+        "    }\n" +
+        "}"
+        expect(withStrings({ 'a': 'Long' }, input)).toContain('Object x = Helpers.add(a, b);');
+    });
+    test('the checker gate still wins: a nullable alias leaf keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: Str, b: string): void {\n" +
+        "        const x = a + b;\n" +
+        "    }\n" +
+        "}"
+        const output = withStrings({ 'a': 'String', 'b': 'String' }, input);
+        expect(output).toContain('Object x = Helpers.add(a, b);');
+    });
+    test('a declared String local chains with a call operand natively', () => {
+        const input =
+        "class T {\n" +
+        "    tag(): string { return \"x\"; }\n" +
+        "    f(name: string): void {\n" +
+        "        const x = name + this.tag();\n" +
+        "    }\n" +
+        "}"
+        const output = withStrings({ 'name': 'String' }, input);
+        expect(output).toContain('Object x = (name + this.tag());');
+        expect(output).not.toContain('Helpers.add(');
+    });
+});
+
 
 describe('java optional parameter unpacking', () => {
     test('literal defaults unpack natively from optionalArgs (no Helpers.getArg)', () => {
