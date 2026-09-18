@@ -1268,6 +1268,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!this.javaOperandIsNonNullNumber(node)) {
             return undefined;
         }
+        if (!this.javaIdentifierKeepsDeclaredName(node)) {
+            return undefined;
+        }
         let javaType;
         try {
             javaType = resolver(node);
@@ -1281,6 +1284,22 @@ export class JavaTranspiler extends BaseTranspiler {
             return 'double';
         }
         return undefined;
+    }
+
+    // a use the printer rewrote to its `finalX` anonymous-class capture prints against its
+    // own `Object finalX = x;` local, so the recorded type of the declaration no longer
+    // holds (`(finalTime - 8L)` on an Object local does not compile)
+    javaIdentifierKeepsDeclaredName(node): boolean {
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined || declaration.kind !== ts.SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        return String(node.escapedText) === String(declaration.name?.escapedText);
     }
 
     // the checker type is the plain non-nullable `number` (TypeFlags.Number, no alias):

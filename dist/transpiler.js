@@ -9400,6 +9400,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!this.javaOperandIsNonNullNumber(node)) {
       return void 0;
     }
+    if (!this.javaIdentifierKeepsDeclaredName(node)) {
+      return void 0;
+    }
     let javaType;
     try {
       javaType = resolver(node);
@@ -9413,6 +9416,21 @@ var JavaTranspiler = class extends BaseTranspiler {
       return "double";
     }
     return void 0;
+  }
+  // a use the printer rewrote to its `finalX` anonymous-class capture prints against its
+  // own `Object finalX = x;` local, so the recorded type of the declaration no longer
+  // holds (`(finalTime - 8L)` on an Object local does not compile)
+  javaIdentifierKeepsDeclaredName(node) {
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || declaration.kind !== ts6.SyntaxKind.VariableDeclaration) {
+      return false;
+    }
+    return String(node.escapedText) === String(declaration.name?.escapedText);
   }
   // the checker type is the plain non-nullable `number` (TypeFlags.Number, no alias):
   // `Int`/`Num`/`any` and unions hold undefined at runtime, which the helpers absorb

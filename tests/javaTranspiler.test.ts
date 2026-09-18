@@ -3421,6 +3421,20 @@ describe('java replaceAll native emission', () => {
         });
     });
 
+    test('a captured object-literal local keeps the helper (it prints as an Object finalX)', () => {
+        withNumericLocals({ time: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const time: number = this.milliseconds();\n" +
+            "        const request = { 'start_timestamp': time - 8, 'end_timestamp': time };\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.subtract(finalTime, 8)');
+        });
+    });
+
     test('without the embedding layer table a numeric local keeps the helper', () => {
         const input =
         "class T {\n" +

@@ -1014,6 +1014,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeConcat(node: any): boolean;
     javaProvableNumericKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaDeclaredNumericLocalKind(node: any): string | undefined;
+    javaIdentifierKeepsDeclaredName(node: any): boolean;
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
