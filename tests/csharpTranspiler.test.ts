@@ -1864,7 +1864,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         "function f (x: string | number) {\n" +
         "    const missing = x === undefined;\n" +
         "    return missing;\n" +
-        "}");
+        "}\n");
         expect(output).toContain("isEqual(x, null)");
     });
     test('a local the embedding build layer declares a string compares natively to a literal', () => {
@@ -2096,6 +2096,60 @@ describe('csharp null comparisons on hand-written fields and parameters', () => 
         "    return noArgs;\n" +
         "}");
         expect(output).toContain("isEqual(args, null)");
+    });
+});
+
+describe('csharp equality of two reads the embedding build layer typed', () => {
+    // the ccxt build layer retypes the `object` declarations it proves (string?, Int64?,
+    // bool?, ...) and records each one through csharpExpressionTypeResolver; a pair of reads
+    // it typed compares like the two boxes isEqual compares. These tests stub that resolver.
+    const withReadKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const twoReads =
+        "function f () {\n" +
+        "    const alpha = this.safeValue({}, 'a');\n" +
+        "    const beta = this.safeValue({}, 'b');\n" +
+        "    const same = alpha === beta;\n" +
+        "    const different = alpha !== beta;\n" +
+        "    return [same, different];\n" +
+        "}";
+    test('two reads of one value kind print the native operator', () => {
+        const output = withReadKinds({ alpha: 'string?', beta: 'string?' }, twoReads);
+        expect(output).toContain("bool same = (alpha == beta);");
+        expect(output).toContain("bool different = (alpha != beta);");
+        expect(output).not.toContain("isEqual(alpha, beta)");
+    });
+    test('bool and Int64 reads use the same rule', () => {
+        const bools = withReadKinds({ alpha: 'bool?', beta: 'bool' }, twoReads);
+        expect(bools).toContain("bool same = (alpha == beta);");
+        const numbers = withReadKinds({ alpha: 'Int64?', beta: 'Int64' }, twoReads);
+        expect(numbers).toContain("bool same = (alpha == beta);");
+    });
+    test('reads the resolver does not name keep isEqual', () => {
+        expect(withReadKinds({}, twoReads)).toContain("isEqual(alpha, beta)");
+    });
+    test('collection-typed and mixed-kind reads keep isEqual', () => {
+        const collections = withReadKinds({ alpha: 'List<object>', beta: 'List<object>' }, twoReads);
+        expect(collections).toContain("isEqual(alpha, beta)");
+        expect(collections).not.toContain("(alpha == beta)");
+        const mixed = withReadKinds({ alpha: 'string?', beta: 'Int64?' }, twoReads);
+        expect(mixed).toContain("isEqual(alpha, beta)");
+    });
+    test('a literal on one side stays on the helper', () => {
+        const input =
+        "function f () {\n" +
+        "    const alpha = this.safeValue({}, 'a');\n" +
+        "    const isA = alpha === 'a';\n" +
+        "    return isA;\n" +
+        "}";
+        const output = withReadKinds({ alpha: 'string?' }, input);
+        expect(output).toContain("isEqual(alpha, \"a\")");
     });
 });
 
