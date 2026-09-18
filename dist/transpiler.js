@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9332,11 +9332,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     return void 0;
   }
   // true when the printed Java for this operand is statically a String: a string
-  // literal, a nested `+` this rule prints as a native concat, or a form the
-  // embedding build layer's javaExpressionTypeResolver names `String` (a local whose
-  // emitted declaration is `String <name> = `, a call to a hand-written `public
-  // String` runtime method). Java compiles `+` only when at least one operand is
-  // statically a String, so a String local anchors the concat like a literal does.
+  // literal, or a nested `+` this rule prints as a native concat (so every native
+  // concat is anchored by a literal and Java concatenates the other side).
   javaProvableString(node) {
     if (node === void 0) {
       return false;
@@ -9350,20 +9347,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       case ts6.SyntaxKind.BinaryExpression:
         return this.javaNativeConcat(node);
     }
-    return this.javaResolvedString(node);
-  }
-  // the embedding build layer's proof of the concrete printed Java type of an
-  // expression (installed like csharpExpressionTypeResolver); only `String` is
-  // consumed here, and a missing resolver proves nothing
-  javaResolvedString(node) {
-    if (node === void 0 || this.javaExpressionTypeResolver === void 0) {
-      return false;
-    }
-    try {
-      return this.javaExpressionTypeResolver(node) === "String";
-    } catch (e) {
-      return false;
-    }
+    return false;
   }
   // does this `+` node print as a native concat (both sides plain string, one side a
   // provable String)? Mirrors printInlineHelperArithmetic so callers can reason about
