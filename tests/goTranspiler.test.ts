@@ -3992,3 +3992,142 @@ describe('go .push -> append on a declared []any local', () => {
         expect(output).toContain("AppendToArray(&a, 1)");
     });
 });
+
+// ToString is the identity on a Go string (go/v4/exchange_helpers.go: derefScalar leaves a
+// string alone and its `case string` returns it unchanged), so a receiver the printer
+// declares `string` prints as itself; every other receiver keeps the helper.
+describe('go ToString -> the receiver when it is a declared string', () => {
+    test('a string-typed local prints bare', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const id = 'x';\n" +
+        "        return id.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var id string = "x"\n\treturn id\n}');
+        expect(output).not.toContain('ToString(');
+    });
+    test('a local initialised from a string-returning helper prints bare', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const id = a.toUpperCase ();\n" +
+        "        return id.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var id string = ToUpper(a)\n\treturn id\n}');
+        expect(output).not.toContain('ToString(');
+    });
+    test('a string literal receiver prints bare', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        return 'x'.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('return "x"');
+        expect(output).not.toContain('ToString(');
+    });
+    test('the inlined call still classifies its declaration as a string', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const id = 'x';\n" +
+        "        const idString = id.toString ();\n" +
+        "        return idString.length;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var idString string = id');
+        expect(output).not.toContain('ToString(');
+    });
+    test('an inlined call inside a concat chain keeps the chain native', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const id = 'x';\n" +
+        "        return 'id: ' + id.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('return "id: " + id');
+        expect(output).not.toContain('ToString(');
+    });
+    test('a chained helper receiver prints bare', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        return a.toUpperCase ().toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('return ToUpper(a)');
+        expect(output).not.toContain('ToString(');
+    });
+    test('an any-typed local keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const id = GetValue (a, 0);\n" +
+        "        return id.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var id any = GetValue(a, 0)');
+        expect(output).toContain('return ToString(id)');
+    });
+    test('an int-typed local keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const keys = Object.keys (a);\n" +
+        "        const n = keys.length;\n" +
+        "        return n.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var n int = len(keys)');
+        expect(output).toContain('return ToString(n)');
+    });
+    test('an int64-typed local keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const n = parseInt (a, 10);\n" +
+        "        return n.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var n int64 = ParseInt(a, 10)');
+        expect(output).toContain('return ToString(n)');
+    });
+    test('a float64-typed local keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const n = Math.floor (a);\n" +
+        "        return n.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var n float64 = MathFloor(a)');
+        expect(output).toContain('return ToString(n)');
+    });
+    test('a local written a non-string value later keeps the helper (D2)', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        let id = 'x';\n" +
+        "        id = GetValue (a, 0);\n" +
+        "        return id.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('var id any = "x"');
+        expect(output).toContain('return ToString(id)');
+    });
+});

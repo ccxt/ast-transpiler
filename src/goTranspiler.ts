@@ -1204,6 +1204,19 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             }
             break;
         }
+        case ts.SyntaxKind.CallExpression: {
+            // `x.toString()` that printToStringCall inlined to the receiver's own text: the
+            // declaration then holds that receiver's value, i.e. the same Go string. Every
+            // other receiver keeps the helper call, whose own return type is classified below.
+            const property = initializer.expression;
+            if ((property?.kind === ts.SyntaxKind.PropertyAccessExpression)
+                && (property.name?.escapedText === 'toString')
+                && (initializer.arguments?.length === 0)
+                && (this.goOperandStaticType(property.expression, printedValue) === 'string')) {
+                return 'string';
+            }
+            break;
+        }
         }
         let value = printedValue.trim();
         // `const x = (a === b)` prints the wrapping parentheses of the source
@@ -5014,7 +5027,20 @@ ${this.getIden(identation)}${returnStatement}`;
         return `toFixed(${name}, ${parsedArg})`;
     }
 
+    // ToString is the identity on a Go string (exchange_helpers.go: derefScalar leaves a
+    // string alone and its `case string` returns it unchanged), so a receiver the printer
+    // already declares `string` prints as itself — same value, one evaluation, no helper.
+    // An `any` box, a *string (derefScalar would answer nil for it), an int64 or a
+    // float64 keeps the helper: the runtime formats those, not Go's default conversion.
     printToStringCall(node, identation, name = undefined) {
+        if ((name !== undefined) && (name.indexOf('\n') < 0)) {
+            const receiver = (node?.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+                ? node.expression.expression
+                : undefined;
+            if ((receiver !== undefined) && (this.goOperandStaticType(receiver, name) === 'string')) {
+                return name;
+            }
+        }
         return `ToString(${name})`;
     }
 

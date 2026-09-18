@@ -5546,6 +5546,13 @@ func New${this.capitalize(this.className)}() *${this.className} {
         }
         break;
       }
+      case ts5.SyntaxKind.CallExpression: {
+        const property = initializer.expression;
+        if (property?.kind === ts5.SyntaxKind.PropertyAccessExpression && property.name?.escapedText === "toString" && initializer.arguments?.length === 0 && this.goOperandStaticType(property.expression, printedValue) === "string") {
+          return "string";
+        }
+        break;
+      }
     }
     let value = printedValue.trim();
     while (value.startsWith("(") && this.isWholePrintedCall(value, 0)) {
@@ -7731,7 +7738,18 @@ ${this.getIden(identation)}`;
   printToFixedCall(node, identation, name = void 0, parsedArg = void 0) {
     return `toFixed(${name}, ${parsedArg})`;
   }
+  // ToString is the identity on a Go string (exchange_helpers.go: derefScalar leaves a
+  // string alone and its `case string` returns it unchanged), so a receiver the printer
+  // already declares `string` prints as itself — same value, one evaluation, no helper.
+  // An `any` box, a *string (derefScalar would answer nil for it), an int64 or a
+  // float64 keeps the helper: the runtime formats those, not Go's default conversion.
   printToStringCall(node, identation, name = void 0) {
+    if (name !== void 0 && name.indexOf("\n") < 0) {
+      const receiver = node?.expression?.kind === ts5.SyntaxKind.PropertyAccessExpression ? node.expression.expression : void 0;
+      if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "string") {
+        return name;
+      }
+    }
     return `ToString(${name})`;
   }
   printConcatCall(node, identation, name = void 0, parsedArg = void 0) {
