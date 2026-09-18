@@ -1804,3 +1804,108 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('if (inOp(this.options, key))');
     });
 });
+
+// `const x = this.<name>(...)` where the enclosing class itself declares <name> with a plain
+// `boolean` return: that method prints a C# `bool`, so the local holding the call is declared
+// `bool` and its condition reads drop the isTrue round-trip. The scope is the class's own
+// methods — a base helper's C# signature lives in the base tree, not in this declaration.
+describe('csharp helper removal: own bool-returning calls type their locals', () => {
+    test('a plain boolean method types the local and drops isTrue at its conditions', () => {
+        const input =
+        "class T {\n" +
+        "    isLinear(type: string, subType: string = undefined): boolean {\n" +
+        "        return (subType === undefined) ? (type === 'swap') : (subType === 'linear');\n" +
+        "    }\n" +
+        "    isInverse(type: string): boolean {\n" +
+        "        return type === 'delivery';\n" +
+        "    }\n" +
+        "    main(type: string, subType: string, market: any) {\n" +
+        "        const isLinearType = this.isLinear(type, subType);\n" +
+        "        const isInverseType = this.isInverse(type);\n" +
+        "        const isLinearSwapConditional = isLinearType && (market !== undefined);\n" +
+        "        if (isLinearSwapConditional) { return 1; }\n" +
+        "        if (isLinearType) { return 2; }\n" +
+        "        if (!isInverseType) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('bool isLinearType = this.isLinear(type, subType);');
+        expect(output).toContain('bool isInverseType = this.isInverse(type);');
+        expect(output).toContain("bool isLinearSwapConditional = isLinearType && (!isEqual(market, null));");
+        expect(output).toContain('if (isLinearSwapConditional)');
+        expect(output).toContain('if (isLinearType)');
+        expect(output).toContain('if (!isInverseType)');
+        // the call is still evaluated exactly once, at the declaration
+        expect((output.match(/this\.isLinear\(/g) ?? []).length).toBe(1);
+        expect(output).not.toContain('isTrue');
+    });
+    test('a nullable boolean method keeps the object box and the isTrue wrapper', () => {
+        const input =
+        "class T {\n" +
+        "    safeFlag(d: any): boolean | undefined {\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    main(d: any) {\n" +
+        "        const flag = this.safeFlag(d);\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object flag = this.safeFlag(d);');
+        expect(output).toContain('if (isTrue(flag))');
+    });
+    test('a method declared by another class keeps the object box', () => {
+        const input =
+        "class Base {\n" +
+        "    flag(): boolean {\n" +
+        "        return true;\n" +
+        "    }\n" +
+        "}\n" +
+        "class T extends Base {\n" +
+        "    main() {\n" +
+        "        const flag = this.flag();\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object flag = this.flag();');
+        expect(output).toContain('if (isTrue(flag))');
+    });
+    test('a later write of another type demotes the local back to object', () => {
+        const input =
+        "class T {\n" +
+        "    flag(): boolean {\n" +
+        "        return true;\n" +
+        "    }\n" +
+        "    main(a: any) {\n" +
+        "        let flag = this.flag();\n" +
+        "        flag = a;\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object flag = this.flag();');
+        expect(output).toContain('if (isTrue(flag))');
+    });
+    test('a boolean method result used as a ternary condition goes bare too', () => {
+        const input =
+        "class T {\n" +
+        "    usesPrivateKey(): boolean {\n" +
+        "        return true;\n" +
+        "    }\n" +
+        "    main(privateKey: string, secret: string) {\n" +
+        "        const usesPrivKey = this.usesPrivateKey();\n" +
+        "        const value = usesPrivKey ? privateKey : secret;\n" +
+        "        return value;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('bool usesPrivKey = this.usesPrivateKey();');
+        expect(output).toContain('((bool) usesPrivKey) ? privateKey : secret');
+        expect(output).not.toContain('isTrue');
+    });
+});

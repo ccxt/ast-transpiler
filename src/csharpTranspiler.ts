@@ -1387,7 +1387,45 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         }
-        return this.csharpCallReturnType(initializer);
+        const knownType = this.csharpCallReturnType(initializer);
+        if (knownType !== undefined) {
+            return knownType;
+        }
+        return this.csharpBoolCallTyped(initializer) ? 'bool' : undefined;
+    }
+
+    // a `this.<name>(...)` call to a method the enclosing class itself declares with a plain
+    // `bool` return annotation (csharpBooleanReturnType prints that same `bool`) on a value
+    // the checker still sees as a boolean: the call hands back an unboxed C# bool, so a local
+    // holding it is declared `bool` and its condition reads drop the isTrue round-trip.
+    // Scoped to the class's own methods: a base helper's C# signature lives in the base tree
+    // (this.safeBool -> bool?, ...) and only the return table there may name it. A name the
+    // table already answers and an overloaded family (one C# method for many TS signatures)
+    // keep their box too — for those only the printed implementation's annotation counts.
+    csharpBoolCallTyped(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.CallExpression || !this.csharpIsCheckedBoolean(node)) {
+            return false;
+        }
+        const expression = node.expression;
+        if (expression?.kind !== ts.SyntaxKind.PropertyAccessExpression || expression.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        let declaration;
+        let checker;
+        try {
+            checker = this.getChecker();
+            declaration = checker.getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return false;
+        }
+        if (!ts.isMethodDeclaration(declaration) || (this.csharpBooleanReturnType(declaration) !== 'bool')) {
+            return false;
+        }
+        const owner = ts.findAncestor(declaration, ts.isClassLike);
+        if ((owner === undefined) || (owner !== ts.findAncestor(node, ts.isClassLike))) {
+            return false;
+        }
+        return checker.getSymbolAtLocation(declaration.name)?.declarations?.length === 1;
     }
 
     csharpEnclosingFunction(node) {

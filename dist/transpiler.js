@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -3762,7 +3762,44 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return void 0;
       }
     }
-    return this.csharpCallReturnType(initializer);
+    const knownType = this.csharpCallReturnType(initializer);
+    if (knownType !== void 0) {
+      return knownType;
+    }
+    return this.csharpBoolCallTyped(initializer) ? "bool" : void 0;
+  }
+  // a `this.<name>(...)` call to a method the enclosing class itself declares with a plain
+  // `bool` return annotation (csharpBooleanReturnType prints that same `bool`) on a value
+  // the checker still sees as a boolean: the call hands back an unboxed C# bool, so a local
+  // holding it is declared `bool` and its condition reads drop the isTrue round-trip.
+  // Scoped to the class's own methods: a base helper's C# signature lives in the base tree
+  // (this.safeBool -> bool?, ...) and only the return table there may name it. A name the
+  // table already answers and an overloaded family (one C# method for many TS signatures)
+  // keep their box too — for those only the printed implementation's annotation counts.
+  csharpBoolCallTyped(node) {
+    if (node?.kind !== ts4.SyntaxKind.CallExpression || !this.csharpIsCheckedBoolean(node)) {
+      return false;
+    }
+    const expression = node.expression;
+    if (expression?.kind !== ts4.SyntaxKind.PropertyAccessExpression || expression.expression?.kind !== ts4.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    let declaration;
+    let checker;
+    try {
+      checker = this.getChecker();
+      declaration = checker.getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return false;
+    }
+    if (!ts4.isMethodDeclaration(declaration) || this.csharpBooleanReturnType(declaration) !== "bool") {
+      return false;
+    }
+    const owner = ts4.findAncestor(declaration, ts4.isClassLike);
+    if (owner === void 0 || owner !== ts4.findAncestor(node, ts4.isClassLike)) {
+      return false;
+    }
+    return checker.getSymbolAtLocation(declaration.name)?.declarations?.length === 1;
   }
   csharpEnclosingFunction(node) {
     let current = node?.parent;

@@ -547,6 +547,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpCallReturnType(initializer: any): string | undefined;
     csharpCalleeResolves(node: any): boolean;
     csharpTypeOfInitializer(initializer: any): string | undefined;
+    csharpBoolCallTyped(node: any): boolean;
     csharpEnclosingFunction(node: any): any;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
     csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
