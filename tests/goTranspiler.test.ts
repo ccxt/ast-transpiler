@@ -2363,3 +2363,148 @@ describe('go gofmt-clean native shapes', () => {
         expect(output).toContain("Slice(this.Id, idx+1, nil)");
     });
 });
+
+
+// helper-family removal: `Add(Add(a, "lit"), b)` string chains print as the Go
+// operator when every leaf is a non-nil string — a declared `string`, a literal, or a
+// `*string` local the checker narrowed to a non-nilable string at that use site
+describe('go string concat chains -> native +', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('a chain over two guard-narrowed *string locals prints as one Go expression', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any, other: any) {\n" +
+        "        const fromId = this.safeString (item, 'from');\n" +
+        "        const toId = this.safeString (item, 'to');\n" +
+        "        if (fromId === undefined) { throw new Error ('missing from'); }\n" +
+        "        if (toId === undefined) { throw new Error ('missing to'); }\n" +
+        "        return fromId + '_' + toId;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var fromId *string = this.SafeString(item, "from")');
+        expect(output).toContain('return *fromId + "_" + *toId');
+        expect(output).not.toContain('Add(');
+    });
+    test('a four-leaf chain leaves the literals bare and derefs both *string leaves', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (parts: string[]) {\n" +
+        "        const scheme = this.safeString (parts, 'scheme');\n" +
+        "        if (scheme === undefined) { return undefined; }\n" +
+        "        const domain = this.safeString (parts, 'domain');\n" +
+        "        if (domain === undefined) { return undefined; }\n" +
+        "        return scheme + '//' + domain + '/';\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var scheme *string = this.SafeString(parts, "scheme")');
+        expect(output).toContain('return *scheme + "//" + *domain + "/"');
+        expect(output).not.toContain('Add(');
+    });
+    test('a flat expression narrowed by an `if (x !== undefined)` block also goes native', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any) {\n" +
+        "        const interval = this.safeString (item, 'interval');\n" +
+        "        let intervalString: string | undefined = undefined;\n" +
+        "        if (interval !== undefined) {\n" +
+        "            intervalString = interval + 'h';\n" +
+        "        }\n" +
+        "        return intervalString;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('intervalString = *interval + "h"');
+        expect(output).not.toContain('Add(');
+    });
+    test('a `=== "lit"` comparison narrows the *string leaf too', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any) {\n" +
+        "        const side = this.safeString (item, 'side');\n" +
+        "        if (side === 'buy') {\n" +
+        "            return side + '_' + 'ok';\n" +
+        "        }\n" +
+        "        return side;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('return *side + "_" + "ok"');
+        expect(output).not.toContain('Add(');
+    });
+    test('a *string leaf with no nil proof keeps the helper call', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any, other: any) {\n" +
+        "        const fromId = this.safeString (item, 'from');\n" +
+        "        const toId = this.safeString (item, 'to');\n" +
+        "        return fromId + '_' + toId;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('return Add(Add(fromId, "_"), toId)');
+    });
+    test('an unproven leaf keeps the outer helper, the proven inner pair still inlines', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any, symbol: any) {\n" +
+        "        const fromId = this.safeString (item, 'from');\n" +
+        "        if (fromId === undefined) { throw new Error ('x'); }\n" +
+        "        return fromId + '_' + symbol;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('return Add(*fromId+"_", symbol)');
+    });
+    test('a *string local reassigned a different type stays an any box and keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any) {\n" +
+        "        let fromId = this.safeString (item, 'from');\n" +
+        "        fromId = 'override';\n" +
+        "        return fromId + '_';\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var fromId any = this.SafeString(item, "from")');
+        expect(output).toContain('return Add(fromId, "_")');
+    });
+    test('a narrowed *int64 leaf keeps Add (the numeric family is not the string one)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeInteger (a: any, b: string): number | undefined { return a; }\n" +
+        "    main (item: any) {\n" +
+        "        const expiry = this.safeInteger (item, 'expiry');\n" +
+        "        if (expiry !== undefined) {\n" +
+        "            return expiry + 1;\n" +
+        "        }\n" +
+        "        return expiry;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('return Add(expiry, 1)');
+    });
+    test('a *string local typed by a non-nilable overload needs no guard at all', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString2 (a: any, b: string, c: string): string { return c; }\n" +
+        "    uuid (): string { return 'x'; }\n" +
+        "    main (params: any, other: any) {\n" +
+        "        const type = this.safeString2 (params, 'type', 'future');\n" +
+        "        return type + '_' + this.uuid ();\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var typeVar *string = this.SafeString2(params, "type", "future")');
+        expect(output).toContain('return *typeVar + "_" + this.Uuid()');
+        expect(output).not.toContain('Add(');
+    });
+});
