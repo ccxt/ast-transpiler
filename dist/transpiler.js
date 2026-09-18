@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10872,17 +10872,14 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return "";
   }
-  // Does a string (literal text or literal-type value) parse as a number?
-  // is_equal() coerces those against numeric/bool operands, a plain string
-  // compare does not.
-  textCoercesToNumber(text) {
+  // A string literal whose text parses as a number — is_equal() coerces those
+  // against numeric/bool operands, a plain string compare does not.
+  stringLiteralCoercesToNumber(node) {
+    const text = node.text;
     if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text)) {
       return true;
     }
     return /^[+-]?(inf|infinity|nan)$/i.test(text);
-  }
-  stringLiteralCoercesToNumber(node) {
-    return this.textCoercesToNumber(node.text);
   }
   // f64 literal text for a numeric literal; undefined when it is not a Rust
   // decimal/float literal (hex/octal/binary fall back to the helper).
@@ -10899,49 +10896,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `${text}.0`;
   }
-  // The printer's own proof that a plain read prints as a Rust `Value`:
-  // `this.<field>` (every field the printer declares is `Value`) or an
-  // identifier bound to a local/param (a local it narrows to `bool` is only
-  // narrowed when every use is a condition sink — never an is_equal argument).
-  rustReadPrintsValue(node) {
-    if (node === void 0) {
-      return false;
-    }
-    if (node.kind === SyntaxKind4.PropertyAccessExpression && node.expression.kind === SyntaxKind4.ThisKeyword) {
-      return true;
-    }
-    if (node.kind !== SyntaxKind4.Identifier) {
-      return false;
-    }
-    const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declarations = symbol?.declarations ?? [];
-    if (declarations.length === 0) {
-      return false;
-    }
-    return declarations.every((declaration) => ts7.isParameter(declaration) || ts7.isVariableDeclaration(declaration) && declaration.initializer?.kind !== SyntaxKind4.NewExpression);
-  }
-  // Can the checked type only hold a Bool, Null/undefined or a non-numeric
-  // string? Then `x.as_bool() == Some(b)` answers exactly what is_equal(x, b)
-  // does: its f64 fallback (Str parse / Bool→0|1) can never fire.
-  rustBooleanComparableType(type) {
-    if (type === void 0) {
-      return false;
-    }
-    if (type.flags & ts7.TypeFlags.Union) {
-      const members = type.types ?? [];
-      return members.length > 0 && members.every((member) => this.rustBooleanComparableType(member));
-    }
-    if (type.flags & (ts7.TypeFlags.Boolean | ts7.TypeFlags.BooleanLiteral)) {
-      return true;
-    }
-    if (type.flags & (ts7.TypeFlags.Undefined | ts7.TypeFlags.Null)) {
-      return true;
-    }
-    if (type.flags & ts7.TypeFlags.StringLiteral) {
-      return !this.textCoercesToNumber(String(type.value ?? ""));
-    }
-    return false;
-  }
   // Native `==`/`!=` on the unwrapped payload when the checker proves the
   // Value variants line up; undefined keeps the is_equal() helper.
   printNativeEqualityComparison(left, right, op) {
@@ -10955,11 +10909,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const literal = leftLiteral !== void 0 ? left : right;
       const literalKind = leftLiteral ?? rightLiteral;
       const other = leftLiteral !== void 0 ? right : left;
-      if (!this.printsValueExpression(other) && (literalKind !== "null" || !this.rustReadPrintsValue(other))) {
+      if (!this.printsValueExpression(other)) {
         return void 0;
       }
-      const otherType = this.getChecker().getTypeAtLocation(other);
-      const otherKind = this.primitiveKindOfType(otherType);
+      const otherKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(other));
       if (literalKind === "null") {
         return `${this.printNode(other, 0)} ${operator} Value::Null`;
       }
@@ -10983,7 +10936,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return `${this.printNode(other, 0)}.as_f64() ${operator} Some(${text})`;
       }
       if (literalKind === "boolean") {
-        if (otherKind !== "boolean" && !this.rustBooleanComparableType(otherType)) {
+        if (otherKind !== "boolean") {
           return void 0;
         }
         const value = literal.kind === SyntaxKind4.TrueKeyword ? "true" : "false";
