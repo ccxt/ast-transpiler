@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8910,13 +8910,171 @@ var JavaTranspiler = class extends BaseTranspiler {
   // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
   // printed only when the checker excludes all of those.
   elementWriteTargetsMap(container, base, keys) {
-    if (!ts6.isStringLiteral(keys[keys.length - 1])) {
+    const lastKey = keys[keys.length - 1];
+    if (!ts6.isStringLiteral(lastKey) && !this.isJavaStringType(this.getChecker().getTypeAtLocation(lastKey))) {
       return false;
     }
     if (ts6.isPropertyAccessExpression(base) && base.expression.kind === ts6.SyntaxKind.ThisKeyword) {
       return false;
     }
-    return this.isDictionaryType(container);
+    return this.isDictionaryType(container) || this.isPlainHashMapReceiver(container, keys);
+  }
+  // a key proven by the checker to be a string prints as a java String: the read is
+  // the same expression, only the key needs the (String) cast the typed put demands
+  elementWriteKeyText(key, keyText) {
+    if (ts6.isStringLiteral(key)) {
+      return keyText;
+    }
+    return `(String)${keyText}`;
+  }
+  // Receivers that are a plain java.util.HashMap at runtime, where ".put" and the
+  // helper's map branch are the same write: a local initialized with an object
+  // literal or with a call whose every return is such a literal (this.account()).
+  // Lists (append), class instances (reflection) and ConcurrentHashMaps stay helpers.
+  isPlainHashMapReceiver(container, keys) {
+    if (keys.length !== 1 || container === void 0 || container.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(container);
+    } catch (e) {
+      return false;
+    }
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (!declaration || declaration.kind !== ts6.SyntaxKind.VariableDeclaration || !declaration.initializer) {
+      return false;
+    }
+    const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
+    const proven = ts6.isObjectLiteralExpression(initializer) || ts6.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0);
+    if (!proven) {
+      return false;
+    }
+    return !this.javaLocalIsReassigned(container);
+  }
+  unwrapPrintTransparentExpression(node) {
+    let current = node;
+    while (current && (ts6.isParenthesizedExpression(current) || ts6.isAsExpression(current) || ts6.isTypeAssertionExpression(current) || current.kind === ts6.SyntaxKind.NonNullExpression)) {
+      current = current.expression;
+    }
+    return current;
+  }
+  // Every write of the local in its enclosing function must be the element write
+  // itself; an assignment could replace the HashMap with a List or a class instance.
+  javaLocalIsReassigned(node) {
+    let scope = node;
+    while (scope && !ts6.isFunctionLike(scope) && !ts6.isSourceFile(scope)) {
+      scope = scope.parent;
+    }
+    if (!scope) {
+      return true;
+    }
+    const symbol = this.getChecker().getSymbolAtLocation(node);
+    let reassigned = false;
+    const walk = (current) => {
+      if (reassigned || current === void 0) {
+        return;
+      }
+      if (current.kind === ts6.SyntaxKind.BinaryExpression && current.operatorToken.kind === ts6.SyntaxKind.EqualsToken && current.left.kind === ts6.SyntaxKind.Identifier && this.getChecker().getSymbolAtLocation(current.left) === symbol) {
+        reassigned = true;
+        return;
+      }
+      if ((ts6.isForOfStatement(current) || ts6.isForInStatement(current)) && ts6.isIdentifier(current.initializer) && this.getChecker().getSymbolAtLocation(current.initializer) === symbol) {
+        reassigned = true;
+        return;
+      }
+      ts6.forEachChild(current, walk);
+    };
+    walk(scope);
+    return reassigned;
+  }
+  // A call whose callee body returns object literals only, so the value it hands
+  // back is always a freshly built HashMap on the Java side as well.
+  callAlwaysReturnsPlainHashMap(node, depth) {
+    if (depth > 3) {
+      return false;
+    }
+    const checker = this.getChecker();
+    let callee = this.unwrapPrintTransparentExpression(node.expression);
+    if (callee !== void 0 && ts6.isPropertyAccessExpression(callee)) {
+      if (callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+        return false;
+      }
+      callee = callee.name;
+    }
+    if (callee === void 0 || callee.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = checker.getSymbolAtLocation(callee);
+    } catch (e) {
+      return false;
+    }
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (!declaration || declaration.kind !== ts6.SyntaxKind.MethodDeclaration && declaration.kind !== ts6.SyntaxKind.FunctionDeclaration) {
+      return false;
+    }
+    if (!this.returnTypePrintsAsHashMap(declaration)) {
+      return false;
+    }
+    const body = declaration.body;
+    if (!body || !ts6.isBlock(body)) {
+      return false;
+    }
+    let plain = true;
+    let returns = 0;
+    const walk = (current) => {
+      if (!plain || current === void 0) {
+        return;
+      }
+      if (ts6.isFunctionLike(current) && current !== declaration) {
+        return;
+      }
+      if (ts6.isReturnStatement(current)) {
+        returns += 1;
+        const expression = current.expression;
+        if (expression === void 0) {
+          plain = false;
+          return;
+        }
+        const value = this.unwrapPrintTransparentExpression(expression);
+        if (ts6.isObjectLiteralExpression(value)) {
+          return;
+        }
+        if (ts6.isCallExpression(value) && this.callAlwaysReturnsPlainHashMap(value, depth + 1)) {
+          return;
+        }
+        plain = false;
+        return;
+      }
+      ts6.forEachChild(current, walk);
+    };
+    walk(body);
+    return plain && returns > 0;
+  }
+  // the declared return type must not be a class instance (those print as objects)
+  // or an array (those print as Lists), so the object-literal returns above are what
+  // the caller can rely on
+  returnTypePrintsAsHashMap(declaration) {
+    try {
+      const checker = this.getChecker();
+      const signature = checker.getSignatureFromDeclaration(declaration);
+      const type = signature?.getReturnType();
+      if (!type || (type.flags & ts6.TypeFlags.Object) === 0) {
+        return false;
+      }
+      if (checker.isArrayType(type) || checker.isTupleType(type)) {
+        return false;
+      }
+      const declarations = type.getSymbol()?.declarations ?? [];
+      if (declarations.some((d) => d.kind === ts6.SyntaxKind.ClassDeclaration)) {
+        return false;
+      }
+      return type.getCallSignatures().length === 0;
+    } catch (e) {
+      return false;
+    }
   }
   isDictionaryType(node) {
     try {
@@ -9166,8 +9324,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       prefixes = prefixes ? prefixes : "";
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
+      const keyArg = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
       if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
-        return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${lastKey}, ${rhs})`;
+        return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${keyArg}, ${rhs})`;
       }
       return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
