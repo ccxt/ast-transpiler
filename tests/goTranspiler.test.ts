@@ -2987,6 +2987,79 @@ describe('go gofmt-clean native shapes', () => {
         expect(output).toContain("[]any{\"a\", \"client-or\" + \"der-id\"}");
         expect(output).toContain("Slice(this.Id, idx+1, nil)");
     });
+    const squashWs = (output: string) => output.replace(/\s+/g, ' ');
+    test('indexOf on a printer-declared string receiver emits strings.Index', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main () {\n" +
+        "        const symbol = 'BTC/USDT';\n" +
+        "        if (symbol.indexOf ('/') > -1) { return symbol; }\n" +
+        "        return '';\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // the file needs the stdlib package its native emission calls
+        expect(output).toContain("import \"strings\"");
+        expect(output).toContain("strings.Index(symbol, \"/\")");
+        expect(output).not.toContain("GetIndexOf(symbol");
+    });
+    test('indexOf on a *string receiver emits the nil-guarded strings.Index literal', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const amount = this.safeString (item, 'amount');\n" +
+        "        if (amount.indexOf ('-') >= 0) { return 'out'; }\n" +
+        "        return 'in';\n" +
+        "    }\n" +
+        "}\n";
+        const output = squashWs(transpiler.transpileGo(input).content);
+        expect(output).toContain("import \"strings\"");
+        // GetIndexOf derefScalar's a nil *string to -1; the literal repeats the identifier
+        expect(output).toContain("func() int { if amount == nil { return -1 } return strings.Index(*amount, \"-\") }()");
+        expect(output).not.toContain("GetIndexOf(amount");
+    });
+    test('indexOf on a receiver Go boxes as any keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (params) {\n" +
+        "        const marketId = this.safeString (params, 'marketId');\n" +
+        "        return [ params.indexOf ('/'), marketId.indexOf ('-C'), this.getId ().indexOf ('x') ];\n" +
+        "    }\n" +
+        "    getId () { return 'x'; }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("import \"strings\"");
+        expect(output).toContain("GetIndexOf(params, \"/\")");
+    });
+    test('indexOf on a slice receiver keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main () {\n" +
+        "        const code = 'EAI_AGAIN';\n" +
+        "        const codes = [ 'EAI_AGAIN', 'ETIMEDOUT' ];\n" +
+        "        const parts = 'a-b'.split ('-');\n" +
+        "        return [ codes.indexOf (code), parts.indexOf ('b') ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // the helper's type switch has no []any case (it answers -1), so a []any receiver
+        // must not be inlined; its []string case scans the slice
+        expect(output).not.toContain("import \"strings\"");
+        expect(output).toContain("GetIndexOf(codes, code)");
+    });
+    test('indexOf on a GetValue box keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (transaction) {\n" +
+        "        const ids = Object.keys (transaction);\n" +
+        "        return GetValue (ids, 0).indexOf ('_');\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("import \"strings\"");
+        expect(output).toContain("GetIndexOf(GetValue(ids, 0), \"_\")");
+    });
 });
 
 
