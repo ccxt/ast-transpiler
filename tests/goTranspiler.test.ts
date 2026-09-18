@@ -3768,3 +3768,95 @@ describe('go IsEqual(x, nil) on an any local whose every write is a non-pointer 
         expect(output).toContain("IsEqual(since, nil)");
     });
 });
+
+describe('go native element assignment on a hand-written container field', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/ +/g, ' ');
+    test('a map field assigns through a native index', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        this.has['a'] = 1;\n" +
+        "        return this.has;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("this.Has[\"a\"] = 1");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a sync.Map field assigns through Store', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        this.options['a'] = 1;\n" +
+        "        return this.options;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("this.Options.Store(\"a\", 1)");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a sync.Map field with a string-typed local key assigns through Store', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const k = 'x';\n" +
+        "        this.orderbooks[k] = 1;\n" +
+        "        return this.orderbooks;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var k string = \"x\"");
+        expect(output).toContain("this.Orderbooks.Store(k, 1)");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a sync.Map field with an unproven key stays on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(key) {\n" +
+        "        this.options[key] = 1;\n" +
+        "        return this.options;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(this.Options, key, 1)");
+    });
+    test('a field declared any stays on the helper: Go cannot index an interface', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        this.urls['a'] = 1;\n" +
+        "        this.balance['b'] = 2;\n" +
+        "        return this.urls;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(this.Urls, \"a\", 1)");
+        expect(output).toContain("AddElementToObject(this.Balance, \"b\", 2)");
+    });
+    test('a compound assignment on a sync.Map field stays on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        this.options['a'] += 1;\n" +
+        "        return this.options;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(this.Options, \"a\", Add(GetValue(this.Options, \"a\"), 1))");
+    });
+    test('the field table never types a local of the same name', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const options = {};\n" +
+        "        options['a'] = 1;\n" +
+        "        return options;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var options map[string]any = map[string]any{}");
+        expect(output).toContain("options[\"a\"] = 1");
+        expect(output).not.toContain("options.Store(");
+    });
+});

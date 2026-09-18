@@ -4786,6 +4786,39 @@ var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.LessThanEqualsToken]: "<="
 };
 var GO_STRING_FIELD_NAMES = ["Id", "Name", "Version"];
+var GO_FIELD_CONTAINER_TYPES_NATIVE = {
+  "Has": "map[string]any",
+  "Api": "map[string]any",
+  "TransformedApi": "map[string]any",
+  "RequiredCredentials": "map[string]any",
+  "HttpExceptions": "map[string]any",
+  "Timeframes": "map[string]any",
+  "Features": "map[string]any",
+  "Exceptions": "map[string]any",
+  "Precision": "map[string]any",
+  "UserAgents": "map[string]any",
+  "TokenBucket": "map[string]any",
+  "CommonCurrencies": "map[string]any",
+  "ProxyDictionaries": "map[string]any",
+  "WsClients": "map[string]any",
+  "Clients": "map[string]any",
+  "Limits": "map[string]any",
+  "Fees": "map[string]any",
+  "Status": "map[string]any",
+  "Countries": "map[string]any",
+  "Options": "*sync.Map",
+  "Markets": "*sync.Map",
+  "Markets_by_id": "*sync.Map",
+  "MarketsById": "*sync.Map",
+  "Currencies": "*sync.Map",
+  "Currencies_by_id": "*sync.Map",
+  "CurrenciesById": "*sync.Map",
+  "BaseCurrencies": "*sync.Map",
+  "QuoteCurrencies": "*sync.Map",
+  "Tickers": "*sync.Map",
+  "Orderbooks": "*sync.Map",
+  "Transactions": "*sync.Map"
+};
 var GO_ARITHMETIC_KINDS = [
   ts5.SyntaxKind.PlusToken,
   ts5.SyntaxKind.MinusToken,
@@ -6341,7 +6374,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
       const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
-      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs})`) : void 0;
+      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs})`, true) : void 0;
       if (native !== void 0) {
         return native;
       }
@@ -6647,6 +6680,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
+  // the Go container type of a hand-written `this.<field>` receiver, undefined for every
+  // other shape. The generated exchange structs embed the BaseExchange, so `this.<field>`
+  // is the only property access whose Go type the printer knows from the field table —
+  // a local or a parameter of the same name is a different declaration and never lands here.
+  goFieldContainerTypeNative(node) {
+    if (node?.kind !== ts5.SyntaxKind.PropertyAccessExpression || node.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    const name = node.name?.escapedText;
+    if (typeof name !== "string") {
+      return void 0;
+    }
+    return GO_FIELD_CONTAINER_TYPES_NATIVE[this.transformPropertyAccessExpressionName(name, node.name)];
+  }
   // the printed key is a Go string when the printer knows it: a string literal, or
   // an identifier declared `string`. Params, GetValue(...) and string concatenation
   // all print as `any`, which Go refuses as a map key.
@@ -6731,8 +6778,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   }
   // native `container[key] = value` when the receiver's Go type is proved by the
   // printer, otherwise undefined and the caller keeps the runtime helper
-  printNativeElementAssignment(containerNode, containerStr, keyNode, keyStr, valueStr) {
+  printNativeElementAssignment(containerNode, containerStr, keyNode, keyStr, valueStr, compound = false) {
     const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
+    const fieldType = this.goFieldContainerTypeNative(containerNode);
+    if (fieldType !== void 0) {
+      if (!this.goIsStringKeyExpression(keyNode)) {
+        return void 0;
+      }
+      if (fieldType === "*sync.Map") {
+        return compound ? void 0 : `${containerStr}.Store(${keyStr}, ${valueStr})`;
+      }
+      return `${containerStr}[${keyStr}] = ${valueStr}`;
+    }
     if (containerType === "map[string]any") {
       if (!this.goIsStringKeyExpression(keyNode)) {
         return void 0;

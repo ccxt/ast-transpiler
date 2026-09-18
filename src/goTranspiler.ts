@@ -240,6 +240,53 @@ const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
 // value is never nil, so `this.<field> + s` matches Add(field, s) exactly.
 const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version' ];
 
+// hand-written BaseExchange fields (go/v4/exchange.go) declared as a container: an
+// element write on one of them is native code — a map index write, or `Store` for the
+// thread-safe ones, which is exactly what AddElementToObject does for a *sync.Map.
+// `map[string]interface{}` is the same Go type as `map[string]any` (any is an alias).
+// The fields declared `any` there (Urls, Balance, Trades, Ohlcvs, Positions, Headers,
+// FundingRates, Events, Outcomes, Orders, MyTrades, Liquidations, TriggerOrders,
+// Accounts) are absent: indexing them needs an assertion, so those keep the helper.
+// Everything else in the struct is not a container and is absent too.
+// Bidsasks is absent as well, although it is a *sync.Map: the ccxt-side ws text pass
+// (build/goTranspiler.ts, getWsRegexes) rewrites any `<...asks>.Store(` in the emitted
+// pro/prediction Go into an order-book-side assertion (`this.Bidsasks.(ccxt.IOrderBookSide).Store(`),
+// which does not compile. That pass belongs to another unit; drop the field here until
+// its pattern is anchored to a whole identifier.
+const GO_FIELD_CONTAINER_TYPES_NATIVE: { [name: string]: string } = {
+    'Has': 'map[string]any',
+    'Api': 'map[string]any',
+    'TransformedApi': 'map[string]any',
+    'RequiredCredentials': 'map[string]any',
+    'HttpExceptions': 'map[string]any',
+    'Timeframes': 'map[string]any',
+    'Features': 'map[string]any',
+    'Exceptions': 'map[string]any',
+    'Precision': 'map[string]any',
+    'UserAgents': 'map[string]any',
+    'TokenBucket': 'map[string]any',
+    'CommonCurrencies': 'map[string]any',
+    'ProxyDictionaries': 'map[string]any',
+    'WsClients': 'map[string]any',
+    'Clients': 'map[string]any',
+    'Limits': 'map[string]any',
+    'Fees': 'map[string]any',
+    'Status': 'map[string]any',
+    'Countries': 'map[string]any',
+    'Options': '*sync.Map',
+    'Markets': '*sync.Map',
+    'Markets_by_id': '*sync.Map',
+    'MarketsById': '*sync.Map',
+    'Currencies': '*sync.Map',
+    'Currencies_by_id': '*sync.Map',
+    'CurrenciesById': '*sync.Map',
+    'BaseCurrencies': '*sync.Map',
+    'QuoteCurrencies': '*sync.Map',
+    'Tickers': '*sync.Map',
+    'Orderbooks': '*sync.Map',
+    'Transactions': '*sync.Map',
+};
+
 // operator kinds the arithmetic helpers are emitted for
 const GO_ARITHMETIC_KINDS = [
     ts.SyntaxKind.PlusToken,
@@ -2368,7 +2415,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // For +=, we need to get the current value, add to it, then set it back
             const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
             const native = (keyStrs.length === 1)
-                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs})`)
+                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs})`, true)
                 : undefined;
             if (native !== undefined) {
                 return native;
@@ -2968,6 +3015,21 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // the Go container type of a hand-written `this.<field>` receiver, undefined for every
+    // other shape. The generated exchange structs embed the BaseExchange, so `this.<field>`
+    // is the only property access whose Go type the printer knows from the field table —
+    // a local or a parameter of the same name is a different declaration and never lands here.
+    goFieldContainerTypeNative(node): string | undefined {
+        if ((node?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        const name = node.name?.escapedText;
+        if (typeof name !== 'string') {
+            return undefined;
+        }
+        return GO_FIELD_CONTAINER_TYPES_NATIVE[this.transformPropertyAccessExpressionName(name, node.name)];
+    }
+
     // the printed key is a Go string when the printer knows it: a string literal, or
     // an identifier declared `string`. Params, GetValue(...) and string concatenation
     // all print as `any`, which Go refuses as a map key.
@@ -3056,8 +3118,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // native `container[key] = value` when the receiver's Go type is proved by the
     // printer, otherwise undefined and the caller keeps the runtime helper
-    printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string): string | undefined {
+    printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound = false): string | undefined {
         const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
+        const fieldType = this.goFieldContainerTypeNative(containerNode);
+        if (fieldType !== undefined) {
+            if (!this.goIsStringKeyExpression(keyNode)) {
+                return undefined;
+            }
+            if (fieldType === '*sync.Map') {
+                // a `+=` reads the element back through `container[key]`, which a
+                // sync.Map has no operator for: that shape keeps the runtime helper
+                return compound ? undefined : `${containerStr}.Store(${keyStr}, ${valueStr})`;
+            }
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
+        }
         if (containerType === 'map[string]any') {
             if (!this.goIsStringKeyExpression(keyNode)) {
                 return undefined;
