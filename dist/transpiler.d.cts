@@ -1138,6 +1138,11 @@ declare class RustTranspiler extends BaseTranspiler {
     typeOfNodeIfAny(node: ts.Node): ts.Type | undefined;
     isValueLengthType(type: ts.Type | undefined): boolean;
     printArrayLength(node: any, identation: any, leftExpr?: any): string;
+    /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
+    rustSliceLiteralBound(node: any): number | undefined;
+    rustSliceClampedIndex(value: number): string;
+    printNativeStringIndexOf(node: any, receiverText: string): string | undefined;
+    printNativeStringSlice(node: any, receiverText: string): string | undefined;
     isDictShapedType(type: ts.Type | undefined): boolean;
     printNativeInOperator(key: any, obj: any): string;
     foldNegateLiteral(operandText: string): string | undefined;
