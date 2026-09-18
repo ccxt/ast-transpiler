@@ -527,8 +527,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsNullComparableType(csharpType: any): boolean;
     csharpOperandIsValueTyped(node: any): boolean;
     csharpTypeHasValueScalar(type: any): boolean;
-    csharpOperandsAreDeclaredReads(left: any, right: any): boolean;
-    csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpNullComparison(text: string, isEquality: boolean): string;
     csharpExpressionTypeOf(node: any): string | undefined;
