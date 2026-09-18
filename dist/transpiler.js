@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2714,10 +2714,6 @@ var CSHARP_THIS_RETURN_TYPES = {
   "safeList2": "List<object>",
   "safeListN": "List<object>"
 };
-var CSHARP_NATIVE_NUMERIC_THIS_KINDS = {
-  "precisionFromString": "int",
-  "parseToInt": "Int64?"
-};
 var CSHARP_SAFE_ACCESSOR_NAMES = [
   "safeString",
   "safeString2",
@@ -2750,7 +2746,6 @@ var CSHARP_SAFE_ACCESSOR_NAMES = [
 var CSHARP_TYPE_NAMES = ["string", "bool", "int", "long", "Int64", "double", "object", "List", "IList", "Dictionary", "IDictionary", "var"];
 var GUARD_KEY_SEPARATOR = "\0";
 var CSHARP_NUMERIC_KINDS = ["int", "Int64", "double"];
-var CSHARP_NUMERIC_VALUE_KINDS = ["int", "Int64", "Int64?", "double", "double?"];
 var CSHARP_NATIVE_COMPARISON_TOKENS = {
   [ts4.SyntaxKind.LessThanToken]: "<",
   [ts4.SyntaxKind.GreaterThanToken]: ">",
@@ -3459,69 +3454,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpNullComparison(text, isEquality) {
     return isEquality ? `(${text} == null)` : `(${text} != null)`;
   }
-  // `isEqual(<numeric call>, N)` / `isEqual(N, <numeric call>)` -> `==` / `!=`: the call
-  // prints a C# value of a concrete numeric kind, so the integer literal adapts to it and
-  // the operator performs the comparison isEqual's integer and double branches do. The
-  // string/bool/collection calls and every `object` box (getValue, mod, safeValue, a
-  // parameter) name no numeric kind: those keep the helper.
-  csharpNativeNumericCallEquality(left, right, leftText, rightText, isEquality) {
-    const leftKind = this.csharpNumericCallKind(left);
-    const rightKind = this.csharpNumericCallKind(right);
-    const leftLiteral = leftKind === void 0 ? this.csharpIntegerLiteralKind(left) : void 0;
-    const rightLiteral = rightKind === void 0 ? this.csharpIntegerLiteralKind(right) : void 0;
-    const callOnLeft = leftKind !== void 0 && rightLiteral !== void 0 && this.csharpNumericKindHoldsLiteral(leftKind, rightLiteral);
-    const callOnRight = rightKind !== void 0 && leftLiteral !== void 0 && this.csharpNumericKindHoldsLiteral(rightKind, leftLiteral);
-    if (!callOnLeft && !callOnRight) {
-      return void 0;
-    }
-    return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
-  }
-  // the C# value kind of an operand printed as a call (or as `x.length`), when that printed
-  // signature is a numeric value type: `.indexOf(...)`/`.length` (int) and the safe*
-  // accessors come from the printer's own tables, the this.<name>() methods of
-  // CSHARP_NATIVE_NUMERIC_THIS_KINDS from the hand-written C# signatures. undefined keeps
-  // the helper, since an `object` box has no comparable value
-  csharpNumericCallKind(node) {
-    const expression = node?.expression;
-    if (node?.kind === ts4.SyntaxKind.CallExpression && expression?.kind === ts4.SyntaxKind.PropertyAccessExpression && expression.expression?.kind === ts4.SyntaxKind.ThisKeyword) {
-      const named2 = CSHARP_NATIVE_NUMERIC_THIS_KINDS[expression.name?.escapedText];
-      if (named2 !== void 0 && this.csharpCalleeResolves(node)) {
-        return named2;
-      }
-    }
-    const named = this.csharpCallReturnType(node);
-    return named === void 0 || CSHARP_NUMERIC_VALUE_KINDS.indexOf(named) < 0 ? void 0 : named;
-  }
-  // the C# kind of an integer literal operand (`N` / `-N`), or undefined when the text is not
-  // an integer the literal can hold exactly. isEqual's integer branch round-trips through
-  // Convert.ToInt64 and its `(int)a == (int)b` branch truncates a non-integral literal, so
-  // only a safe integer literal keeps the two comparisons identical
-  csharpIntegerLiteralKind(node) {
-    let value;
-    if (node?.kind === ts4.SyntaxKind.PrefixUnaryExpression) {
-      if (node.operator !== ts4.SyntaxKind.MinusToken || node.operand?.kind !== ts4.SyntaxKind.NumericLiteral) {
-        return void 0;
-      }
-      value = -Number(node.operand.text);
-    } else if (node?.kind === ts4.SyntaxKind.NumericLiteral) {
-      value = Number(node.text);
-    } else {
-      return void 0;
-    }
-    if (!Number.isSafeInteger(value)) {
-      return void 0;
-    }
-    return value >= -2147483648 && value <= 2147483647 ? "int" : "long";
-  }
-  // a `long` literal has no implicit conversion to an `int` operand; every other pair
-  // converts the literal exactly, which is what isEqual's Convert.ToInt64 /
-  // Convert.ToDouble branches do with the same two boxes
-  csharpNumericKindHoldsLiteral(callKind, literalKind) {
-    if (callKind === "int") {
-      return literalKind === "int";
-    }
-    return callKind.indexOf("Int64") === 0 || callKind.indexOf("double") === 0;
-  }
   // the concrete C# type of an expression the printer can name, or undefined: the embedding
   // build layer's proof wins (it retypes locals the printer leaves `object`), then the
   // printer's own tables and the literals whose C# type is fixed by their text
@@ -3736,10 +3668,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
         if (inlined !== void 0) {
           return inlined;
-        }
-        const numericCall = this.csharpNativeNumericCallEquality(left, right, leftText, rightText, isEquality);
-        if (numericCall !== void 0) {
-          return numericCall;
         }
       }
       const wrapper = this.binaryExpressionsWrappers[op];
