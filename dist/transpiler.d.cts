@@ -1005,6 +1005,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     isJavaMapStructureType(type: any): boolean;
     isJavaListStructureType(type: any): boolean;
     tupleRequiredElementCount(type: any): number;
+    isJavaArrayStructureType(type: any): boolean;
+    javaSideEffectFreeReference(node: any): any;
+    javaStringElementsReceiver(node: any): boolean;
     isLeftSideOfAssignment(node: any): boolean;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
