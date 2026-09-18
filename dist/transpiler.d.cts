@@ -877,7 +877,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printJoinCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToFixedCall(node: any, identation: any, name?: any, parsedArg?: any): string;
-    printToStringCall(node: any, identation: any, name?: any): string;
+    printToStringCall(node: any, identation: any, name?: any): any;
     printConcatCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
     printToLowerCaseCall(node: any, identation: any, name?: any): string;
