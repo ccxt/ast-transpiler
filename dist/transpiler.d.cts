@@ -1132,8 +1132,11 @@ declare class RustTranspiler extends BaseTranspiler {
     literalKindOfNode(node: any): string;
     printsValueExpression(node: any): boolean;
     callExpressionName(node: any): string;
+    textCoercesToNumber(text: string): boolean;
     stringLiteralCoercesToNumber(node: any): boolean;
     numericLiteralF64Text(node: any): string;
+    rustReadPrintsValue(node: any): boolean;
+    rustBooleanComparableType(type: any): boolean;
     printNativeEqualityComparison(left: any, right: any, op: any): string;
     typeOfNodeIfAny(node: ts.Node): ts.Type | undefined;
     isValueLengthType(type: ts.Type | undefined): boolean;

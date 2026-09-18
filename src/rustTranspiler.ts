@@ -326,14 +326,18 @@ export class RustTranspiler extends BaseTranspiler {
         return '';
     }
 
-    // A string literal whose text parses as a number — is_equal() coerces those
-    // against numeric/bool operands, a plain string compare does not.
-    stringLiteralCoercesToNumber(node): boolean {
-        const text = node.text;
+    // Does a string (literal text or literal-type value) parse as a number?
+    // is_equal() coerces those against numeric/bool operands, a plain string
+    // compare does not.
+    textCoercesToNumber(text: string): boolean {
         if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text)) {
             return true;
         }
         return /^[+-]?(inf|infinity|nan)$/i.test(text);
+    }
+
+    stringLiteralCoercesToNumber(node): boolean {
+        return this.textCoercesToNumber(node.text);
     }
 
     // f64 literal text for a numeric literal; undefined when it is not a Rust
@@ -352,6 +356,53 @@ export class RustTranspiler extends BaseTranspiler {
         return `${text}.0`;
     }
 
+    // The printer's own proof that a plain read prints as a Rust `Value`:
+    // `this.<field>` (every field the printer declares is `Value`) or an
+    // identifier bound to a local/param (a local it narrows to `bool` is only
+    // narrowed when every use is a condition sink — never an is_equal argument).
+    rustReadPrintsValue(node): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        if (node.kind === SyntaxKind.PropertyAccessExpression && node.expression.kind === SyntaxKind.ThisKeyword) {
+            return true;
+        }
+        if (node.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const symbol: any = this.getChecker().getSymbolAtLocation(node);
+        const declarations: any[] = symbol?.declarations ?? [];
+        if (declarations.length === 0) {
+            return false;
+        }
+        return declarations.every((declaration) => ts.isParameter(declaration)
+            || (ts.isVariableDeclaration(declaration)
+                && declaration.initializer?.kind !== SyntaxKind.NewExpression));
+    }
+
+    // Can the checked type only hold a Bool, Null/undefined or a non-numeric
+    // string? Then `x.as_bool() == Some(b)` answers exactly what is_equal(x, b)
+    // does: its f64 fallback (Str parse / Bool→0|1) can never fire.
+    rustBooleanComparableType(type): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            const members: any[] = (type as any).types ?? [];
+            return members.length > 0 && members.every((member) => this.rustBooleanComparableType(member));
+        }
+        if (type.flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
+            return true;
+        }
+        if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) {
+            return true;
+        }
+        if (type.flags & ts.TypeFlags.StringLiteral) {
+            return !this.textCoercesToNumber(String((type as any).value ?? ''));
+        }
+        return false;
+    }
+
     // Native `==`/`!=` on the unwrapped payload when the checker proves the
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
@@ -365,10 +416,11 @@ export class RustTranspiler extends BaseTranspiler {
             const literal = leftLiteral !== undefined ? left : right;
             const literalKind = leftLiteral ?? rightLiteral;
             const other = leftLiteral !== undefined ? right : left;
-            if (!this.printsValueExpression(other)) {
+            if (!this.printsValueExpression(other) && (literalKind !== 'null' || !this.rustReadPrintsValue(other))) {
                 return undefined;
             }
-            const otherKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(other));
+            const otherType = this.getChecker().getTypeAtLocation(other);
+            const otherKind = this.primitiveKindOfType(otherType);
             if (literalKind === 'null') {
                 // Exact for every runtime value: is_equal(x, null) is true only
                 // when x is Null, and the derived PartialEq says the same.
@@ -394,7 +446,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return `${this.printNode(other, 0)}.as_f64() ${operator} Some(${text})`;
             }
             if (literalKind === 'boolean') {
-                if (otherKind !== 'boolean') {
+                if (otherKind !== 'boolean' && !this.rustBooleanComparableType(otherType)) {
                     return undefined;
                 }
                 const value = literal.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';

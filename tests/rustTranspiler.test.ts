@@ -1335,3 +1335,119 @@ describe('rust numeric literals', () => {
         expect(output).not.toContain('Value::Int(1e-7)');
     });
 });
+
+// Native equality for plain reads whose checker type is a class instance
+// (struct field / local / param — all printed `Value`) and for operands the
+// checker confines to Bool/Null/non-numeric strings.
+describe('rust native equality on declared reads', () => {
+    const CACHE_FIELD = 'class Cache {}\nclass A {\n    orders: Cache | undefined = undefined;\n';
+
+    test('a class-typed field compares to null natively', () => {
+        const ts = CACHE_FIELD +
+            '    run(u: any) {\n' +
+            '        if (this.orders === undefined) {\n' +
+            '            return u;\n' +
+            '        }\n' +
+            '        return this.orders;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (self.orders == Value::Null) {');
+        expect(output).not.toContain('is_equal(&self.orders');
+    });
+
+    test('a class-typed parameter compares to null natively', () => {
+        const ts = 'class Cache {}\nclass A {\n' +
+            '    run(orders: Cache | undefined, u: any) {\n' +
+            '        if (orders === undefined) {\n' +
+            '            return u;\n' +
+            '        }\n' +
+            '        return orders;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (orders == Value::Null) {');
+        expect(output).not.toContain('is_equal(&orders');
+    });
+
+    test('a local initialised from a field compares to null natively', () => {
+        const ts = CACHE_FIELD +
+            '    run(u: any) {\n' +
+            '        const cached = this.orders;\n' +
+            '        if (cached === undefined) {\n' +
+            '            return u;\n' +
+            '        }\n' +
+            '        return cached;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (cached == Value::Null) {');
+        expect(output).not.toContain('is_equal(&cached');
+    });
+
+    test('a local holding a constructed struct stays on the helper', () => {
+        const ts = 'class B {}\nclass A {\n' +
+            '    run(u: any) {\n' +
+            '        const created = new B();\n' +
+            '        return created === undefined;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_equal(&created, &Value::Null)');
+    });
+
+    const HAS_UNION = 'class A {\n    has!: { [key: string]: boolean | \'emulated\' | undefined };\n';
+
+    test('a bool-literal union compares the unwrapped bool', () => {
+        const output = transpiler.transpileRust(HAS_UNION +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('.unwrap_or(Value::Null).as_bool() == Some(true)');
+        expect(output).not.toContain('is_equal(');
+    });
+
+    test('a negated bool-literal union compares the unwrapped bool', () => {
+        const output = transpiler.transpileRust(HAS_UNION +
+            '    run() {\n' +
+            '        if (this.has[\'fetchOrders\'] !== false) {\n' +
+            '            return 1;\n' +
+            '        }\n' +
+            '        return 2;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('.unwrap_or(Value::Null).as_bool() != Some(false)');
+        expect(output).not.toContain('is_equal(');
+    });
+
+    test('a numeric string member keeps the helper', () => {
+        const output = transpiler.transpileRust(
+            'class A {\n    has!: { [key: string]: boolean | \'1\' | undefined };\n' +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('is_equal(&self.has');
+    });
+
+    test('a number member keeps the helper', () => {
+        const output = transpiler.transpileRust(
+            'class A {\n    has!: { [key: string]: boolean | number | undefined };\n' +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('is_equal(&self.has');
+    });
+
+    test('a plain string member keeps the helper', () => {
+        const output = transpiler.transpileRust(
+            'class A {\n    has!: { [key: string]: string };\n' +
+            '    run() {\n' +
+            '        return this.has[\'fetchOrders\'] === true;\n' +
+            '    }\n' +
+            '}').content;
+        expect(output).toContain('is_equal(&self.has');
+    });
+});
