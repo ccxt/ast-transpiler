@@ -802,7 +802,10 @@ declare class GoTranspiler extends BaseTranspiler {
     printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string): string | undefined;
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
     sliceLengthTypes: string[];
-    printInlineArrayLength(expression: any, printedText: string): string | undefined;
+    GO_NATIVE_LENGTH_FIELDS: string[];
+    printInlineArrayLength(expression: any, printedText: string, lengthNode?: any): string | undefined;
+    goNativeLengthFieldType(printedText: string): string | undefined;
+    goLengthFeedsArithmeticClassifier(lengthNode: any): boolean;
     printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined;
     goStripControlClauseParens(text: string): string;
     goPrintTernaryBranch(node: any, levels: number): string;

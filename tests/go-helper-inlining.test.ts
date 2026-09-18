@@ -89,6 +89,100 @@ describe('go .length -> len on a slice', () => {
         const output = transpile(ts);
         expect(output).toContain('GetArrayLength(m)');
     });
+    test('a Go string local prints len (its bytes are what the helpers count)', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abc'\n" +
+        "        const n = s.length\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('var n int = len(s)');
+        expect(output).not.toContain('GetArrayLength(');
+        expect(output).not.toContain('GetLength(');
+    });
+    test('a TS-string-annotated local prints len instead of GetLength', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s: string = 'abc'\n" +
+        "        const n = s.length\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('var n int = len(s)');
+        expect(output).not.toContain('GetLength(');
+    });
+    test('a *string local keeps GetLength', () => {
+        const ts =
+        "class Test {\n" +
+        "    safeString (a: any, b: any): string { return a[b]; }\n" +
+        "    f (a: any) {\n" +
+        "        const s = this.safeString (a, 'b')\n" +
+        "        const n = s.length\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('GetLength(s)');
+        expect(output).not.toContain('len(s)');
+    });
+    test('a *string local with a TS-`any` type keeps GetArrayLength', () => {
+        const ts =
+        "class Test {\n" +
+        "    safeString (a: any, b: any) { return a[b]; }\n" +
+        "    f (a: any) {\n" +
+        "        const s = this.safeString (a, 'b')\n" +
+        "        const n = s.length\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('GetArrayLength(s)');
+        expect(output).not.toContain('len(s)');
+    });
+    test('this.Symbols (a hand-written []string field) prints len', () => {
+        const ts =
+        "class Test {\n" +
+        "    symbols: string[] = []\n" +
+        "    f () {\n" +
+        "        for (let i = 0; i < this.symbols.length; i++) {\n" +
+        "            const s = this.symbols[i]\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('for i := 0; i < len(this.Symbols); i++');
+        expect(output).not.toContain('GetArrayLength(this.Symbols)');
+    });
+    test('a hand-written map/interface field keeps GetArrayLength', () => {
+        const ts =
+        "class Test {\n" +
+        "    has: any = {}\n" +
+        "    f () {\n" +
+        "        const n = this.has.length\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('GetArrayLength(this.Has)');
+    });
+    test('a length feeding an arithmetic chain keeps the helper call', () => {
+        const ts =
+        "class Test {\n" +
+        "    f () {\n" +
+        "        const s = 'abc'\n" +
+        "        const n = s.length - 2\n" +
+        "        return n\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('Subtract(GetLength(s), 2)');
+        expect(output).not.toContain('len(s)');
+    });
 });
 
 describe('go `key in obj` -> map membership', () => {

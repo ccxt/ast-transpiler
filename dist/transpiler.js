@@ -4975,6 +4975,10 @@ var GoTranspiler = class extends BaseTranspiler {
     // `any` box GetArrayLength answers 0, so only a `[]`-typed value may inline —
     // and only for the slice types the helper itself counts (a []byte would answer 0).
     this.sliceLengthTypes = ["[]any", "[]string", "[]int64", "[]float64", "[]bool", "[]int", "[][]any", "[]map[string]any"];
+    // hand-written BaseExchange fields (go/v4/exchange.go) whose Go type is one of the
+    // slice types above: the struct value is never a nil pointer and len(field) is the
+    // very value the helper's type switch returns for it.
+    this.GO_NATIVE_LENGTH_FIELDS = ["Symbols"];
     // comparison helpers that normalize int/int64/float64 against each other, so a
     // literal operand's Go default type (int) behaves like the int64 OpNeg produces
     this.comparisonHelpers = ["IsEqual", "IsGreaterThan", "IsLessThan", "IsGreaterThanOrEqual", "IsLessThanOrEqual"];
@@ -6758,7 +6762,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return this.goTypeOfInitializer(inner, printedText);
   }
-  printInlineArrayLength(expression, printedText) {
+  printInlineArrayLength(expression, printedText, lengthNode) {
     if (printedText.includes("\n")) {
       return void 0;
     }
@@ -6766,7 +6770,58 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (typeof goType === "string" && this.sliceLengthTypes.indexOf(goType) >= 0) {
       return `len(${printedText})`;
     }
+    if (this.goLengthFeedsArithmeticClassifier(lengthNode)) {
+      return void 0;
+    }
+    if (goType === "string") {
+      return `len(${printedText})`;
+    }
+    if (this.goNativeLengthFieldType(printedText) !== void 0) {
+      return `len(${printedText})`;
+    }
     return void 0;
+  }
+  // the hand-written struct type of a `this.<field>` read, for the fields the Go
+  // struct declares as a slice the length helpers count. A field of any other type
+  // (map / *sync.Map / interface{}) keeps the helper: GetArrayLength answers 0 for
+  // those, while len would answer the real count.
+  goNativeLengthFieldType(printedText) {
+    const match = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
+    if (match === null || this.GO_NATIVE_LENGTH_FIELDS.indexOf(match[1]) < 0) {
+      return void 0;
+    }
+    return "[]string";
+  }
+  // true when the `.length` sits inside a `-`, `*`, `/` or `%` chain. The ccxt-side
+  // arithmetic classifier (build/go-local-types.js, CCXT_GO_INT_OPERAND_CALLEES)
+  // names the printed `GetArrayLength(`/`GetLength(` call as an `int` operand, so
+  // inlining `len` there would declassify the whole chain (its int64 local and the
+  // `.(int64)` unbox); those sites keep the helper.
+  goLengthFeedsArithmeticClassifier(lengthNode) {
+    let current = lengthNode?.parent;
+    for (let i = 0; i < 16 && current !== void 0; i++) {
+      if (current.kind === ts5.SyntaxKind.BinaryExpression) {
+        const op = current.operatorToken?.kind;
+        if (op === ts5.SyntaxKind.MinusToken || op === ts5.SyntaxKind.AsteriskToken || op === ts5.SyntaxKind.SlashToken || op === ts5.SyntaxKind.PercentToken) {
+          return true;
+        }
+      }
+      switch (current.kind) {
+        case ts5.SyntaxKind.ExpressionStatement:
+        case ts5.SyntaxKind.VariableStatement:
+        case ts5.SyntaxKind.ReturnStatement:
+        case ts5.SyntaxKind.IfStatement:
+        case ts5.SyntaxKind.Block:
+        case ts5.SyntaxKind.ForStatement:
+        case ts5.SyntaxKind.WhileStatement:
+        case ts5.SyntaxKind.MethodDeclaration:
+        case ts5.SyntaxKind.FunctionDeclaration:
+        case ts5.SyntaxKind.ArrowFunction:
+          return false;
+      }
+      current = current.parent;
+    }
+    return false;
   }
   // Go has no ternary operator. The func literal returns the same branch value the
   // helper would and prints the condition the same way; it evaluates only the branch
@@ -7427,7 +7482,7 @@ ${this.getIden(level)}}()`;
     switch (rightSide) {
       case "length":
         const type = this.getChecker().getTypeAtLocation(expression);
-        rawExpression = this.isStringType(type.flags) ? `GetLength(${leftSide})` : this.printInlineArrayLength(expression, leftSide) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
+        rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`);
         break;
       case "push":
         rawExpression = `((IList<object>)${leftSide}).Add`;
