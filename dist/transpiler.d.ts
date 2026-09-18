@@ -521,6 +521,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     csharpEqualityOperandType(node: any): string | undefined;
+    csharpReferenceFieldType(node: any): string | undefined;
+    csharpParameterOperandType(node: any): string | undefined;
     csharpNumericLiteralKind(node: any): string | undefined;
     csharpDeclaredTypeOfBinding(node: any): string | undefined;
     csharpValueEqualityKind(csharpType: any): string | undefined;

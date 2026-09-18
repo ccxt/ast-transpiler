@@ -208,6 +208,20 @@ const CSHARP_NATIVE_FIELDS: { [name: string]: string } = {
 // `(IDictionary<string, object>)` cast the transpiled helper body itself applies
 const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks', 'ohlcvs', 'trades', 'markets', 'currencies', 'currencies_by_id' ];
 
+// hand-written BaseExchange / PredictionExchange fields whose C# declaration is a reference
+// type (cs/ccxt/base/Exchange.Options.cs, Exchange.WsBridge.cs, PredictionExchange.cs): the
+// field holds a reference box at runtime, so a null comparison on it is exactly the
+// isEqual(field, null) branch. A value-typed hand-written field keeps the helper — rateLimit
+// is a `double` (and its TS number type alone would not prove the C# kind).
+const CSHARP_REFERENCE_FIELDS_NATIVE = [
+    'id', 'hostname', 'apiKey', 'secret', 'password', 'uid', 'accountId', 'login', 'privateKey',
+    'walletAddress', 'twofa', 'proxy', 'proxyUrl', 'proxy_url', 'proxyUrlCallback',
+    'proxy_url_callback', 'last_http_response', 'markets', 'markets_by_id', 'features', 'tickers',
+    'bidsasks', 'ohlcvs', 'trades', 'orders', 'myTrades', 'positions', 'liquidations', 'balance',
+    'accounts', 'currencies', 'currencies_by_id', 'outcomes', 'outcomes_by_id', 'events',
+    'events_by_slug', 'clients', 'ids', 'tokenBucket',
+];
+
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
@@ -874,12 +888,58 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.csharpEqualityOperandType(node.expression);
         case ts.SyntaxKind.Identifier:
             // printIdentifier prints the `undefined` identifier as null
-            return (node.escapedText === 'undefined') ? 'null' : this.csharpDeclaredTypeOfBinding(node);
+            if (node.escapedText === 'undefined') {
+                return 'null';
+            }
+            return this.csharpDeclaredTypeOfBinding(node) ?? this.csharpParameterOperandType(node);
+        case ts.SyntaxKind.PropertyAccessExpression: {
+            const fieldType = this.csharpReferenceFieldType(node);
+            return (fieldType === undefined) ? this.csharpTypeOfInitializer(node) : fieldType;
+        }
         }
         if (ts.isStringLiteralLike(node)) {
             return 'string';
         }
         return this.csharpTypeOfInitializer(node);
+    }
+
+    // 'object' for a `this.<field>` read of a hand-written field the table proves a reference
+    // box; undefined for everything else. Only the null branch of printInlineEquality accepts
+    // 'object', so the exact field type is never claimed and the value-equality branches
+    // (string literals, bools) keep the helper
+    csharpReferenceFieldType(node): string | undefined {
+        if (!ts.isPropertyAccessExpression(node) || (node.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        const name = node.name?.escapedText as string;
+        if (CSHARP_REFERENCE_FIELDS_NATIVE.indexOf(name) < 0) {
+            return undefined;
+        }
+        return this.csharpOperandIsValueTyped(node) ? undefined : 'object';
+    }
+
+    // `object` for a parameter operand a null comparison compiles on, else undefined. A
+    // generated parameter prints `object <name>`; the ccxt build layer narrows only string
+    // positions to `string` (a reference type) and numeric positions to `Int64?` / `double?` /
+    // `double`, so a parameter whose checker type holds no number/boolean member is a reference
+    // or a nullable value and `name == null` is its isEqual null branch. `createOrder`'s
+    // `double amount` and every other number/boolean parameter keep the helper.
+    csharpParameterOperandType(node): string | undefined {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        const declaration = symbol?.valueDeclaration;
+        if ((declaration === undefined) || !ts.isParameter(declaration)) {
+            return undefined;
+        }
+        // a destructured or rest parameter prints a different declaration shape
+        if (!ts.isIdentifier(declaration.name) || (declaration.name.escapedText !== node.escapedText) || (declaration.dotDotDotToken !== undefined)) {
+            return undefined;
+        }
+        return this.csharpOperandIsValueTyped(node) ? undefined : 'object';
     }
 
     // A numeric literal prints as an untyped C# constant that adapts to the operand on the

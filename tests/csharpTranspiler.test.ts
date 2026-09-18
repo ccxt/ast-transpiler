@@ -1214,7 +1214,8 @@ describe('csharp typed body locals', () => {
         "}";
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("public virtual bool isDictionary(object value)");
-        expect(output).toContain("return ((bool)((object)((!isEqual(value, null)) && ((value is IDictionary<string, object>))))!);");
+        // the `value !== undefined` guard is a null test on the `object value` parameter
+        expect(output).toContain("return ((bool)((object)(((value != null)) && ((value is IDictionary<string, object>))))!);");
     });
     test('a method declared `: boolean | undefined` (or an alias) returns bool? and keeps null', () => {
         const input =
@@ -1684,6 +1685,81 @@ describe('csharp helper removal: isEqual on a numeric call result', () => {
         "}");
         expect(output).toContain('isEqual(getValue(position, "contracts"), 0)');
         expect(output).toContain('isEqual(mod(ms, 2), 0)');
+    });
+});
+
+// The null test on a hand-written BaseExchange field (a reference box in C#) and on a
+// method parameter (printed `object`, or `string` where the build layer narrows a string
+// position) is native; a value-typed operand keeps the helper.
+describe('csharp null comparisons on hand-written fields and parameters', () => {
+    const nullTests = (input: string) => transpiler.transpileCSharp(input).content;
+    test('a reference-typed hand-written field prints the null test', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    markets: any = undefined;\n" +
+        "    test(): void {\n" +
+        "        const noMarkets = this.markets === undefined;\n" +
+        "        console.log(noMarkets);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool noMarkets = (this.markets == null);");
+    });
+    test('a field the table does not list keeps isEqual', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    foo: any = undefined;\n" +
+        "    test(): void {\n" +
+        "        const noFoo = this.foo === undefined;\n" +
+        "        console.log(noFoo);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool noFoo = isEqual(this.foo, null);");
+    });
+    test('a value-typed hand-written field keeps isEqual — rateLimit is a C# double', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    rateLimit: number = 2000;\n" +
+        "    test(): void {\n" +
+        "        const noRateLimit = this.rateLimit === undefined;\n" +
+        "        console.log(noRateLimit);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool noRateLimit = isEqual(this.rateLimit, null);");
+    });
+    test('a field never takes the value-equality branches', () => {
+        const output = nullTests(
+        "class T {\n" +
+        "    apiKey: string = undefined;\n" +
+        "    test(): void {\n" +
+        "        const empty = this.apiKey === '';\n" +
+        "        console.log(empty);\n" +
+        "    }\n" +
+        "}");
+        expect(output).toContain("bool empty = isEqual(this.apiKey, \"\");");
+    });
+    test('an object-typed parameter prints the null test', () => {
+        const output = nullTests(
+        "function f (parameters = {}) {\n" +
+        "    const noParams = parameters === undefined;\n" +
+        "    return noParams;\n" +
+        "}");
+        expect(output).toContain("bool noParams = (parameters == null);");
+    });
+    test('a string-typed parameter prints the null test', () => {
+        const output = nullTests(
+        "function f (symbol: string) {\n" +
+        "    const noSymbol = symbol === undefined;\n" +
+        "    return noSymbol;\n" +
+        "}");
+        expect(output).toContain("bool noSymbol = (symbol == null);");
+    });
+    test('a rest parameter keeps isEqual — it prints a params object[]', () => {
+        const output = nullTests(
+        "function f (...args: string[]) {\n" +
+        "    const noArgs = args === undefined;\n" +
+        "    return noArgs;\n" +
+        "}");
+        expect(output).toContain("isEqual(args, null)");
     });
 });
 
