@@ -1444,13 +1444,27 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (ts.isIdentifier(key)) {
             const named = this.csharpTypedLocalType(key);
-            return (named === undefined || named.indexOf('string') !== 0) ? undefined : this.printNode(key, 0);
+            // a non-nullable string local is the printed proof ContainsKey needs (`string?`
+            // still needs the checker's string, or a null key would throw where inOp says false)
+            if (named === 'string') {
+                return this.printNode(key, 0);
+            }
+            if ((named === undefined) || (named.indexOf('string') !== 0)) {
+                return undefined;
+            }
+            return this.isStringType(this.getChecker().getTypeAtLocation(key).flags) ? this.printNode(key, 0) : undefined;
         }
         if (this.csharpCallReturnType(key) === 'string') {
-            return this.printNode(key, 0);
+            // the callee's C# signature is a plain string; the checker proof is the phase-1 gate
+            return this.isStringType(this.getChecker().getTypeAtLocation(key).flags) ? this.printNode(key, 0) : undefined;
         }
         const printed = this.printNode(key, 0);
-        return printed.startsWith('((string)') ? printed : undefined;
+        if (!printed.startsWith('((string)')) {
+            return undefined;
+        }
+        // the cast is the printer's own string view of the value: only a checker-proven
+        // string operand may have it (a non-string box would throw where the helper says false)
+        return this.isStringType(this.getChecker().getTypeAtLocation(key).flags) ? printed : undefined;
     }
 
     // the checker's view of an `in` / `.length` operand: a dictionary carries a string
@@ -1469,27 +1483,143 @@ export class CSharpTranspiler extends BaseTranspiler {
         return type?.symbol?.escapedName === 'Array';
     }
 
-    // `key in obj` -> `obj.ContainsKey(key)`, only when the checker proves obj is a
-    // dictionary and both the printed key and the printed operand are already C#
-    // dictionary/string values. Every other shape keeps the inOp helper
-    csharpNativeInExpression(key, obj): string | undefined {
+    // a union of dictionary members and nullish ones (what a `Dict | undefined` signature
+    // widens to): a C# reference that happens to be null is a nullish arm, not a scalar one.
+    // Any other member (arrays, classes, scalars) keeps the helper
+    csharpNullableDictionaryType(type): boolean {
+        if (type === undefined || ((type.flags & ts.TypeFlags.Union) === 0)) {
+            return false;
+        }
+        let dictionaries = 0;
+        for (const member of (type as ts.UnionType).types ?? []) {
+            if ((member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) !== 0) {
+                continue;
+            }
+            if (!this.csharpIsDictionaryType(member)) {
+                return false;
+            }
+            dictionaries++;
+        }
+        return dictionaries > 0;
+    }
+
+    // a dictionary whose values are `any` — the shape the transpiled C# boxes as
+    // Dictionary<string, object>. A `Dictionary<Future>` / `Dictionary<Currency>` keeps the
+    // helper: the C# cast target is invariant, so `IDictionary<string, Future>` would throw
+    csharpIsAnyValuedDictionaryType(type): boolean {
+        if (!this.csharpIsDictionaryType(type)) {
+            return false;
+        }
+        const value = this.getChecker().getIndexTypeOfType(type, ts.IndexKind.String);
+        return (value !== undefined) && this.isAnyType(value.flags);
+    }
+
+    // the parameter printFunctionBody gives a `??= new Dictionary<string, object>()` line
+    // (its initializer is an object literal): from the first statement on its box is a
+    // dictionary whatever the caller passed, so a null check would be dead code
+    csharpDictionaryParamsBag(node): boolean {
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        const initializer = (declaration?.kind === ts.SyntaxKind.Parameter) ? (declaration as ts.ParameterDeclaration).initializer : undefined;
+        return initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression;
+    }
+
+    // D2: the name is rewritten before this read, so the box it holds there is not the one its
+    // declaration started with (the scan is a name match, so any earlier write bails)
+    csharpNameWrittenBefore(node, name: string): boolean {
+        const scope = this.csharpEnclosingFunction(node);
+        if (scope === undefined) {
+            return true;
+        }
+        let written = false;
+        const visit = (n) => {
+            if (written || (n.pos >= node.pos)) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name)) {
+                const parent = n.parent;
+                const assignment = (parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === n);
+                const increment = ((parent?.kind === ts.SyntaxKind.PostfixUnaryExpression) || (parent?.kind === ts.SyntaxKind.PrefixUnaryExpression))
+                    && ((parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken));
+                if (assignment || increment) {
+                    written = true;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return written;
+    }
+
+    // the C# dictionary a ContainsKey receiver reads through, or undefined when no table names
+    // one: the printer's own tables (typed local, hand-written field, call it types), then the
+    // embedding build layer's declared-type table (locals it retyped), then an `object`-typed
+    // parameter whose TS declaration proves an any-valued dictionary (the parse* row params) or
+    // whose printer-emitted `??= new Dictionary<string, object>()` line proves the bag. That
+    // last one applies the same `(IDictionary<string, object>)` cast the helper body itself
+    // applies, plus a null test because the helper answers false for a null receiver
+    csharpNativeDictionaryReceiver(obj): { text: string, nullTest?: string } | undefined {
         const checker = this.getChecker();
-        if (!this.isStringType(checker.getTypeAtLocation(key).flags)) {
-            return undefined;
-        }
-        if (!this.csharpIsDictionaryType(checker.getTypeAtLocation(obj))) {
-            return undefined;
-        }
+        const type = checker.getTypeAtLocation(obj);
+        const nullable = this.csharpNullableDictionaryType(type);
         const receiver = this.csharpNativeReceiver(obj);
-        // only a dictionary C# type carries ContainsKey (IList<object> keeps the helper)
-        if (receiver === undefined || receiver.type.indexOf('Dictionary<') < 0) {
+        if (receiver !== undefined) {
+            // only a dictionary C# type carries ContainsKey (IList<object> keeps the helper)
+            if (receiver.type.indexOf('Dictionary<') < 0) {
+                return undefined;
+            }
+            return nullable ? { text: receiver.text, nullTest: receiver.text } : { text: receiver.text };
+        }
+        // the embedding build layer's declared-type table names the type the local's own
+        // declaration carries, so it needs neither the checker proof nor a cast
+        const declared = this.csharpExpressionTypeOf(obj);
+        if (declared !== undefined) {
+            return (declared.indexOf('Dictionary<') >= 0) ? { text: this.printNode(obj, 0) } : undefined;
+        }
+        // an `object` box: only a parameter of this function (a local may box the hand-written
+        // base's own instantiation — `client.futures` is IDictionary<string, Future> — and the
+        // printer cannot tell), and only while nothing has rewritten it (D2)
+        if (!ts.isIdentifier(obj) || (this.csharpTypedLocalType(obj) !== undefined)) {
             return undefined;
         }
+        const name = obj.escapedText as string;
+        if (this.csharpNameWrittenBefore(obj, name)) {
+            return undefined;
+        }
+        const declaration = checker.getSymbolAtLocation(obj)?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.Parameter) {
+            return undefined; // a local may box a hand-written instantiation the printer cannot name
+        }
+        const printed = this.printNode(obj, 0);
+        const text = `((IDictionary<string, object>)${printed})`;
+        // the params bag: the printer's own `??= new Dictionary<string, object>()` line made the
+        // box a dictionary whatever the caller passed, so no checker proof is needed (and no
+        // null test — the line is the first statement of the body)
+        if (this.csharpDictionaryParamsBag(obj)) {
+            return { text };
+        }
+        if (!this.csharpIsDictionaryType(type) && !nullable) {
+            return undefined;
+        }
+        if (!this.csharpIsAnyValuedDictionaryType(type)) {
+            return undefined;
+        }
+        return { text, nullTest: printed };
+    }
+
+    // `key in obj` -> `obj.ContainsKey(key)`, only when both the printed key and the printed
+    // operand are already C# string / dictionary values. Every other shape keeps the inOp helper
+    csharpNativeInExpression(key, obj): string | undefined {
         const printedKey = this.csharpNativeStringKey(key);
         if (printedKey === undefined) {
             return undefined;
         }
-        return `${receiver.text}.ContainsKey(${printedKey})`;
+        const receiver = this.csharpNativeDictionaryReceiver(obj);
+        if (receiver === undefined) {
+            return undefined;
+        }
+        const call = `${receiver.text}.ContainsKey(${printedKey})`;
+        return (receiver.nullTest === undefined) ? call : `(${receiver.nullTest} != null && ${call})`;
     }
 
     // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep

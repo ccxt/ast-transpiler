@@ -1283,8 +1283,9 @@ describe('csharp typed body locals', () => {
         "    return undefined;\n" +
         "}";
         const guardedOutput = transpiler.transpileCSharp(guarded).content;
-        // the `in` guard prints a C# bool of its own (`inOp` returns bool): no isTrue round-trip
-        expect(guardedOutput).toContain('if (inOp(parameters, "x"))');
+        // the `in` guard prints a C# bool of its own (ContainsKey returns bool): no isTrue
+        // round-trip; the receiver is still object, so the cast and the helper's null test stay
+        expect(guardedOutput).toContain('if ((parameters != null && ((IDictionary<string, object>)parameters).ContainsKey("x")))');
         expect(guardedOutput).toContain('object y = ((IDictionary<string,object>)parameters)["x"];');
         // the else-branch of a negated guard runs only when the key is there
         const negatedElse =
@@ -2615,5 +2616,89 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         "}\n";
         const output = withKinds({ i: 'int', count: 'int' }, input);
         expect(output).toContain('postFixIncrement(ref this.count)');
+    });
+    test('a dictionary parameter prints the cast and the null test the helper applies', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parseTrade (trade: { [key: string]: any }) {\n" +
+        "        if ('isDust' in trade) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // a parameter is still `object`, so the receiver needs the same
+        // (IDictionary<string, object>) cast the helper body applies, and the null test
+        // because inOp answers false for a null receiver
+        expect(output).toContain('public virtual object parseTrade(object trade)');
+        expect(output).toContain('if ((trade != null && ((IDictionary<string, object>)trade).ContainsKey("isDust")))');
+    });
+    test('the params bag prints the cast without the null test', () => {
+        const input =
+        "function f (params: { [key: string]: any } = {}): any {\n" +
+        "    if ('x' in params) { return params['x']; }\n" +
+        "    return undefined;\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // printFunctionBody already emitted `parameters ??= new Dictionary<string, object>()`,
+        // so the box is a dictionary and can never be null at this point
+        expect(output).toContain('parameters ??= new Dictionary<string, object>();');
+        expect(output).toContain('if (((IDictionary<string, object>)parameters).ContainsKey("x"))');
+    });
+    test('a nullable dictionary receiver keeps the null test', () => {
+        const input =
+        "class Exchange {\n" +
+        "    indexBy (a: any, b: any): { [key: string]: any } | undefined { return undefined; }\n" +
+        "    main (a: any): any {\n" +
+        "        const merged = this.indexBy(a, a);\n" +
+        "        return ('k' in merged);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('Dictionary<string, object> merged = this.indexBy(a, a);');
+        // inOp answers false for the nullish arm, not a throw
+        expect(output).toContain('return ((merged != null && merged.ContainsKey("k")));');
+    });
+    test('a dictionary parameter of another value type keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (futures: { [key: string]: Promise<any> }): any {\n" +
+        "        return ('k' in futures);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the C# box of a Dictionary<Future> is IDictionary<string, Future>: the invariant
+        // cast to IDictionary<string, object> would throw, so the helper stays
+        expect(output).toContain('return (inOp(futures, "k"));');
+    });
+    test('an object local keeps the helper: only parameters are cast', () => {
+        const input =
+        "function f (d: { [key: string]: any }): any {\n" +
+        "    const other = d;\n" +
+        "    return ('k' in other);\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the hand-written base may box its own instantiation (client.futures), and the
+        // printer prints both locals as `object`
+        expect(output).toContain('object other = d;');
+        expect(output).toContain('return (inOp(other, "k"));');
+    });
+    test('a parameter rewritten before the read keeps the helper', () => {
+        const input =
+        "function f (params: { [key: string]: any } = {}): any {\n" +
+        "    params = {};\n" +
+        "    return ('x' in params);\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // D2: the box at the read is whatever the assignment stored
+        expect(output).toContain('return (inOp(parameters, "x"));');
+    });
+    test('a native receiver still needs a printed string key', () => {
+        const input =
+        "function f (params: { [key: string]: any } = {}, key: any): any {\n" +
+        "    return (key in params);\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the C# parameter is `object`, so ContainsKey has no string to bind
+        expect(output).toContain('return (inOp(parameters, key));');
     });
 });
