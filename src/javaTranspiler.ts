@@ -2629,23 +2629,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (leftFamily !== 'number' || rightFamily !== 'number') {
             return undefined;
         }
-<<<<<<< HEAD
         if (op === ts.SyntaxKind.PlusToken) {
             // the widened rule: literals + the non-null numeric proofs this printer owns
             return this.printWidenedNativeAdd(left, right, leftText, rightText);
         }
-        // `+` keeps phase-1's literal-only rule (java-13/14 own Add): its operands must not
-        // derive from a retyped local anywhere below
-        const childAllows = !isPlus;
-        const leftKind = this.javaProvableNumericKind(left, childAllows);
-        const rightKind = this.javaProvableNumericKind(right, childAllows);
-        const pairKind = this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
-        if (pairKind === undefined) {
-||||||| 77fcdf9
-        const leftKind = this.javaProvableNumericKind(left);
-        const rightKind = this.javaProvableNumericKind(right);
-        if (leftKind === undefined || leftKind !== rightKind) {
-=======
         if (isMod) {
             // Helpers.mod normalizes both operands to double and returns their double
             // remainder: the same value once both operands print as a non-null Java number
@@ -2654,10 +2641,13 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             return `(((double) ${leftText}) % ((double) ${rightText}))`;
         }
-        const leftKind = this.javaProvableNumericKind(left);
-        const rightKind = this.javaProvableNumericKind(right);
-        if (leftKind === undefined || leftKind !== rightKind) {
->>>>>>> hx2/java-32
+        // `+` keeps phase-1's literal-only rule (java-13/14 own Add): its operands must not
+        // derive from a retyped local anywhere below
+        const childAllows = !isPlus;
+        const leftKind = this.javaProvableNumericKind(left, childAllows);
+        const rightKind = this.javaProvableNumericKind(right, childAllows);
+        const pairKind = this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+        if (pairKind === undefined) {
             return undefined;
         }
         if (isDivide) {
@@ -2668,7 +2658,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
     }
 
-<<<<<<< HEAD
     // Helpers.mathMin/mathMax take Object, tolerate null and hand the ORIGINAL operand
     // box back, while java.lang.Math.min/max take primitives, so the native call is only
     // emitted when both operands print as primitives of one numeric family: int/long
@@ -3055,8 +3044,6 @@ export class JavaTranspiler extends BaseTranspiler {
             ? javaType : undefined;
     }
 
-||||||| 77fcdf9
-=======
     // an operand `(double) <text>` can be applied to without changing what Helpers.mod
     // computes: a numeric literal or a native arithmetic node (javaProvableNumericKind,
     // already printed as a java number) or a primitive int loop counter
@@ -3064,7 +3051,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableNumericKind(node) !== undefined || this.javaProvableCounterInt(node);
     }
 
->>>>>>> hx2/java-32
     getObjectLiteralFromCallExpressionArguments(node) {
         const res = [];
         if (!node?.arguments) {
