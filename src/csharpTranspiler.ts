@@ -189,12 +189,17 @@ const GUARD_KEY_SEPARATOR = "\u0000";
 
 // C# kinds a comparison can be printed natively on: the runtime isLessThan family compares two
 // boxes of one kind with the conversions the C# operator applies too. `double` keeps only
-// `>`/`>=` — the helper reads a NaN operand as "less than", a native comparison is false.
+// `>`/`>=` — the helper reads a NaN operand as "less than", a native comparison is false — and
+// only meets another `double`: its isEqual accepts an integral double as an integer.
 const CSHARP_NUMERIC_KINDS = [ 'int', 'Int64', 'double' ];
 
 // numeric kinds a printed call result can carry (with the nullable spellings the safe*
 // accessors and parseToInt use), for the equality path only
 const CSHARP_NUMERIC_VALUE_KINDS = [ 'int', 'Int64', 'Int64?', 'double', 'double?' ];
+
+// integer kinds the helper normalises to Int64 (normalizeIntIfNeeded), the same widening the
+// C# operator applies to an int next to a long, so a mixed pair prints the identical comparison
+const CSHARP_INTEGER_KINDS = [ 'int', 'Int64' ];
 
 const CSHARP_NATIVE_COMPARISON_TOKENS = {
     [ts.SyntaxKind.LessThanToken]: '<',
@@ -1351,9 +1356,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         return isNumber(node.left) && isNumber(node.right);
     }
 
-    // `<`, `>`, `<=`, `>=` on two operands of the same proven C# number kind print natively:
-    // the helper compares the two boxes with the conversions the operator applies, and only
-    // `double` carries a value (NaN) the two disagree on — see CSHARP_NUMERIC_KINDS
+    // `<`, `>`, `<=`, `>=` on two operands whose printed C# kind this printer can name (a
+    // declaration, a literal, a call of a known signature — never the JS type) print natively:
+    // the helper compares the same two boxes through the conversions the C# operator applies,
+    // and an int/Int64 pair is the same comparison too — see CSHARP_NUMERIC_KINDS
     csharpNativeNumericComparison(node, identation): string | undefined {
         const token = CSHARP_NATIVE_COMPARISON_TOKENS[node.operatorToken.kind];
         if (token === undefined) {
@@ -1361,13 +1367,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const leftKind = this.csharpExpressionTypeOf(node.left);
         const rightKind = this.csharpExpressionTypeOf(node.right);
-        if ((leftKind === undefined) || (leftKind !== rightKind) || (CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0)) {
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        const integerPair = (CSHARP_INTEGER_KINDS.indexOf(leftKind) >= 0) && (CSHARP_INTEGER_KINDS.indexOf(rightKind) >= 0);
+        if (!integerPair && ((leftKind !== rightKind) || (CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0))) {
             return undefined;
         }
         if ((leftKind === 'double') && ((token === '<') || (token === '<='))) {
-            return undefined;
-        }
-        if (!this.csharpOperandsAreNumbers(node)) {
             return undefined;
         }
         const leftText = this.printNode(node.left, 0).trim();

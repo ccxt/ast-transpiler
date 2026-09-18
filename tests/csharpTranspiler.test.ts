@@ -2065,7 +2065,7 @@ describe('csharp native numeric comparisons', () => {
         expect(output).not.toContain("isLessThan(");
         expect(output).not.toContain("isGreaterThan");
     });
-    test('an unproven or mismatched kind keeps the runtime helper', () => {
+    test('an unproven or double-mixed kind keeps the runtime helper', () => {
         const unproven =
         "class Exchange {\n" +
         "    main(gamma: number, delta: number) {\n" +
@@ -2076,20 +2076,54 @@ describe('csharp native numeric comparisons', () => {
         const mismatched =
         "class Exchange {\n" +
         "    main(epsilon: number, zeta: number) {\n" +
-        "        return epsilon < zeta;\n" +
+        "        return [epsilon < zeta, epsilon > zeta];\n" +
         "    }\n" +
         "}";
-        expect(withKinds({ epsilon: 'int', zeta: 'Int64' }, mismatched)).toContain("isLessThan(epsilon, zeta)");
+        // isEqual reads an integral double as an integer, so a double never mixes kinds
+        const output = withKinds({ epsilon: 'int', zeta: 'double' }, mismatched);
+        expect(output).toContain("isLessThan(epsilon, zeta)");
+        expect(output).toContain("isGreaterThan(epsilon, zeta)");
     });
-    test('an operand the checker does not see as a plain number keeps the helper', () => {
+    test('an int/Int64 pair prints the native operator', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number, gamma: number) {\n" +
+        "        return [alpha < beta, alpha >= beta, alpha > 5, gamma <= 5];\n" +
+        "    }\n" +
+        "}";
+        // the helper normalises int to Int64, the widening the C# operator applies too
+        const output = withKinds({ alpha: 'Int64', beta: 'int', gamma: 'int' }, input);
+        expect(output).toContain("alpha < beta");
+        expect(output).toContain("alpha >= beta");
+        expect(output).toContain("alpha > 5");
+        expect(output).toContain("gamma <= 5");
+        expect(output).not.toContain("isLessThan(");
+        expect(output).not.toContain("isGreaterThan");
+    });
+    test('a double next to an integer kind keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(mu: number, nu: number) {\n" +
+        "        return [mu >= nu, mu > nu, mu <= nu, mu < nu];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ mu: 'Int64', nu: 'double' }, input);
+        expect(output).toContain("isGreaterThanOrEqual(mu, nu)");
+        expect(output).toContain("isGreaterThan(mu, nu)");
+        expect(output).toContain("isLessThanOrEqual(mu, nu)");
+        expect(output).toContain("isLessThan(mu, nu)");
+    });
+    test('a declared kind prints natively even when the checker sees `any`', () => {
         const input =
         "class Exchange {\n" +
         "    main(eta: any, theta: number) {\n" +
         "        return eta < theta;\n" +
         "    }\n" +
         "}";
-        // the resolver claims int for both, the checker sees `any` on the left
-        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("isLessThan(eta, theta)");
+        // the resolver names both C# declarations: a declared number is that box at runtime
+        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("eta < theta");
+        // an operand the resolver leaves unproven keeps the helper
+        expect(withKinds({ theta: 'int' }, input)).toContain("isLessThan(eta, theta)");
     });
     test('two doubles print `>`/`>=` but keep `<`/`<=` (NaN)', () => {
         const input =
