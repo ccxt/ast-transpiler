@@ -268,6 +268,14 @@ const CSHARP_REFERENCE_FIELDS_NATIVE = [
     'events_by_slug', 'clients', 'ids', 'tokenBucket',
 ];
 
+// hand-written BaseExchange fields declared `bool` (cs/ccxt/base/Exchange.Options.cs, e.g.
+// `public bool newUpdates;` / `public bool verbose { get; set; }`): a `this.<name>` read is
+// already a C# bool, so a condition holding one needs no isTrue wrapper
+const CSHARP_NATIVE_BOOL_FIELDS = [
+    'alias', 'certified', 'enableRateLimit', 'isSandboxModeEnabled', 'newUpdates', 'pro',
+    'reduceFees', 'reloadingMarkets', 'returnResponseHeaders', 'substituteCommonCurrencyCodes', 'verbose',
+];
+
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
@@ -3736,14 +3744,26 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.csharpBinaryExpressionPrintsBool(node);
         case ts.SyntaxKind.Identifier:
             return this.csharpIdentifierPrintsBool(node);
+        case ts.SyntaxKind.PropertyAccessExpression:
+            return this.csharpFieldPrintsBool(node);
         case ts.SyntaxKind.CallExpression:
             return this.csharpCallPrintsBool(node);
         }
         return false;
     }
 
-    // isEqual / !isEqual / isGreaterThan / ... / inOp all have a C# `bool` signature, and a
-    // `&&` / `||` prints both operands through printCondition, i.e. as bool themselves
+    // `this.<field>` reads of the hand-written BaseExchange bool fields: the field is declared
+    // `bool` there, so a checker-typed plain boolean read is a C# bool the condition can use bare
+    csharpFieldPrintsBool(node): boolean {
+        if (node.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        return (CSHARP_NATIVE_BOOL_FIELDS.indexOf(node.name?.escapedText as string) >= 0) && this.csharpIsCheckedBoolean(node);
+    }
+
+    // isEqual / !isEqual / isGreaterThan / ... / inOp all have a C# `bool` signature, a
+    // `&&` / `||` prints both operands through printCondition, i.e. as bool themselves, and
+    // `x instanceof T` prints the C# type test `<x> is <T>`, itself a bool
     csharpBinaryExpressionPrintsBool(node): boolean {
         switch (node.operatorToken.kind) {
         case ts.SyntaxKind.EqualsEqualsToken:
@@ -3755,6 +3775,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         case ts.SyntaxKind.LessThanToken:
         case ts.SyntaxKind.LessThanEqualsToken:
         case ts.SyntaxKind.InKeyword:
+        case ts.SyntaxKind.InstanceOfKeyword:
         case ts.SyntaxKind.BarBarToken:
         case ts.SyntaxKind.AmpersandAmpersandToken:
             return true;
@@ -3771,10 +3792,16 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     // `bool name = ...` is only declared when getCSharpLocalType resolved that exact
     // declaration to `bool`, so ask the same function: the condition and the declaration
-    // cannot disagree. Parameters, members and demoted locals return `object` there.
+    // cannot disagree. Parameters, members and demoted locals return `object` there. The
+    // embedding layer's resolver (ccxt: build/csharp-local-types.js) retypes locals the
+    // printer cannot name itself and reports the type the printed declaration carries, so a
+    // `bool` there is the same proof for a declaration this printer did not write
     csharpIdentifierPrintsBool(node): boolean {
         if (!this.csharpIsCheckedBoolean(node)) {
             return false;
+        }
+        if (this.csharpExpressionTypeOf(node) === 'bool') {
+            return true;
         }
         const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
         if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
@@ -3897,19 +3924,26 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `${this.getIden(identation)}${this.FALSY_WRAPPER_OPEN}${printed}${this.FALSY_WRAPPER_CLOSE}`;
     }
 
-    // dropping the wrapper exposes the `&&` / `||` of the node, so the bare text needs its own
+    // dropping the wrapper exposes the `&&` / `||` / `is` of the node, so the bare text needs its own
     // parentheses where C# binds tighter than the JS it replaces: under `!` (which binds tighter
     // than both), and a `||` that becomes an operand of a `&&` (`(a || b) && c` must not flatten
-    // to `a || b && c`). Source parentheses, when present, already come out in `printed`.
+    // to `a || b && c`). A type test additionally needs them under the `(bool)` cast the
+    // conditional-expression printer prepends (`(bool) x is T` would bind as `((bool) x) is T`).
+    // Source parentheses, when present, already come out in `printed`.
     csharpConditionParensIfNeeded(node, printed: string): string {
         if (node?.kind !== ts.SyntaxKind.BinaryExpression) {
             return printed;
         }
         const op = node.operatorToken.kind;
+        const parent = node.parent;
+        if (op === ts.SyntaxKind.InstanceOfKeyword) {
+            const underNot = parent?.kind === ts.SyntaxKind.PrefixUnaryExpression && parent.operator === ts.SyntaxKind.ExclamationToken;
+            const underCast = parent?.kind === ts.SyntaxKind.ConditionalExpression && parent.condition === node;
+            return (underNot || underCast) ? `(${printed})` : printed;
+        }
         if (op !== ts.SyntaxKind.BarBarToken && op !== ts.SyntaxKind.AmpersandAmpersandToken) {
             return printed;
         }
-        const parent = node.parent;
         const underNot = parent?.kind === ts.SyntaxKind.PrefixUnaryExpression && parent.operator === ts.SyntaxKind.ExclamationToken;
         const underAnd = op === ts.SyntaxKind.BarBarToken && parent?.kind === ts.SyntaxKind.BinaryExpression
             && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken;

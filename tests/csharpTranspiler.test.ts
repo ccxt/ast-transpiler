@@ -3585,3 +3585,108 @@ describe('csharp loop-index element reads', () => {
         expect(output).toContain('getValue(list, i)');
     });
 });
+
+// the embedding build layer (ccxt: build/csharp-local-types.js) prints the declaration of some
+// locals itself and reports that same type through csharpExpressionTypeResolver; a `bool` there
+// is the declaration the emitted code carries, so the condition can use the read bare
+describe('isTrue drops for a declared bool the printer did not type itself', () => {
+    // Identifier nodes only, the way installCsharpNumericComparisons installs the resolver
+    const withKind = (kind, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.kind === 80) ? kind : undefined;
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const input = `
+class T {
+    isRoundNumber(x: number): boolean { return true; }
+    f(leverage: number) {
+        const rational = this.isRoundNumber(leverage);
+        if (!rational) { return 1; }
+        const band = rational ? 'a' : 'b';
+        return band;
+    }
+}`;
+    test('a resolver-declared bool local prints bare under ! and in a ternary condition', () => {
+        const output = withKind('bool', input);
+        expect(output).toContain('if (!rational)');
+        expect(output).toContain('((bool) rational) ? "a" : "b"');
+        expect(output).not.toContain('isTrue');
+    });
+    test('without that declaration the local keeps the wrapper', () => {
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (!isTrue(rational))');
+        expect(output).toContain('((bool) isTrue(rational)) ? "a" : "b"');
+    });
+    test('a nullable or non-bool declaration keeps the wrapper', () => {
+        // `bool?` is no condition in C#, and the other resolved kinds are not booleans at all
+        expect(withKind('bool?', input)).toContain('if (!isTrue(rational))');
+        expect(withKind('object', input)).toContain('if (!isTrue(rational))');
+    });
+});
+
+// hand-written BaseExchange fields declared `bool` (cs/ccxt/base/Exchange.Options.cs, see
+// CSHARP_NATIVE_BOOL_FIELDS): the read is a C# bool, so the wrapper around it goes
+describe('isTrue drops for hand-written bool fields', () => {
+    const input = `
+class Exchange {
+    newUpdates: boolean = true;
+    verbose: boolean = true;
+    f() {
+        if (this.newUpdates) { return 1; }
+        if (!this.verbose) { return 2; }
+        const label = this.newUpdates ? 'a' : 'b';
+        return label;
+    }
+}`;
+    test('a checker-typed plain boolean field read prints bare', () => {
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('if (this.newUpdates)');
+        expect(output).toContain('if (!this.verbose)');
+        expect(output).toContain('((bool) this.newUpdates) ? "a" : "b"');
+        expect(output).not.toContain('isTrue');
+    });
+    test('a nullable or unlisted member keeps the wrapper', () => {
+        const output = transpiler.transpileCSharp(`
+class Exchange {
+    maybe: boolean | undefined = undefined;
+    f() {
+        if (this.maybe) { return 1; }
+    }
+}`).content;
+        expect(output).toContain('if (isTrue(this.maybe))');
+    });
+});
+
+// `x instanceof T` prints the C# type test `<x> is <T>`, a bool of its own: the wrapper goes,
+// with parentheses where `!` / the ternary's `(bool)` cast would otherwise rebind the text
+describe('instanceof conditions print bare', () => {
+    test('if, ! and a ternary condition', () => {
+        const output = transpiler.transpileCSharp(`
+class CustomError {}
+class Exchange {
+    f(e: any, x: any) {
+        if (e instanceof CustomError) { return 1; }
+        if (!(x instanceof CustomError)) { return 2; }
+        const fix = e instanceof CustomError ? 'a' : 'b';
+        return fix;
+    }
+}`).content;
+        expect(output).toContain('if (e is CustomError)');
+        expect(output).toContain('if (!(x is CustomError))');
+        expect(output).toContain('((bool) (e is CustomError)) ? "a" : "b"');
+        expect(output).not.toContain('isTrue');
+    });
+    test('a negated test without source parentheses adds its own', () => {
+        const output = transpiler.transpileCSharp(`
+class CustomError {}
+class Exchange {
+    f(e: any) {
+        if (!(e instanceof CustomError)) { return 1; }
+    }
+}`).content;
+        expect(output).toContain('if (!(e is CustomError))');
+    });
+});

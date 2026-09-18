@@ -608,6 +608,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
     csharpConditionPrintsBool(node: any): boolean;
+    csharpFieldPrintsBool(node: any): boolean;
     csharpBinaryExpressionPrintsBool(node: any): boolean;
     csharpIsCheckedBoolean(node: any): boolean;
     csharpIdentifierPrintsBool(node: any): boolean;

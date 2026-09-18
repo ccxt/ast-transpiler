@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2762,6 +2762,19 @@ var CSHARP_NATIVE_FIELDS = {
   "ids": "List<object>"
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
+var CSHARP_NATIVE_BOOL_FIELDS = [
+  "alias",
+  "certified",
+  "enableRateLimit",
+  "isSandboxModeEnabled",
+  "newUpdates",
+  "pro",
+  "reduceFees",
+  "reloadingMarkets",
+  "returnResponseHeaders",
+  "substituteCommonCurrencyCodes",
+  "verbose"
+];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
@@ -4417,13 +4430,24 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return this.csharpBinaryExpressionPrintsBool(node);
       case ts4.SyntaxKind.Identifier:
         return this.csharpIdentifierPrintsBool(node);
+      case ts4.SyntaxKind.PropertyAccessExpression:
+        return this.csharpFieldPrintsBool(node);
       case ts4.SyntaxKind.CallExpression:
         return this.csharpCallPrintsBool(node);
     }
     return false;
   }
-  // isEqual / !isEqual / isGreaterThan / ... / inOp all have a C# `bool` signature, and a
-  // `&&` / `||` prints both operands through printCondition, i.e. as bool themselves
+  // `this.<field>` reads of the hand-written BaseExchange bool fields: the field is declared
+  // `bool` there, so a checker-typed plain boolean read is a C# bool the condition can use bare
+  csharpFieldPrintsBool(node) {
+    if (node.expression?.kind !== ts4.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    return CSHARP_NATIVE_BOOL_FIELDS.indexOf(node.name?.escapedText) >= 0 && this.csharpIsCheckedBoolean(node);
+  }
+  // isEqual / !isEqual / isGreaterThan / ... / inOp all have a C# `bool` signature, a
+  // `&&` / `||` prints both operands through printCondition, i.e. as bool themselves, and
+  // `x instanceof T` prints the C# type test `<x> is <T>`, itself a bool
   csharpBinaryExpressionPrintsBool(node) {
     switch (node.operatorToken.kind) {
       case ts4.SyntaxKind.EqualsEqualsToken:
@@ -4435,6 +4459,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       case ts4.SyntaxKind.LessThanToken:
       case ts4.SyntaxKind.LessThanEqualsToken:
       case ts4.SyntaxKind.InKeyword:
+      case ts4.SyntaxKind.InstanceOfKeyword:
       case ts4.SyntaxKind.BarBarToken:
       case ts4.SyntaxKind.AmpersandAmpersandToken:
         return true;
@@ -4449,10 +4474,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
   }
   // `bool name = ...` is only declared when getCSharpLocalType resolved that exact
   // declaration to `bool`, so ask the same function: the condition and the declaration
-  // cannot disagree. Parameters, members and demoted locals return `object` there.
+  // cannot disagree. Parameters, members and demoted locals return `object` there. The
+  // embedding layer's resolver (ccxt: build/csharp-local-types.js) retypes locals the
+  // printer cannot name itself and reports the type the printed declaration carries, so a
+  // `bool` there is the same proof for a declaration this printer did not write
   csharpIdentifierPrintsBool(node) {
     if (!this.csharpIsCheckedBoolean(node)) {
       return false;
+    }
+    if (this.csharpExpressionTypeOf(node) === "bool") {
+      return true;
     }
     const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
     if (declaration === void 0 || !ts4.isVariableDeclaration(declaration) || declaration.name?.kind !== ts4.SyntaxKind.Identifier) {
@@ -4483,19 +4514,26 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return `${this.getIden(identation)}${this.FALSY_WRAPPER_OPEN}${printed}${this.FALSY_WRAPPER_CLOSE}`;
   }
-  // dropping the wrapper exposes the `&&` / `||` of the node, so the bare text needs its own
+  // dropping the wrapper exposes the `&&` / `||` / `is` of the node, so the bare text needs its own
   // parentheses where C# binds tighter than the JS it replaces: under `!` (which binds tighter
   // than both), and a `||` that becomes an operand of a `&&` (`(a || b) && c` must not flatten
-  // to `a || b && c`). Source parentheses, when present, already come out in `printed`.
+  // to `a || b && c`). A type test additionally needs them under the `(bool)` cast the
+  // conditional-expression printer prepends (`(bool) x is T` would bind as `((bool) x) is T`).
+  // Source parentheses, when present, already come out in `printed`.
   csharpConditionParensIfNeeded(node, printed) {
     if (node?.kind !== ts4.SyntaxKind.BinaryExpression) {
       return printed;
     }
     const op = node.operatorToken.kind;
+    const parent = node.parent;
+    if (op === ts4.SyntaxKind.InstanceOfKeyword) {
+      const underNot2 = parent?.kind === ts4.SyntaxKind.PrefixUnaryExpression && parent.operator === ts4.SyntaxKind.ExclamationToken;
+      const underCast = parent?.kind === ts4.SyntaxKind.ConditionalExpression && parent.condition === node;
+      return underNot2 || underCast ? `(${printed})` : printed;
+    }
     if (op !== ts4.SyntaxKind.BarBarToken && op !== ts4.SyntaxKind.AmpersandAmpersandToken) {
       return printed;
     }
-    const parent = node.parent;
     const underNot = parent?.kind === ts4.SyntaxKind.PrefixUnaryExpression && parent.operator === ts4.SyntaxKind.ExclamationToken;
     const underAnd = op === ts4.SyntaxKind.BarBarToken && parent?.kind === ts4.SyntaxKind.BinaryExpression && parent.operatorToken.kind === ts4.SyntaxKind.AmpersandAmpersandToken;
     return underNot || underAnd ? `(${printed})` : printed;
