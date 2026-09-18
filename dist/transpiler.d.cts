@@ -538,9 +538,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpTypeIsNative(csharpType: string): boolean;
     csharpTypedLocalType(node: any): string | undefined;
-    csharpCountMemberOf(csharpType: string): string | undefined;
-    csharpDeclaredLengthExpression(node: any): string | undefined;
-    csharpLengthReceiverIdentifier(node: any): any | undefined;
     csharpNativeStringKey(key: any): string | undefined;
     csharpIsDictionaryType(type: any): boolean;
     csharpIsArrayType(type: any): boolean;
