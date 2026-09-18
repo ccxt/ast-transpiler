@@ -515,6 +515,58 @@ describe('csharp transpiling tests', () => {
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
+    // a consumer's receiver-type hook (ccxt's classifier names the declaration it retyped) proves
+    // the receiver already carries a dictionary: the element WRITE needs no interface cast. The
+    // unhooked emission is the test above — byte-identical with no hook installed.
+    test('a dict-typed receiver drops the element-write cast when the type hook names it', () => {
+        const config = {
+            'verbose': false,
+            'csharp': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                    'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+                    'ELEMENT_ACCESS_WRAPPER_CLOSE': ')'
+                }
+            }
+        }
+        const hooked = new Transpiler(config);
+        const ts =
+        "const x = {};\n" +
+        "x[\"teste\"] = 1;";
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'Dictionary<string, object>' : undefined;
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {};\n" +
+            "x[\"teste\"] = 1;");
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'IDictionary<string, object>' : undefined;
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {};\n" +
+            "x[\"teste\"] = 1;");
+        // an object receiver (the hook names no type) keeps the cast
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = () => undefined;
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {};\n" +
+            "((IDictionary<string,object>)x)[\"teste\"] = 1;");
+    })
+    test('a non-string key keeps the element-write cast even on a dict-typed receiver', () => {
+        const config = {
+            'verbose': false,
+            'csharp': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                    'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+                    'ELEMENT_ACCESS_WRAPPER_CLOSE': ')'
+                }
+            }
+        }
+        const hooked = new Transpiler(config);
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'Dictionary<string, object>' : undefined;
+        const ts =
+        "const x = {};\n" +
+        "x[1] = 1;";
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {};\n" +
+            "((List<object>)x)[Convert.ToInt32(1)] = 1;");
+    })
     // test('basic throw statement', () => {
     //     const ts =
     //     "function test () {\n" +
@@ -596,7 +648,68 @@ describe('csharp transpiling tests', () => {
         "const ff = myStr.length;"
         const csharp =
         "string myStr = \"test\";\n" +
-        "int ff = ((string)myStr).Length;"
+        "int ff = myStr.Length;"
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    })
+    // the receiver's static C# type is what decides the `((string)x)` wrapper: a local the
+    // printer itself declares `string` already IS a string, so the cast names nothing
+    test('string method receivers on a printer-typed local drop the cast', () => {
+        const ts =
+        "const s = \"Test\";\n" +
+        "const a = s.toUpperCase();\n" +
+        "const b = s.toLowerCase();\n" +
+        "const c = s.trim();\n" +
+        "const d = s.split(\"e\");\n" +
+        "const e = s.replace(\"t\", \"x\");\n" +
+        "const f = s.length;"
+        const csharp =
+        "string s = \"Test\";\n" +
+        "string a = s.ToUpper();\n" +
+        "string b = s.ToLower();\n" +
+        "string c = s.Trim();\n" +
+        "List<object> d = s.Split(new [] {((string)\"e\")}, StringSplitOptions.None).ToList<object>();\n" +
+        "string e = s.Replace((string)\"t\", (string)\"x\");\n" +
+        "int f = s.Length;"
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    })
+    test('string method receivers on an object local keep the cast', () => {
+        const ts =
+        "const s = this.safeString (m, \"k\");\n" +
+        "const a = s.trim();\n" +
+        "const b = s.toUpperCase();\n" +
+        "const c = s.length;"
+        const csharp =
+        "object s = callDynamically(this, \"safeString\", new object[] { m, \"k\" });\n" +
+        "string a = ((string)s).Trim();\n" +
+        "string b = ((string)s).ToUpper();\n" +
+        "int c = getArrayLength(s);"
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    })
+    test('string method receivers on a parameter keep the cast', () => {
+        const ts =
+        "function f (x) {\n" +
+        "    const a = x.toUpperCase();\n" +
+        "    const b = x.trim();\n" +
+        "    return a;\n" +
+        "}"
+        const csharp =
+        "public object f(object x)\n" +
+        "{\n" +
+        "    string a = ((string)x).ToUpper();\n" +
+        "    string b = ((string)x).Trim();\n" +
+        "    return a;\n" +
+        "}"
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    })
+    test('string method receiver on a call keeps the cast', () => {
+        const ts =
+        "const a = this.safeString (m, \"k\").trim();"
+        const csharp =
+        "string a = ((string)callDynamically(this, \"safeString\", new object[] { m, \"k\" })).Trim();"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })
@@ -1802,5 +1915,253 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         // C# (its narrowing happens in a later pass), so the helper must stay
         expect(output).toContain('public virtual object main(object key)');
         expect(output).toContain('if (inOp(this.options, key))');
+    });
+    test('destructuring holder stays untyped while csharpDestructuringTempType returns undefined', () => {
+        const input =
+        "class Exchange {\n" +
+        "    test (): void {\n" +
+        "        const [a, b] = this.someTuple(1);\n" +
+        "        let c;\n" +
+        "        [c, params] = this.handleSomethingAndParams(params);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("var abVariable = callDynamically(this, \"someTuple\", new object[] { 1 });");
+        expect(output).toContain("var a = ((IList<object>) abVariable)[0];");
+        expect(output).toContain("var b = ((IList<object>) abVariable)[1];");
+        expect(output).toContain("var cparametersVariable = callDynamically(this, \"handleSomethingAndParams\", new object[] { parameters });");
+        expect(output).toContain("c = ((IList<object>)cparametersVariable)[0];");
+        expect(output).toContain("parameters = ((IList<object>)cparametersVariable)[1];");
+    });
+    test('a typed destructuring holder is declared with it and read without the re-cast', () => {
+        const input =
+        "class Exchange {\n" +
+        "    test (): void {\n" +
+        "        const [a, b] = this.someTuple(1);\n" +
+        "        let c;\n" +
+        "        [c, params] = this.handleSomethingAndParams(params);\n" +
+        "    }\n" +
+        "}";
+        const printer: any = (transpiler as any).csharpTranspiler;
+        printer.csharpDestructuringTempType = () => 'IList<object>';
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("IList<object> abVariable = (IList<object>)callDynamically(this, \"someTuple\", new object[] { 1 });");
+            expect(output).toContain("var a = abVariable[0];");
+            expect(output).toContain("var b = abVariable[1];");
+            expect(output).toContain("IList<object> cparametersVariable = (IList<object>)callDynamically(this, \"handleSomethingAndParams\", new object[] { parameters });");
+            expect(output).toContain("c = cparametersVariable[0];");
+            expect(output).toContain("parameters = cparametersVariable[1];");
+        } finally {
+            delete printer.csharpDestructuringTempType;
+        }
+    });
+    test('a ternary condition drops the redundant (bool) cast around isTrue', () => {
+        // printCondition always renders a C# bool, so `((bool) isTrue(x))` was a cast on a bool
+        const input =
+        "class Exchange {\n" +
+        "    main(side, a, b) {\n" +
+        "        const first = side === 'sell' ? a : b;\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("isTrue(isEqual(side, \"sell\")) ? a : b");
+        expect(output).not.toContain("((bool) isTrue");
+        expect(output).not.toContain("((bool) !isTrue");
+    });
+    test('a ternary condition that prints as a bool local drops isTrue too', () => {
+        // `isTrue` is the identity on a C# `bool`, and the local is declared bool by the
+        // printer itself (getCSharpLocalType) — same proof as the declaration
+        const input =
+        "class Exchange {\n" +
+        "    main(market, a, b) {\n" +
+        "        const isSpot = market['spot'] === true;\n" +
+        "        return isSpot ? a : b;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("bool isSpot = isEqual(getValue(market, \"spot\"), true)");
+        expect(output).toContain("return isSpot ? a : b;");
+    });
+    test('a ternary condition the printer cannot declare bool keeps isTrue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market, flag, a, b) {\n" +
+        "        const read = market['spot'];\n" +
+        "        let reassigned = market['spot'] === true;\n" +
+        "        reassigned = market['x'];\n" +
+        "        return [read ? a : b, reassigned ? a : b, flag ? a : b];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object read = getValue(market, \"spot\")");
+        expect(output).toContain("object reassigned = isEqual(getValue(market, \"spot\"), true)");
+        expect(output).toContain("isTrue(read) ? a : b");
+        expect(output).toContain("isTrue(reassigned) ? a : b");
+        expect(output).toContain("isTrue(flag) ? a : b");
+    });
+});
+
+describe('x.push on a receiver the classifier declares a list drops the cast', () => {
+    // the printer's own print names no type for `const keys = []` / `this.safeList (...)`:
+    // the ccxt classifier (build/csharp-local-types.js) retypes those declarations AFTER
+    // printing, so the printer asks the csharpLocalTypeOf hook for the printed type
+    afterEach(() => {
+        delete (transpiler as any).csharpTranspiler.csharpLocalTypeOf;
+    });
+    test('the untyped emission keeps the cast', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const keys = [];\n" +
+        "        keys.push('a');\n" +
+        "        const other = this.safeList(item, 'k');\n" +
+        "        other.push('b');\n" +
+        "        return [keys, other];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((IList<object>)keys).Add(\"a\")");
+        expect(output).toContain("((IList<object>)other).Add(\"b\")");
+    });
+    test('a receiver the hook names a list is printed without the cast', () => {
+        (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => {
+            if (node?.escapedText === 'keys') {
+                return 'List<object>';
+            }
+            if (node?.escapedText === 'other') {
+                return 'IList<object>';
+            }
+            return undefined;
+        };
+        const input =
+        "class Exchange {\n" +
+        "    safeList (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const keys = [];\n" +
+        "        keys.push('a');\n" +
+        "        const other = this.safeList(item, 'k');\n" +
+        "        other.push('b');\n" +
+        "        const plain = item['k'];\n" +
+        "        plain.push('c');\n" +
+        "        return [keys, other, plain];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("keys.Add(\"a\")");
+        expect(output).toContain("other.Add(\"b\")");
+        expect(output).not.toContain("((IList<object>)keys)");
+        expect(output).not.toContain("((IList<object>)other)");
+        // a receiver the hook cannot name keeps the cast
+        expect(output).toContain("((IList<object>)plain).Add(\"c\")");
+    });
+    test('a receiver the hook names object keeps the cast', () => {
+        (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => (node?.escapedText === 'keys' ? 'object' : undefined);
+        const input =
+        "class Exchange {\n" +
+        "    main () {\n" +
+        "        const keys = [];\n" +
+        "        keys.push('a');\n" +
+        "        return keys;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("((IList<object>)keys).Add(\"a\")");
+    });
+});
+
+// cs-strict S14: `((List<object>)x)[i] = v` drops the cast when the receiver's PRINTED
+// declaration is a concrete List<object>. The declaration is typed after printing by the
+// ccxt classifier (build/csharp-local-types.js), so the printer reads it through the
+// `csharpLocalTypeOf` hook the classifier installs; the tests below stub that hook.
+describe('cs-strict S14 element-access list cast gate', () => {
+    const config = {
+        'verbose': false,
+        'csharp': {
+            'parser': {
+                'NUM_LINES_END_FILE': 0,
+                'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+                'ELEMENT_ACCESS_WRAPPER_CLOSE': ')',
+            }
+        }
+    };
+    const transpile = (input: string, localTypeOf?: (node: any) => string | undefined) => {
+        const localTranspiler: any = new Transpiler(config as any);
+        if (localTypeOf !== undefined) {
+            localTranspiler.csharpTranspiler.csharpLocalTypeOf = localTypeOf;
+        }
+        return localTranspiler.transpileCSharp(input).content;
+    };
+    const listInput = (statement: string) => 'function test () {\n    const orders: any[] = [];\n' + statement + '\n}';
+    const listReceiver = () => 'List<object>';
+
+    test('an untyped receiver keeps the printer cast (no classifier hook)', () => {
+        const output = transpile(listInput('    orders[0] = 5;'));
+        expect(output).toContain("((List<object>)orders)[Convert.ToInt32(0)] = 5;");
+    });
+    test('a List<object>-declared receiver drops the cast', () => {
+        const output = transpile(listInput('    orders[0] = 5;'), listReceiver);
+        expect(output).toContain("orders[Convert.ToInt32(0)] = 5;");
+        expect(output).not.toContain("((List<object>)orders)");
+    });
+    test('an IList<object>-declared receiver keeps the cast (it would be a downcast)', () => {
+        const output = transpile(listInput('    orders[0] = 5;'), () => 'IList<object>');
+        expect(output).toContain("((List<object>)orders)[Convert.ToInt32(0)] = 5;");
+    });
+    test('index reads are never touched (they print getValue)', () => {
+        const output = transpile(listInput('    const a = orders[0];'), listReceiver);
+        expect(output).toContain("object a = getValue(orders, 0);");
+    });
+    test('a string key keeps the dictionary cast', () => {
+        const output = transpile(listInput('    orders["k"] = 5;'), listReceiver);
+        expect(output).toContain('((IDictionary<string,object>)orders)["k"] = 5;');
+    });
+    test('a non-identifier receiver keeps the cast', () => {
+        const output = transpile(listInput('    this.orders[0] = 5;'), listReceiver);
+        expect(output).toContain("((List<object>)this.orders)[Convert.ToInt32(0)] = 5;");
+    });
+    test('a compound element write keeps both casts', () => {
+        const output = transpile(listInput('    orders[0] += 5;'), listReceiver);
+        expect(output).toContain("((List<object>)orders)[Convert.ToInt32(0)] = add(((List<object>)orders)[Convert.ToInt32(0)], 5);");
+    });
+    test('a union string key defers to the instance exception hook (worker dispatch)', () => {
+        const localTranspiler: any = new Transpiler(config as any);
+        localTranspiler.csharpTranspiler.csharpLocalTypeOf = listReceiver;
+        // build/csharp-worker.ts#setupCsharpPrinter replaces this hook per instance; the
+        // element-access rule must not preempt it for a key that may be a string
+        localTranspiler.csharpTranspiler.printElementAccessExpressionExceptionIfAny = () => 'INSTANCE_HOOK';
+        const output = localTranspiler.transpileCSharp('function test (key: string | undefined) {\n    const orders: any[] = [];\n    orders[key] = 5;\n}').content;
+        expect(output).toContain('INSTANCE_HOOK');
+    });
+    test('an any-typed key is a dictionary element and keeps the cast', () => {
+        const output = transpile(listInput('    const key: any = "k";\n    orders[key] = 5;'), listReceiver);
+        expect(output).toContain("((IDictionary<string,object>)orders)[(string)key] = 5;");
+    });
+});
+
+describe('dictionary index-write cast elision hook', () => {
+    const hookConfig = {
+        'verbose': false,
+        'csharp': {
+            'parser': {
+                'NUM_LINES_END_FILE': 0,
+                "ELEMENT_ACCESS_WRAPPER_OPEN": "getValue(",
+                "ELEMENT_ACCESS_WRAPPER_CLOSE": ")"
+            }
+        }
+    };
+    test('an index write keeps the upstream dictionary cast while no hook is installed', () => {
+        const t = new Transpiler(hookConfig);
+        const output = t.transpileCSharp("class A { f (x: any, v: any) { x[\"k\"] = v; } }").content;
+        expect(output).toContain('((IDictionary<string,object>)x)["k"] = v;');
+    });
+    test('the hook drops only the receiver cast and keeps the key cast', () => {
+        const t = new Transpiler(hookConfig);
+        t.csharpTranspiler.csharpDictionaryIndexWriteNeedsNoCast = () => true;
+        const output = t.transpileCSharp("class A { f (x: any, k: string, v: any) { x[k] = v; } }").content;
+        expect(output).toContain('x[(string)k] = v;');
+        expect(output).not.toContain('IDictionary<string,object>');
     });
 });
