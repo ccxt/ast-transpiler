@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4657,6 +4657,9 @@ var parserConfig4 = {
   "ELEMENT_ACCESS_WRAPPER_OPEN": "GetValue(",
   "ELEMENT_ACCESS_WRAPPER_CLOSE": ")"
 };
+var GO_NATIVE_CALL_RETURN_TYPES = {
+  "strings.Index": "int"
+};
 var GO_HELPER_RETURN_TYPES = {
   "GetArrayLength": "int",
   "GetLength": "int",
@@ -4981,6 +4984,10 @@ var GoTranspiler = class extends BaseTranspiler {
     // level of the statement being printed: a multi-line composite literal is laid out
     // relative to it (go/printer), whatever level the expression printers hand down
     this.goStatementLevel = 0;
+    // stdlib packages this file's native emissions call; printSourceFileStatements turns them
+    // into the import declarations the emitted Go needs (an occurrence outside a file print,
+    // e.g. the intellisense body, only marks a set that the next file print replaces)
+    this.goFileStdlibImports = /* @__PURE__ */ new Set();
     // -----------------------------------------------------------------------
     // gofmt-compatible spacing of the binary expressions this printer emits
     // -----------------------------------------------------------------------
@@ -5555,6 +5562,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (value.startsWith("func() bool {") && value.endsWith("}()")) {
       return "bool";
     }
+    if (value.startsWith("func() int {") && value.endsWith("}()")) {
+      return "int";
+    }
     if (open <= 0 || !this.isWholePrintedCall(value, open)) {
       return void 0;
     }
@@ -5562,7 +5572,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (!/^[A-Za-z_][\w.]*$/.test(callee)) {
       return void 0;
     }
-    return GO_HELPER_RETURN_TYPES[callee];
+    return GO_NATIVE_CALL_RETURN_TYPES[callee] ?? GO_HELPER_RETURN_TYPES[callee];
   }
   // strips the wrapping parentheses the source (or an operand) printed around a
   // whole expression, so the inner text can be classified
@@ -7082,8 +7092,20 @@ ${this.getIden(level)}}()`;
   // declaration by a blank line (go/printer declList: min = 2 when the decl has a doc
   // comment); the file members are joined with a bare newline otherwise
   printSourceFileStatements(node, identation) {
-    const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
-    return printed.map((st, index) => index > 0 && /^\s*(\/\/|\/\*)/.test(st) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
+    const outerImports = this.goFileStdlibImports;
+    const fileImports = /* @__PURE__ */ new Set();
+    this.goFileStdlibImports = fileImports;
+    let body = "";
+    try {
+      const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
+      body = printed.map((st, index) => index > 0 && /^\s*(\/\/|\/\*)/.test(st) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
+    } finally {
+      this.goFileStdlibImports = outerImports;
+    }
+    if (fileImports.size === 0) {
+      return body;
+    }
+    return [...fileImports].sort().map((path3) => `import "${path3}"`).join("\n") + "\n\n" + body;
   }
   printNode(node, identation = 0) {
     if (node !== void 0 && ts5.isSourceFile(node)) {
@@ -7710,7 +7732,74 @@ ${this.getIden(identation)}`;
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Contains(${name}, ${parsedArg})`;
   }
+  // the Go type an `indexOf` operand is printed as, or undefined for anything Go cannot
+  // hand to strings.Index: an `any` box (a parameter, a GetValue/Ternary result), a
+  // number, a slice. The receiver and the needle both have to be Go strings
+  goIndexOfOperandType(node, printedText) {
+    if (this.goIsAnyBoxExpression(node, printedText)) {
+      return void 0;
+    }
+    if (node?.kind === ts5.SyntaxKind.Identifier) {
+      return this.goDeclaredTypeOfIdentifier(node);
+    }
+    if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) {
+      return void 0;
+    }
+    return this.goStringCallStaticType(node, printedText) ?? this.goStringFieldStaticType(node, printedText);
+  }
+  // The ccxt writers assemble four outputs from a *slice* of the printer output: the two
+  // base-class files keep only what follows their TRANSPILED marker, the two ws cache tests
+  // what follows their first separator. The file-level import this printer emits leads the
+  // output, so for those the import would be cut off and the native call would not compile;
+  // they keep the helper until their writer adds the import itself.
+  goFileKeepsFileLevelImports() {
+    const fileName = this.getSrc()?.fileName ?? "";
+    return !/(?:base\/Exchange(?:\.nooverloads\.\d+)?|base\/PredictionExchange|base\/test\.orderBook|base\/test\.cache)\.ts$/.test(fileName);
+  }
+  // `GetIndexOf(s, t)` answers `strings.Index(s, t)` for a receiver the printer itself
+  // declares `string` once `t` is a string too (`target.(string)` always succeeds then, and
+  // -1 is the not-found answer of both); a `*string` receiver goes through derefScalar and
+  // answers -1 when nil, which the nil-guarded literal below reproduces. Everything else -
+  // a slice, or a parameter/field the Go side boxes as `any` - keeps the helper call.
+  goNativeIndexOf(node, name, parsedArg) {
+    if (typeof name !== "string" || typeof parsedArg !== "string") {
+      return void 0;
+    }
+    if (name.includes("\n") || parsedArg.includes("\n")) {
+      return void 0;
+    }
+    if (!this.goFileKeepsFileLevelImports()) {
+      return void 0;
+    }
+    const receiver = node?.expression?.expression;
+    const target = node?.arguments?.[0];
+    if (this.goIndexOfOperandType(target, parsedArg) !== "string") {
+      return void 0;
+    }
+    const receiverType = this.goIndexOfOperandType(receiver, name);
+    if (receiverType === "string") {
+      this.goFileStdlibImports.add("strings");
+      return `strings.Index(${name}, ${parsedArg})`;
+    }
+    if (receiverType === "*string" && receiver?.kind === ts5.SyntaxKind.Identifier) {
+      this.goFileStdlibImports.add("strings");
+      const level = this.goStatementLevel;
+      const body = this.getIden(level + 1);
+      const inner = this.getIden(level + 2);
+      return `func() int {
+${body}if ${name} == nil {
+${inner}return -1
+${body}}
+${body}return strings.Index(*${name}, ${parsedArg})
+${this.getIden(level)}}()`;
+    }
+    return void 0;
+  }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
+    const native = this.goNativeIndexOf(node, name, parsedArg);
+    if (native !== void 0) {
+      return native;
+    }
     return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
