@@ -2783,6 +2783,9 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
+var CSHARP_COUNT_TYPES = ["List<", "IList<", "Dictionary<", "IDictionary<", "ConcurrentDictionary<"];
+var CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)\)/;
+var CSHARP_NULL_COMPARISON_REFERENCE_HEADS = ["string", "IDictionary<", "Dictionary<", "IList<", "List<", "ConcurrentDictionary<", "ccxt.pro.", "ArrayCache", "IOrderBook", "Future", "WebSocketClient", "Delegates"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -2799,6 +2802,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     // prefix is final, so every later read of the local is statically that type and its
     // members may replace inOp/getArrayLength
     this.csharpTypedLocals = /* @__PURE__ */ new WeakMap();
+    // parameter node -> the type the printed signature gives it (printParameterType, e.g.
+    // `Dict` -> Dictionary<string, object>), recorded as the signature is printed. Read-only:
+    // no printer rule consults it, see csharpPrintedParamType
+    this.csharpParamTypes = /* @__PURE__ */ new WeakMap();
     // declaration node -> C# type of the local ('' = the printer prints `object`); see
     // csharpStringReceiverType -- the ccxt classifier asks once per string-method receiver
     this.stringReceiverTypes = /* @__PURE__ */ new WeakMap();
@@ -3007,6 +3014,29 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpDeclaredReceiverType(node) {
     return void 0;
   }
+  // The C# type the printed SIGNATURE gives the parameter a receiver binds to (the type
+  // printParameterType emitted for it: `Dictionary<string, object>` for a `Dict`
+  // annotation, `object` when the printer names nothing). Recorded while the signature is
+  // printed, so a body use can ask for it. Read-only: no printer rule consults this map, and
+  // the consumer's csharpDeclaredReceiverType override is what turns the answer into an
+  // emission change — a run without that override prints byte-identically
+  csharpPrintedParamType(receiver) {
+    const declaration = this.csharpReceiverBinding(receiver);
+    if (declaration?.kind !== ts4.SyntaxKind.Parameter) {
+      return void 0;
+    }
+    const recorded = this.csharpParamTypes.get(declaration);
+    return recorded === void 0 || recorded === "" || recorded === "object" ? void 0 : recorded;
+  }
+  // A receiver whose declared C# type the consumer's classifier names as a concrete
+  // dictionary: every `((IDictionary<string,object>)x)` the printer wraps around its element
+  // access (read, write, .Keys, .Values, .Remove) only renames the box the declaration
+  // already carries, so the cast is an identity conversion. Gated entirely on the consumer's
+  // hook, so an object receiver — and every untyped run — keeps the upstream cast
+  csharpReceiverIsDeclaredDictionary(expression) {
+    const declared = this.csharpDeclaredReceiverType(expression);
+    return declared === "Dictionary<string, object>" || declared === "IDictionary<string, object>";
+  }
   // A dict element WRITE (`request["k"] = v`) on a receiver whose *declared* C# type already
   // is a dictionary needs no `((IDictionary<string,object>)…)` cast: the cast only named the
   // box the declaration carries, and both indexers are the same setter. Gated entirely on
@@ -3064,6 +3094,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return `${this.printNode(node.expression, 0)}[Convert.ToInt32(${this.printNode(node.argumentExpression, 0)})]`;
       }
     }
+    const listRead = this.csharpListIndexRead(node);
+    if (listRead !== void 0) {
+      return listRead;
+    }
     return super.printElementAccessExpression(node, identation);
   }
   csharpNativeElementAccess(node) {
@@ -3095,6 +3129,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const printedKey = this.printNode(argumentExpression, 0);
     if (isNumberKey) {
       return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
+    }
+    if (this.csharpReceiverIsDeclaredDictionary(expression)) {
+      return `${receiver}[${printedKey}]`;
     }
     return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
   }
@@ -3333,6 +3370,180 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const localTypeOf = this.csharpLocalTypeOf;
     return typeof localTypeOf === "function" && localTypeOf.call(this, receiver) === "List<object>";
   }
+  // The C# declared type pair of a list index READ (`x[i]`): the receiver's printed type
+  // (`List<object>` / `IList<object>`) and the index's (`int`). Consumer-installed
+  // (build/csharp-local-types.js); undefined by default, so an unpatched printer keeps the
+  // base `getValue (x, i)` for every read.
+  csharpListIndexReadTypes(node) {
+    return void 0;
+  }
+  // `x[i]` read on a list receiver: the helper answers null for an index off the end while
+  // the C# indexer throws (ArgumentOutOfRangeException), so the native read is only emitted
+  // where the source proves the index in range. Every other read keeps the helper; the
+  // receiver/index types come from the consumer hook above, so the untyped emission is
+  // byte-identical.
+  csharpListIndexRead(node) {
+    if (node?.kind !== ts4.SyntaxKind.ElementAccessExpression) {
+      return void 0;
+    }
+    const { expression, argumentExpression } = node;
+    if (expression?.kind !== ts4.SyntaxKind.Identifier || argumentExpression?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const parent = node.parent;
+    const isWrite = parent?.kind === ts4.SyntaxKind.BinaryExpression && (parent.operatorToken.kind === ts4.SyntaxKind.EqualsToken || parent.operatorToken.kind === ts4.SyntaxKind.PlusEqualsToken) && parent.left === node;
+    if (isWrite) {
+      return void 0;
+    }
+    const types = typeof this.csharpListIndexReadTypes === "function" ? this.csharpListIndexReadTypes(node) : void 0;
+    if (types?.index !== "int") {
+      return void 0;
+    }
+    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>") {
+      return void 0;
+    }
+    if (!this.csharpIndexIsLoopBounded(node, expression, argumentExpression)) {
+      return void 0;
+    }
+    return this.printNode(expression, 0) + "[" + this.printNode(argumentExpression, 0) + "]";
+  }
+  // the read sits in the body of a `for` that re-tests `index < receiver.length`, both
+  // resolved to the very symbols the read uses, and nothing in the body can move either
+  csharpIndexIsLoopBounded(read, receiver, index) {
+    const receiverSymbol = this.csharpIdentifierSymbol(receiver);
+    const indexSymbol = this.csharpIdentifierSymbol(index);
+    if (receiverSymbol === void 0 || indexSymbol === void 0) {
+      return false;
+    }
+    let node = read;
+    while (node?.parent !== void 0) {
+      const parent = node.parent;
+      if (ts4.isFunctionLike(parent)) {
+        return false;
+      }
+      if (ts4.isForStatement(parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol)) {
+        return true;
+      }
+      node = parent;
+    }
+    return false;
+  }
+  csharpIdentifierSymbol(node) {
+    if (node?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    try {
+      return this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol) {
+    if (!this.csharpContains(forStatement.statement, read)) {
+      return false;
+    }
+    const condition = forStatement.condition;
+    if (condition?.kind !== ts4.SyntaxKind.BinaryExpression || condition.operatorToken?.kind !== ts4.SyntaxKind.LessThanToken) {
+      return false;
+    }
+    const length = condition.right;
+    if (length?.kind !== ts4.SyntaxKind.PropertyAccessExpression || length.name?.escapedText !== "length") {
+      return false;
+    }
+    if (this.csharpIdentifierSymbol(condition.left) !== indexSymbol) {
+      return false;
+    }
+    if (this.csharpIdentifierSymbol(this.csharpLengthReceiverIdentifier(length.expression)) !== receiverSymbol) {
+      return false;
+    }
+    return !this.csharpIndexBoundIsVoided(forStatement.statement, receiverSymbol, indexSymbol);
+  }
+  // the identifier a `.length` receiver reads through the wrappers whose C# print is the bare
+  // expression: parentheses, and an `as T` assertion for a T printAsExpression does not cast
+  // (`any` / `string` / `T[]` print a cast of their own, and the bound would then not be the
+  // receiver's own Count). `(response as List).length` prints `response?.Count ?? 0`
+  csharpLengthReceiverIdentifier(node) {
+    let current = node;
+    while (current !== void 0) {
+      if (current.kind === ts4.SyntaxKind.ParenthesizedExpression) {
+        current = current.expression;
+        continue;
+      }
+      if (current.kind === ts4.SyntaxKind.AsExpression && current.type !== void 0 && current.type.kind !== ts4.SyntaxKind.AnyKeyword && current.type.kind !== ts4.SyntaxKind.StringKeyword && current.type.kind !== ts4.SyntaxKind.ArrayType) {
+        current = current.expression;
+        continue;
+      }
+      break;
+    }
+    return current;
+  }
+  // the condition ran before the body did: a write to the index, or any use of the receiver
+  // other than an element access / a property read (a method call, an argument, a bare read —
+  // anything that could hand the list to something that shrinks it) voids the bound
+  csharpIndexBoundIsVoided(body, receiverSymbol, indexSymbol) {
+    let voided = false;
+    const visit = (n) => {
+      if (voided || n === void 0) {
+        return;
+      }
+      if (n.kind === ts4.SyntaxKind.Identifier) {
+        const symbol = this.csharpIdentifierSymbol(n);
+        if (symbol === indexSymbol && this.csharpIdentifierIsWritten(n)) {
+          voided = true;
+          return;
+        }
+        if (symbol === receiverSymbol && !this.csharpReceiverUseKeepsBound(n)) {
+          voided = true;
+          return;
+        }
+      }
+      ts4.forEachChild(n, visit);
+    };
+    ts4.forEachChild(body, visit);
+    return voided;
+  }
+  // a use that cannot move the value the condition tested: the expression of an element
+  // access (`recv[i]`, a read or an element write — neither changes the length) or of a
+  // property READ (`recv.Count`); a property write or a call on the receiver is not one
+  csharpReceiverUseKeepsBound(node) {
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    if (parent.kind === ts4.SyntaxKind.ElementAccessExpression && parent.expression === node) {
+      return true;
+    }
+    if (parent.kind === ts4.SyntaxKind.PropertyAccessExpression && parent.expression === node) {
+      if (this.csharpIdentifierIsWritten(node)) {
+        return false;
+      }
+      const grand = parent.parent;
+      return !(grand?.kind === ts4.SyntaxKind.CallExpression && grand.expression === parent);
+    }
+    return false;
+  }
+  // the identifier is a write target: `x = v`, `x += v`, `x++` / `x--`, a destructuring
+  // element, or a property/element write through it (`x.length = 0`)
+  csharpIdentifierIsWritten(node) {
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    if (parent.kind === ts4.SyntaxKind.BinaryExpression && parent.left === node && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
+      return true;
+    }
+    if ((parent.kind === ts4.SyntaxKind.PrefixUnaryExpression || parent.kind === ts4.SyntaxKind.PostfixUnaryExpression) && (parent.operator === ts4.SyntaxKind.PlusPlusToken || parent.operator === ts4.SyntaxKind.MinusMinusToken)) {
+      return true;
+    }
+    if (parent.kind === ts4.SyntaxKind.ArrayLiteralExpression || parent.kind === ts4.SyntaxKind.PropertyAccessExpression) {
+      const grand = parent.parent;
+      return grand?.kind === ts4.SyntaxKind.BinaryExpression && grand.left === parent && this.csharpIsAssignmentOperator(grand.operatorToken.kind);
+    }
+    return false;
+  }
+  csharpIsAssignmentOperator(kind) {
+    return kind >= ts4.SyntaxKind.FirstAssignment && kind <= ts4.SyntaxKind.LastAssignment;
+  }
   // S22: an index WRITE (`x["k"] = v`) needs no `((IDictionary<string,object>)x)` cast when
   // the receiver's printed C# declaration already IS a dictionary — the cast only exists
   // because the TS type of `x` says nothing about that declaration. The declared type of
@@ -3537,6 +3748,18 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return true;
     }
     return this.csharpValueEqualityKind(csharpType) === void 0;
+  }
+  // U55: the null-comparison rule's gate, stricter than csharpIsNullComparableType above:
+  // only a type the hook names (the emitted declaration's own text) is accepted, `object` /
+  // `var` included in the refusal because those are the boxes the classifier did not name.
+  csharpNullComparisonTypeIsProvable(csharpType) {
+    if (csharpType === void 0 || csharpType === "" || csharpType === "object" || csharpType === "var" || csharpType === "null") {
+      return false;
+    }
+    if (csharpType.endsWith("?")) {
+      return true;
+    }
+    return CSHARP_NULL_COMPARISON_REFERENCE_HEADS.some((head) => csharpType.startsWith(head));
   }
   // TypeScript numbers and booleans are C# value types in this port (double / bool /
   // Int64 / int), and the ccxt build script retypes some `object` declarations to exactly
@@ -3781,14 +4004,46 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
   // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
   csharpNativeLengthExpression(expression) {
-    if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+    if (this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+      const receiver = this.csharpNativeReceiver(expression);
+      if (receiver !== void 0) {
+        return `${receiver.text}.Count`;
+      }
+    }
+    return this.csharpDeclaredLengthExpression(expression);
+  }
+  // the member that replaces getArrayLength on a declared C# type: Count counts the same
+  // elements the helper's IList / ICollection branches count, Length is its string branch.
+  // Any other declared type keeps the helper
+  csharpCountMemberOf(csharpType) {
+    if (csharpType === "string" || csharpType === "string?") {
+      return "Length";
+    }
+    return CSHARP_COUNT_TYPES.some((prefix) => csharpType.indexOf(prefix) === 0) ? "Count" : void 0;
+  }
+  // `x.length` -> `(x?.Count ?? 0)` for a receiver whose PRINTED declaration carries a
+  // collection / string type. The type comes from the embedding build layer's hook
+  // (csharpLengthReceiverType, installed by ccxt build/csharp-local-types.js for the
+  // receivers its own post-print passes do not rewrite), or from a cast the printer itself
+  // printed around the receiver. `?.` + `?? 0` is exactly the helper's null -> 0 and reads
+  // the receiver once, so no write scan is needed; without the hook (and without a cast)
+  // the emission is the unchanged getArrayLength call.
+  csharpDeclaredLengthExpression(expression) {
+    const printed = this.printNode(expression, 0).trim();
+    const cast = CSHARP_LENGTH_CAST.exec(printed);
+    const named = cast === null ? this.csharpLengthReceiverType(expression) : cast[1];
+    const member = named === void 0 ? void 0 : this.csharpCountMemberOf(named);
+    if (member === void 0) {
       return void 0;
     }
-    const receiver = this.csharpNativeReceiver(expression);
-    if (receiver === void 0) {
-      return void 0;
-    }
-    return `${receiver.text}.Count`;
+    const receiver = ts4.isIdentifier(expression) ? printed : `(${printed})`;
+    return `(${receiver}?.${member} ?? 0)`;
+  }
+  // the C# type the emitted declaration gives a `.length` receiver, or undefined when this
+  // printer names none. Installed by build/csharp-local-types.js; undefined by default, so
+  // the untyped emission is byte-identical without the override
+  csharpLengthReceiverType(expression) {
+    return void 0;
   }
   // `isEqual (x, "lit")` -> `x == "lit"` when the operand's emitted declaration is a string.
   // A string literal is never null, and isEqual's string branch is `((string)a) == ((string)b)`,
@@ -3816,6 +4071,42 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     return `${leftText} ${inequality ? "!=" : "=="} ${rightText}`;
+  }
+  // U55: `isEqual (x, null)` -> `x == null` (and `!isEqual (x, null)` -> `x != null`) when the
+  // operand's emitted declaration is a typed reference or a nullable value scalar. The helper's
+  // first two guards are `a == null && b == null` / `a == null || b == null`, so with the null
+  // literal on one side it returns exactly the C# null test — reference equality for a reference
+  // type, `!HasValue` for `T?` — and never reaches a typed branch. `null` and the `undefined`
+  // identifier print as the same literal. Gated on the csharpNullComparisonTypeOf hook: an
+  // operand the embedding classifier cannot name (a parameter, a member read, an `object` local,
+  // a call result) keeps the helper call, so the untyped emission is byte-identical.
+  csharpNullLiteralEquality(op, left, right, leftText, rightText) {
+    const equality = op === ts4.SyntaxKind.EqualsEqualsToken || op === ts4.SyntaxKind.EqualsEqualsEqualsToken;
+    const inequality = op === ts4.SyntaxKind.ExclamationEqualsToken || op === ts4.SyntaxKind.ExclamationEqualsEqualsToken;
+    if (!equality && !inequality) {
+      return void 0;
+    }
+    const leftNull = this.csharpOperandIsNullLiteral(left);
+    const rightNull = this.csharpOperandIsNullLiteral(right);
+    if (leftNull === rightNull) {
+      return void 0;
+    }
+    let operand = leftNull ? right : left;
+    while (operand?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
+      operand = operand.expression;
+    }
+    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const operandType = typeof this.csharpNullComparisonTypeOf === "function" ? this.csharpNullComparisonTypeOf(operand) : void 0;
+    if (!this.csharpNullComparisonTypeIsProvable(operandType)) {
+      return void 0;
+    }
+    return this.csharpNullComparison(leftNull ? rightText : leftText, equality);
+  }
+  // `null` and the `undefined` identifier both print as the C# null literal
+  csharpOperandIsNullLiteral(node) {
+    return node?.kind === ts4.SyntaxKind.NullKeyword || node?.kind === ts4.SyntaxKind.Identifier && node.escapedText === "undefined";
   }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
@@ -3877,9 +4168,19 @@ var CSharpTranspiler = class extends BaseTranspiler {
         if (nativeEquality !== void 0) {
           return nativeEquality;
         }
+        const nativeNullEquality = this.csharpNullLiteralEquality(op, left, right, leftText, rightText);
+        if (nativeNullEquality !== void 0) {
+          return nativeNullEquality;
+        }
         const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
         if (inlined !== void 0) {
           return inlined;
+        }
+      }
+      if (op === ts4.SyntaxKind.PlusToken) {
+        const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
+        if (nativeConcat !== void 0) {
+          return nativeConcat;
         }
       }
       const wrapper = this.binaryExpressionsWrappers[op];
@@ -4266,9 +4567,21 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const negated = parent?.kind === ts4.SyntaxKind.PrefixUnaryExpression && parent.operator === ts4.SyntaxKind.ExclamationToken;
     return this.getIden(identation) + (negated ? `(${equalsTrue})` : equalsTrue);
   }
-  // only the if / while / && / || / ! condition positions print natively: the ternary
-  // condition keeps the base path (its `((bool) …)` wrapper and the isTrue drop on a
-  // typed bool local are that unit's change, not this one).
+  // `!x` on the `bool?` the hook names prints `x != true`: exactly `!(x == true)` (null -> true)
+  // and the value isTrue computes for the box. A `bool` operand keeps the base `!x`; an operand
+  // the hook cannot name keeps `!isTrue(x)` (the untyped emission is untouched).
+  csharpNegatedConditionOperand(operand) {
+    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    if (this.csharpConditionOperandType(operand) !== "bool?") {
+      return void 0;
+    }
+    return `${this.printNode(operand, 0)} != true`;
+  }
+  // only the if / while / && / || / ! condition positions print natively through this gate; the
+  // ternary condition has its own hook-driven fold (csharpTernaryConditionOperand, U56) because
+  // its operand is a plain value position the base printCondition path never asks about.
   csharpConditionPositionAllowsNative(node) {
     const parent = node?.parent;
     switch (parent?.kind) {
@@ -4440,6 +4753,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const initializer = node.initializer;
     let type = this.printParameterType(node);
     type = type ? type : "";
+    this.csharpParamTypes.set(node, type);
     if (defaultValue) {
       if (initializer) {
         const customDefaultValue = this.printCustomDefaultValueIfNeeded(initializer);
@@ -4594,9 +4908,15 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return `((${parsedArg} is IList<object>) || (${parsedArg}.GetType().IsGenericType && ${parsedArg}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
+    if (node?.arguments?.length === 1 && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
+      return `new List<object>(${parsedArg}.Keys)`;
+    }
     return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
+    if (node?.arguments?.length === 1 && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
+      return `new List<object>(${parsedArg}.Values)`;
+    }
     return `new List<object>(((IDictionary<string,object>)${parsedArg}).Values)`;
   }
   printJsonParseCall(node, identation, parsedArg = void 0) {
@@ -4633,6 +4953,24 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the printer printed it, so the printer cannot see that rewrite on its own. Undefined by
   // default: the untyped emission is unchanged (every caller above keeps the helper form).
   csharpLocalTypeOf(node) {
+    return void 0;
+  }
+  // U55: the emitted C# type of an identifier operand of a null comparison, installed by
+  // build/csharp-local-types.js from the PRINTED declaration lines (the same record the
+  // string-equality hook reads) — a type the printer cannot see for itself, because the
+  // classifier retypes the declaration after printing it. Undefined by default: without the
+  // embedding classifier every null comparison keeps the isEqual helper, byte-identical.
+  csharpNullComparisonTypeOf(node) {
+    return void 0;
+  }
+  // `add (x, y)` -> `(x + y)` when the consumer's classifier proves the LEFT operand's
+  // emitted declaration is a string (unit U57). The helper call such a left operand binds
+  // is add(string, string) (`a + b`) or add(string, object) (`a + b?.ToString()`), and C#'s
+  // string concatenation computes exactly that for both, null operands included -- so the
+  // operator and the helper are the same value. Undefined by default: without the hook the
+  // helper emission is byte-identical. The result is parenthesised because the printer
+  // embeds a subexpression's text in receivers and arguments, where `+` binds looser.
+  csharpNativeStringConcat(left, right, leftText, rightText) {
     return void 0;
   }
   // The emitted declaration type of a local read the embedding build layer retypes AFTER
@@ -4747,6 +5085,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return super.printPrefixUnaryExpression(node, identation);
     }
     if (operator === ts4.SyntaxKind.ExclamationToken) {
+      const nativeNot = this.csharpNegatedConditionOperand(operand);
+      if (nativeNot !== void 0) {
+        return nativeNot;
+      }
       return this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
     }
     const leftSide = this.printNode(operand, 0);
@@ -4879,12 +5221,36 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const whenFalse = this.printNode(node.whenFalse, 0);
     return condition + " ? " + whenTrue + " : " + whenFalse;
   }
+  // the ternary condition is a condition position the native gate above never sees (the operand
+  // sits under a ConditionalExpression): the same hook answer prints natively there -- `bool`
+  // bare, `bool?` as `x == true` (isTrue's value for the box, null -> false), source parens
+  // unwrapped. Undefined keeps the base path, so an operand the hook cannot name is unchanged.
+  csharpTernaryConditionOperand(node) {
+    let operand = node;
+    while (operand?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
+      operand = operand.expression;
+    }
+    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const type = this.csharpConditionOperandType(operand);
+    if (type === "bool") {
+      return this.printNode(operand, 0);
+    }
+    if (type === "bool?") {
+      return `${this.printNode(operand, 0)} == true`;
+    }
+    return void 0;
+  }
   // printCondition already yields a C# `bool` (`isTrue(x)` / `!isTrue(x)`), so the
-  // `((bool) <cond>)` wrapper this printer used to emit was a cast on a bool.
-  // `isTrue` is the identity on a C# `bool`, so a condition the printer itself
-  // declares `bool` (getCSharpLocalType, same proof as the declaration) needs no
-  // wrapper either; anything the printer cannot name `bool` keeps `isTrue`.
+  // `((bool) <cond>)` wrapper this printer used to emit was a cast on a bool. The hook fold
+  // above answers the emitted declaration's own type first; anything it cannot name keeps the
+  // printer's `bool` fold (getCSharpLocalType) and then `isTrue`.
   printTernaryCondition(node) {
+    const native = this.csharpTernaryConditionOperand(node);
+    if (native !== void 0) {
+      return native;
+    }
     if (this.csharpConditionPrintsAsBool(node)) {
       return this.printNode(node, 0);
     }
@@ -4993,8 +5359,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return printedCall !== null && CSHARP_BOOLEAN_PRINTED_CALLS.indexOf(printedCall[1]) >= 0;
   }
   printDeleteExpression(node, identation) {
-    const object = this.printNode(node.expression.expression, 0);
+    const receiver = node.expression.expression;
+    const object = this.printNode(receiver, 0);
     const key = this.printNode(node.expression.argumentExpression, 0);
+    if (this.csharpReceiverIsDeclaredDictionary(receiver)) {
+      return `${object}.Remove((string)${key})`;
+    }
     return `((IDictionary<string,object>)${object}).Remove((string)${key})`;
   }
   printNewExpression(node, identation) {
