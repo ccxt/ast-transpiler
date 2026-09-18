@@ -3667,9 +3667,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (declared !== void 0) {
       return declared.indexOf("Dictionary<") >= 0 ? { text: this.printNode(obj, 0) } : void 0;
     }
-    if (!this.csharpIsDictionaryType(type) && !nullable) {
-      return void 0;
-    }
     if (!_typescript2.default.isIdentifier(obj) || this.csharpTypedLocalType(obj) !== void 0) {
       return void 0;
     }
@@ -3681,13 +3678,18 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (_optionalChain([declaration, 'optionalAccess', _132 => _132.kind]) !== _typescript2.default.SyntaxKind.Parameter) {
       return void 0;
     }
-    const bag = this.csharpDictionaryParamsBag(obj);
-    if (!bag && !this.csharpIsAnyValuedDictionaryType(type)) {
-      return void 0;
-    }
     const printed = this.printNode(obj, 0);
     const text = `((IDictionary<string, object>)${printed})`;
-    return bag ? { text } : { text, nullTest: printed };
+    if (this.csharpDictionaryParamsBag(obj)) {
+      return { text };
+    }
+    if (!this.csharpIsDictionaryType(type) && !nullable) {
+      return void 0;
+    }
+    if (!this.csharpIsAnyValuedDictionaryType(type)) {
+      return void 0;
+    }
+    return { text, nullTest: printed };
   }
   // `key in obj` -> `obj.ContainsKey(key)`, only when both the printed key and the printed
   // operand are already C# string / dictionary values. Every other shape keeps the inOp helper

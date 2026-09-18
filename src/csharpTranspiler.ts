@@ -1259,9 +1259,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (declared !== undefined) {
             return (declared.indexOf('Dictionary<') >= 0) ? { text: this.printNode(obj, 0) } : undefined;
         }
-        if (!this.csharpIsDictionaryType(type) && !nullable) {
-            return undefined;
-        }
         // an `object` box: only a parameter of this function (a local may box the hand-written
         // base's own instantiation — `client.futures` is IDictionary<string, Future> — and the
         // printer cannot tell), and only while nothing has rewritten it (D2)
@@ -1276,13 +1273,21 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (declaration?.kind !== ts.SyntaxKind.Parameter) {
             return undefined; // a local may box a hand-written instantiation the printer cannot name
         }
-        const bag = this.csharpDictionaryParamsBag(obj);
-        if (!bag && !this.csharpIsAnyValuedDictionaryType(type)) {
-            return undefined;
-        }
         const printed = this.printNode(obj, 0);
         const text = `((IDictionary<string, object>)${printed})`;
-        return bag ? { text } : { text, nullTest: printed };
+        // the params bag: the printer's own `??= new Dictionary<string, object>()` line made the
+        // box a dictionary whatever the caller passed, so no checker proof is needed (and no
+        // null test — the line is the first statement of the body)
+        if (this.csharpDictionaryParamsBag(obj)) {
+            return { text };
+        }
+        if (!this.csharpIsDictionaryType(type) && !nullable) {
+            return undefined;
+        }
+        if (!this.csharpIsAnyValuedDictionaryType(type)) {
+            return undefined;
+        }
+        return { text, nullTest: printed };
     }
 
     // `key in obj` -> `obj.ContainsKey(key)`, only when both the printed key and the printed
