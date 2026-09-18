@@ -50,7 +50,7 @@ describe('rust transpiling tests', () => {
         "    break;\n" +
         "}"
         const rust =
-        "while is_true(&Value::Bool(true)) {\n" +
+        "while is_true(&(true)) {\n" +
         "    let mut x: Value = Value::Int(1);\n" +
         "    break;\n" +
         "}";
@@ -1462,6 +1462,63 @@ describe('rust native dict inserts', () => {
         const ts = 'const request: { [key: string]: any } = {};\nrequest["k"] = 1;';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut request');
+    });
+});
+
+describe('rust truthiness sinks take the bare bool', () => {
+    // `is_true` is the one sink whose signature takes a native `bool`
+    // (`impl IsTruthy for bool`, and `IsTruthy for Value` unboxes a
+    // `Value::Bool(b)` back to `b`), so the printer's box around a bool in a
+    // truthiness position is a round-trip and prints as the bare expression.
+
+    test('a boxed condition loses the Value::Bool box', () => {
+        const ts = 'class A { f(x) { if (Array.isArray (x)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(is_array(&x))) {');
+        expect(output).not.toContain('Value::Bool(is_array(&x))');
+    });
+
+    test('a negated boxed condition keeps the is_true marker', () => {
+        const ts = 'class A { f(x) { if (!Array.isArray (x)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !is_true(&(is_array(&x))) {');
+    });
+
+    test('every &&/|| operand is unboxed on its own', () => {
+        const ts = 'class A { f(x, y) { if (Array.isArray (x) || y) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(is_array(&x))) || is_true(&y) {');
+    });
+
+    test('a boxed `in` condition loses the box', () => {
+        const ts = 'class A { f(x) { if ("k" in x) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(in_op(&x, &Value::Str("k".to_string())))) {');
+    });
+
+    test('assert() takes the bare bool as well', () => {
+        const ts = 'class A { f(x) { assert (Array.isArray (x), "msg"); } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('assert((is_array(&x)), Value::Str("msg".to_string()));');
+    });
+
+    // negatives — every other sink takes a `Value` and keeps its box.
+    test('a Value-argument box is untouched', () => {
+        const ts = 'class A { f(x) { return g (Array.isArray (x)); } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('return g(Value::Bool(is_array(&x)));');
+    });
+
+    test('a Value-local initializer box is untouched', () => {
+        const ts = 'class A { f(x) { const y = Array.isArray (x); return y; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut y: Value = Value::Bool(is_array(&x));');
+    });
+
+    test('is_equal keeps its &Value operand box', () => {
+        const ts = 'class A { f(x) { if (x === true) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_equal(&x, &Value::Bool(true)) {');
     });
 });
 

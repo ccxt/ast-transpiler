@@ -1226,6 +1226,9 @@ declare class RustTranspiler extends BaseTranspiler {
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
     printCondition(node: any, identation: any): any;
+    printTruthyArgument(expression: string): string;
+    printAssertCall(node: any, identation: any, parsedArgs: any): string;
+    splitFirstArgument(parsedArgs: string): [string, string];
     printComparisonInBooleanContext(node: any, identation: any): string;
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
