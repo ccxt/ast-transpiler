@@ -1804,3 +1804,75 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('if (inOp(this.options, key))');
     });
 });
+
+describe('csharp helper removal: a for-header counter prints the native ++ / --', () => {
+    // the counter's printed `int` type comes back through csharpExpressionTypeResolver (the
+    // embedding build layer proves it — build/csharp-local-types.js in ccxt retypes the
+    // declaration `int i = 0` itself); these tests stub that resolver with a name map
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const forLoop = (incrementor, declaration = 'let i = 0') =>
+        "class Exchange {\n" +
+        "    main(markets: any[]): void {\n" +
+        "        for (" + declaration + "; i < 10; " + incrementor + ") {\n" +
+        "            const x = markets[i];\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n";
+    test('an int counter prints i++ and drops the ref helper', () => {
+        const output = withKinds({ i: 'int' }, forLoop('i++'));
+        expect(output).toContain('; i++)');
+        expect(output).not.toContain('postFixIncrement');
+    });
+    test('an int counter prints i-- (same ref-helper family)', () => {
+        const output = withKinds({ i: 'int' }, forLoop('i--'));
+        expect(output).toContain('; i--)');
+        expect(output).not.toContain('postFixDecrement');
+    });
+    test('a counter the printer cannot name as int keeps the helper', () => {
+        expect(withKinds({}, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+        expect(withKinds({ i: 'object' }, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+        expect(withKinds({ i: 'Int64' }, forLoop('i++'))).toContain('postFixIncrement(ref i)');
+    });
+    test('a postfix whose value is read keeps the helper (twin returns the new value)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(): void {\n" +
+        "        let j = 0;\n" +
+        "        const y = j++;\n" +
+        "        console.log(y);\n" +
+        "    }\n" +
+        "}\n";
+        expect(withKinds({ j: 'int' }, input)).toContain('postFixIncrement(ref j)');
+    });
+    test('a statement-position postfix keeps the helper (family is for headers only)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(): void {\n" +
+        "        let k = 0;\n" +
+        "        k++;\n" +
+        "        console.log(k);\n" +
+        "    }\n" +
+        "}\n";
+        expect(withKinds({ k: 'int' }, input)).toContain('postFixIncrement(ref k)');
+    });
+    test('a member-expression operand keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    count: number = 0;\n" +
+        "    main(): void {\n" +
+        "        for (let i = 0; i < 10; this.count++) {\n" +
+        "            const x = i;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ i: 'int', count: 'int' }, input);
+        expect(output).toContain('postFixIncrement(ref this.count)');
+    });
+});

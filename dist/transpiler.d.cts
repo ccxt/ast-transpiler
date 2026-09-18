@@ -605,6 +605,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(node: any, identation: any): string;
     printLengthProperty(node: any, identation: any, name?: any): string;
+    csharpNativePostFixIncrement(node: any): boolean;
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
     csharpConditionPrintsBool(node: any): boolean;
