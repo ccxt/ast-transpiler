@@ -1011,6 +1011,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaScalarFamily(node: any): string | undefined;
     javaProvableString(node: any): boolean;
     javaNativeConcat(node: any): boolean;
+    javaThisCallNumericKind(node: any): string | undefined;
     javaProvableNumericKind(node: any): string | undefined;
     javaNativeArithmeticKind(node: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;

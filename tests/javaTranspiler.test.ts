@@ -1,4 +1,6 @@
 import { Transpiler } from '../src/transpiler';
+import fs from 'fs';
+import path from 'path';
 
 jest.mock('module',()=>({
     __esModule: true,
@@ -2855,6 +2857,87 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain('Object x = Helpers.add(a, b);');
         expect(output).toContain('Object y = Helpers.add(n, 1);');
+    });
+});
+
+// java-19: `this.milliseconds()` is a hand-written BaseExchange method declared
+// `public Long milliseconds()` (java/lib/.../BaseExchange.java), so a call to it is a
+// provable Java long operand. The base-tier path below is what makes the call resolve
+// to that declaration - the real run prints ts/src/base/Exchange.ts, a venue override
+// prints its own class file and must keep the helper.
+describe('java hand-written return-type arithmetic (java-19)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-java19');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'exchanges', 'bitfake.ts');
+
+    const baseSource =
+    "class T {\n" +
+    "    milliseconds(): number { return 1; }\n" +
+    "    f1(since): void {\n" +
+    "        since = this.milliseconds() - 2592000000;\n" +
+    "    }\n" +
+    "    f2(since): void {\n" +
+    "        since = this.milliseconds() - 86400000 * 30;\n" +
+    "    }\n" +
+    "    f3(a: any, b: any): void {\n" +
+    "        a = this.milliseconds() - b;\n" +
+    "    }\n" +
+    "    f4(a: any): void {\n" +
+    "        a = this.milliseconds() - 1000.5;\n" +
+    "    }\n" +
+    "    f5(a: any): void {\n" +
+    "        a = 1000 - this.milliseconds();\n" +
+    "    }\n" +
+    "    f6(a: any): void {\n" +
+    "        a = this.milliseconds() * 1000;\n" +
+    "    }\n" +
+    "}";
+
+    let baseOutput: string;
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, baseSource);
+        fs.writeFileSync(VENUE_FIXTURE, baseSource);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        baseOutput = byPath.transpileJavaByPath(BASE_FIXTURE).content;
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('subtract anchored on the hand-written milliseconds() prints native long arithmetic', () => {
+        expect(baseOutput).toContain('since = (this.milliseconds() - 2592000000L);');
+        expect(baseOutput).not.toContain('Helpers.subtract(this.milliseconds(), 2592000000L)');
+    });
+
+    test('a nested literal product prints as a native long right operand', () => {
+        expect(baseOutput).toContain('since = (this.milliseconds() - (86400000L * 30L));');
+        expect(baseOutput).not.toContain('Helpers.subtract(this.milliseconds(), (86400000L * 30L))');
+    });
+
+    test('an unprovable right operand keeps the subtract helper', () => {
+        expect(baseOutput).toContain('a = Helpers.subtract(this.milliseconds(), b);');
+    });
+
+    test('a double right operand keeps the subtract helper (the rule is long-only)', () => {
+        expect(baseOutput).toContain('a = Helpers.subtract(this.milliseconds(), 1000.5);');
+    });
+
+    test('the anchor must be the left operand of the subtraction', () => {
+        expect(baseOutput).toContain('a = Helpers.subtract(1000, this.milliseconds());');
+    });
+
+    test('sibling arithmetic operators are untouched by this rule', () => {
+        expect(baseOutput).toContain('a = Helpers.multiply(this.milliseconds(), 1000);');
+    });
+
+    test('a venue declaring its own milliseconds() keeps the helper', () => {
+        expect(venueOutput).toContain('since = Helpers.subtract(this.milliseconds(), 2592000000L);');
     });
 });
 

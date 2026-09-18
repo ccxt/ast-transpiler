@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8391,6 +8391,11 @@ var parserConfig5 = {
   INFER_VAR_TYPE: false,
   INFER_ARG_TYPE: false
 };
+var JAVA_THIS_RETURN_TYPES = {
+  "milliseconds": "long"
+};
+var JAVA_THIS_RETURN_TYPES_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
+var JAVA_THIS_RETURN_TYPES_LIB_FILE = /(^|[\\/])node_modules[\\/](?:[^\\/]+[\\/]node_modules[\\/])?typescript6?[\\/]lib[\\/]lib\.[^\\/]*\.d\.ts$/;
 var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const kinds = ts6.SyntaxKind;
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
@@ -9361,6 +9366,42 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return this.javaProvableString(node.left) || this.javaProvableString(node.right);
   }
+  // the Java kind a `this.<name>(...)` call provably prints with (a hand-written base
+  // declaration from JAVA_THIS_RETURN_TYPES), or undefined to keep the helper. The
+  // signature must resolve to the base tier or to the Date.now lib signature the
+  // mixed-in functions/time.ts helper points at; a venue override prints its own
+  // (usually Object) signature and is not provable.
+  javaThisCallNumericKind(node) {
+    if (node?.kind !== ts6.SyntaxKind.CallExpression) {
+      return void 0;
+    }
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    const name = callee.name?.escapedText;
+    if (typeof name !== "string") {
+      return void 0;
+    }
+    const kind = JAVA_THIS_RETURN_TYPES[name];
+    if (kind === void 0) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      declaration = void 0;
+    }
+    const fileName = declaration?.getSourceFile?.().fileName;
+    if (typeof fileName !== "string") {
+      return void 0;
+    }
+    if (!JAVA_THIS_RETURN_TYPES_BASE_FILE.test(fileName) && !JAVA_THIS_RETURN_TYPES_LIB_FILE.test(fileName)) {
+      return void 0;
+    }
+    return kind;
+  }
   // the Java kind a numeric operand provably prints with: decimal integer literal ->
   // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
   // natively -> that node's kind. Anything else (hex/binary literals, negative
@@ -9441,6 +9482,12 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken) {
       return void 0;
+    }
+    if (op === ts6.SyntaxKind.MinusToken) {
+      const anchoredKind = this.javaThisCallNumericKind(left);
+      if (anchoredKind === "long" && this.javaProvableNumericKind(right) === "long") {
+        return `(${leftText} - ${this.javaPrintOperandAsLong(right, rightText)})`;
+      }
     }
     if (leftFamily !== "number" || rightFamily !== "number") {
       return void 0;
