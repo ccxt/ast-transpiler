@@ -741,8 +741,12 @@ declare class GoTranspiler extends BaseTranspiler {
     goStringFieldStaticType(node: any, printedText: string): string | undefined;
     goOperandStaticType(node: any, printedText: string): string | undefined;
     goStringCallStaticType(node: any, printedText: string): string | undefined;
+    goConstFloatStaticType(node: any): string | undefined;
     isNonZeroIntegerLiteral(node: any): boolean;
-    goNativeIntResultType(op: any, leftType: string, rightType: string, rightNode: any): string | undefined;
+    isNonZeroFloatLiteral(node: any): boolean;
+    goConstantIntValue(node: any): number | undefined;
+    goInsideTypedDeclarationInitializer(node: any): boolean;
+    goNativeNumericResultType(op: any, leftType: string, rightType: string, node: any): string | undefined;
     goNativeOperandText(node: any, printedText: string): string;
     goNativeArithmetic(node: any, leftText?: any, rightText?: any): {
         goType: string;
