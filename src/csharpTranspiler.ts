@@ -971,12 +971,42 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral | ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) !== 0;
     }
 
+    // `a === b` / `a !== b` between two plain reads: a local or parameter prints as a bare
+    // name and both operands are read once by the printed expression
+    csharpOperandsAreDeclaredReads(left, right): boolean {
+        const isRead = (node) => (node?.kind === ts.SyntaxKind.Identifier) && (node.escapedText !== 'undefined');
+        return isRead(left) && isRead(right);
+    }
+
+    // the C# type the embedding build layer declares for a read the printer can only call
+    // `object`: that layer retypes the declaration so its recorded type IS the printed one
+    csharpDeclaredReadEqualityType(node, printerType: string | undefined): string | undefined {
+        if ((printerType !== undefined) && (printerType !== this.VAR_TOKEN) && (printerType !== 'var')) {
+            return printerType;
+        }
+        const resolver = this.csharpExpressionTypeResolver;
+        if (typeof resolver !== 'function') {
+            return printerType;
+        }
+        let resolved;
+        try {
+            resolved = resolver(node);
+        } catch (e) {
+            return printerType;
+        }
+        return (typeof resolved === 'string') ? resolved : printerType;
+    }
+
     // `==` / `!=` in place of the isEqual wrapper when both operands are C# values of one
     // family, or one side is null/undefined against a type `== null` compiles for. Both
     // operands are printed once, so neither is evaluated twice.
     printInlineEquality(left, right, leftText: string, rightText: string, isEquality: boolean): string | undefined {
-        const leftType = this.csharpEqualityOperandType(left);
-        const rightType = this.csharpEqualityOperandType(right);
+        let leftType = this.csharpEqualityOperandType(left);
+        let rightType = this.csharpEqualityOperandType(right);
+        if (this.csharpOperandsAreDeclaredReads(left, right)) {
+            leftType = this.csharpDeclaredReadEqualityType(left, leftType);
+            rightType = this.csharpDeclaredReadEqualityType(right, rightType);
+        }
         if ((leftType === undefined) || (rightType === undefined)) {
             return undefined;
         }

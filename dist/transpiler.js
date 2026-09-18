@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -3417,12 +3417,40 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return (flags & (ts4.TypeFlags.Number | ts4.TypeFlags.NumberLiteral | ts4.TypeFlags.Boolean | ts4.TypeFlags.BooleanLiteral)) !== 0;
   }
+  // `a === b` / `a !== b` between two plain reads: a local or parameter prints as a bare
+  // name and both operands are read once by the printed expression
+  csharpOperandsAreDeclaredReads(left, right) {
+    const isRead = (node) => node?.kind === ts4.SyntaxKind.Identifier && node.escapedText !== "undefined";
+    return isRead(left) && isRead(right);
+  }
+  // the C# type the embedding build layer declares for a read the printer can only call
+  // `object`: that layer retypes the declaration so its recorded type IS the printed one
+  csharpDeclaredReadEqualityType(node, printerType) {
+    if (printerType !== void 0 && printerType !== this.VAR_TOKEN && printerType !== "var") {
+      return printerType;
+    }
+    const resolver = this.csharpExpressionTypeResolver;
+    if (typeof resolver !== "function") {
+      return printerType;
+    }
+    let resolved;
+    try {
+      resolved = resolver(node);
+    } catch (e) {
+      return printerType;
+    }
+    return typeof resolved === "string" ? resolved : printerType;
+  }
   // `==` / `!=` in place of the isEqual wrapper when both operands are C# values of one
   // family, or one side is null/undefined against a type `== null` compiles for. Both
   // operands are printed once, so neither is evaluated twice.
   printInlineEquality(left, right, leftText, rightText, isEquality) {
-    const leftType = this.csharpEqualityOperandType(left);
-    const rightType = this.csharpEqualityOperandType(right);
+    let leftType = this.csharpEqualityOperandType(left);
+    let rightType = this.csharpEqualityOperandType(right);
+    if (this.csharpOperandsAreDeclaredReads(left, right)) {
+      leftType = this.csharpDeclaredReadEqualityType(left, leftType);
+      rightType = this.csharpDeclaredReadEqualityType(right, rightType);
+    }
     if (leftType === void 0 || rightType === void 0) {
       return void 0;
     }
