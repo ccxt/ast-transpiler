@@ -77,6 +77,19 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
+// TS type flags whose Java print is a scalar final class or a primitive: `instanceof
+// java.util.List` is not convertible on those operands, so they keep the helper
+const JAVA_SCALAR_TYPE_FLAGS: number = ts.TypeFlags.String | ts.TypeFlags.StringLiteral
+    | ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral
+    | ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral
+    | ts.TypeFlags.BigInt | ts.TypeFlags.BigIntLiteral
+    | ts.TypeFlags.Enum | ts.TypeFlags.EnumLiteral
+    | ts.TypeFlags.ESSymbol | ts.TypeFlags.UniqueESSymbol;
+
+// TS type flags that are never an array (JS `Array.isArray(null)` / `(undefined)` is false)
+const JAVA_NULLISH_TYPE_FLAGS: number = ts.TypeFlags.Undefined | ts.TypeFlags.Null
+    | ts.TypeFlags.Void | ts.TypeFlags.Never;
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -2456,16 +2469,112 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, signature);
     }
 
-    // Route through Helpers so consumers control semantics (thread-safety,
-    // null-handling, type coercion) in one place — same pattern as
-    // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
-    // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
-    // forced any downstream that needed different semantics (e.g. synchronized
-    // map access in concurrent code) to post-process the generated Java with
-    // regex — which only catches the bare-identifier argument shape and misses
-    // property-access (`this.x`) and element-access (`obj[k]`) arguments.
-    printArrayIsArrayCall(_node, _identation, parsedArg = undefined) {
-        return `Helpers.isArray(${parsedArg})`;
+    // `Array.isArray(x)` prints `(x instanceof java.util.List)` — the helper answers
+    // false for null (not an instance of anything) and true for a List, which is the
+    // same answer for every operand the printer types as a Java object. The helper
+    // only stays where the operand prints as a Java array (a rest-parameter reference:
+    // the helper's `getClass().isArray()` branch is true there) or as a final Java
+    // class, on which `instanceof List` is not convertible.
+    printArrayIsArrayCall(node, _identation, parsedArg = undefined) {
+        const native = this.printNativeArrayIsArray(node, parsedArg);
+        return native === undefined ? `Helpers.isArray(${parsedArg})` : native;
+    }
+
+    printNativeArrayIsArray(node, parsedArg) {
+        const operand: any = node?.arguments?.[0];
+        if (operand === undefined || parsedArg === undefined) {
+            return undefined;
+        }
+        // the whole call is the value of an expression statement: a bare `true;`/`false;` is
+        // not a Java statement, so that position keeps the helper call
+        if (node.parent !== undefined && ts.isExpressionStatement(node.parent)) {
+            return undefined;
+        }
+        // a side-effect-free array literal prints as a fresh ArrayList (never null), so the
+        // answer is true without evaluating anything the helper would have to keep
+        if (ts.isArrayLiteralExpression(operand)) {
+            return this.javaArrayLiteralDropsNothing(operand) ? 'true' : undefined;
+        }
+        if (!this.javaPrimaryIsArrayOperand(operand)) {
+            return undefined;
+        }
+        const type = this.javaOperandType(operand);
+        // a plain identifier of a type that can never hold a List: the helper answers false
+        // for null/undefined and for every scalar, and the reference stays untouched
+        if (operand.kind === ts.SyntaxKind.Identifier && this.javaNonArrayType(type)) {
+            return 'false';
+        }
+        if (this.isVarargsArrayReference(operand)) {
+            return undefined;
+        }
+        if (this.javaScalarType(type)) {
+            return undefined;
+        }
+        return `(${parsedArg} instanceof java.util.List)`;
+    }
+
+    // Operand shapes whose print is a primary expression: `instanceof` binds tighter than the
+    // low-precedence operators, so a ternary/binary operand would re-parse, and a constructor
+    // or cast print can be a final Java class on which `instanceof List` is not convertible.
+    javaPrimaryIsArrayOperand(node): boolean {
+        const kind = node.kind;
+        return kind === ts.SyntaxKind.Identifier
+            || kind === ts.SyntaxKind.PropertyAccessExpression
+            || kind === ts.SyntaxKind.ElementAccessExpression
+            || kind === ts.SyntaxKind.CallExpression;
+    }
+
+    javaOperandType(operand) {
+        try {
+            return (this.getChecker() as TypeChecker).getTypeAtLocation(operand);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // literals and identifiers have nothing an array-literal wrapper could skip by dropping
+    javaArrayLiteralDropsNothing(node, depth = 0): boolean {
+        if (depth > 4) {
+            return false;
+        }
+        return node.elements.every((element) => ts.isStringLiteral(element)
+            || ts.isNumericLiteral(element)
+            || element.kind === ts.SyntaxKind.TrueKeyword
+            || element.kind === ts.SyntaxKind.FalseKeyword
+            || element.kind === ts.SyntaxKind.NullKeyword
+            || element.kind === ts.SyntaxKind.Identifier
+            || (ts.isArrayLiteralExpression(element) && this.javaArrayLiteralDropsNothing(element, depth + 1)));
+    }
+
+    // types whose Java print is a scalar final class (`instanceof java.util.List` is not
+    // convertible on them): the scalar family, and unions made only of scalars/nulls
+    javaScalarType(type, depth = 0): boolean {
+        if (type === undefined || type === null || depth > 3) {
+            return false;
+        }
+        const flags: any = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const parts: any[] = type.types ?? [];
+            return parts.length > 0 && parts.every((part) => this.javaScalarType(part, depth + 1));
+        }
+        return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
+    }
+
+    // types that provably never hold a List: every scalar (Java String/Long/Double/Boolean
+    // answer false) and the nullish types (JS Array.isArray(null) is false)
+    javaNonArrayType(type, depth = 0): boolean {
+        if (type === undefined || type === null || depth > 3) {
+            return false;
+        }
+        const flags: any = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const parts: any[] = type.types ?? [];
+            return parts.length > 0 && parts.every((part) => this.javaNonArrayType(part, depth + 1));
+        }
+        if ((flags & JAVA_NULLISH_TYPE_FLAGS) !== 0) {
+            return true;
+        }
+        return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
     }
 
     printObjectKeysCall(_node, _identation, parsedArg = undefined) {

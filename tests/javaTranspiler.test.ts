@@ -2129,7 +2129,7 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/\.values\(\)/);
     });
 
-    test('Array.isArray(x) emits Helpers.isArray(x) — bare identifier', () => {
+    test('Array.isArray(x) emits (x instanceof java.util.List) — bare identifier', () => {
         const fresh = new Transpiler();
         const input =
         "class T {\n" +
@@ -2138,12 +2138,12 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        expect(output).toMatch(/Helpers\.isArray\(\s*arg\s*\)/);
-        // The old emit was a raw instanceof check — must not appear.
-        expect(output).not.toMatch(/instanceof java\.util\.List/);
+        // Object operand: the helper's null/List answer is the same instanceof answer
+        expect(output).toContain("return (arg instanceof java.util.List);");
+        expect(output).not.toMatch(/Helpers\.isArray\(/);
     });
 
-    test('Array.isArray(this.x) emits Helpers.isArray(this.x) — property access', () => {
+    test('Array.isArray(this.x) emits (this.x instanceof java.util.List) — property access', () => {
         const fresh = new Transpiler();
         const input =
         "class T {\n" +
@@ -2153,8 +2153,8 @@ describe('java transpiling tests', () => {
         "    }\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        expect(output).toMatch(/Helpers\.isArray\(\s*this\.items\s*\)/);
-        expect(output).not.toMatch(/instanceof java\.util\.List/);
+        expect(output).toContain("return (this.items instanceof java.util.List);");
+        expect(output).not.toMatch(/Helpers\.isArray\(/);
     });
 
     test('async method with hoisted param, loop-local vars, ternaries, and two loops', () => {
@@ -3300,8 +3300,166 @@ describe('java replaceAll native emission', () => {
         "        const x = \"a-b-c\";\n" +
         "        const y = x.toLowerCase().replaceAll(\"-\", \"+\");\n" +
         "    }\n" +
-        "}"
+        "}\n"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
+    });
+});
+
+describe('helper removal: Array.isArray -> native instanceof java.util.List', () => {
+    // `Helpers.isArray(x)` answers false for null and true for a List, which is exactly what
+    // `x instanceof java.util.List` answers for every operand the printer types as an object.
+    // It stays where the operand prints as a Java array (rest parameters: the helper's
+    // getClass().isArray() branch is true there) or as a final Java class (String/Long/Double/
+    // Boolean: `instanceof` is not convertible), and where the operand's print has lower
+    // precedence than `instanceof`.
+
+    test('Object operand emits (operand instanceof java.util.List)', () => {
+        const input =
+        "class T {\n" +
+        "    f(arg) {\n" +
+        "        return Array.isArray(arg);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return (arg instanceof java.util.List);");
+        expect(output).not.toContain("Helpers.isArray(");
+    });
+
+    test('a declared List operand keeps the null test — never the constant true', () => {
+        // a Java List reference is null-capable (safeList/parseJson/`any` callers): JS
+        // Array.isArray(null) is false, so a literal `true` would flip that path
+        const input =
+        "class T {\n" +
+        "    f(x: string[]) {\n" +
+        "        return Array.isArray(x);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return (x instanceof java.util.List);");
+        expect(output).not.toContain("return true");
+    });
+
+    test('element-access operand emits the native instanceof', () => {
+        const input =
+        "class T {\n" +
+        "    f(ticker) {\n" +
+        "        return Array.isArray(ticker['bid']);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return (Helpers.GetValue(ticker, \"bid\") instanceof java.util.List);");
+    });
+
+    test('a call operand keeps its single evaluation inside the instanceof', () => {
+        const input =
+        "class T {\n" +
+        "    getItems(): any[] {\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "    f() {\n" +
+        "        return Array.isArray(this.getItems());\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return (this.getItems() instanceof java.util.List);");
+    });
+
+    test('a side-effect-free array literal is the constant true', () => {
+        const input =
+        "class T {\n" +
+        "    f() {\n" +
+        "        return Array.isArray([1, 2]);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return true;");
+        expect(output).not.toContain("Helpers.isArray(");
+    });
+
+    test('an array literal with an evaluated element keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    getItems(): any[] {\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "    f() {\n" +
+        "        return Array.isArray([this.getItems()]);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isArray(new java.util.ArrayList<Object>(java.util.Arrays.asList(this.getItems())));");
+    });
+
+    test('undefined is the constant false', () => {
+        const input =
+        "class T {\n" +
+        "    f() {\n" +
+        "        return Array.isArray(undefined);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("return false;");
+        expect(output).not.toContain("Helpers.isArray(");
+    });
+
+    test('a String-typed operand keeps the helper (instanceof is not convertible)', () => {
+        const input =
+        "class T {\n" +
+        "    s: string = 'a';\n" +
+        "    f() {\n" +
+        "        return Array.isArray(this.s);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isArray(this.s)");
+        expect(output).not.toContain("instanceof java.util.List");
+    });
+
+    test('a String element access keeps the helper (List<String>.get(0) is a String)', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: string[]) {\n" +
+        "        return Array.isArray(xs[0]);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isArray(Helpers.GetValue(xs, 0))");
+        expect(output).not.toContain("instanceof java.util.List");
+    });
+
+    test('a rest parameter keeps the helper (it prints as a Java array)', () => {
+        const input =
+        "class T {\n" +
+        "    f(...args: any[]) {\n" +
+        "        return Array.isArray(args);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isArray(args)");
+        expect(output).not.toContain("instanceof java.util.List");
+    });
+
+    test('a ternary operand keeps the helper (instanceof binds tighter than ?:)', () => {
+        const input =
+        "class T {\n" +
+        "    f(c: boolean) {\n" +
+        "        return Array.isArray(c ? 'a' : 'b');\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isArray(");
+        expect(output).not.toContain("instanceof java.util.List");
+    });
+
+    test('a statement-position call keeps the helper (a bare `true;` is not a statement)', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        Array.isArray([1, 2]);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isArray(new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 2)));");
     });
 });
