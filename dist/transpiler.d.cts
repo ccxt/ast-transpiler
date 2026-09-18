@@ -1097,16 +1097,6 @@ declare class JavaTranspiler extends BaseTranspiler {
     printPrefixUnaryExpression(node: any, identation: any): any;
     javaBooleanCondition(node: any): any;
     javaConditionPrintsBoolean(node: any): boolean;
-    javaBooleanBoxType(type: any): boolean;
-    javaTypeOfNode(node: any): any;
-    javaTypeOfDeclaration(decl: any): any;
-    javaPrintsBooleanValue(node: any, seen: Set<any>): boolean;
-    javaPrintsBooleanCall(node: any): boolean;
-    isArrayIsArrayCall(node: any): boolean;
-    javaBooleanBaseField(node: any): string | undefined;
-    javaBooleanBoxIdentifier(node: any, seen: Set<any>): string | undefined;
-    javaBooleanWritesAreBoxed(symbol: any, decl: any, node: any, seen: Set<any>): boolean;
-    javaBooleanWrapperFreeCondition(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;
     printDeleteExpression(node: any, _identation: any): string;
