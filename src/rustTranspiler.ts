@@ -876,9 +876,9 @@ export class RustTranspiler extends BaseTranspiler {
         'is_instance', 'starts_with', 'ends_with', 'in_op', 'contains',
     ]);
 
-    // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
-    peelValueBoolBox(printedValue: string): string | undefined {
-        const prefix = 'Value::Bool(';
+    // `<box><expr>)` spanning the whole printed value → `<expr>`. The payload is
+    // only reachable this way: the printer prints the value, not its parts.
+    peelValueBox(printedValue: string, prefix: string): string | undefined {
         if (!printedValue.startsWith(prefix) || !printedValue.endsWith(')')) {
             return undefined;
         }
@@ -902,6 +902,16 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
         return undefined;
+    }
+
+    // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
+    peelValueBoolBox(printedValue: string): string | undefined {
+        return this.peelValueBox(printedValue, 'Value::Bool(');
+    }
+
+    // `Value::Str(<expr>)` spanning the whole expression → `<expr>` (a String).
+    peelValueStrBox(printedValue: string): string | undefined {
+        return this.peelValueBox(printedValue, 'Value::Str(');
     }
 
     // `((expr))` → `expr` — a redundant layer kept from the TS source; the
@@ -971,6 +981,14 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             return this.getChecker().typeToString(type).trim() === 'boolean';
+        } catch (e) {
+            return false; // no checker type → keep the boxed form
+        }
+    }
+
+    rustTypeIsString(node): boolean {
+        try {
+            return this.isStringLikeType(this.getChecker().getTypeAtLocation(node));
         } catch (e) {
             return false; // no checker type → keep the boxed form
         }
@@ -1277,13 +1295,89 @@ export class RustTranspiler extends BaseTranspiler {
         return 'self';
     }
 
+    // ── native string args to the runtime error constructors ────────────────
+    // Audited against rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl
+    // ToErrorMessage` (`&str`/`String`/`Value` all yield the same string) and
+    // `create_error`'s class name is `&str` (bare literal only).
+    private static readonly RUST_ERROR_CONSTRUCTOR_ARGS: Record<string, ('msg' | 'str')[]> = {
+        exchange_error: ['msg'],
+        authentication_error: ['msg'],
+        permission_denied: ['msg'],
+        account_not_enabled: ['msg'],
+        account_suspended: ['msg'],
+        arguments_required: ['msg'],
+        bad_request: ['msg'],
+        bad_symbol: ['msg'],
+        operation_rejected: ['msg'],
+        no_change: ['msg'],
+        margin_mode_already_set: ['msg'],
+        market_closed: ['msg'],
+        manual_interaction_needed: ['msg'],
+        restricted_location: ['msg'],
+        insufficient_funds: ['msg'],
+        invalid_address: ['msg'],
+        address_pending: ['msg'],
+        invalid_order: ['msg'],
+        order_not_found: ['msg'],
+        order_not_cached: ['msg'],
+        order_immediately_fillable: ['msg'],
+        order_not_fillable: ['msg'],
+        duplicate_order_id: ['msg'],
+        contract_unavailable: ['msg'],
+        not_supported: ['msg'],
+        invalid_proxy_settings: ['msg'],
+        exchange_closed_by_user: ['msg'],
+        operation_failed: ['msg'],
+        network_error: ['msg'],
+        d_do_s_protection: ['msg'],
+        rate_limit_exceeded: ['msg'],
+        exchange_not_available: ['msg'],
+        on_maintenance: ['msg'],
+        invalid_nonce: ['msg'],
+        checksum_error: ['msg'],
+        request_timeout: ['msg'],
+        bad_response: ['msg'],
+        null_response: ['msg'],
+        cancel_pending: ['msg'],
+        unsubscribe_error: ['msg'],
+        create_error: ['str', 'msg'],
+    };
+
+    // A string literal prints as the bare `"lit"` (`&str` — no String
+    // allocation); a checker-proven string drops the redundant `Value::Str` box.
+    printErrorConstructorArg(name: string, index: number, node, identation: number): string {
+        const kind = (RustTranspiler as any).RUST_ERROR_CONSTRUCTOR_ARGS[name]?.[index];
+        if (kind === undefined) {
+            return this.printNode(node, identation);
+        }
+        if (ts.isStringLiteral(node) && !(node.text in this.StringLiteralReplacements)) {
+            return this.quotedStringLiteral(node.text);
+        }
+        const printed = this.printNode(node, identation).trim();
+        if (kind !== 'msg' || !this.rustTypeIsString(node)) {
+            return printed;
+        }
+        return this.peelValueStrBox(printed)
+            ?? this.peelValueStrBox(this.stripOuterParens(printed))
+            ?? printed;
+    }
+
+    // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
+    // post-pass applies to `X::new(..)` calls.
+    rustErrorConstructorName(className: string): string {
+        return className
+            .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+            .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+            .toLowerCase();
+    }
+
     printNewExpression(node, identation) {
         let expression = node.expression?.escapedText;
         expression = expression ? expression : this.printNode(node.expression);
-        const args = node.arguments.map(a => this.printNode(a, identation)).join(', ');
         // Plain `new Error(msg)` becomes just the message Value so it can be
         // formatted by `panic!("{:?}", ...)` in printThrowStatement.
         if (expression === 'Error') {
+            const args = node.arguments.map(a => this.printNode(a, identation)).join(', ');
             return args || 'Value::Null';
         }
         // CCXT exception classes end in "Error", "Required", "Found", etc. and
@@ -1291,12 +1385,16 @@ export class RustTranspiler extends BaseTranspiler {
         // error constructors (snake_case fn calls).
         const errorClassPattern = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
         if (typeof expression === 'string' && errorClassPattern.test(expression)) {
-            const snake = expression
-                .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-                .replace(/([a-z\d])([A-Z])/g, '$1_$2')
-                .toLowerCase();
+            const snake = this.rustErrorConstructorName(expression);
+            const args = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(', ');
             return `crate::exchange_errors::${snake}(${args})`;
         }
+        // Classes the ccxt post-pass routes to the same constructors — their
+        // message argument is audited too; every other `X::new(..)` prints as
+        // before.
+        const args = typeof expression === 'string'
+            ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(', ')
+            : node.arguments.map(a => this.printNode(a, identation)).join(', ');
         return `${expression}::new(${args})`;
     }
 

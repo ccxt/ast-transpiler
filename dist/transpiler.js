@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11336,9 +11336,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
   }
-  // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
-  peelValueBoolBox(printedValue) {
-    const prefix = "Value::Bool(";
+  // `<box><expr>)` spanning the whole printed value → `<expr>`. The payload is
+  // only reachable this way: the printer prints the value, not its parts.
+  peelValueBox(printedValue, prefix) {
     if (!printedValue.startsWith(prefix) || !printedValue.endsWith(")")) {
       return void 0;
     }
@@ -11364,6 +11364,14 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
     }
     return void 0;
+  }
+  // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
+  peelValueBoolBox(printedValue) {
+    return this.peelValueBox(printedValue, "Value::Bool(");
+  }
+  // `Value::Str(<expr>)` spanning the whole expression → `<expr>` (a String).
+  peelValueStrBox(printedValue) {
+    return this.peelValueBox(printedValue, "Value::Str(");
   }
   // `((expr))` → `expr` — a redundant layer kept from the TS source; the
   // right-hand side of a declaration binds the whole expression anyway.
@@ -11428,6 +11436,13 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return true;
       }
       return this.getChecker().typeToString(type).trim() === "boolean";
+    } catch (e) {
+      return false;
+    }
+  }
+  rustTypeIsString(node) {
+    try {
+      return this.isStringLikeType(this.getChecker().getTypeAtLocation(node));
     } catch (e) {
       return false;
     }
@@ -11707,18 +11722,41 @@ ${classMethods}
   printThisKeyword(node, identation) {
     return "self";
   }
+  // A string literal prints as the bare `"lit"` (`&str` — no String
+  // allocation); a checker-proven string drops the redundant `Value::Str` box.
+  printErrorConstructorArg(name, index, node, identation) {
+    const kind = _RustTranspiler.RUST_ERROR_CONSTRUCTOR_ARGS[name]?.[index];
+    if (kind === void 0) {
+      return this.printNode(node, identation);
+    }
+    if (ts7.isStringLiteral(node) && !(node.text in this.StringLiteralReplacements)) {
+      return this.quotedStringLiteral(node.text);
+    }
+    const printed = this.printNode(node, identation).trim();
+    if (kind !== "msg" || !this.rustTypeIsString(node)) {
+      return printed;
+    }
+    return this.peelValueStrBox(printed) ?? this.peelValueStrBox(this.stripOuterParens(printed)) ?? printed;
+  }
+  // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
+  // post-pass applies to `X::new(..)` calls.
+  rustErrorConstructorName(className) {
+    return className.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+  }
   printNewExpression(node, identation) {
     let expression = node.expression?.escapedText;
     expression = expression ? expression : this.printNode(node.expression);
-    const args = node.arguments.map((a) => this.printNode(a, identation)).join(", ");
     if (expression === "Error") {
-      return args || "Value::Null";
+      const args2 = node.arguments.map((a) => this.printNode(a, identation)).join(", ");
+      return args2 || "Value::Null";
     }
     const errorClassPattern = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
     if (typeof expression === "string" && errorClassPattern.test(expression)) {
-      const snake = expression.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
-      return `crate::exchange_errors::${snake}(${args})`;
+      const snake = this.rustErrorConstructorName(expression);
+      const args2 = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(", ");
+      return `crate::exchange_errors::${snake}(${args2})`;
     }
+    const args = typeof expression === "string" ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(", ") : node.arguments.map((a) => this.printNode(a, identation)).join(", ");
     return `${expression}::new(${args})`;
   }
   printPropertyAccessExpression(node, identation) {
@@ -12444,6 +12482,53 @@ _RustTranspiler.RUST_BOOL_RESULT_HELPERS = /* @__PURE__ */ new Set([
   "in_op",
   "contains"
 ]);
+// ── native string args to the runtime error constructors ────────────────
+// Audited against rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl
+// ToErrorMessage` (`&str`/`String`/`Value` all yield the same string) and
+// `create_error`'s class name is `&str` (bare literal only).
+_RustTranspiler.RUST_ERROR_CONSTRUCTOR_ARGS = {
+  exchange_error: ["msg"],
+  authentication_error: ["msg"],
+  permission_denied: ["msg"],
+  account_not_enabled: ["msg"],
+  account_suspended: ["msg"],
+  arguments_required: ["msg"],
+  bad_request: ["msg"],
+  bad_symbol: ["msg"],
+  operation_rejected: ["msg"],
+  no_change: ["msg"],
+  margin_mode_already_set: ["msg"],
+  market_closed: ["msg"],
+  manual_interaction_needed: ["msg"],
+  restricted_location: ["msg"],
+  insufficient_funds: ["msg"],
+  invalid_address: ["msg"],
+  address_pending: ["msg"],
+  invalid_order: ["msg"],
+  order_not_found: ["msg"],
+  order_not_cached: ["msg"],
+  order_immediately_fillable: ["msg"],
+  order_not_fillable: ["msg"],
+  duplicate_order_id: ["msg"],
+  contract_unavailable: ["msg"],
+  not_supported: ["msg"],
+  invalid_proxy_settings: ["msg"],
+  exchange_closed_by_user: ["msg"],
+  operation_failed: ["msg"],
+  network_error: ["msg"],
+  d_do_s_protection: ["msg"],
+  rate_limit_exceeded: ["msg"],
+  exchange_not_available: ["msg"],
+  on_maintenance: ["msg"],
+  invalid_nonce: ["msg"],
+  checksum_error: ["msg"],
+  request_timeout: ["msg"],
+  bad_response: ["msg"],
+  null_response: ["msg"],
+  cancel_pending: ["msg"],
+  unsubscribe_error: ["msg"],
+  create_error: ["str", "msg"]
+};
 // ── native container access (`get_value(...)` -> `.get(...)`) ─────────────
 // When the TypeScript checker proves the receiver is a plain Map/List value
 // and the key is a literal, the runtime `get_value` key-marker / `__live_id`

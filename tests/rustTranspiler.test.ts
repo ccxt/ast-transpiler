@@ -1325,6 +1325,53 @@ describe('rust checker-typed native container access', () => {
     });
 });
 
+describe('rust error constructor message arguments', () => {
+    test('a literal message prints as a bare str', () => {
+        const ts = "function f() {\n    throw new NotSupported('demo trading is not supported');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported("demo trading is not supported")');
+        expect(output).not.toContain('Value::Str("demo trading is not supported"');
+    });
+
+    test('escapes in a literal message are preserved', () => {
+        const ts = "function f() {\n    throw new NotSupported('it\\'s \"quoted\"');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported("it\'s \\"quoted\\"")');
+    });
+
+    test('a string concat message drops its Value::Str box', () => {
+        const ts = "function f(id: string) {\n    throw new NotSupported(id + ' handleDelta not supported yet');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" handleDelta not supported yet".to_string())))');
+        expect(output).not.toContain('not_supported(Value::Str(');
+    });
+
+    test('a parenthesised concat message drops its Value::Str box', () => {
+        const ts = "function f(id: string) {\n    throw new NotSupported((id + ' msg'));\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".to_string())))');
+    });
+
+    test('a concat message of a post-pass error class also drops its box', () => {
+        const ts = "function f(id: string) {\n    throw new BadRequest (id + ' msg');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('BadRequest::new(format!("{}{}", id, Value::Str(" msg".to_string())))');
+        expect(output).not.toContain('BadRequest::new(Value::Str(');
+    });
+
+    test('an unproven message keeps its box', () => {
+        const ts = "function f(msg: any) {\n    throw new NotSupported(msg);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('crate::exchange_errors::not_supported(msg)');
+    });
+
+    test('a non-error class constructor is untouched', () => {
+        const ts = "function f(id: string) {\n    const p = new Precise (id + ' msg');\n    return p;\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Precise::new(Value::Str(format!(');
+    });
+});
+
 describe('rust numeric literals', () => {
     test('an exponent literal is a float, negated or not', () => {
         const input = "class A { f(x) { const a = x.g(1e-7); const b = x.g(-1e-7); const c = -5; return [a, b, c]; } }";
