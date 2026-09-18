@@ -5967,7 +5967,7 @@ ${this.getIden(identation)}${returnStatement}`;
   printArrayLiteralExpression(node, identation = 0) {
     let arrayOpen = this.ARRAY_OPENING_TOKEN;
     const elems = node.elements;
-    const elements = node.elements.map((e) => this.printNode(e, identation)).join(", ");
+    const elements = node.elements.map((e) => this.printNode(e, identation).trim()).join(", ");
     if (elems.length > 0) {
       const first = elems[0];
       if (first.kind === _typescript2.default.SyntaxKind.CallExpression) {
@@ -6476,7 +6476,7 @@ ${tryBodyBlock}
     if (node.arguments.length === 0) {
       return `New${this.capitalize(expression)}()`;
     }
-    const args = node.arguments.map((n) => this.printNode(n, identation)).join(", ");
+    const args = node.arguments.map((n) => this.printNode(n, identation).trim()).join(", ");
     if (expression.endsWith("Error")) {
       return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
     }

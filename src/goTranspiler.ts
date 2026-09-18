@@ -2781,7 +2781,8 @@ ${this.getIden(identation)}${returnStatement}`;
 
         // elements that span lines (object literals, calls carrying one) need the
         // statement's own level so their bodies land one level deeper
-        const elements = node.elements.map((e) => this.printNode(e, identation)).join(", ");
+        // …but an element is inline after `{`, so any leading indent a printer prepends is trimmed
+        const elements = node.elements.map((e) => this.printNode(e, identation).trim()).join(", ");
 
         // take into consideration list of promises
         if (elems.length > 0) {
@@ -3473,7 +3474,9 @@ ${tryBodyBlock}
         if (node.arguments.length === 0) {
             return `New${this.capitalize(expression)}()`;
         }
-        const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
+        // an argument printer may prepend the statement indent (parenthesised casts do);
+        // inside the call the argument is inline, so trim it like printArgsForCallExpression
+        const args = node.arguments.map(n => this.printNode(n, identation).trim()).join(", ");
         if (expression.endsWith('Error')) {
             return expression + this.LEFT_PARENTHESIS + args + this.RIGHT_PARENTHESIS;
         }
