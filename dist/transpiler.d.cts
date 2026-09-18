@@ -995,7 +995,10 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaIntegerLiteralKind(node: any): "int" | "long";
     isVarargsArrayReference(node: any, depth?: number): any;
     isJavaListType(type: any): boolean;
-    javaLengthKind(expression: any): "List" | "String";
+    javaLengthKind(expression: any): "List" | "String" | "StringOrNull" | "ListOrNull";
+    isJavaListValueType(type: any): any;
+    isJavaListBackedClassType(type: any): boolean;
+    isJavaNullishUnion(type: any, isMember: any): any;
     printJavaLength(expression: any, leftSide: any): string;
     isJavaPrimitiveForCounter(node: any): boolean;
     javaPrimitiveOperandKind(node: any): "int" | "long";
