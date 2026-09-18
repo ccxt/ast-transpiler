@@ -125,6 +125,16 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'IsDictionary': 'bool',
     'StartsWith': 'bool',
     'EndsWith': 'bool',
+    // the native string operations (emitted with a proven Go `string` receiver) return exactly
+    // the type of the helper they replace, so a local initialised by one keeps its declared type
+    'strings.Split': '[]string',
+    'strings.Join': 'string',
+    'strings.ToUpper': 'string',
+    'strings.ToLower': 'string',
+    'strings.Replace': 'string',
+    'strings.ReplaceAll': 'string',
+    'strings.HasPrefix': 'bool',
+    'strings.HasSuffix': 'bool',
     'IsInstance': 'bool',
     'IsInteger': 'bool',
     'this.InArray': 'bool',
@@ -236,6 +246,9 @@ const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
 // interface the local used to hold
 const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDictionary' ];
 
+
+// the boundary comment ccxt's base sources (ts/src/base/Exchange.ts, PredictionExchange.ts)
+// carry and build/goTranspiler.ts re-assembles the generated file around
 
 // the Go numeric kinds. `<` `>` `<=` `>=` compile without a conversion only when
 // both operands carry the same one of these
@@ -522,6 +535,11 @@ export class GoTranspiler extends BaseTranspiler {
     // gofmt indents every nesting level with exactly one tab; the printer emits the
     // same bytes so the generated tree needs no `gofmt` pass (campaign go-gofmt F01)
     DEFAULT_IDENTATION = "\t";
+    // stdlib packages the source file being printed references. A Go import may only be
+    // declared before the file's first declaration, i.e. in the head of the printed body
+    // (printSourceFileStatements), so the file-level print collects the names here and
+    // prepends `import "..."` to its own output. Nested prints keep their own list.
+    // memo of goStdlibImportIsPlaceable() for the file being printed (reset per source file)
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -5237,11 +5255,64 @@ ${this.getIden(identation)}${returnStatement}`;
         return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
+    // A native string operation needs every operand to be a printed Go `string` — the helper
+    // takes `any` and re-derives the same string at runtime, so a proven operand cannot change
+    // the result. A regex literal is never a Go string (its printed text is a pattern, not the
+    // value the helper's ToString would produce), so those keep the helper call.
+    goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean {
+        for (let i = 0; i < expected.length; i++) {
+            const operand = operands[i];
+            if (operand === undefined || operand.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+                return false;
+            }
+            if (this.goOperandStaticType(operand, texts[i]) !== expected[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // the emission entry point: undefined when the file's stdlib import could not be placed
+    // (see goStdlibImportIsPlaceable), else the native call text, with the file-level import
+    // recorded for printSourceFileStatements
+    goNativeStringCall(nativeCall: string): string | undefined {
+        if (!this.goStdlibImportIsPlaceable()) {
+            return undefined;
+        }
+        this.goFileStdlibImports.add('strings');
+        return nativeCall;
+    }
+
+    // The native string calls below need `import "strings"` in front of the file's first
+    // declaration. Every ccxt consumer splices the printed body at the head of the file it
+    // writes (createGoExchange, the test/example emitters), except the two base sources:
+    // build/goTranspiler.ts#transpileBaseMethods drops everything above the `METHODS BELOW THIS
+    // LINE` boundary and #transpilePredictionBaseMethods splices the methods after its own struct
+    // declaration, so neither can carry the import — those files keep the boxed helper call until
+    // the emitter declares the import itself (getGoImports(file)).
+    goStdlibImportIsPlaceable(): boolean {
+        return this.goFileKeepsFileLevelImports();
+    }
+
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+        // `s.startsWith (p)` -> strings.HasPrefix
+        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string'])) {
+            const native = this.goNativeStringCall(`strings.HasPrefix(${name}, ${parsedArg})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `StartsWith(${name}, ${parsedArg})`;
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+        // `s.endsWith (p)` -> strings.HasSuffix
+        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string'])) {
+            const native = this.goNativeStringCall(`strings.HasSuffix(${name}, ${parsedArg})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `EndsWith(${name}, ${parsedArg})`;
     }
 
@@ -5250,10 +5321,26 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
+        // `a.join (sep)` -> strings.Join: only a declared `[]string` receiver can skip the
+        // per-element ToString the helper applies to a []any
+        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['[]string', 'string'])) {
+            const native = this.goNativeStringCall(`strings.Join(${name}, ${parsedArg})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `Join(${name}, ${parsedArg})`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
+        // `s.split (sep)` -> strings.Split, which keeps JS's empty trailing element
+        // ("a," -> ["a", ""]) exactly like the helper's own strings.Split call
+        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string'])) {
+            const native = this.goNativeStringCall(`strings.Split(${name}, ${parsedArg})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `Split(${name}, ${parsedArg})`;
     }
 
@@ -5283,10 +5370,24 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printToUpperCaseCall(node, identation, name = undefined) {
+        // `s.toUpperCase ()` -> strings.ToUpper
+        if (this.goNativeStringOperands([node.expression?.expression], [name], ['string'])) {
+            const native = this.goNativeStringCall(`strings.ToUpper(${name})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `ToUpper(${name})`;
     }
 
     printToLowerCaseCall(node, identation, name = undefined) {
+        // `s.toLowerCase ()` -> strings.ToLower
+        if (this.goNativeStringOperands([node.expression?.expression], [name], ['string'])) {
+            const native = this.goNativeStringCall(`strings.ToLower(${name})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `ToLower(${name})`;
     }
 
@@ -5430,10 +5531,28 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        // JS `replace` with a *string* pattern replaces the first occurrence only, which the
+        // boxed helper (ReplaceAll for every argument) cannot express: with all three operands
+        // proven strings, emit the count-1 form and the JS semantics exactly.
+        if (parsedArg !== undefined && parsedArg2 !== undefined
+            && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ['string', 'string', 'string'])) {
+            const native = this.goNativeStringCall(`strings.Replace(${name}, ${parsedArg}, ${parsedArg2}, 1)`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        // `s.replaceAll (a, b)` replaces every occurrence, like the helper
+        if (parsedArg !== undefined && parsedArg2 !== undefined
+            && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ['string', 'string', 'string'])) {
+            const native = this.goNativeStringCall(`strings.ReplaceAll(${name}, ${parsedArg}, ${parsedArg2})`);
+            if (native !== undefined) {
+                return native;
+            }
+        }
         return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 

@@ -636,6 +636,8 @@ declare class GoTranspiler extends BaseTranspiler {
     DEFAULT_RETURN_TYPE: string;
     ASYNC_BODY_SUFFIX: string;
     DEFAULT_IDENTATION: string;
+    goStdlibPackages: any[];
+    goStdlibImportPlaceable: boolean | undefined;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
@@ -821,6 +823,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
     printSourceFileStatements(node: any, identation: any): string;
+    goStdlibImportPreamble(packages: string[]): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
@@ -871,6 +874,9 @@ declare class GoTranspiler extends BaseTranspiler {
     printArrayPushCall(node: CallExpression, identation: number, name?: string | undefined, parsedArg?: string | undefined): string;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean;
+    goNativeStringCall(nativeCall: string): string | undefined;
+    goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printTrimCall(node: any, identation: any, name?: any): string;
