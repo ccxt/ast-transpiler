@@ -2102,6 +2102,94 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/\.keySet\(\)/);
     });
 
+    // --- objectKeys native emission (checker-proven dict argument) ---
+    //
+    // The helper keeps its `instanceof Map` fallback and its synchronized
+    // snapshot for shared field maps; a checker-proven dict target is a Map on
+    // every print and run path, so the key copy prints native.
+
+    test('Object.keys(dict-typed identifier) emits the native key copy', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(dict: { [key: string]: any }) {\n" +
+        "        return Object.keys(dict);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/new java\.util\.ArrayList<Object>\(\(\(java\.util\.Map<String, Object>\)dict\)\.keySet\(\)\)/);
+        expect(output).not.toMatch(/Helpers\.objectKeys\(/);
+    });
+
+    test('Object.keys of a dict-returning call emits the native key copy', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    g(): { [key: string]: any } {\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "    f() {\n" +
+        "        return Object.keys(this.g());\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/new java\.util\.ArrayList<Object>\(\(\(java\.util\.Map<String, Object>\)this\.g\(\)\)\.keySet\(\)\)/);
+    });
+
+    test('Object.keys of a dict narrowed by Array.isArray (else branch) emits the native key copy', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(orders: { [key: string]: any } | any[]) {\n" +
+        "        if (Array.isArray(orders)) {\n" +
+        "            return orders.length;\n" +
+        "        } else {\n" +
+        "            return Object.keys(orders);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/new java\.util\.ArrayList<Object>\(\(\(java\.util\.Map<String, Object>\)orders\)\.keySet\(\)\)/);
+    });
+
+    test('Object.keys(this.<dict field>) keeps the helper (shared field map)', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    dict: { [key: string]: any } = {};\n" +
+        "    f() {\n" +
+        "        return Object.keys(this.dict);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        // Field maps are shared with other threads and the helper's synchronized
+        // snapshot is the port's documented map-read invariant.
+        expect(output).toMatch(/Helpers\.objectKeys\(\s*this\.dict\s*\)/);
+        expect(output).not.toMatch(/\.keySet\(\)/);
+    });
+
+    test('Object.keys of a nullable dict / an array keeps the helper', () => {
+        const fresh = new Transpiler();
+        const nullable =
+        "class T {\n" +
+        "    f(dict: { [key: string]: any } | undefined) {\n" +
+        "        return Object.keys(dict);\n" +
+        "    }\n" +
+        "}";
+        const nullableOutput = fresh.transpileJava(nullable).content;
+        expect(nullableOutput).toMatch(/Helpers\.objectKeys\(/);
+        expect(nullableOutput).not.toMatch(/\.keySet\(\)/);
+        const array =
+        "class T {\n" +
+        "    f(list: any[]) {\n" +
+        "        return Object.keys(list);\n" +
+        "    }\n" +
+        "}";
+        const arrayOutput = fresh.transpileJava(array).content;
+        expect(arrayOutput).toMatch(/Helpers\.objectKeys\(/);
+        expect(arrayOutput).not.toMatch(/\.keySet\(\)/);
+    });
+
     test('Object.values(x) emits Helpers.objectValues(x) — bare identifier', () => {
         const fresh = new Transpiler();
         const input =

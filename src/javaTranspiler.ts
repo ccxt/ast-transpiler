@@ -2458,18 +2458,37 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // Route through Helpers so consumers control semantics (thread-safety,
     // null-handling, type coercion) in one place — same pattern as
-    // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json. The
-    // previous inline emits (`x instanceof java.util.List`, `((Map)x).keySet()`)
-    // forced any downstream that needed different semantics (e.g. synchronized
-    // map access in concurrent code) to post-process the generated Java with
-    // regex — which only catches the bare-identifier argument shape and misses
-    // property-access (`this.x`) and element-access (`obj[k]`) arguments.
+    // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json.
     printArrayIsArrayCall(_node, _identation, parsedArg = undefined) {
         return `Helpers.isArray(${parsedArg})`;
     }
 
-    printObjectKeysCall(_node, _identation, parsedArg = undefined) {
+    // A checker-proven dict prints a Map on every path, so the key copy is native;
+    // every other target keeps the helper — shared field maps need its synchronized
+    // snapshot, the rest need its instanceof/null fallbacks.
+    printObjectKeysCall(node, _identation, parsedArg = undefined) {
+        const native = this.printNativeObjectKeysCall(node);
+        if (native !== undefined) {
+            return native;
+        }
         return `Helpers.objectKeys(${parsedArg})`;
+    }
+
+    printNativeObjectKeysCall(node) {
+        const argument = node?.arguments?.[0];
+        if (argument === undefined || ts.isPropertyAccessExpression(argument)) {
+            return undefined;
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(argument);
+        } catch (e) {
+            return undefined;
+        }
+        if (!this.isJavaMapStructureType(type)) {
+            return undefined;
+        }
+        return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).keySet())`;
     }
 
     printObjectValuesCall(_node, _identation, parsedArg = undefined) {
