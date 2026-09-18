@@ -1250,6 +1250,72 @@ describe('go inline equality', () => {
         // a field the printer cannot name keeps the helper
         expect(output).toContain("if EvalTruthy(this.Options) {");
     });
+    test('a bool read the checker proves drops IsEqual against a bool literal', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "interface MarketInterface { spot: Bool; linear: Bool; }\n" +
+        "function f (markets: any, symbol: string) {\n" +
+        "    const market: MarketInterface = markets[symbol];\n" +
+        "    const a = market['spot'] === true;\n" +
+        "    const b = market['linear'] !== true;\n" +
+        "    const c = market['spot'] === false;\n" +
+        "    const d = market['id'] === 'BTC/USDT';\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var market any = GetValue(markets, symbol)");
+        // Market.spot is a Bool: the box holds that bool or nil, and every other
+        // dynamic type is unequal to a Go bool exactly as in TypeScript
+        expect(output).toContain("var a bool = (GetValue(market, \"spot\") == true)");
+        expect(output).toContain("var b bool = (GetValue(market, \"linear\") != true)");
+        expect(output).toContain("var c bool = (GetValue(market, \"spot\") == false)");
+        expect(output).not.toContain("IsEqual(GetValue(market, \"spot\")");
+        expect(output).not.toContain("IsEqual(GetValue(market, \"linear\")");
+        // this family is the bool literal only: a string literal keeps the helper
+        expect(output).toContain("var d bool = IsEqual(GetValue(market, \"id\"), \"BTC/USDT\")");
+    });
+    test('the mirrored literal inlines to the same comparison', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "interface MarketInterface { option: Bool; }\n" +
+        "function f (markets: any, symbol: string) {\n" +
+        "    const market: MarketInterface = markets[symbol];\n" +
+        "    const a = true === market['option'];\n" +
+        "    const b = false !== market['option'];\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (true == GetValue(market, \"option\"))");
+        expect(output).toContain("var b bool = (false != GetValue(market, \"option\"))");
+        expect(output).not.toContain("IsEqual(GetValue(market");
+    });
+    test('an unproven element read keeps IsEqual', () => {
+        const input =
+        "function f (markets: any, symbol: string) {\n" +
+        "    const market = markets[symbol];\n" +
+        "    const a = market['spot'] === true;\n" +
+        "    const b = market['linear'] !== true;\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // `markets` is any: the read is any too, and the box may hold a *bool
+        expect(output).toContain("var a bool = IsEqual(GetValue(market, \"spot\"), true)");
+        expect(output).toContain("var b bool = !IsEqual(GetValue(market, \"linear\"), true)");
+    });
+    test('a declared map receiver keeps its native index and drops IsEqual', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "interface MarketInterface { spot: Bool; }\n" +
+        "function f () {\n" +
+        "    const market: MarketInterface = { 'spot': true };\n" +
+        "    const a = market['spot'] === true;\n" +
+        "    return a;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var market map[string]any = map[string]any{");
+        expect(output).toContain("var a bool = (market[\"spot\"] == true)");
+        expect(output).not.toContain("IsEqual(market[");
+    });
 });
 
 describe('go ordered comparisons inline to native operators', () => {

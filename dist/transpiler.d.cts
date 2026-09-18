@@ -786,6 +786,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goScalarFamilyWithNil(node: any): string | undefined;
     goPrintedCallee(printedValue: string): string | undefined;
     goIsAnyBoxExpression(node: any, printedText: string): boolean;
+    goBoxedElementRead(node: any, printedText: string): boolean;
     goAnyLocalHoldsPointerCache: Map<any, boolean>;
     goAnyLocalHoldsPointer(decl: any): boolean;
     goScalarFamilyOfType(type: any, allowNil?: boolean): string | undefined;
