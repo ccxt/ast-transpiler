@@ -449,7 +449,7 @@ describe('go typed body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var upper string = ToUpper(market)");
         expect(output).toContain("var parts []string = Split(market, \"/\")");
-        expect(output).toContain("var count int = GetArrayLength(parts)");
+        expect(output).toContain("var count int = len(parts)");
         expect(output).toContain("var same bool = (IsEqual(upper, market))");
         expect(output).toContain("var merged map[string]any = this.Extend(");
     });
@@ -469,7 +469,7 @@ describe('go typed body locals', () => {
         expect(output).toContain("var income any = this.SafeValue(item, \"income\")");
         expect(output).toContain("var first any = GetValue(item, \"first\")");
         expect(output).toContain("var sum any = Add(a, b)");
-        expect(output).toContain("var picked any = Ternary(");
+        expect(output).toContain("var picked any = func() any {");
     });
     test('a local reassigned with another type, appended to or spread stays any', () => {
         const input =
@@ -551,7 +551,7 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
         expect(output).toContain("var timestamp *int64 = this.SafeInteger(item, \"time\")");
         expect(output).toContain("var rate *float64 = this.SafeFloat(item, \"rate\")");
-        expect(output).toContain("var flag any = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
         expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
     });
     test('the 2/N and lower/upper/product/timestamp variants carry the same pointer type', () => {
@@ -579,7 +579,7 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var code *string = this.SafeStringUpper(item, \"code\")");
         expect(output).toContain("var expiry *int64 = this.SafeIntegerProduct(item, \"expiry\", 1000)");
         expect(output).toContain("var created *int64 = this.SafeTimestamp2(item, \"created\", \"ts\")");
-        expect(output).toContain("var post any = this.SafeBoolN(");
+        expect(output).toContain("var post *bool = this.SafeBoolN(");
     });
     test('a Safe* local reassigned to a differently typed value falls back to any', () => {
         const input =
@@ -625,6 +625,70 @@ describe('go pointer-typed Safe* body locals', () => {
         "}";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+    });
+    test('a SafeBool local is declared *bool; SafeDict/SafeList locals stay any (those Go accessors return any)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const flag = this.safeBool (item, 'flag');\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const rows = this.safeList (item, 'rows');\n" +
+        "        return [flag, info, rows];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var flag *bool = this.SafeBool(item, \"flag\")");
+        expect(output).toContain("var info any = this.SafeDict(item, \"info\")");
+        expect(output).toContain("var rows any = this.SafeList(item, \"rows\")");
+    });
+    test('the 2/N bool variants carry *bool; the dict/list variants stay any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeBool2(a, b, c) { return a; }\n" +
+        "    safeBoolN(a, b) { return a; }\n" +
+        "    safeDict2(a, b, c) { return a; }\n" +
+        "    safeDictN(a, b) { return a; }\n" +
+        "    safeList2(a, b, c) { return a; }\n" +
+        "    safeListN(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const post = this.safeBool2 (item, 'postOnly', 'post_only');\n" +
+        "        const anyFlag = this.safeBoolN (item, ['reduceOnly']);\n" +
+        "        const nested = this.safeDict2 (item, 'a', 'b');\n" +
+        "        const deep = this.safeDictN (item, ['a', 'b']);\n" +
+        "        const pair = this.safeList2 (item, 'a', 'b');\n" +
+        "        const deepList = this.safeListN (item, ['a', 'b']);\n" +
+        "        return [post, anyFlag, nested, deep, pair, deepList];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var post *bool = this.SafeBool2(item, \"postOnly\", \"post_only\")");
+        expect(output).toContain("var anyFlag *bool = this.SafeBoolN(");
+        expect(output).toContain("var nested any = this.SafeDict2(item, \"a\", \"b\")");
+        expect(output).toContain("var deep any = this.SafeDictN(");
+        expect(output).toContain("var pair any = this.SafeList2(item, \"a\", \"b\")");
+        expect(output).toContain("var deepList any = this.SafeListN(");
+    });
+    test('an any-typed dict/list local keeps the helper for truthiness/nil tests', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a, b) { return a; }\n" +
+        "    safeList(a, b) { return a; }\n" +
+        "    safeBool(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const info = this.safeDict (item, 'info');\n" +
+        "        const rows = this.safeList (item, 'rows');\n" +
+        "        const flag = this.safeBool (item, 'flag');\n" +
+        "        if (rows === undefined) { return info; }\n" +
+        "        if (flag) { return rows; }\n" +
+        "        return [info, rows, flag];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsEqual(rows, nil)");
+        expect(output).toContain("if flag != nil && *flag {");
     });
     test('a local initialized from Precise arithmetic is declared as *string', () => {
         const input =
@@ -958,7 +1022,9 @@ describe('go inline equality', () => {
         expect(output).toContain("var c bool = (x != \"delivery\")");
         expect(output).toContain("var d bool = (n == 1)");
         expect(output).toContain("var e bool = (b == true)");
-        expect(output).toContain("var g bool = IsEqual(o, \"delivery\")");
+        // an `any` operand: only a string/bool literal may drop the helper, the
+        // box can hold a number and IsEqual converts across numeric widths
+        expect(output).toContain("var g bool = (o == \"delivery\")");
         expect(output).not.toContain("*x");
         expect(output).not.toContain("IsEqualString");
         expect(output).not.toContain("IsEqualInt");
@@ -974,13 +1040,16 @@ describe('go inline equality', () => {
         "    const b = s !== 'delivery';\n" +
         "    const c = i === 1;\n" +
         "    const d = s === undefined;\n" +
-        "    return [ a, b, c, d ];\n" +
+        "    const e = i === undefined;\n" +
+        "    return [ a, b, c, d, e ];\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var a bool = IsEqual(s, \"delivery\")");
-        expect(output).toContain("var b bool = !IsEqual(s, \"delivery\")");
+        expect(output).toContain("var a bool = (s == \"delivery\")");
+        expect(output).toContain("var b bool = (s != \"delivery\")");
         expect(output).toContain("var c bool = IsEqual(i, 1)");
-        expect(output).toContain("var d bool = IsEqual(s, nil)");
+        expect(output).toContain("var d bool = (s == nil)");
+        // a nullable number keeps the helper: the box may hold int, int64 or float64
+        expect(output).toContain("var e bool = IsEqual(i, nil)");
         expect(output).not.toContain("IsEqualString");
         expect(output).not.toContain("*s");
     });
@@ -1015,6 +1084,32 @@ describe('go inline equality', () => {
         expect(output).toContain("u = Add(u, 1)");
         expect(output).not.toContain("ConcatString");
         expect(output).not.toContain("AddNumber");
+    });
+    test('a classifier that types an any-box read at its declaration does not make the operand native', () => {
+        // ccxt installs goTypeOfInitializer hooks that name the value inside `GetValue(keys, i)`
+        // (a []string element) so the *declaration* can assert it; the printed operand is
+        // still an interface box, so `"a:" + keys[i]` must keep the helper
+        const hooked = new Transpiler({ 'verbose': false });
+        const printer: any = hooked.goTranspiler;
+        const upstream = printer.goTypeOfInitializer;
+        printer.goTypeOfInitializer = function (initializer, printedValue) {
+            const known = upstream.call(this, initializer, printedValue);
+            if (known !== undefined) {
+                return known;
+            }
+            return /^GetValue\(keys, i\)$/.test((printedValue ?? '').trim()) ? 'string' : undefined;
+        };
+        const input =
+        "function f (symbols: any) {\n" +
+        "    const keys = Object.keys (symbols);\n" +
+        "    for (let i = 0; i < keys.length; i++) {\n" +
+        "        const hash = 'myTrades:' + keys[i];\n" +
+        "        const key = keys[i];\n" +
+        "    }\n" +
+        "}\n"
+        const output = hooked.transpileGo(input).content;
+        expect(output).toContain("var hash any = Add(\"myTrades:\", GetValue(keys, i))");
+        expect(output).toContain("var key string = GetValue(keys, i)");
     });
     test('truthiness is inlined for locals whose Go type the printer declared', () => {
         const input =
@@ -1115,6 +1210,624 @@ describe('go inline equality', () => {
         expect(output).toContain("IsEqual(length, limit)");
         expect(output).not.toContain("*limit == length");
     });
+    test('a parenthesized operand is decided on the operand itself', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    valueIsDefined (a) { return true; }\n" +
+        "    f (response: any, opt: any) {\n" +
+        "        const isWsProxyDefined = this.valueIsDefined (response);\n" +
+        "        const s = this.safeString (response, 'id');\n" +
+        "        const picked = (isWsProxyDefined) ? 1 : 2;\n" +
+        "        if ((s)) { return 1; }\n" +
+        "        if ((opt)) { return 2; }\n" +
+        "        return picked;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a parenthesized operand the printer types inlines too: the ternary becomes a
+        // func literal with the bare Go bool condition (parentheses kept, as the
+        // operator still parses the same way) instead of the Ternary helper
+        expect(output).toContain("var picked any = func() any { if (isWsProxyDefined) { return 1 }; return 2 }()");
+        expect(output).not.toContain("Ternary(");
+        expect(output).toContain("if s != nil && *s != \"\" {");
+        // an `any` operand still needs the helper, parentheses or not
+        expect(output).toContain("if EvalTruthy(opt) {");
+    });
+    test('hand-written bool fields need no truthiness helper', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        if (this.enableRateLimit) { return 1; }\n" +
+        "        if (!this.verbose) { return 2; }\n" +
+        "        if (this.options) { return 3; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if this.EnableRateLimit {");
+        expect(output).toContain("if !this.Verbose {");
+        // a field the printer cannot name keeps the helper
+        expect(output).toContain("if EvalTruthy(this.Options) {");
+    });
+});
+
+describe('go ordered comparisons inline to native operators', () => {
+    test('a for-loop counter compared to a length emits `<`', () => {
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        for (let i = 0; i < arr.length; i++) {\\n" +
+        "            const z = arr[i];\\n" +
+        "        }\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("for i := 0; i < GetArrayLength(arr); i++ {");
+        expect(output).not.toContain("IsLessThan(i, GetArrayLength(arr))");
+    });
+    test('an int local compared to an int literal emits `>` `>=` `<=`', () => {
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        const n = arr.length;\\n" +
+        "        const a = n > 0;\\n" +
+        "        const b = n >= 2;\\n" +
+        "        const c = n <= 3;\\n" +
+        "        return [ a, b, c ];\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (n > 0)");
+        expect(output).toContain("var b bool = (n >= 2)");
+        expect(output).toContain("var c bool = (n <= 3)");
+        expect(output).not.toContain("IsGreaterThan(n, 0)");
+        expect(output).not.toContain("IsLessThanOrEqual(n, 3)");
+    });
+    test('float64 keeps IsLessThan/IsLessThanOrEqual but inlines `>`/`>=`', () => {
+        // the helper answers true when an operand is NaN, Go answers false, so only
+        // the two operators whose result cannot differ are inlined
+        const input =
+        "class T {\\n" +
+        "    f (v: number) {\\n" +
+        "        const g = Math.floor(v);\\n" +
+        "        const a = g > 5;\\n" +
+        "        const b = g >= 5;\\n" +
+        "        const c = g < 5;\\n" +
+        "        const d = g <= 5;\\n" +
+        "        return [ a, b, c, d ];\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (g > 5)");
+        expect(output).toContain("var b bool = (g >= 5)");
+        expect(output).toContain("var c bool = IsLessThan(g, 5)");
+        expect(output).toContain("var d bool = IsLessThanOrEqual(g, 5)");
+    });
+    test('an `any` operand stays on the helper', () => {
+        const input =
+        "class T {\\n" +
+        "    f (x: any) {\\n" +
+        "        return x < 5;\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("return IsLessThan(x, 5)");
+        expect(output).not.toContain("(x < 5)");
+    });
+    test('a float literal against an int local stays on the helper', () => {
+        // `n < 1.5` does not compile when n is an int, and Go would reject the constant
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        const n = arr.length;\\n" +
+        "        return n < 1.5;\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("return IsLessThan(n, 1.5)");
+    });
+    test('the inlined comparison stays a Go bool in a condition', () => {
+        const input =
+        "class T {\\n" +
+        "    f (arr: any[]) {\\n" +
+        "        const n = arr.length;\\n" +
+        "        if (n > 0) {\\n" +
+        "            return 1;\\n" +
+        "        }\\n" +
+        "        return 0;\\n" +
+        "    }\\n" +
+        "}\\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if n > 0 {");
+        expect(output).not.toContain("EvalTruthy((n > 0))");
+    });
+});
+
+describe('go native element assignment', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/ +/g, ' ');
+    test('a map local with a string literal key assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['symbol'] = 'BTC/USDT';\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request map[string]any = map[string]any{}");
+        expect(output).toContain("request[\"symbol\"] = \"BTC/USDT\"");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a map local with a string-typed local key assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        const key = 'symbol';\n" +
+        "        request[key] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var key string = \"symbol\"");
+        expect(output).toContain("request[key] = 1");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a map local with a non-string key stays on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params, key) {\n" +
+        "        const request = {};\n" +
+        "        request[key] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(request, key, 1)");
+    });
+    test('a nested element chain stays on the helper: GetValue is any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['a']['b'] = 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(GetValue(request, \"a\"), \"b\", 1)");
+    });
+    test('an any receiver stays on the helper: Go cannot index an interface', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params) {\n" +
+        "        const request = params;\n" +
+        "        request['symbol'] = 'x';\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request any = params");
+        expect(output).toContain("AddElementToObject(request, \"symbol\", \"x\")");
+    });
+    test('a map local reassigned to another type stays on the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(params) {\n" +
+        "        const request = {};\n" +
+        "        request['symbol'] = 1;\n" +
+        "        request = params;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request any = map[string]any{}");
+        expect(output).toContain("AddElementToObject(request, \"symbol\", 1)");
+    });
+    test('a map local from a map-returning helper assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a, b) { return a; }\n" +
+        "    main(params) {\n" +
+        "        const request = this.extend({}, params);\n" +
+        "        request['symbol'] = 'BTC/USDT';\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var request map[string]any = this.Extend(map[string]any{}, params)");
+        expect(output).toContain("request[\"symbol\"] = \"BTC/USDT\"");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('+= on a map local adds through the same native index', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const request = {};\n" +
+        "        request['count'] += 1;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("request[\"count\"] = Add(request[\"count\"], 1)");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a slice literal local with an in-range literal index assigns natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[0] = 5;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var copy []any = []any{1, 2, 3}");
+        expect(output).toContain("copy[0] = 5");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('a literal index past the slice literal stays on the helper (Go would panic)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[7] = 5;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(copy, 7, 5)");
+    });
+    test('a runtime index stays on the helper (the helper ignores out-of-range)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(i) {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[i] = 5;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(copy, i, 5)");
+    });
+    test('a rebound slice stays on the helper: its length is no longer literal', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(other) {\n" +
+        "        const copy = [1, 2, 3];\n" +
+        "        copy[0] = 5;\n" +
+        "        copy = other;\n" +
+        "        return copy;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(copy, 0, 5)");
+    });
+    test('a []string local stays on the helper: only []any inlines', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market) {\n" +
+        "        const parts = market.split('/');\n" +
+        "        parts[0] = 'x';\n" +
+        "        return parts;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var parts []string = Split(market, \"/\")");
+        expect(output).toContain("AddElementToObject(parts, 0, \"x\")");
+    });
+    test('element access on an object literal reads the Go map natively', () => {
+        const input =
+        "function f() {\n" +
+        "    return ({ 'a': 1 })['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('})["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('element access on a local the printer typed map[string]any reads natively', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    return m['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var m map[string]any =");
+        expect(output).toContain('return m["a"]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('the native index accepts a Go string key, not just a literal', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    const k = 'a';\n" +
+        "    return m[k];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var k string =");
+        expect(output).toContain('return m[k]');
+        expect(output).not.toContain('GetValue(');
+    });
+    test('only the first step of a chain is native, the rest stay GetValue', () => {
+        const input =
+        "function f() {\n" +
+        "    const m = { 'a': 1 };\n" +
+        "    return m['a']['b'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(m["a"], "b")');
+    });
+    test('GetValue stays when the container is boxed in any', () => {
+        const input =
+        "function f(m) {\n" +
+        "    return m['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(m, "a")');
+    });
+    test('GetValue stays for an array index: nil slice and out-of-range read as nil', () => {
+        const input =
+        "function f() {\n" +
+        "    const a = [1, 2, 3];\n" +
+        "    return a[0];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('GetValue(a, 0)');
+    });
+    test('a typed map assignment target assigns through the same native index', () => {
+        const input =
+        "function f() {\n" +
+        "    const x = {};\n" +
+        "    x['a'] = 1;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the printer typed the `{}` literal as a Go map, so the receiver is proven
+        // indexable: the write goes through the native index exactly like the read
+        // does, and no boxed receiver keeps the helper alive
+        expect(output).toContain("var x map[string]any = map[string]any{}");
+        expect(output).toContain('x["a"] = 1');
+        expect(output).not.toContain('AddElementToObject');
+    });
+    test('a local the reject filters demoted to any keeps GetValue', () => {
+        const input =
+        "function f() {\n" +
+        "    let m = {};\n" +
+        "    m = g();\n" +
+        "    return m['a'];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('var m any =');
+        expect(output).toContain('GetValue(m, "a")');
+    });
+    test('string concat replaces Add when both operands are Go strings', () => {
+        const input =
+        "class T {\n" +
+        "    id: string = 'test';\n" +
+        "    f () {\n" +
+        "        var s = this.id + ' does not support ' + 'market';\n" +
+        "        return s;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var s any = this.Id + \" does not support \" + \"market\"");
+        expect(output).not.toContain("Add(");
+    });
+    test('concat with an any operand keeps the outer Add but inlines the string part', () => {
+        const input =
+        "class T {\n" +
+        "    id: string = 'test';\n" +
+        "    f (t: string) {\n" +
+        "        var s = this.id + ' does not support ' + t + ' market';\n" +
+        "        return s;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(Add(this.Id + \" does not support \", t), \" market\")");
+    });
+    test('int64 local minus an integer literal is a bare Go subtraction', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f () {\n" +
+        "        var now = this.milliseconds();\n" +
+        "        var since = now - 2592000000;\n" +
+        "        return since;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var now int64 = this.Milliseconds()");
+        expect(output).toContain("var since any = now - 2592000000");
+    });
+    test('Divide inlines a literal divisor but keeps the helper for a zero divisor', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f () {\n" +
+        "        var q = this.milliseconds() / 2;\n" +
+        "        var z = this.milliseconds() / 0;\n" +
+        "        return q;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var q any = this.Milliseconds() / 2");
+        expect(output).toContain("var z any = Divide(this.Milliseconds(), 0)");
+    });
+    test('Mod stays a helper (float semantics, no panic on a zero divisor)', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f () {\n" +
+        "        var r = this.milliseconds() % 2;\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var r any = Mod(this.Milliseconds(), 2)");
+    });
+    test('Subtract on an int-typed helper result keeps the helper (it returns int64)', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: string[]) {\n" +
+        "        var n = a.length - 1;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var n any = Subtract(GetArrayLength(a), 1)");
+    });
+    test('Add on an int-typed helper result is native (the helper returns int too)', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: string[]) {\n" +
+        "        var n = a.length + 1;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var n any = GetArrayLength(a) + 1");
+    });
+    test('float operands keep Add (the helper collapses integral results to int64)', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: number) {\n" +
+        "        var n = Math.floor(a) + 1;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(MathFloor(a), 1)");
+    });
+    test('concatenating into a typed string field is a compound assignment', () => {
+        const input =
+        "class T {\n" +
+        "    id: string = 'test';\n" +
+        "    f () {\n" +
+        "        this.id += 'x';\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("this.Id += \"x\"");
+    });
+
+    test('a nullable scalar in an any box compares natively', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "type Bool = boolean | undefined;\n" +
+        "function f (s: Str, flag: Bool, n: number | undefined) {\n" +
+        "    const a = s === 'delivery';\n" +
+        "    const b = s !== undefined;\n" +
+        "    const c = flag === true;\n" +
+        "    const d = flag === undefined;\n" +
+        "    const e = n === undefined;\n" +
+        "    const g = n === 1;\n" +
+        "    return [ a, b, c, d, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = (s == \"delivery\")");
+        expect(output).toContain("var b bool = (s != nil)");
+        expect(output).toContain("var c bool = (flag == true)");
+        expect(output).toContain("var d bool = (flag == nil)");
+        expect(output).toContain("var e bool = IsEqual(n, nil)");
+        // numbers keep the helper: the box may hold int, int64 or float64
+        expect(output).toContain("var g bool = IsEqual(n, 1)");
+    });
+    test('two nullable boxes of the same family compare natively', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "function f (a: Str, b: Str, c: string, d: Str) {\n" +
+        "    const x = a === b;\n" +
+        "    const y = c === d;\n" +
+        "    return [ x, y ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var x bool = (a == b)");
+        expect(output).toContain("var y bool = (c == d)");
+    });
+    test('a boxed helper result and the typed accessors compare against nil, a string and a bool', () => {
+        const input =
+        "class T {\n" +
+        "    safeValue (a, b) { return a; }\n" +
+        "    safeBool (a, b) { return a; }\n" +
+        "    safeDict (a, b) { return a; }\n" +
+        "    f (response: any, key: string) {\n" +
+        "        const v = this.safeValue (response, key);\n" +
+        "        const r = GetValue(response, key);\n" +
+        "        const a = this.safeBool (response, key) === true;\n" +
+        "        const b = this.safeDict (response, key) !== undefined;\n" +
+        "        const c = GetValue(response, key) === 'spot';\n" +
+        "        const d = GetValue(response, key) === undefined;\n" +
+        "        const e = Ternary(true, r, v) === false;\n" +
+        "        return [ v, r, a, b, c, d, e ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // this.SafeBool(...) is a *bool accessor: `== true` would not compile against
+        // the pointer, and a call must not be repeated by the deref branches, so the
+        // deref-aware IsEqual is the only emission with the same predicate
+        expect(output).toContain("var a bool = IsEqual(this.SafeBool(response, key), true)");
+        // an any-typed nil test is not a proven nullable scalar, so it keeps the helper
+        expect(output).toContain("var b bool = !IsEqual(this.SafeDict(response, key), nil)");
+        expect(output).toContain("var c bool = (GetValue(response, key) == \"spot\")");
+        // an any-typed operand is not a proven nullable scalar: nil stays on the helper
+        expect(output).toContain("var d bool = IsEqual(GetValue(response, key), nil)");
+        expect(output).toContain("var e bool = (Ternary(true, r, v) == false)");
+    });
+    test('a concrete Go scalar keeps the helper for a nil test', () => {
+        const input =
+        "class T {\n" +
+        "    f (s: string, d: any) {\n" +
+        "        const n = s.length;\n" +
+        "        const m = d.length;\n" +
+        "        const a = n === undefined;\n" +
+        "        const b = m === undefined;\n" +
+        "        return [ a, b ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // `n` is an `any` box whose TypeScript type is `number` and `m` is a plain Go
+        // int: `== nil` would not compile against the int, and the number family stays
+        // on the helper in both cases
+        expect(output).toContain("IsEqual(n, nil)");
+        expect(output).toContain("IsEqual(m, nil)");
+        expect(output).not.toContain("n == nil");
+        expect(output).not.toContain("m == nil");
+    });
+    test('a number literal on a box stays on the helper, string and bool inline', () => {
+        const input =
+        "class T {\n" +
+        "    f (o: any) {\n" +
+        "        const values = o;\n" +
+        "        const a = values === 0;\n" +
+        "        const b = values === false;\n" +
+        "        const c = values === '';\n" +
+        "        return [ a, b, c ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a bool = IsEqual(values, 0)");
+        expect(output).toContain("var b bool = (values == false)");
+        expect(output).toContain("var c bool = (values == \"\")");
+    });
+});
+
+describe('go array push onto an element access', () => {
+    test('a native map index receiver is hoisted into a local before AppendToArray', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(market: Dict) {\n" +
+        "        const request: Dict = {};\n" +
+        "        request['base'] = [];\n" +
+        "        request['base'].push (market['baseId']);\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain('AppendToArray(&request["base"]');
+        expect(output).toMatch(/retRes\d+ := request\["base"\]\n\s*AppendToArray\(&retRes\d+, /);
+    });
 });
 
 // gofmt's go/printer/nodes.go controlClause() prints the condition of if/for through
@@ -1204,7 +1917,7 @@ describe('go redundant parentheses', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toMatch(/var a bool =\s+\(x == "delivery"\)/);
         expect(output).toMatch(/var b bool =\s+\(x == "delivery"\)/);
-        expect(output).toMatch(/var c bool =\s+\(IsEqual\(o, "delivery"\)\)/);
+        expect(output).toMatch(/var c bool =\s+\(o == "delivery"\)/);
         expect(output).not.toContain("((x == \"delivery\"");
         expect(output).not.toContain("((IsEqual");
     });
@@ -1215,7 +1928,7 @@ describe('go redundant parentheses', () => {
         "    return a;\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Ternary((x == \"delivery\"), \"yes\", \"no\")");
+        expect(output).toContain("func() any { if (x == \"delivery\") { return \"yes\" }; return \"no\" }()");
         expect(output).not.toContain("Ternary(((x == \"delivery\")");
     });
     test('parentheses that are not redundant stay: call arguments and operand pairs', () => {

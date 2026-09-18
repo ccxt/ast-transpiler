@@ -491,6 +491,10 @@ declare class PhpTranspiler extends BaseTranspiler {
 declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     csharpBooleanReturnTypes: WeakMap<ts.Node, string>;
+    csharpLocalTypes: WeakMap<ts.Node, string>;
+    csharpGuardIndex: WeakMap<ts.Node, Map<string, any[]>>;
+    csharpExpressionTypeResolver?: (node: any) => string | undefined;
+    csharpTypedLocals: WeakMap<ts.Node, string>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -500,16 +504,59 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): void;
+    printElementAccessExpression(node: any, identation: any): any;
+    csharpNativeElementAccess(node: any): string | undefined;
+    csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
+    csharpGuardAdmitsRead(guard: any, read: any): boolean;
+    csharpInGuardsOf(func: any): Map<string, any[]>;
+    csharpLiteralDeclaresKey(node: any, expression: any, key: any, isNumberKey: any): boolean;
+    csharpObjectLiteralDeclaresKey(literal: any, key: any): boolean;
+    csharpReceiverIsDictionaryLike(expression: any, key: any): boolean;
+    csharpReceiverIsRewritten(func: any, expression: any): boolean;
+    csharpHasKeyRemoval(func: any, expression: any, key: any): boolean;
+    csharpGuardIsNegated(guard: any): boolean;
+    csharpAlwaysExits(statement: any): boolean;
+    csharpContains(outer: any, inner: any): boolean;
     printWrappedUnknownThisProperty(node: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
+    csharpEqualityOperandType(node: any): string | undefined;
+    csharpNumericLiteralKind(node: any): string | undefined;
+    csharpDeclaredTypeOfBinding(node: any): string | undefined;
+    csharpValueEqualityKind(csharpType: any): string | undefined;
+    csharpIsNullComparableType(csharpType: any): boolean;
+    csharpOperandIsValueTyped(node: any): boolean;
+    csharpTypeHasValueScalar(type: any): boolean;
+    printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpNullComparison(text: string, isEquality: boolean): string;
+    csharpExpressionTypeOf(node: any): string | undefined;
+    csharpOperandsAreNumbers(node: any): boolean;
+    csharpNativeNumericComparison(node: any, identation: any): string | undefined;
+    csharpNativeReceiver(node: any): {
+        text: string;
+        type: string;
+    } | undefined;
+    csharpTypeIsNative(csharpType: string): boolean;
+    csharpTypedLocalType(node: any): string | undefined;
+    csharpNativeStringKey(key: any): string | undefined;
+    csharpIsDictionaryType(type: any): boolean;
+    csharpIsArrayType(type: any): boolean;
+    csharpNativeInExpression(key: any, obj: any): string | undefined;
+    csharpNativeLengthExpression(expression: any): string | undefined;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     csharpCallReturnType(initializer: any): string | undefined;
+    csharpCalleeResolves(node: any): boolean;
     csharpTypeOfInitializer(initializer: any): string | undefined;
     csharpEnclosingFunction(node: any): any;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
-    csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string): boolean;
+    csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
     getCSharpLocalType(declaration: any): string;
+    csharpIsSafeAccessorCall(initializer: any): boolean;
+    csharpTypeIsList(csharpType: string): boolean;
+    csharpTypeIsStringType(csharpType: string): boolean;
+    csharpIsClassThrowArgument(node: any): boolean;
+    csharpIsDeleteKey(node: any): boolean;
+    csharpIsLeftPlusOperand(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
@@ -560,6 +607,13 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printLengthProperty(node: any, identation: any, name?: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
+    csharpConditionPrintsBool(node: any): boolean;
+    csharpBinaryExpressionPrintsBool(node: any): boolean;
+    csharpIsCheckedBoolean(node: any): boolean;
+    csharpIdentifierPrintsBool(node: any): boolean;
+    csharpCallPrintsBool(node: any): boolean;
+    printCondition(node: any, identation: any): any;
+    csharpConditionParensIfNeeded(node: any, printed: string): string;
     printConditionalExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
@@ -574,6 +628,7 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
     classNameMap: {
         [key: string]: string;
@@ -681,6 +736,19 @@ declare class GoTranspiler extends BaseTranspiler {
     printFunctionType(node: any): any;
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
+    goUnwrapPrintedParens(printedText: string): string;
+    goLocalStaticType(node: any): string | undefined;
+    goStringFieldStaticType(node: any, printedText: string): string | undefined;
+    goOperandStaticType(node: any, printedText: string): string | undefined;
+    goStringCallStaticType(node: any, printedText: string): string | undefined;
+    isNonZeroIntegerLiteral(node: any): boolean;
+    goNativeIntResultType(op: any, leftType: string, rightType: string, rightNode: any): string | undefined;
+    goNativeOperandText(node: any, printedText: string): string;
+    goNativeArithmetic(node: any, leftText?: any, rightText?: any): {
+        goType: string;
+        text: string;
+    } | undefined;
+    goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
@@ -714,13 +782,30 @@ declare class GoTranspiler extends BaseTranspiler {
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     goScalarFamily(node: any): string | undefined;
-    goScalarFamilyOfType(type: any): string | undefined;
+    goScalarFamilyWithNil(node: any): string | undefined;
+    goPrintedCallee(printedValue: string): string | undefined;
+    goIsAnyBoxExpression(node: any, printedText: string): boolean;
+    goScalarFamilyOfType(type: any, allowNil?: boolean): string | undefined;
     goDeclaredTypeCache: Map<any, string>;
     goDeclaredTypeInProgress: Set<any>;
     goDeclaredTypeOfIdentifier(node: any): string | undefined;
     goIsPointerIdentifier(node: any): boolean;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
+    goElementAssignmentContainerType(node: any, printedText: string): string | undefined;
+    goIsStringKeyExpression(node: any): boolean;
+    goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
+    goLocalIsRebound(scope: any, nameNode: any): boolean;
+    goRebindingTargetOf(identifier: any): any;
+    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string): string | undefined;
+    goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
+    sliceLengthTypes: string[];
+    printInlineArrayLength(expression: any, printedText: string): string | undefined;
+    printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined;
+    printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
+    comparisonHelpers: string[];
+    printInlineOpNeg(node: any, printedText: string): string | undefined;
     printInlineTruthy(node: any): string | undefined;
+    goNativeCondition(node: any): string | undefined;
     goControlClauseParens(node: any, expression: string): string;
     goEnclosedExpression(text: string): string | undefined;
     goIsControlClauseCondition(node: any): boolean;
@@ -736,6 +821,12 @@ declare class GoTranspiler extends BaseTranspiler {
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goOperandNumericKind(node: any, printedText: string): string | undefined;
+    goLiteralTypedLocalKind(node: any): string | undefined;
+    goNumericLiteralKind(node: any): string | undefined;
+    goLiteralFitsKind(node: any, kind: string): boolean;
+    goComparisonKind(left: any, leftKind: string, right: any, rightKind: string): string | undefined;
+    printInlineOrderedComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     printParenthesizedExpression(node: any, identation: any): string;
     goIsParenthesizedExpression(printed: string): boolean;
     goSkipGoLiteral(text: string, start: number): number;
@@ -838,6 +929,11 @@ declare class GoTranspiler extends BaseTranspiler {
      * calls.  This removes the root cause of the unbalanced-parenthesis bug
      * without any post-processing or regex hacks.
      */
+    goIndexableTypeOf(node: any, printed: string): string | undefined;
+    goElementAccessChain(containerStr: string, keyStrs: string[]): string;
+    goKeyIsString(node: any, printed: string): boolean;
+    isGoThisPropertyAccessExpression(node: any): boolean;
+    isGoElementAccessAssignmentTarget(node: any): boolean;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: ts.Node): boolean;
     /**
@@ -855,6 +951,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printArgsForCallExpression(node: any, identation: any): string;
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
+    javaBooleanOperators: ts.SyntaxKind[];
     usageToFinalName: WeakMap<ts.Node, string>;
     finalVarScopeStack: Array<Set<string>>;
     finalVarMutations: Array<{
@@ -883,7 +980,35 @@ declare class JavaTranspiler extends BaseTranspiler {
     getVarMethodIfAny(node: any): string;
     getVarClassIfAny(node: any): string;
     getVarKey(node: any): string;
+    equalityOperandFamily(type: any): string | undefined;
+    isNullishLiteral(node: any): boolean;
+    printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
+    elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
+    isDictionaryType(node: any): boolean;
+    isDictionaryTsType(type: any, checker: any, depth: number): boolean;
+    javaIntegerLiteralKind(node: any): "int" | "long";
+    isVarargsArrayReference(node: any, depth?: number): any;
+    isJavaListType(type: any): boolean;
+    javaLengthKind(expression: any): "List" | "String";
+    printJavaLength(expression: any, leftSide: any): string;
+    isJavaPrimitiveForCounter(node: any): boolean;
+    javaPrimitiveOperandKind(node: any): "int" | "long";
+    isJavaMapType(type: any): boolean;
+    isJavaStringType(type: any): any;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    isJavaMapStructureType(type: any): boolean;
+    isJavaListStructureType(type: any): boolean;
+    tupleRequiredElementCount(type: any): number;
+    isLeftSideOfAssignment(node: any): boolean;
+    printCheckerTypedElementAccessRead(node: any): string;
+    printElementAccessExpression(node: any, identation: any): any;
+    javaScalarFamily(node: any): string | undefined;
+    javaProvableString(node: any): boolean;
+    javaNativeConcat(node: any): boolean;
+    javaProvableNumericKind(node: any): string | undefined;
+    javaNativeArithmeticKind(node: any): string | undefined;
+    javaPrintOperandAsLong(node: any, text: any): any;
+    printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
     collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;
@@ -911,6 +1036,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
+    printOptionalArgInit(paramName: any, index: any, initializer: any): string;
+    isPureInitializer(node: any): any;
     printFunctionBody(node: any, identation: any): string;
     printBlock(node: any, identation: any, chainBlock?: boolean): string;
     printInstanceOfExpression(node: any, identation: any): string;
@@ -953,13 +1080,18 @@ declare class JavaTranspiler extends BaseTranspiler {
     printAssertCall(_node: any, _identation: any, parsedArgs: any): string;
     printSliceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
-    printReplaceAllCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    stringLiteralArgument(argument: any): string;
+    sideEffectFreeReceiver(expression: any): any;
     printPadEndCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadStartCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(_node: any, _identation: any): string;
     printLengthProperty(node: any, _identation: any, _name?: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
     printPrefixUnaryExpression(node: any, identation: any): any;
+    javaBooleanCondition(node: any): any;
+    javaConditionPrintsBoolean(node: any): boolean;
+    printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;
     printDeleteExpression(node: any, _identation: any): string;
     printThrowStatement(node: any, identation: any): string;
@@ -982,17 +1114,54 @@ declare class RustTranspiler extends BaseTranspiler {
     constructor(config?: {});
     initConfig(): void;
     capitalize(str: string): string;
+    quotedStringLiteral(text: string): string;
     printStringLiteral(node: any): any;
     printNumericLiteral(node: any): string;
     printBooleanLiteral(node: any): "Value::Bool(true)" | "Value::Bool(false)";
     printNullKeyword(node: any, identation: any): string;
+    private static readonly BOOL_PRODUCING_OPERATORS;
+    private static readonly BOOL_PRODUCING_CALLS;
+    private static readonly PAYLOAD_ACCESSORS;
+    primitiveKindOfType(type: any): string;
+    literalKindOfNode(node: any): string;
+    printsValueExpression(node: any): boolean;
+    callExpressionName(node: any): string;
+    stringLiteralCoercesToNumber(node: any): boolean;
+    numericLiteralF64Text(node: any): string;
+    printNativeEqualityComparison(left: any, right: any, op: any): string;
+    typeOfNodeIfAny(node: ts.Node): ts.Type | undefined;
+    isValueLengthType(type: ts.Type | undefined): boolean;
+    printArrayLength(node: any, identation: any, leftExpr?: any): string;
+    isDictShapedType(type: ts.Type | undefined): boolean;
+    printNativeInOperator(key: any, obj: any): string;
+    foldNegateLiteral(operandText: string): string | undefined;
     ensureRef(expr: string): string;
+    isNumberTyped(node: any): boolean;
+    isBooleanPosition(node: any): boolean;
+    printNativeNumericComparison(node: any, operator: any, leftText: any, rightText: any): string;
+    isNumberLikeType(type: any): boolean;
+    isStringLikeType(type: any): boolean;
+    printNativeAssignmentArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
+    printNativeArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
+    printNativeStringConcat(leftText: string, rightText: string): string;
+    printNativeNumeric(op: any, leftText: string, rightText: string): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
     printDateNowCall(node: any, identation: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
+    private static readonly RUST_BOOL_RESULT_HELPERS;
+    peelValueBoolBox(printedValue: string): string | undefined;
+    stripOuterParens(printedValue: string): string;
+    printedBoolHelperCall(printedValue: string): boolean;
+    rustNodeIsBoolExpression(node: any): boolean;
+    rustTypeIsBoolean(node: any): boolean;
+    rustEnclosingFunction(node: any): any;
+    rustBindsName(node: any, name: string): boolean;
+    rustIdentifierUseIsCondition(node: any): boolean;
+    rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
+    getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
     printPropertyDeclaration(node: any, identation: any): string;
     getStructFields(node: any): Array<{
         name: string;
@@ -1011,20 +1180,64 @@ declare class RustTranspiler extends BaseTranspiler {
     printThisKeyword(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): any;
     printPropertyAccessExpression(node: any, identation: any): any;
+    /** Methods whose Rust counterpart takes `&mut self`: a `self.<field>` read in
+     *  their args must keep the `get_value(...)` shape the ccxt post-pass hoists. */
+    static readonly MUT_SELF_METHODS: Set<string>;
+    toSnakeCaseName(name: string): string;
+    escapeRustStringLiteral(text: string): string;
+    getCheckedTypeOf(node: any): ts.Type | undefined;
+    typeSymbolOf(type: ts.Type): ts.Symbol | undefined;
+    /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
+     *  backed by a plain `Value` map in the rust port. */
+    isLibDeclaredType(type: ts.Type): boolean;
+    isClassInstanceType(type: ts.Type): boolean;
+    hasCallableShape(type: ts.Type): boolean;
+    isProvenListType(type: ts.Type): boolean;
+    /** True only for object types the rust port represents as `Value::Dict`
+     *  (plain interfaces / index-signature / literal types — never classes). */
+    isProvenMapType(type: ts.Type): boolean;
+    isProvenMapExpression(node: ts.Node): boolean;
+    isProvenListExpression(node: ts.Node): boolean;
+    /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
+    printNativeListIndex(receiverText: string, index: number): string;
+    /** Native read for one chain level, or undefined to keep `get_value`. */
+    printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
+    printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
+    isNodeInsideNode(node: ts.Node, container: ts.Node): boolean;
+    /** Root place of an access chain (`x` for `x['a']['b']`, `this.balance` for
+     *  `this.balance['usdt']`), or undefined for a temporary. */
+    rootPlaceText(node: ts.Node): string | undefined;
+    /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
+     *  matching their text; the native form is invisible to them, so it is only
+     *  emitted where no such hoist is needed. */
+    isNativeAccessPositionSafe(node: ts.Node): boolean;
+    /** Receiver shapes whose printed text is a single `Value` place (`x`, `this.x`). */
+    isShallowValueReceiver(node: ts.Node): boolean;
     transformPropertyAcessExpressionIfNeeded(node: any): string;
+    staticKeyLookup(node: any, container: any): string | undefined;
     printElementAccessExpression(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
     private static readonly COMPARISON_OPS;
+    private static readonly NATIVE_COMPARISON_OPERATORS;
     printCondition(node: any, identation: any): any;
+    printComparisonInBooleanContext(node: any, identation: any): string;
+    nativeEqualityText(node: any): string;
+    unwrapParens(node: any): any;
+    hasNativeComparisonOperand(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
+    printNativeIncrement(op: any, operand: any, operandText: string): string | undefined;
     printPrefixUnaryExpression(node: any, identation: any): any;
     printObjectLiteralExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printConditionalExpression(node: any, identation: any): string;
+    private static readonly BOOL_VALUE_PREFIXES;
+    private static isBoolValueExpression;
+    printTernaryArm(node: any, identation?: number): string;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;

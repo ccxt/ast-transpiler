@@ -1004,10 +1004,10 @@ describe('java transpiling tests', () => {
         const output = transpiler.transpileJava(input).content;
         // All values referencing type must use finalType (check each put's value part)
         expect(output).toContain('put( "type", finalType )');
-        expect(output).toContain('Helpers.isEqual(finalType, "spot")');
+        expect(output).toContain('java.util.Objects.equals(finalType, "spot")');
         // finalType must appear in ternary expressions too (not raw 'type')
-        expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? true/);
-        expect(output).toMatch(/Helpers\.isEqual\(finalType, "swap"\).*\? false/);
+        expect(output).toMatch(/java\.util\.Objects\.equals\(finalType, "swap"\).*\? true/);
+        expect(output).toMatch(/java\.util\.Objects\.equals\(finalType, "swap"\).*\? false/);
     });
 
     // --- Bug: PrefixUnaryExpression not handled for final var replacement ---
@@ -1573,7 +1573,7 @@ describe('java transpiling tests', () => {
         expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
         // Snapshot must be in the same branch as the reassignment.
         const branchPattern =
-            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*return\b/g;
+            /rawHash = [^;]*;\s*final Object finalRawHash\w* = rawHash;\s*return\b/g;
         expect((output.match(branchPattern) || []).length).toBe(2);
         // No method-scope snapshot before the if/else (which would capture null).
         expect(output).not.toMatch(/final Object finalRawHash\w* = rawHash;\s*if\s*\(/);
@@ -2035,7 +2035,7 @@ describe('java transpiling tests', () => {
         expect((output.match(/final Object finalRawHash\w* = rawHash;/g) || []).length).toBe(2);
         // The snapshot must come AFTER the corresponding reassignment in each branch.
         const branchPattern =
-            /rawHash = Helpers\.add\([^;]*\);\s*final Object finalRawHash\w* = rawHash;\s*request = new java\.util\.HashMap/g;
+            /rawHash = [^;]*;\s*final Object finalRawHash\w* = rawHash;\s*request = new java\.util\.HashMap/g;
         expect((output.match(branchPattern) || []).length).toBe(2);
         // Must NOT emit a method-scope snapshot before the if/else
         // (which the pre-fix output did, capturing the null seed value).
@@ -2441,5 +2441,867 @@ describe('java asyncSupplier option', () => {
         expect(output).not.toContain("VIRTUAL_EXECUTOR");
         expect(output).toContain("return null;");
         expect((output.match(/^        \}\);$/gm) || []).length).toBe(2);
+    });
+});
+
+describe('java boolean conditions emitted without the Helpers.isTrue wrapper', () => {
+    const conditionOf = (body: string, signature = 'test(x: any): void') => {
+        const input =
+        "class T {\n" +
+        "    " + signature + " {\n" +
+        body +
+        "    }\n" +
+        "}"
+        return transpiler.transpileJava(input).content;
+    };
+
+    test('comparison conditions print the comparison helper alone', () => {
+        expect(conditionOf("        if (x === 1) { return; }\n")).toContain("if (Helpers.isEqual(x, 1))");
+        // the null literal is native equality (d2): Objects.equals(x, null) is the identity test
+        // Helpers.isEqual(x, null) performs, and the boolean needs no isTrue wrapper (d1)
+        const notNull = conditionOf("        if (x !== null) { return; }\n");
+        expect(notNull).toContain("if (!java.util.Objects.equals(x, null))");
+        expect(notNull).not.toContain("Helpers.isTrue(");
+        expect(conditionOf("        if (x == 1) { return; }\n")).toContain("if (Helpers.isEqual(x, 1))");
+        expect(conditionOf("        if (x != null) { return; }\n"))
+            .toContain("if (!java.util.Objects.equals(x, null))");
+    });
+
+    test('relational conditions print the comparison helper alone', () => {
+        expect(conditionOf("        if (x > 1) { return; }\n")).toContain("if (Helpers.isGreaterThan(x, 1))");
+        expect(conditionOf("        if (x >= 1) { return; }\n")).toContain("if (Helpers.isGreaterThanOrEqual(x, 1))");
+        expect(conditionOf("        if (x < 1) { return; }\n")).toContain("if (Helpers.isLessThan(x, 1))");
+        expect(conditionOf("        if (x <= 1) { return; }\n")).toContain("if (Helpers.isLessThanOrEqual(x, 1))");
+    });
+
+    test('while and ternary conditions are unwrapped too', () => {
+        const loop = conditionOf("        while (x > 1) { x = 2; }\n");
+        expect(loop).toContain("while (Helpers.isGreaterThan(x, 1))");
+        const ternary = conditionOf("        return (x === 1) ? \"y\" : \"n\";\n", 'test(x: any): string');
+        expect(ternary).toContain("(Helpers.isEqual(x, 1))");
+        expect(ternary).not.toContain("Helpers.isTrue(");
+    });
+
+    test('typeof guards and instanceof print native/helper checks without the wrapper', () => {
+        const typeofGuard = conditionOf("        if (typeof x === 'string') { return; }\n");
+        expect(typeofGuard).toContain("if ((x instanceof String))");
+        expect(typeofGuard).not.toContain("Helpers.isTrue(");
+        const instance = conditionOf("        if (x instanceof Error) { return; }\n");
+        expect(instance).toContain("if (Helpers.isInstance(x, Error.class))");
+    });
+
+    test('the `in` operator condition prints Helpers.inOp without the wrapper', () => {
+        const output = conditionOf("        if (x in this.options) { return; }\n");
+        expect(output).toContain("if (Helpers.inOp(this.options, x))");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('logical operators of boolean conditions print native, no wrapper anywhere', () => {
+        const and = conditionOf("        if (x === 1 && x !== 2) { return; }\n");
+        expect(and).toContain("if (Helpers.isEqual(x, 1) && !Helpers.isEqual(x, 2))");
+        expect(and).not.toContain("Helpers.isTrue(");
+        const or = conditionOf("        if (x === 1 || x !== 2) { return; }\n");
+        expect(or).toContain("if (Helpers.isEqual(x, 1) || !Helpers.isEqual(x, 2))");
+        expect(or).not.toContain("Helpers.isTrue(");
+    });
+
+    test('negated boolean conditions drop the wrapper but keep the operator', () => {
+        const output = conditionOf("        if (!(x === 1)) { return; }\n");
+        expect(output).toContain("if (!(Helpers.isEqual(x, 1)))");
+        expect(output).not.toContain("Helpers.isTrue(");
+    });
+
+    test('non-boolean conditions keep the falsy helper', () => {
+        // a string / any condition still needs the runtime truthiness test
+        expect(conditionOf("        if (x) { return; }\n", 'test(x: string): void'))
+            .toContain("if (Helpers.isTrue(x))");
+        expect(conditionOf("        if (x) { return; }\n")).toContain("if (Helpers.isTrue(x))");
+        // `boolean | undefined` is not proven boolean - the helper must stay
+        expect(conditionOf("        if (x) { return; }\n", 'test(x: boolean | undefined): void'))
+            .toContain("if (Helpers.isTrue(x))");
+        // negation of a non-boolean keeps the helper inside the `!`
+        expect(conditionOf("        if (!x) { return; }\n", 'test(x: string): void'))
+            .toContain("if (!Helpers.isTrue(x))");
+    });
+
+    test('logical operators over non-boolean operands keep the wrapper', () => {
+        const output = conditionOf("        if (x && x) { return; }\n", 'test(x: string): void');
+        expect(output).toContain("if (Helpers.isTrue(Helpers.isTrue(x) && Helpers.isTrue(x)))");
+    });
+
+    test('comparison operands inside a logical expression are unwrapped individually', () => {
+        const output = conditionOf("        if (x && x === 1) { return; }\n", 'test(x: string): void');
+        // the string operand prints native equality (d2); the comparison is still unwrapped on
+        // its own - only the non-boolean `x` operand keeps an isTrue inside the &&
+        expect(output).toContain("Helpers.isTrue(x) && java.util.Objects.equals(x, 1)");
+        expect(output).not.toContain("Helpers.isTrue(java.util.Objects.equals(");
+    });
+});
+
+describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
+    test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
+        const input =
+        "function f (x: string, s: string | undefined, o: any) {\n" +
+        "    const a = x === 'delivery';\n" +
+        "    const b = x !== 'delivery';\n" +
+        "    const c = s === x;\n" +
+        "    const d = o === 'delivery';\n" +
+        "    const e = o !== 'delivery';\n" +
+        "    return [ a, b, c, d, e ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('java.util.Objects.equals(x, "delivery")');
+        expect(output).toContain('!java.util.Objects.equals(x, "delivery")');
+        // string | undefined folds into the string family
+        expect(output).toContain("java.util.Objects.equals(s, x)");
+        // an untyped operand still compares natively once the other side is a string
+        expect(output).toContain('java.util.Objects.equals(o, "delivery")');
+        expect(output).toContain('!java.util.Objects.equals(o, "delivery")');
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('undefined/null literals compare natively against any operand type', () => {
+        const input =
+        "function f (o: any, n: number) {\n" +
+        "    const a = o === undefined;\n" +
+        "    const b = o !== undefined;\n" +
+        "    const c = n === undefined;\n" +
+        "    const d = o === null;\n" +
+        "    return [ a, b, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Objects.equals(o, null)");
+        expect(output).toContain("!java.util.Objects.equals(o, null)");
+        expect(output).toContain("java.util.Objects.equals(n, null)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('boolean operands compare natively', () => {
+        const input =
+        "function f (b: boolean, o: any) {\n" +
+        "    const a = b === true;\n" +
+        "    const c = o === true;\n" +
+        "    const d = b !== o;\n" +
+        "    return [ a, c, d ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Objects.equals(b, true)");
+        expect(output).toContain("java.util.Objects.equals(o, true)");
+        expect(output).toContain("!java.util.Objects.equals(b, o)");
+        expect(output).not.toContain("Helpers.isEqual");
+    });
+
+    test('numeric and unproven pairs keep Helpers.isEqual', () => {
+        const input =
+        "function f (n: number, o: any) {\n" +
+        "    const a = n === 1;\n" +
+        "    const b = n === n;\n" +
+        "    const e = o === o;\n" +
+        "    const g = 1 === 2;\n" +
+        "    return [ a, b, e, g ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isEqual(n, 1)");
+        expect(output).toContain("Helpers.isEqual(n, n)");
+        expect(output).toContain("Helpers.isEqual(o, o)");
+        expect(output).toContain("Helpers.isEqual(1, 2)");
+        expect(output).not.toContain("java.util.Objects.equals");
+    });
+});
+
+describe('checker-typed element access: Helpers.GetValue -> native Map/List access', () => {
+    // the Java runtime holds every dict-shaped value as a Map<String, Object> (raw HashMap or a
+    // types.TypedMap view) and every tuple as List<Object>, so a read the checker proves to be a
+    // dict/tuple with a literal key prints the native accessor instead of the helper. `any`,
+    // unions, strings, nullable values, non-tuple arrays and non-literal keys keep the helper.
+    test('dict-typed container with a string literal key goes native', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D): void {\n" +
+        "        const a = d['k'];\n" +
+        "        const b = d['price'];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)d).get("k")');
+        expect(output).toContain('((java.util.Map<String, Object>)d).get("price")');
+        expect(output).not.toContain('Helpers.GetValue(d,');
+    });
+
+    test('non-literal keys keep the helper', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D, k: string): void {\n" +
+        "        const a = d[k];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(d, k)");
+        expect(output).not.toContain("((java.util.Map<String, Object>)d).get(k)");
+    });
+
+    test('any-typed containers keep the helper (nothing is proven)', () => {
+        const input =
+        "class T {\n" +
+        "    test(p: any): void {\n" +
+        "        const a = p['k'];\n" +
+        "        const b = p[0];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(p, "k")');
+        expect(output).toContain("Helpers.GetValue(p, 0)");
+    });
+
+    test('string containers keep the helper (index access yields a char)', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const a = s['abc'];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(s, "abc")');
+    });
+
+    test('nullable containers keep the helper (a null container must stay null)', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D | undefined): void {\n" +
+        "        const a = d['k'];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(d, "k")');
+    });
+
+    test('tuple reads go native inside the required elements and keep the helper outside', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(tup: [any, D]): void {\n" +
+        "        const a = tup[1];\n" +
+        "        const b = tup[4];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.List<Object>)tup).get(1)");
+        expect(output).toContain("Helpers.GetValue(tup, 4)");
+    });
+
+    test('non-tuple array reads keep the helper (get() would throw out of range)', () => {
+        const input =
+        "class T {\n" +
+        "    test(arr: number[], symbols: string[]): void {\n" +
+        "        const a = arr[0];\n" +
+        "        const b = symbols[1];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(arr, 0)");
+        expect(output).toContain("Helpers.GetValue(symbols, 1)");
+    });
+
+    test('element writes keep the base emission (only reads go native)', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D, arr: number[]): void {\n" +
+        "        d['x'] = 1;\n" +
+        "        d['x'] += 1;\n" +
+        "        arr[0] = 5;\n" +
+        "        this.something(d, arr);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // d6: a string-literal write into a checker-proven dictionary is a native Map.put
+        expect(output).toContain('((java.util.Map<String, Object>)d).put("x", 1)');
+        expect(output).not.toContain('Helpers.addElementToObject(d, "x"');
+        // the array target keeps the helper (index append-at-size is not provable)
+        expect(output).toContain("Helpers.addElementToObject(arr, 0, 5)");
+        expect(output).toContain('((java.util.HashMap<String, Object>)d).get("x") = Helpers.add(');
+    });
+
+    test('comparison operators are reads, not writes (regression: !== is not an assignment)', () => {
+        const input =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    test(d: D): void {\n" +
+        "        if (d['k'] !== undefined && d['k'] !== false) {\n" +
+        "            this.something(d);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // both the read (d3) and the comparison on literal operands (d2) are native now; the
+        // comparison must stay a comparison - nothing here is a write
+        expect(output).toContain('!java.util.Objects.equals(((java.util.Map<String, Object>)d).get("k"), null)');
+        expect(output).not.toContain('.put(');
+        expect(output).not.toContain('!Helpers.isEqual(Helpers.GetValue(d, "k"), null)');
+    });
+});
+
+describe('java helper-family inlining (+ - * / += -=)', () => {
+    test('string + string with one statically-String operand prints a native concat', () => {
+        const input =
+        "class T {\n" +
+        "    f(b: string): void {\n" +
+        "        const x = \"a\" + b;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = ("a" + b);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('nested concat chain inlines every link', () => {
+        const input =
+        "class T {\n" +
+        "    f(b: string): void {\n" +
+        "        const x = (\"a\" + b) + \"c\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = ((("a" + b)) + "c");');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('+= with a string literal prints a native concat assignment', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        let s = \"x\";\n" +
+        "        s += \"y\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('s = (s + "y");');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('integer literals print native long arithmetic, / prints double division', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const x = 2 * 3;\n" +
+        "        const w = 7 + 1;\n" +
+        "        const y = 10 / 4;\n" +
+        "        const q = (2 * 3) * 4;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (2L * 3L);');
+        expect(output).toContain('Object w = (7L + 1L);');
+        expect(output).toContain('Object y = (((double) 10) / ((double) 4));');
+        expect(output).toContain('Object q = (((2L * 3L)) * 4L);');
+        expect(output).not.toContain('Helpers.multiply(');
+        expect(output).not.toContain('Helpers.divide(');
+    });
+
+    test('mixed literal kinds and non-literal numbers keep the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: number, b: number): void {\n" +
+        "        const z = 1.5 * 2;\n" +
+        "        const x = a + b;\n" +
+        "        const y = a * 3;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object z = Helpers.multiply(1.5, 2);');
+        expect(output).toContain('Object x = Helpers.add(a, b);');
+        expect(output).toContain('Object y = Helpers.multiply(a, 3);');
+    });
+
+    test('string-typed call operands do not anchor a concat (Java declares them Object)', () => {
+        const input =
+        "class T {\n" +
+        "    host(path: string): string { return path; }\n" +
+        "    f(a: string): void {\n" +
+        "        const x = this.host(a) + this.host(a);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.add(this.host(a), this.host(a))');
+    });
+
+    test('nullable aliases keep the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: Str, b: Str, n: Num): void {\n" +
+        "        const x = a + b;\n" +
+        "        const y = n + 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.add(a, b);');
+        expect(output).toContain('Object y = Helpers.add(n, 1);');
+    });
+});
+
+describe('java optional parameter unpacking', () => {
+    test('literal defaults unpack natively from optionalArgs (no Helpers.getArg)', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, symbol = undefined) {\n" +
+        "        return symbol;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("public Object m(Object arg, Object... optionalArgs)");
+        expect(output).toContain("Object symbol = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+
+    test('every literal default shape keeps its index and its default value', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, a = 1, b = true, c = 'x', d = {}, e = []) {\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1;");
+        expect(output).toContain("Object b = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true;");
+        expect(output).toContain("Object c = optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\";");
+        expect(output).toContain("Object d = optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}};");
+        expect(output).toContain("Object e = optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList());");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+
+    test('every native unpack is null-guarded, like the helper it replaces', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, params = {}) {\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // a caller passing a bare trailing null supplies a null varargs array; the
+        // guard keeps that reading like an empty one instead of throwing NPE
+        expect(output).not.toMatch(/= optionalArgs\.length/);
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 0");
+    });
+
+    test('defaults that are not pure literals keep Helpers.getArg', () => {
+        const input =
+        "class T {\n" +
+        "    m(arg, params = this.something(arg), other = someVar) {\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg }));");
+        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar);");
+        expect(output).not.toContain("optionalArgs.length >");
+    });
+
+    test('async method unpacks natively inside the supplyAsync lambda', () => {
+        const input =
+        "class T {\n" +
+        "    async m(arg, params = {}) {\n" +
+        "        return this.something(params);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("            Object parameters = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}};");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+
+    test('constructor optional parameters unpack natively', () => {
+        const input =
+        "class T {\n" +
+        "    constructor(a, b = 1) {\n" +
+        "        this.b = b;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("T(Object a, Object... optionalArgs)");
+        expect(output).toContain("Object b = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1;");
+        expect(output).not.toContain("Helpers.getArg");
+    });
+});
+
+// `obj[key] = value` prints the runtime helper by default; the native Map.put is
+// printed only when the checker proves the target is a TS dictionary, the key is a
+// string literal and the receiver is not a shared field map.
+describe('java element-access write: native Map.put for proven dictionaries', () => {
+    const put = '((java.util.Map<String, Object>)request).put("symbol", "BTC/USDT")';
+
+    test('dictionary-typed local with a string-literal key prints Map.put', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[\"symbol\"] = \"BTC/USDT\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain(put);
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('dictionary-typed parameter with a string-literal key prints Map.put', () => {
+        const input =
+        "class T {\n" +
+        "    test(request: { [key: string]: any }): void {\n" +
+        "        request[\"symbol\"] = \"BTC/USDT\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain(put);
+        expect(output).not.toContain("addElementToObject");
+    });
+
+    test('shared field map keeps the helper (ConcurrentHashMap null-removal + monitor)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        this.options[\"sandboxMode\"] = true;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(this.options, "sandboxMode", true)');
+        expect(output).not.toContain(".put(");
+    });
+
+    test('non-literal key keeps the helper (the key prints as Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(code: string): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[code] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(request, code, 1)");
+    });
+
+    test('element read as key keeps the helper (GetValue returns Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(market: { [key: string]: any }): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[market[\"id\"]] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // the key is a plain read, so the d3 rule rewrites it; the write stays the helper
+        // because the key is not a string literal
+        expect(output).toContain('Helpers.addElementToObject(request, ((java.util.Map<String, Object>)market).get("id"), 1)');
+        expect(output).not.toContain("Helpers.GetValue(");
+    });
+
+    test('array target keeps the helper (index append-at-size is not provable)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const arr: any[] = [];\n" +
+        "        arr[0] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(arr, 0, 1)");
+        expect(output).not.toContain(".set(");
+    });
+
+    test('any-typed target keeps the helper (no proof)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x: any = {};\n" +
+        "        x[\"k\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(x, "k", 1)');
+    });
+
+    test('non-dictionary interface target keeps the helper', () => {
+        const input =
+        "interface Foo { a: number; }\n" +
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x: Foo = { a: 1 };\n" +
+        "        x[\"a\"] = 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(x, "a", 2)');
+    });
+
+    test('numeric key on a dictionary keeps the helper (Map.put takes a String key)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const request: { [key: string]: any } = {};\n" +
+        "        request[0] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(request, 0, 1)");
+    });
+
+    test('nested dictionary write prints the native put on the inner map', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const features: { [key: string]: { [key: string]: any } } = {};\n" +
+        "        features[\"spot\"][\"limit\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)Helpers.GetValue(features, "spot")).put("limit", 1)');
+    });
+});
+
+describe('helper removal: native comparison / containsKey / size', () => {
+    test('checker-proven array length prints List.size() instead of the runtime helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: number[]): void {\n" +
+        "        const n = xs.length;\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.List<?>)xs).size()");
+        expect(output).not.toContain("Helpers.getArrayLength");
+    });
+
+    test('unproven (any) receiver keeps the length helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(x: any): void {\n" +
+        "        const n = x.length;\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArrayLength(x)");
+    });
+
+    test('rest parameter (varargs array, not a List) keeps the length helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(...args: any[]): void {\n" +
+        "        const n = args.length;\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getArrayLength(args)");
+    });
+
+    test('for-loop counter with an integer-literal initializer compares natively', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: number[]): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("for (var i = 0; i < ((java.util.List<?>)xs).size(); i++)");
+        expect(output).not.toContain("Helpers.isLessThan");
+    });
+
+    test('while-loop counter (Object-typed local, not a for-counter) keeps the comparison helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: number[]): void {\n" +
+        "        let i = 0;\n" +
+        "        while (i < xs.length) {\n" +
+        "            i++;\n" +
+        "        }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("while (Helpers.isLessThan(i, ((java.util.List<?>)xs).size()))");
+    });
+
+    test('Object operands keep the comparison helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: number, b: number): void {\n" +
+        "        if (a < b) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.isLessThan(a, b)");
+    });
+
+    test('string length stays a native int inside a comparison', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        if (s.length > 3) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)s).length() > 3");
+        expect(output).not.toContain("Helpers.isGreaterThan");
+    });
+
+    test('checker-proven object receiver prints Map.containsKey', () => {
+        const input =
+        "interface Cfg { [key: string]: number; }\n" +
+        "class T {\n" +
+        "    f(c: Cfg, k: string): void {\n" +
+        "        if (k in c) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)c).containsKey(k)");
+        expect(output).not.toContain("Helpers.inOp");
+    });
+
+    test('string-literal-union key prints Map.containsKey', () => {
+        const input =
+        "interface Cfg { [key: string]: number; }\n" +
+        "class T {\n" +
+        "    f(c: Cfg, k: 'a' | 'b'): void {\n" +
+        "        if (k in c) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)c).containsKey(k)");
+    });
+
+    test('array receiver of `in` keeps the membership helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(arr: number[], k: string): void {\n" +
+        "        if (k in arr) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(arr, k)");
+    });
+
+    test('any-typed receiver of `in` keeps the membership helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(c: any, k: string): void {\n" +
+        "        if (k in c) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(c, k)");
+    });
+
+    test('unproven nested receiver keeps the membership helper', () => {
+        const input =
+        "interface Cfg { [key: string]: number; }\n" +
+        "interface Outer { [key: string]: Cfg; }\n" +
+        "class T {\n" +
+        "    f(o: Outer, k: string, j: string): void {\n" +
+        "        if (j in o[k]) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)Helpers.GetValue(o, k)).containsKey(j)");
+    });
+});
+
+describe('java replaceAll native emission', () => {
+    // Literal pattern and replacement on a side-effect-free receiver: the helper's null /
+    // empty-pattern guards cannot fire, so the call is emitted as a native String.replace
+    // with a null-safe receiver read.
+    test('literal pattern and replacement emit String.replace with a null guard', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.replaceAll(\"-\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(x == null ? null : ((String)x).replace(\"-\", \"+\"))");
+        expect(output).not.toContain("Helpers.replaceAll");
+    });
+
+    test('a property receiver stays native (no call in the read)', () => {
+        const input =
+        "class T {\n" +
+        "    m = \"a-b\";\n" +
+        "    test(): void {\n" +
+        "        const y = this.m.replaceAll(\"-\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(this.m == null ? null : ((String)this.m).replace(\"-\", \"+\"))");
+    });
+
+    // Fallbacks: every shape the native rule cannot prove keeps the runtime helper.
+    test('a non-literal pattern keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(p: string): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.replaceAll(p, \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.replaceAll((String)x, (String)p, (String)\"+\")");
+    });
+
+    test('the empty literal pattern keeps the helper (helper is a no-op there)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.replaceAll(\"\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.replaceAll((String)x, (String)\"\", (String)\"+\")");
+    });
+
+    test('a call receiver keeps the helper (single evaluation of the receiver)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = \"a-b-c\";\n" +
+        "        const y = x.toLowerCase().replaceAll(\"-\", \"+\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 });

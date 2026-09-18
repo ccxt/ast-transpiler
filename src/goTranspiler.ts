@@ -71,6 +71,9 @@ const parserConfig = {
 // refines what the Go compiler knows about it.
 const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'GetArrayLength': 'int',
+    'GetLength': 'int',
+    // the printInlineArrayLength emission of `.length` on a slice
+    'len': 'int',
     'GetIndexOf': 'int',
     'ToString': 'string',
     'ToLower': 'string',
@@ -148,6 +151,12 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'this.SafeFloat': '*float64',
     'this.SafeFloat2': '*float64',
     'this.SafeFloatN': '*float64',
+    // absent flag → nil pointer, present flag → its value, mirroring the string/number accessors
+    'this.SafeBool': '*bool',
+    'this.SafeBool2': '*bool',
+    'this.SafeBoolN': '*bool',
+    // SafeDict*/SafeList* stay untyped: the Go accessors return `any` because the value
+    // may be a *sync.Map, a Dict or an order-book side, none of which is a map[string]any / []any
     // Precise arithmetic returns a numeric string, or nil when an operand is
     // absent, so it carries the same *string shape as the Safe* string accessors
     'Precise.StringMul': '*string',
@@ -162,11 +171,57 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'Precise.StringMod': '*string',
 };
 
-// helpers whose Go signature is `any` (GetValue, Ternary, Add, ...) are
+// helpers whose Go signature is `any` (GetValue, Ternary, Add, SafeValue, ...) are
 // deliberately absent above: their box holds a value the printer cannot name, so
-// those locals stay `any`.
+// those locals stay `any`. A Safe* entry presupposes the matching Go accessor
+// returns that shape (as the hand-written base already does for Str/Int/Float).
+
+// Hand-written CCXT fields whose Go type is a plain `bool` (go/v4/exchange.go,
+// struct BaseExchange, embedded by every derived exchange). Reading one already
+// yields a Go bool, so a condition on it needs no truthiness helper at all.
+const GO_BOOL_FIELDS = new Set([
+    'this.Verbose',
+    'this.EnableRateLimit',
+    'this.ReduceFees',
+    'this.SubstituteCommonCurrencyCodes',
+    'this.IsSandboxModeEnabled',
+]);
+// A printed call the printer cannot type *and* whose Go signature returns `any`
+// can be compared with nil / a string / a bool literal without the helper: the
+// box holds a scalar or nil, never a typed pointer.
+const GO_ANY_BOX_CALLS = [
+    'GetValue', 'Ternary',
+    'SafeValue', 'this.SafeValue',
+    'SafeDict', 'this.SafeDict',
+    'SafeList', 'this.SafeList',
+    'SafeNumber', 'this.SafeNumber',
+];
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
+
+// the Go numeric kinds. `<` `>` `<=` `>=` compile without a conversion only when
+// both operands carry the same one of these
+const GO_NUMERIC_KINDS = [ 'int', 'int64', 'float64' ];
+
+const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
+    [ts.SyntaxKind.GreaterThanToken]: '>',
+    [ts.SyntaxKind.GreaterThanEqualsToken]: '>=',
+    [ts.SyntaxKind.LessThanToken]: '<',
+    [ts.SyntaxKind.LessThanEqualsToken]: '<=',
+};
+
+// hand-written BaseExchange fields (go/v4/exchange.go) declared `string`: their Go
+// value is never nil, so `this.<field> + s` matches Add(field, s) exactly.
+const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version' ];
+
+// operator kinds the arithmetic helpers are emitted for
+const GO_ARITHMETIC_KINDS = [
+    ts.SyntaxKind.PlusToken,
+    ts.SyntaxKind.MinusToken,
+    ts.SyntaxKind.AsteriskToken,
+    ts.SyntaxKind.SlashToken,
+    ts.SyntaxKind.PercentToken,
+];
 
 // ---------------------------------------------------------------------------------------------
 // Trailing `//` comment alignment (gofmt's tabwriter cells).
@@ -360,6 +415,8 @@ export class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
+    // declarations whose Go local type is being resolved right now (see goLocalStaticType)
+    goLocalTypeResolution = new Set<any>();
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     asyncMethodSuffix = '';
@@ -1043,9 +1100,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 return 'bool';
             }
             // `a === b` prints either `IsEqual(a, b)` or an inlined `(a == b)`;
-            // both are Go bools
+            // `a < b` prints either `IsLessThan(a, b)` or an inlined `(a < b)`.
+            // All of them are Go bools.
             if ((op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken)
-                || (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+                || (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken)
+                || (ORDERED_COMPARISON_OPERATORS[op] !== undefined)) {
                 return 'bool';
             }
             break;
@@ -1057,6 +1116,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             value = value.substring(1, value.length - 1).trim();
         }
         const open = value.indexOf('(');
+        // the native `key in obj` emission is an immediately-called func literal that
+        // returns a Go bool, so it needs no EvalTruthy round-trip either
+        if (value.startsWith('func() bool {') && value.endsWith('}()')) {
+            return 'bool';
+        }
         if (open <= 0 || !this.isWholePrintedCall(value, open)) {
             return undefined;
         }
@@ -1065,6 +1129,192 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         return GO_HELPER_RETURN_TYPES[callee];
+    }
+
+    // strips the wrapping parentheses the source (or an operand) printed around a
+    // whole expression, so the inner text can be classified
+    goUnwrapPrintedParens(printedText: string): string {
+        let value = (printedText ?? '').trim();
+        while (value.startsWith('(') && this.isWholePrintedCall(value, 0)) {
+            value = value.substring(1, value.length - 1).trim();
+        }
+        return value;
+    }
+
+    // the concrete Go type of a `var x T = <init>` local, undefined for `any`
+    goLocalStaticType(node): string | undefined {
+        const declaration: any = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
+            return undefined;
+        }
+        if (declaration.parent?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
+            return undefined; // declared with `:=`, where the printer annotates nothing
+        }
+        if (this.goLocalTypeResolution.has(declaration)) {
+            return undefined; // the safety scan below prints an expression using this same local
+        }
+        this.goLocalTypeResolution.add(declaration);
+        try {
+            return this.getGoLocalType(declaration, this.printNode(declaration.initializer, 0));
+        } finally {
+            this.goLocalTypeResolution.delete(declaration);
+        }
+    }
+
+    // `this.<field>` read of a hand-written BaseExchange string field
+    goStringFieldStaticType(node, printedText: string): string | undefined {
+        const match = /^this\.([A-Za-z_]\w*)$/.exec(this.goUnwrapPrintedParens(printedText));
+        if (match === null || GO_STRING_FIELD_NAMES.indexOf(match[1]) < 0) {
+            return undefined;
+        }
+        // a `string | undefined` field prints a nilable Go value, where Add's nil
+        // branch is reachable — only a non-optional string is provable
+        return this.getChecker().getTypeAtLocation(node).flags === ts.TypeFlags.String ? 'string' : undefined;
+    }
+
+    // Go static type of an operand's printed form: 'string', 'int', 'int64' or
+    // 'const-int' (untyped integer literal). undefined when the printer cannot name
+    // it — a nilable/`any` operand keeps the helper call.
+    goOperandStaticType(node, printedText: string): string | undefined {
+        switch (node?.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return 'string';
+        case ts.SyntaxKind.NumericLiteral:
+            return /^[0-9]+$/.test(node.text) ? 'const-int' : undefined;
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
+        case ts.SyntaxKind.BinaryExpression:
+            return this.goNativeArithmetic(node)?.goType;
+        case ts.SyntaxKind.Identifier:
+            return this.goLocalStaticType(node);
+        case ts.SyntaxKind.PropertyAccessExpression:
+            // `a.length` / `s.replace(...)` print as helper calls, `this.Id` as a field
+            return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
+        }
+        return this.goStringCallStaticType(node, printedText);
+    }
+
+    // the Go type the printed expression already produces; '*string' / '*int64'
+    // helpers box a nilable pointer, so those keep the helper call as well
+    goStringCallStaticType(node, printedText: string): string | undefined {
+        // the operator needs the printed expression's *static* Go type. A helper whose
+        // Go signature returns `any` (GetValue, Ternary, ...) prints an interface box even
+        // when a classifier can name the value inside it — that value only becomes
+        // typed through an assertion at a declaration, never inline as an operand.
+        if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) {
+            return undefined;
+        }
+        const goType = this.goTypeOfInitializer(node, printedText);
+        return ('string' === goType || 'int' === goType || 'int64' === goType) ? goType : undefined;
+    }
+
+    isNonZeroIntegerLiteral(node): boolean {
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.isNonZeroIntegerLiteral(node.expression);
+        }
+        return node?.kind === ts.SyntaxKind.NumericLiteral && /^[1-9][0-9]*$/.test(node.text);
+    }
+
+    // The bare Go operator must yield the same type the runtime helper returns for
+    // the same operands (go/v4/exchange_helpers.go): Add keeps int/int64, while
+    // Subtract/Multiply/Divide collapse every integer result to int64 and Mod is
+    // float-based, so only the rows below are equivalent.
+    goNativeIntResultType(op, leftType: string, rightType: string, rightNode): string | undefined {
+        let operands = undefined;
+        if (leftType === 'int64' && (rightType === 'int64' || rightType === 'const-int')) {
+            operands = 'int64';
+        } else if (leftType === 'const-int' && rightType === 'int64') {
+            operands = 'int64';
+        } else if (leftType === 'int' && (rightType === 'int' || rightType === 'const-int')) {
+            operands = 'int'; // Add's int/int branch, the only int-typed helper result
+        } else if (leftType === 'const-int' && (rightType === 'int' || rightType === 'const-int')) {
+            operands = 'int';
+        }
+        if (operands === undefined || op === ts.SyntaxKind.PercentToken) {
+            return undefined;
+        }
+        if (op === ts.SyntaxKind.SlashToken && !this.isNonZeroIntegerLiteral(rightNode)) {
+            return undefined; // Divide returns nil on a zero divisor, the operator panics
+        }
+        if (op === ts.SyntaxKind.PlusToken) {
+            return operands === 'int64' ? 'int64' : 'int';
+        }
+        // int64 in, int64 out: Subtract goes through ParseInt, Multiply/Divide use reflect Int()
+        return operands === 'int64' ? 'int64' : undefined;
+    }
+
+    // an operand that is itself a bare operator expression needs parens under a
+    // tighter parent operator; a whole helper call is already delimited
+    goNativeOperandText(node, printedText: string): string {
+        const text = printedText.trim();
+        if (node?.kind !== ts.SyntaxKind.BinaryExpression || text.startsWith('(')) {
+            return text;
+        }
+        const open = text.indexOf('(');
+        if (open > 0 && this.isWholePrintedCall(text, open)) {
+            return text;
+        }
+        // `a + b` on strings is the only shape that can never sit under a tighter
+        // operator, so it is the only one left unwrapped
+        return (this.goOperandStaticType(node, text) === 'string') ? text : '(' + text + ')';
+    }
+
+    // `Add(a, b)` & co. become the Go operator when both printed operands already
+    // hold a concrete Go type the helper would return unchanged; undefined keeps the
+    // helper call (nil branches, `any` boxes, strings passed to Subtract, ...).
+    goNativeArithmetic(node, leftText = undefined, rightText = undefined): { goType: string, text: string } | undefined {
+        const op = node.operatorToken.kind;
+        if (GO_ARITHMETIC_KINDS.indexOf(op) < 0) {
+            return undefined;
+        }
+        leftText = leftText ?? this.printNode(node.left, 0);
+        rightText = rightText ?? this.printNode(node.right, 0);
+        const leftType = this.goOperandStaticType(node.left, leftText);
+        const rightType = this.goOperandStaticType(node.right, rightText);
+        if (leftType === undefined || rightType === undefined) {
+            return undefined;
+        }
+        if (leftType === 'string' || rightType === 'string') {
+            if (leftType !== 'string' || rightType !== 'string' || op !== ts.SyntaxKind.PlusToken) {
+                return undefined; // the other four helpers return nil for strings
+            }
+            return { 'goType': 'string', 'text': leftText.trim() + ' + ' + rightText.trim() };
+        }
+        const goType = this.goNativeIntResultType(op, leftType, rightType, node.right);
+        if (goType === undefined) {
+            return undefined;
+        }
+        const symbol = this.SupportedKindNames[op];
+        return { goType, 'text': this.goNativeOperandText(node.left, leftText) + ' ' + symbol + ' ' + this.goNativeOperandText(node.right, rightText) };
+    }
+
+    // `x += y` prints `x = Add(x, y)`; the compound operator is equivalent while
+    // both sides hold a concrete Go type that can never make the helper return nil
+    goNativeCompoundAssignment(op, leftNode, leftText: string, rightNode, rightText: string): string | undefined {
+        const leftType = this.goOperandStaticType(leftNode, leftText);
+        const rightType = this.goOperandStaticType(rightNode, rightText);
+        if (leftType === undefined || rightType === undefined) {
+            return undefined;
+        }
+        const isAdd = op === ts.SyntaxKind.PlusEqualsToken;
+        const isSubtract = op === ts.SyntaxKind.MinusEqualsToken;
+        if (!isAdd && !isSubtract) {
+            return undefined;
+        }
+        if (leftType === 'string' && isAdd && rightType === 'string') {
+            return `${leftText.trim()} += ${rightText.trim()}`;
+        }
+        if (leftType !== 'int64') {
+            return undefined;
+        }
+        if (isAdd && (rightType === 'int64' || rightType === 'const-int')) {
+            return `${leftText.trim()} += ${rightText.trim()}`;
+        }
+        if (isSubtract && (rightType === 'int64' || rightType === 'const-int')) {
+            return `${leftText.trim()} -= ${rightText.trim()}`;
+        }
+        return undefined;
     }
 
     goEnclosingFunction(node) {
@@ -1780,6 +2030,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // its closing brace at the statement level; the leading indentation is dropped
             const rhs     = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
 
+            // a single key over a receiver the printer typed itself is plain Go
+            // indexing; a nested chain goes through GetValue, which is `any`
+            const native = (keyStrs.length === 1)
+                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, rhs)
+                : undefined;
+            if (native !== undefined) {
+                return native;
+            }
+
             return `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
 
@@ -1816,6 +2075,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             // For +=, we need to get the current value, add to it, then set it back
             const currentValue = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${lastKey}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            const native = (keyStrs.length === 1)
+                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, `Add(${containerStr}[${lastKey}], ${rhs})`)
+                : undefined;
+            if (native !== undefined) {
+                return native;
+            }
             const result = `AddElementToObject(${acc}, ${lastKey}, Add(${currentValue}, ${rhs}))`;
             return result;
         }
@@ -1828,7 +2093,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
 
         if (op === ts.SyntaxKind.InKeyword) {
-            return `InOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+            const dictText = this.printNode(right, 0);
+            const keyText = this.printNode(left, 0);
+            const inlined = this.printInlineInOp(right, left, dictText, keyText);
+            if (inlined !== undefined) {
+                return inlined;
+            }
+            return `InOp(${dictText}, ${keyText})`;
         }
 
         // only print the operands when this op is actually handled here; otherwise
@@ -1841,6 +2112,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const operandDepth = this.goExprDepth + 1;
             const leftText = this.goWithExprDepth(operandDepth, () => this.printNode(left, 0));
             const rightText = this.goWithExprDepth(operandDepth, () => this.printNode(right, 0));
+
+            const nativeAssignment = this.goNativeCompoundAssignment(op, left, leftText, right, rightText);
+            if (nativeAssignment !== undefined) {
+                return nativeAssignment;
+            }
 
             if (op === ts.SyntaxKind.PlusEqualsToken) {
                 return `${leftText} = Add(${leftText}, ${rightText})`;
@@ -1859,9 +2135,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 }
             }
 
+            if (ORDERED_COMPARISON_OPERATORS[op] !== undefined) {
+                const inlined = this.printInlineOrderedComparison(left, right, leftText, rightText, op);
+                if (inlined !== undefined) {
+                    return inlined;
+                }
+            }
+
             const wrapper = this.binaryExpressionsWrappers[op];
             const open = wrapper[0];
             const close = wrapper[1];
+            const nativeArithmetic = this.goNativeArithmetic(node, leftText, rightText);
+            if (nativeArithmetic !== undefined) {
+                return nativeArithmetic.text;
+            }
             return `${open}${leftText}, ${rightText}${close}`;
         }
 
@@ -1893,31 +2180,95 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.goScalarFamilyOfType(type);
     }
 
-    goScalarFamilyOfType(type): string | undefined {
+    // the scalar family the TypeScript type of an operand belongs to, where a
+    // `string | undefined` union still counts as 'string': the Go box holds that
+    // scalar or nil, and both `x == nil` and `x == "lit"` are then the same
+    // predicate as the helper. Numbers are excluded by the caller.
+    goScalarFamilyWithNil(node): string | undefined {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return this.goScalarFamilyOfType(type, true);
+    }
+
+    // the callee name of a printed call, e.g. `this.SafeDict(x, 0, {})` → `this.SafeDict`
+    goPrintedCallee(printedValue: string): string | undefined {
+        let value = printedValue.trim();
+        while (value.startsWith('(') && this.isWholePrintedCall(value, 0)) {
+            value = value.substring(1, value.length - 1).trim();
+        }
+        const open = value.indexOf('(');
+        if (open <= 0 || !this.isWholePrintedCall(value, open)) {
+            return undefined;
+        }
+        const callee = value.substring(0, open);
+        return /^[A-Za-z_][\w.]*$/.test(callee) ? callee : undefined;
+    }
+
+    // true when this expression prints to an interface (`any`) box: a parameter, a
+    // local the printer left `any`, or one of the helpers whose Go signature returns
+    // `any`. A *T / scalar local or call is not a box and keeps its own rule.
+    goIsAnyBoxExpression(node, printedText: string): boolean {
+        if (node?.kind === ts.SyntaxKind.Identifier) {
+            let symbol;
+            try {
+                symbol = this.getChecker().getSymbolAtLocation(node);
+            } catch (e) {
+                return false;
+            }
+            const decl = symbol?.valueDeclaration;
+            const isBinding = (decl?.kind === ts.SyntaxKind.Parameter)
+                || (decl?.kind === ts.SyntaxKind.VariableDeclaration);
+            if (!isBinding) {
+                return false;
+            }
+            // the printer names a Go type for this local/`:=` initializer, so the
+            // value is not behind an interface
+            return this.goDeclaredTypeOfIdentifier(node) === undefined;
+        }
+        if (node?.kind === ts.SyntaxKind.CallExpression) {
+            if (this.goTypeOfInitializer(node, printedText) !== undefined) {
+                return false; // a *T or a scalar the printer can name
+            }
+            return GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0;
+        }
+        return false;
+    }
+
+    goScalarFamilyOfType(type, allowNil = false): string | undefined {
         if (type === undefined) {
             return undefined;
         }
         // Str/Int/Num/Bool are nullable aliases of `string | undefined` & friends;
-        // their Go representation is still `any`, so they never inline
+        // their Go representation is still `any`, so they never inline — unless the
+        // caller is asking about the value the `any` box holds (allowNil)
         const alias = type.aliasSymbol?.escapedName;
-        switch (alias) {
-        case 'Str':
-        case 'Int':
-        case 'Num':
-        case 'Bool':
-            return undefined;
+        if (!allowNil) {
+            switch (alias) {
+            case 'Str':
+            case 'Int':
+            case 'Num':
+            case 'Bool':
+                return undefined;
+            }
         }
         const flags = type.flags;
         if (flags & ts.TypeFlags.Union) {
             const families = new Set<string>();
             for (const member of type.types) {
-                const family = this.goScalarFamilyOfType(member);
+                const family = this.goScalarFamilyOfType(member, allowNil);
                 if (family === undefined) {
                     return undefined;
                 }
                 // `string | undefined` is `any` in Go, never a bare Go string:
                 // one nullable member disqualifies the whole union
                 if (family === 'nil') {
+                    if (allowNil) {
+                        continue; // the box holds nil for that member
+                    }
                     return undefined;
                 }
                 families.add(family);
@@ -2014,6 +2365,226 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // the concrete Go type a `x[k] = v` receiver is declared with, when the printer
+    // can name it: a local it typed itself, or a whole call whose Go return type it
+    // knows. Everything else is an `any` box, and indexing an `any` in Go needs a
+    // type assertion, so those keep the runtime helper.
+    goElementAssignmentContainerType(node, printedText: string): string | undefined {
+        const declared = this.goDeclaredTypeOfIdentifier(node);
+        if ((declared === 'map[string]any') || (declared === '[]any')) {
+            return declared;
+        }
+        if (node?.kind === ts.SyntaxKind.CallExpression) {
+            const known = this.goTypeOfInitializer(node, printedText);
+            if ((known === 'map[string]any') || (known === '[]any')) {
+                return known;
+            }
+        }
+        return undefined;
+    }
+
+    // the printed key is a Go string when the printer knows it: a string literal, or
+    // an identifier declared `string`. Params, GetValue(...) and string concatenation
+    // all print as `any`, which Go refuses as a map key.
+    goIsStringKeyExpression(node): boolean {
+        if ((node.kind === ts.SyntaxKind.StringLiteral) || (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return true;
+        }
+        return this.goDeclaredTypeOfIdentifier(node) === 'string';
+    }
+
+    // `[]any` receivers only inline when the index is a literal the slice's own
+    // literal initializer covers and nothing rebinds the local: the helper silently
+    // ignores an out-of-range index, while Go panics on the assignment.
+    goSliceIndexProvablyInRange(node, indexNode): boolean {
+        if ((node?.kind !== ts.SyntaxKind.Identifier) || (indexNode?.kind !== ts.SyntaxKind.NumericLiteral)) {
+            return false;
+        }
+        const index = Number(indexNode.text);
+        if (!Number.isInteger(index) || (index < 0)) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const decl = symbol?.valueDeclaration;
+        if (decl === undefined || decl.kind !== ts.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const initializer = decl.initializer;
+        if (initializer?.kind !== ts.SyntaxKind.ArrayLiteralExpression) {
+            return false;
+        }
+        if (initializer.elements.length <= index) {
+            return false;
+        }
+        return !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+    }
+
+    // true when the local is rebound anywhere in its function; an element write
+    // (`x[k] = v`) leaves the local itself bound, so only the slice header is at stake
+    goLocalIsRebound(scope, nameNode): boolean {
+        if (scope === undefined) {
+            return true;
+        }
+        const name = nameNode.escapedText;
+        let rebound = false;
+        const visit = (n) => {
+            if (rebound) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name) && (n !== nameNode)) {
+                if (this.goRebindingTargetOf(n) !== undefined) {
+                    rebound = true;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        visit(scope);
+        return rebound;
+    }
+
+    // walks up from the identifier to the assignment it targets: `x = …` / `x += …` /
+    // `[x, y] = …` / `for (x of …)` rebind the local, `x[k] = v` does not
+    goRebindingTargetOf(identifier) {
+        let node: any = identifier;
+        let parent = node.parent;
+        while (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            node = parent;
+            parent = parent.parent;
+        }
+        if ((parent?.kind === ts.SyntaxKind.ForOfStatement) && (parent.initializer === node)) {
+            return parent;
+        }
+        if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === node)) {
+            const op = parent.operatorToken.kind;
+            if ((op === ts.SyntaxKind.EqualsToken) || ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment))) {
+                return parent;
+            }
+        }
+        return undefined;
+    }
+
+    // native `container[key] = value` when the receiver's Go type is proved by the
+    // printer, otherwise undefined and the caller keeps the runtime helper
+    printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string): string | undefined {
+        const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
+        if (containerType === 'map[string]any') {
+            if (!this.goIsStringKeyExpression(keyNode)) {
+                return undefined;
+            }
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
+        }
+        if (containerType === '[]any') {
+            if (!this.goSliceIndexProvablyInRange(containerNode, keyNode)) {
+                return undefined;
+            }
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
+        }
+        return undefined;
+    }
+
+    // the concrete Go type an *expression* is printed as: a local's declared type,
+    // the return type of a runtime helper call, or a literal. undefined when the value
+    // stays inside an `any` box — a native Go operation on an `any` box would not
+    // compile, so every rule below falls back to its helper in that case.
+    goPrintedTypeOfExpression(node, printedText: string): string | undefined {
+        const inner = (node?.kind === ts.SyntaxKind.ParenthesizedExpression) ? node.expression : node;
+        if (inner?.kind === ts.SyntaxKind.Identifier) {
+            return this.goDeclaredTypeOfIdentifier(inner);
+        }
+        return this.goTypeOfInitializer(inner, printedText);
+    }
+
+    // `x.length` on a value the printer declares as a slice is `len(x)`: Go's len is
+    // 0 for a nil slice, exactly like GetArrayLength's `[]T` cases. On a map or an
+    // `any` box GetArrayLength answers 0, so only a `[]`-typed value may inline —
+    // and only for the slice types the helper itself counts (a []byte would answer 0).
+    sliceLengthTypes = [ '[]any', '[]string', '[]int64', '[]float64', '[]bool', '[]int', '[][]any', '[]map[string]any' ];
+
+    printInlineArrayLength(expression, printedText: string): string | undefined {
+        if (printedText.includes('\n')) {
+            return undefined;
+        }
+        const goType = this.goPrintedTypeOfExpression(expression, printedText);
+        if ((typeof goType === 'string') && this.sliceLengthTypes.indexOf(goType) >= 0) {
+            return `len(${printedText})`;
+        }
+        return undefined;
+    }
+
+    // Go has no ternary operator. The func literal returns the same branch value the
+    // helper would and prints the condition the same way; it evaluates only the branch
+    // TypeScript would take, while Ternary receives both already evaluated.
+    printInlineTernary(condition: string, whenTrue: string, whenFalse: string): string | undefined {
+        if (condition.includes('\n') || whenTrue.includes('\n') || whenFalse.includes('\n')) {
+            return undefined;
+        }
+        return `func() any { if ${condition} { return ${whenTrue} }; return ${whenFalse} }()`;
+    }
+
+    // `key in obj` on a Go map[string]any with a string key. The two-value map read is
+    // a statement, hence the func literal: a present-but-nil value is ok=true, exactly
+    // like InOp's map case. InOp also answers false for a nil/number key and covers
+    // sync.Map/orderbook receivers, so anything else keeps the helper.
+    printInlineInOp(dictNode, keyNode, dictText: string, keyText: string): string | undefined {
+        if (dictText.includes('\n') || keyText.includes('\n')) {
+            return undefined;
+        }
+        if (this.goPrintedTypeOfExpression(dictNode, dictText) !== 'map[string]any') {
+            return undefined;
+        }
+        if (this.goPrintedTypeOfExpression(keyNode, keyText) !== 'string') {
+            return undefined;
+        }
+        return `func() bool { _, ok := ${dictText}[${keyText}]; return ok }()`;
+    }
+
+    // comparison helpers that normalize int/int64/float64 against each other, so a
+    // literal operand's Go default type (int) behaves like the int64 OpNeg produces
+    comparisonHelpers = [ 'IsEqual', 'IsGreaterThan', 'IsLessThan', 'IsGreaterThanOrEqual', 'IsLessThanOrEqual' ];
+
+    // OpNeg boxes `-val.Int()` / `-val.Float()`, i.e. an int64 or a float64, and nil
+    // for anything else. `-x` reproduces that exactly only for an operand that already
+    // prints as float64/int64; a Go `int` (or an integer literal) boxes as int instead.
+    printInlineOpNeg(node, printedText: string): string | undefined {
+        if (printedText.includes('\n')) {
+            return undefined;
+        }
+        const goType = this.goPrintedTypeOfExpression(node.operand, printedText);
+        if ((goType === 'float64') || (goType === 'int64')) {
+            return `-${printedText}`;
+        }
+        // a fractional/exponent literal is already a Go float64 constant; an integer
+        // literal is only interchangeable where the consumer normalizes the number
+        if (/^\d+(\.\d+)?([eE][+-]?\d+)?$/.test(printedText.trim())) {
+            if (printedText.includes('.') || /[eE]/.test(printedText)) {
+                return `-${printedText}`;
+            }
+            const parent = node.parent;
+            if (parent?.kind === ts.SyntaxKind.CallExpression) {
+                const callee = this.printNode(parent.expression, 0);
+                if (this.comparisonHelpers.indexOf(callee) >= 0) {
+                    return `-${printedText}`;
+                }
+            }
+            // `a > -1` prints as IsGreaterThan(a, …); the relational wrappers all
+            // normalise int/int64/float64 the same way the equality helpers do
+            if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
+                const op = parent.operatorToken.kind;
+                if ((op === ts.SyntaxKind.GreaterThanToken) || (op === ts.SyntaxKind.GreaterThanEqualsToken)
+                    || (op === ts.SyntaxKind.LessThanToken) || (op === ts.SyntaxKind.LessThanEqualsToken)) {
+                    return `-${printedText}`;
+                }
+            }
+        }
+        return undefined;
+    }
+
     // JS truthiness of an operand whose Go type the printer knows, expressed with
     // plain Go instead of boxing the value into `EvalTruthy(any)`. Each arm mirrors the
     // matching `EvalTruthy` case exactly, including nil (a nil *T and a nil map are
@@ -2053,6 +2624,32 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         return undefined;
     }
+
+    // the native Go text for a condition operand the printer can type, or undefined
+    // when the operand has to go through the truthiness helper. `(x)` is decided on
+    // its operand and keeps the source parentheses, so the surrounding operator still
+    // parses exactly the same way.
+    goNativeCondition(node): string | undefined {
+        if (node?.kind === ts.SyntaxKind.Identifier) {
+            return this.printInlineTruthy(node);
+        }
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            const inner = this.goNativeCondition(node.expression);
+            if (inner === undefined) {
+                return undefined;
+            }
+            return (inner.startsWith('(') && this.isWholePrintedCall(inner, 0)) ? inner : `(${inner})`;
+        }
+        // an expression that already prints a Go `bool` needs no EvalTruthy round-trip:
+        // `a || b`, `!x`, `a === b` and the Is*/Precise.String* predicates are all
+        // bool-typed, so `EvalTruthy(<bool>)` is the identity function on them
+        const printed = this.printNode(node, 0);
+        if (this.goTypeOfInitializer(node, printed) === 'bool') {
+            return printed;
+        }
+        return GO_BOOL_FIELDS.has(printed) ? printed : undefined;
+    }
+
 
     // gofmt prints the condition of every `if`/`for`/`switch` through
     // go/printer/nodes.go controlClause() -> stripParens(): the single outermost,
@@ -2265,21 +2862,21 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     printCondition(node, identation) {
         // `!x` is handled by printPrefixUnaryExpression, which calls back into this
         // method with the operand; let the base class keep that recursion intact
-        if (node?.kind === ts.SyntaxKind.Identifier) {
-            const inlined = this.printInlineTruthy(node);
-            if (inlined !== undefined) {
-                // printInlineTruthy prints the operand itself, so the control-clause
-                // parens of printNode do not see the parentheses it wraps it in
-                return `${this.getIden(identation)}${this.goControlClauseParens(node, inlined)}`;
-            }
-            return super.printCondition(node, identation);
+        const native = this.goNativeCondition(node);
+        if (native !== undefined) {
+            // goNativeCondition prints the operand itself, so the control-clause
+            // parens of printNode do not see the parentheses it wraps it in
+            return `${this.getIden(identation)}${this.goControlClauseParens(node, native)}`;
         }
-        // an expression that already prints a Go `bool` needs no EvalTruthy round-trip:
-        // `a || b`, `!x`, `a === b` and the Is*/Precise.String* predicates are all
-        // bool-typed, so `EvalTruthy(<bool>)` is the identity function on them
-        const printed = this.printNode(node, 0);
-        if (this.goTypeOfInitializer(node, printed) === 'bool') {
-            return `${this.getIden(identation)}${printed}`;
+        // a native `key in obj` prints as a `func() bool` call, which the type probe
+        // above cannot name; it is a Go bool all the same
+        const inNode = (node?.kind === ts.SyntaxKind.ParenthesizedExpression) ? node.expression : node;
+        if (inNode?.kind === ts.SyntaxKind.BinaryExpression && inNode.operatorToken.kind === ts.SyntaxKind.InKeyword) {
+            const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0));
+            if (inlined !== undefined) {
+                const text = (inNode === node) ? inlined : `(${inlined})`;
+                return `${this.getIden(identation)}${this.goControlClauseParens(node, text)}`;
+            }
         }
         return super.printCondition(node, identation);
     }
@@ -2361,7 +2958,166 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
+        // an operand the printer boxes into `any` whose TypeScript type proves the box
+        // holds a scalar or nil: `x === undefined` and `x === 'lit'` are then the same
+        // predicate as the helper, without the interface round-trip. Numbers stay on
+        // IsEqual: an `any` box may hold int, int64 or float64, and Go compares those
+        // by exact width.
+        const lNilFam = this.goScalarFamilyWithNil(left);
+        const rNilFam = this.goScalarFamilyWithNil(right);
+        const lBox = !lPtr && this.goIsAnyBoxExpression(left, leftText);
+        const rBox = !rPtr && this.goIsAnyBoxExpression(right, rightText);
+        if (lBox && (rFam === 'nil') && (lNilFam !== undefined) && (lNilFam !== 'number')) {
+            return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        if (rBox && (lFam === 'nil') && (rNilFam !== undefined) && (rNilFam !== 'number')) {
+            return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+        }
+        // a string or bool literal: only a value of that very type is equal in both
+        // predicates, so no numeric or nil member can be compared away
+        const isLiteral = (node): boolean => {
+            switch (node?.kind) {
+            case ts.SyntaxKind.StringLiteral:
+            case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            case ts.SyntaxKind.TrueKeyword:
+            case ts.SyntaxKind.FalseKeyword:
+                return true;
+            }
+            return false;
+        };
+        const literalMatchesBox = (boxFam: string | undefined, litNode, litFam: string | undefined): boolean =>
+            ((litFam === 'string') || (litFam === 'bool')) && isLiteral(litNode)
+            && ((boxFam === litFam) || (boxFam === undefined));
+        if (lBox && literalMatchesBox(lNilFam, right, rFam)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        if (rBox && literalMatchesBox(rNilFam, left, lFam)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        // two boxes of one non-numeric family: both hold that scalar or nil
+        if (lBox && rBox && (lNilFam !== undefined) && (lNilFam !== 'number') && (lNilFam === rNilFam)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
         return undefined;
+    }
+
+    // the Go numeric kind an operand's static type is, or undefined when it stays
+    // `any` (unknown helper result, union, pointer box): only a concrete kind can
+    // join a comparison the Go compiler accepts
+    goOperandNumericKind(node, printedText: string): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            const declared = this.goDeclaredTypeOfIdentifier(node);
+            if (declared !== undefined) {
+                return (GO_NUMERIC_KINDS.indexOf(declared) >= 0) ? declared : undefined;
+            }
+            return this.goLiteralTypedLocalKind(node);
+        }
+        if (node.kind === ts.SyntaxKind.NumericLiteral) {
+            return this.goNumericLiteralKind(node);
+        }
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.goOperandNumericKind(node.expression, this.printNode(node.expression, 0));
+        }
+        const goType = this.goTypeOfInitializer(node, printedText);
+        return (goType !== undefined && GO_NUMERIC_KINDS.indexOf(goType) >= 0) ? goType : undefined;
+    }
+
+    // a local bound by `:=` takes its Go type from the initializer: an untyped
+    // integer constant is `int`, a floating-point one is `float64`. A variable
+    // statement prints `var x <type> = …` instead, where the printer already
+    // decided the type, so only the `:=` form may be trusted here.
+    goLiteralTypedLocalKind(node): string | undefined {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        const declaration = symbol?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
+            return undefined;
+        }
+        const declarationList = declaration.parent;
+        if (declarationList?.kind !== ts.SyntaxKind.VariableDeclarationList
+            || declarationList.parent?.kind === ts.SyntaxKind.FirstStatement) {
+            return undefined;
+        }
+        return this.goNumericLiteralKind(declaration.initializer);
+    }
+
+    // an untyped Go constant: the integer forms adopt any numeric kind, the
+    // floating-point ones only fit float64
+    goNumericLiteralKind(node): string | undefined {
+        const text = node?.text;
+        if (text === undefined) {
+            return undefined;
+        }
+        if (/^[0-9][0-9_]*$/.test(text) || /^0[xXoObB][0-9a-fA-F_]+$/.test(text)) {
+            return 'int';
+        }
+        if (/^[0-9][.eE]/.test(text)) {
+            return 'float64';
+        }
+        return undefined;
+    }
+
+    // a constant only joins a comparison when its value is representable in the
+    // other operand's kind: `0.5` is not an int, and neither is 1e400 (infinity)
+    goLiteralFitsKind(node, kind: string): boolean {
+        const value = Number(node?.text?.replaceAll('_', ''));
+        if (!Number.isFinite(value)) {
+            return false;
+        }
+        if (kind === 'float64') {
+            return true;
+        }
+        return Number.isInteger(value) && (Math.abs(value) <= 2147483647);
+    }
+
+    // the kind both operands are compared in, or undefined when Go would need a
+    // conversion (two different concrete kinds) or the constant does not fit
+    goComparisonKind(left, leftKind: string, right, rightKind: string): string | undefined {
+        if (leftKind === rightKind) {
+            return leftKind;
+        }
+        if ((left?.kind === ts.SyntaxKind.NumericLiteral) && (right?.kind !== ts.SyntaxKind.NumericLiteral)) {
+            return this.goLiteralFitsKind(left, rightKind) ? rightKind : undefined;
+        }
+        if ((right?.kind === ts.SyntaxKind.NumericLiteral) && (left?.kind !== ts.SyntaxKind.NumericLiteral)) {
+            return this.goLiteralFitsKind(right, leftKind) ? leftKind : undefined;
+        }
+        return undefined;
+    }
+
+    // `<` `>` `<=` `>=` between two operands the checker proves to be numbers of the
+    // same Go kind is exactly the comparison the helper performs, minus the interface
+    // round-trip, so the call carries no information. Everything else — `any` boxes,
+    // pointers, mixed kinds, strings — keeps the helper. float64 keeps
+    // IsLessThan/IsLessThanOrEqual: the helper answers true whenever an operand is
+    // NaN while Go (and JS) answer false, and only those two operators differ.
+    printInlineOrderedComparison(left, right, leftText: string, rightText: string, op): string | undefined {
+        const operator = ORDERED_COMPARISON_OPERATORS[op];
+        if (operator === undefined) {
+            return undefined;
+        }
+        const leftKind = this.goOperandNumericKind(left, leftText);
+        const rightKind = this.goOperandNumericKind(right, rightText);
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        // both operands may additionally be checker-typed numbers; that check is
+        // implied by the concrete Go kind above and buys nothing
+        const kind = this.goComparisonKind(left, leftKind, right, rightKind);
+        if (kind === undefined) {
+            return undefined;
+        }
+        if ((kind === 'float64') && ((operator === '<') || (operator === '<='))) {
+            return undefined;
+        }
+        return `(${leftText} ${operator} ${rightText})`;
     }
 
     // Go's printer never wraps an already parenthesised expression: gofmt prints a
@@ -2473,7 +3229,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const type = (this.getChecker() as TypeChecker).getTypeAtLocation(expression); // eslint-disable-line
             // this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
-            rawExpression = this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
+            rawExpression = this.isStringType(type.flags) ? `GetLength(${leftSide})` : this.printInlineArrayLength(expression, leftSide) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`; // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
             rawExpression = `((IList<object>)${leftSide}).Add`;
@@ -2888,7 +3644,8 @@ ${this.getIden(identation)}${returnStatement}`;
     printArrayPushCall(node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
         let returnValue = '';
         let returnRandName = name;
-        if (name?.startsWith('GetValue')) {
+        // a map/slice index or a GetValue box is not addressable: copy it into a local first
+        if (name?.startsWith('GetValue') || /[\]\)]$/.test(name ?? '')) {
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
             returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
         }
@@ -3033,6 +3790,11 @@ ${this.getIden(identation)}${returnStatement}`;
         const condition = this.printCondition(node.condition, 0);
         const whenTrue = this.printNode(node.whenTrue, 0);
         const whenFalse = this.printNode(node.whenFalse, 0);
+
+        const inlined = this.printInlineTernary(condition, whenTrue, whenFalse);
+        if (inlined !== undefined) {
+            return inlined;
+        }
 
         return `Ternary(${condition}, ${whenTrue}, ${whenFalse})`;
     }
@@ -3224,11 +3986,11 @@ ${this.getIden(identation)}${returnStatement}`;
             if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
-                // the value is printed at the statement's own level so a multi-line object
-                // literal (bare, or nested inside a call argument) lands one level deeper with
-                // its closing brace at the statement level; the leading indentation a call
-                // printer adds is dropped, since the value sits after the `(`
                 const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
+                const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value);
+                if (native !== undefined) {
+                    return native;
+                }
                 return `AddElementToObject(${leftSide}, ${propName}, ${value})`;
             }
 
@@ -3463,7 +4225,12 @@ ${tryBodyBlock}
             return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
         }
         if (operator === ts.SyntaxKind.MinusToken) {
-            return this.getIden(identation) + `OpNeg(${this.printNode(node.operand, 0)})`;
+            const printed = this.printNode(node.operand, 0);
+            const inlined = this.printInlineOpNeg(node, printed);
+            if (inlined !== undefined) {
+                return this.getIden(identation) + inlined;
+            }
+            return this.getIden(identation) + `OpNeg(${printed})`;
         }
         return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
     }
@@ -3489,6 +4256,76 @@ ${tryBodyBlock}
      * calls.  This removes the root cause of the unbalanced-parenthesis bug
      * without any post-processing or regex hacks.
      */
+    // The Go static type of `printed` when the printer can name it as a native Go
+    // map or slice, undefined while the value stays boxed in `any` (GetValue,
+    // Ternary, a parameter, an untyped struct field). Only initializer shapes the
+    // printer itself types — object/array literals, helper calls whose Go return
+    // type it knows (GO_HELPER_RETURN_TYPES + the ccxt extension), and locals whose
+    // declaration got that same concrete type — are reported.
+    goIndexableTypeOf(node, printed: string): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goIndexableTypeOf(node.expression, printed);
+        case ts.SyntaxKind.ObjectLiteralExpression:
+            return 'map[string]any';
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return '[]any';
+        case ts.SyntaxKind.CallExpression:
+            return this.goTypeOfInitializer(node, printed);
+        case ts.SyntaxKind.Identifier:
+            return this.goDeclaredTypeOfIdentifier(node);
+        }
+        return undefined;
+    }
+
+    // the leftover chain after the first (native) step, still helper-wrapped:
+    // `m["a"]["b"]["c"]` prints `GetValue(GetValue(m["a"], "b"), "c")`
+    goElementAccessChain(containerStr: string, keyStrs: string[]) {
+        let acc = containerStr;
+        for (let i = 1; i < keyStrs.length; i++) {
+            acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        }
+        return acc;
+    }
+
+    // true when the printed key is a Go string, so `m[key]` reads the map with the
+    // same key GetValue resolves for a string operand (GetValue parses a non-string
+    // key, which on map[string]any just yields nil)
+    goKeyIsString(node, printed: string) {
+        if (node === undefined) {
+            return false;
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+            return true;
+        case ts.SyntaxKind.Identifier:
+            return this.goDeclaredTypeOfIdentifier(node) === 'string';
+        case ts.SyntaxKind.CallExpression:
+            return this.goTypeOfInitializer(node, printed) === 'string';
+        }
+        return false;
+    }
+
+    // true for `this.<field>` — the one property-access shape whose Go type the
+    // printer itself cannot name (the fields live in the hand-written Go structs)
+    isGoThisPropertyAccessExpression(node) {
+        return (node?.kind === ts.SyntaxKind.PropertyAccessExpression)
+            && (node.expression?.kind === ts.SyntaxKind.ThisKeyword);
+    }
+
+    // true when the element access is the target of an assignment: the binary
+    // expression printer owns that shape (AddElementToObject / rewritten GetValue
+    // chains), a native `x[k]` index there would drop the write
+    isGoElementAccessAssignmentTarget(node) {
+        const parent = node.parent;
+        return (parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === node)
+            && ((parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) || (parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken));
+    }
+
     printElementAccessExpression(node, identation) {
         // Maintain original special-case handling first.
         const special = this.printElementAccessExpressionExceptionIfAny(node);
@@ -3521,6 +4358,15 @@ ${tryBodyBlock}
         const indexDepth = this.goExprDepth + 1;
         const containerStr = this.goWithExprDepth(indexDepth, () => this.printNode(baseExpr, 0));
         const keyStrs = keys.map(k => this.goWithExprDepth(indexDepth, () => this.printNode(k, 0)));
+
+        // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
+        // and a nil element both come back as the `any` nil, so the native index
+        // yields the identical value without the helper call
+        if (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') {
+            if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)) {
+                return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
+            }
+        }
 
         // Now build nested helpers.
         let acc = containerStr;
