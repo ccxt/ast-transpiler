@@ -547,7 +547,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 case "Math.max":
                     return `Helpers.mathMax(${parsedArg1}, ${parsedArg2})`;
                 case "Math.pow":
-                    return `Helpers.mathPow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
+                    // both arguments are Double.parseDouble results, so Helpers.mathPow always
+                    // takes its Number branch and returns the same double java.lang.Math.pow does
+                    return `Math.pow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
                 }
             }
             const leftSide = node.expression?.expression;
@@ -1287,12 +1289,85 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // the native form of a helper-family binary operator, or undefined to keep the helper
+    // `for (var i = <int literal>; ...; i++)` prints a primitive `var` counter (see
+    // isJavaPrimitiveForCounter). Only ++/-- may write it: any other assignment in the
+    // loop would print a different kind into the same slot (D2), so the proof bails.
+    javaProvableCounterInt(node) {
+        if (!node || node.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(node);
+        const declaration: any = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (!declaration || declaration.kind !== ts.SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        if (this.javaIntegerLiteralKind(declaration.initializer) !== 'int') {
+            return false;
+        }
+        const list = declaration.parent;
+        const forStatement: any = list?.parent;
+        if (!forStatement || forStatement.kind !== ts.SyntaxKind.ForStatement || forStatement.initializer !== list) {
+            return false;
+        }
+        const incrementor = forStatement.incrementor;
+        if (!incrementor || incrementor.operand?.kind !== ts.SyntaxKind.Identifier
+            || incrementor.operand.escapedText !== node.escapedText) {
+            return false;
+        }
+        if (incrementor.kind !== ts.SyntaxKind.PostfixUnaryExpression && incrementor.kind !== ts.SyntaxKind.PrefixUnaryExpression) {
+            return false;
+        }
+        const name = node.escapedText;
+        let safe = true;
+        const scan = (n) => {
+            if (!safe || !n || n === incrementor) {
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.BinaryExpression && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(n.operatorToken.kind)
+                && n.left?.kind === ts.SyntaxKind.Identifier && n.left.escapedText === name) {
+                safe = false;
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.PostfixUnaryExpression || n.kind === ts.SyntaxKind.PrefixUnaryExpression)
+                && n.operand?.kind === ts.SyntaxKind.Identifier && n.operand.escapedText === name) {
+                return;
+            }
+            ts.forEachChild(n, scan);
+        };
+        scan(forStatement.statement);
+        if (!safe) {
+            return false;
+        }
+        // the enclosing function may not write it either
+        let enclosing = forStatement.parent;
+        while (enclosing && !ts.isFunctionLike(enclosing)) {
+            enclosing = enclosing.parent;
+        }
+        if (enclosing) {
+            const body = enclosing.body ?? enclosing;
+            const scanOuter = (n) => {
+                if (!safe || !n || n === forStatement || ts.isFunctionLike(n)) {
+                    return;
+                }
+                if (n.kind === ts.SyntaxKind.BinaryExpression && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(n.operatorToken.kind)
+                    && n.left?.kind === ts.SyntaxKind.Identifier && n.left.escapedText === name) {
+                    safe = false;
+                    return;
+                }
+                ts.forEachChild(n, scanOuter);
+            };
+            scanOuter(body);
+        }
+        return safe;
+    }
+
     printInlineHelperArithmetic(left, right, leftText, rightText, op) {
         const isPlus = op === ts.SyntaxKind.PlusToken || op === ts.SyntaxKind.PlusEqualsToken;
         const isMinus = op === ts.SyntaxKind.MinusToken || op === ts.SyntaxKind.MinusEqualsToken;
         const isMultiply = op === ts.SyntaxKind.AsteriskToken;
         const isDivide = op === ts.SyntaxKind.SlashToken;
-        if (!isPlus && !isMinus && !isMultiply && !isDivide) {
+        const isMod = op === ts.SyntaxKind.PercentToken;
+        if (!isPlus && !isMinus && !isMultiply && !isDivide && !isMod) {
             return undefined;
         }
         const leftFamily = this.javaScalarFamily(left);
@@ -1312,6 +1387,14 @@ export class JavaTranspiler extends BaseTranspiler {
         if (leftFamily !== 'number' || rightFamily !== 'number') {
             return undefined;
         }
+        if (isMod) {
+            // Helpers.mod normalizes both operands to double and returns their double
+            // remainder: the same value once both operands print as a non-null Java number
+            if (!this.javaProvableNumericDoubleOperand(left) || !this.javaProvableNumericDoubleOperand(right)) {
+                return undefined;
+            }
+            return `(((double) ${leftText}) % ((double) ${rightText}))`;
+        }
         const leftKind = this.javaProvableNumericKind(left);
         const rightKind = this.javaProvableNumericKind(right);
         if (leftKind === undefined || leftKind !== rightKind) {
@@ -1328,6 +1411,13 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const operator = isPlus ? '+' : (isMinus ? '-' : '*');
         return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
+    }
+
+    // an operand `(double) <text>` can be applied to without changing what Helpers.mod
+    // computes: a numeric literal or a native arithmetic node (javaProvableNumericKind,
+    // already printed as a java number) or a primitive int loop counter
+    javaProvableNumericDoubleOperand(node) {
+        return this.javaProvableNumericKind(node) !== undefined || this.javaProvableCounterInt(node);
     }
 
     getObjectLiteralFromCallExpressionArguments(node) {

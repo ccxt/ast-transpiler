@@ -3305,3 +3305,72 @@ describe('java replaceAll native emission', () => {
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 });
+
+describe('java helper removal: mod / Math.pow residual families', () => {
+    test('Math.pow emits java.lang.Math.pow (both arguments are already parsed doubles)', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, y: any): any {\n" +
+        "        return Math.pow(x, y);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Math.pow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y)))");
+        expect(output).not.toContain("Helpers.mathPow");
+    });
+
+    test('mod on a for-counter emits the double remainder natively', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: any[]): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            if (i % 2 === 1) {\n" +
+        "                return;\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(((double) i) % ((double) 2))");
+        expect(output).not.toContain("Helpers.mod(");
+    });
+
+    test('mod on an Object-typed operand keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, n: number): any {\n" +
+        "        return x % n;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.mod(x, n)");
+    });
+
+    test('mod keeps the helper when the loop body assigns the counter', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: any[]): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            if (i % 2 === 1) {\n" +
+        "                i = 0;\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.mod(i, 2)");
+    });
+
+    test('mod keeps the helper on a non-counter local', () => {
+        const input =
+        "class T {\n" +
+        "    test(): any {\n" +
+        "        let i = 0;\n" +
+        "        i++;\n" +
+        "        return i % 2;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.mod(i, 2)");
+    });
+});
