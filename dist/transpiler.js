@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9256,64 +9256,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return required;
   }
-  // non-tuple array reads: the Java representation is java.util.List (the printer maps every
-  // array type to one), but neither the receiver nor the index is bounded statically, so the
-  // read keeps the helper's null / off-range outcomes.
-  isJavaArrayStructureType(type) {
-    if (type === void 0) {
-      return false;
-    }
-    const excludedFlags = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Union | ts6.TypeFlags.Intersection | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Never;
-    if ((type.flags & excludedFlags) !== 0) {
-      return false;
-    }
-    const checker = this.getChecker();
-    if (checker.isTupleType(type)) {
-      return false;
-    }
-    return checker.isArrayType(type);
-  }
-  // the null-safe element read prints its receiver once per guard; only a reference whose
-  // printed Java has no side effects (identifier, `this`/`this.field` chain) may repeat it.
-  javaSideEffectFreeReference(node) {
-    if (node === void 0) {
-      return false;
-    }
-    switch (node.kind) {
-      case ts6.SyntaxKind.Identifier:
-      case ts6.SyntaxKind.ThisKeyword:
-        return true;
-      case ts6.SyntaxKind.ParenthesizedExpression:
-        return this.javaSideEffectFreeReference(node.expression);
-      case ts6.SyntaxKind.PropertyAccessExpression:
-        return this.javaSideEffectFreeReference(node.expression);
-      default:
-        return false;
-    }
-  }
-  // receivers whose printed elements the ccxt post-pass types as String FROM the helper call
-  // (`x.split(sep)` and string-literal array producers): those locals narrow to String only
-  // while the read prints `Helpers.GetValue(`, so their reads keep the helper.
-  javaStringElementsReceiver(node) {
-    if (!ts6.isIdentifier(node)) {
-      return false;
-    }
-    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-    if (declaration === void 0 || !ts6.isVariableDeclaration(declaration)) {
-      return false;
-    }
-    const initializer = declaration.initializer;
-    if (initializer === void 0) {
-      return false;
-    }
-    if (ts6.isCallExpression(initializer) && ts6.isPropertyAccessExpression(initializer.expression)) {
-      return initializer.expression.name?.escapedText === "split";
-    }
-    if (ts6.isArrayLiteralExpression(initializer)) {
-      return initializer.elements.length > 0 && initializer.elements.every((element) => element.kind === ts6.SyntaxKind.StringLiteral || element.kind === ts6.SyntaxKind.NoSubstitutionTemplateLiteral);
-    }
-    return false;
-  }
   isLeftSideOfAssignment(node) {
     const parent = node.parent;
     if (parent?.kind !== ts6.SyntaxKind.BinaryExpression || parent.left !== node) {
@@ -9344,27 +9286,15 @@ var JavaTranspiler = class extends BaseTranspiler {
       const target2 = this.printNode(node.expression, 0);
       return `((java.util.Map<String, Object>)${target2}).get(${this.printNode(key, 0)})`;
     }
+    if (!this.isJavaListStructureType(type)) {
+      return void 0;
+    }
     const index = Number(key.text);
-    if (!Number.isInteger(index) || index < 0) {
-      return void 0;
-    }
-    if (this.isJavaListStructureType(type)) {
-      if (index >= this.tupleRequiredElementCount(type)) {
-        return void 0;
-      }
-      const target2 = this.printNode(node.expression, 0);
-      return `((java.util.List<Object>)${target2}).get(${this.printNode(key, 0)})`;
-    }
-    if (!this.isJavaArrayStructureType(type)) {
-      return void 0;
-    }
-    if (!this.javaSideEffectFreeReference(node.expression) || this.javaStringElementsReceiver(node.expression)) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.tupleRequiredElementCount(type)) {
       return void 0;
     }
     const target = this.printNode(node.expression, 0);
-    const list = `((java.util.List<?>)${target})`;
-    const keyText = this.printNode(key, 0);
-    return `(${target} == null || ${keyText} >= ${list}.size() ? null : ${list}.get(${keyText}))`;
+    return `((java.util.List<Object>)${target}).get(${this.printNode(key, 0)})`;
   }
   printElementAccessExpression(node, identation) {
     const native = this.printCheckerTypedElementAccessRead(node);
