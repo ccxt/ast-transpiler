@@ -1147,6 +1147,9 @@ declare class RustTranspiler extends BaseTranspiler {
     printNativeNumericComparison(node: any, operator: any, leftText: any, rightText: any): string;
     isNumberLikeType(type: any): boolean;
     isStringLikeType(type: any): boolean;
+    private static readonly RUST_CONCAT_SAFE_FLAGS;
+    isStringOrNullishType(type: any): boolean;
+    isNativeStringConcatPair(leftType: any, rightType: any): boolean;
     printNativeAssignmentArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
     printNativeArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
     printNativeStringConcat(leftText: string, rightText: string): string;
