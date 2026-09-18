@@ -611,8 +611,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpBinaryExpressionPrintsBool(node: any): boolean;
     csharpIsCheckedBoolean(node: any): boolean;
     csharpIdentifierPrintsBool(node: any): boolean;
-    csharpCalleeName_Native(node: any): string | undefined;
-    csharpBoolCall_Native(node: any): boolean;
     csharpCallPrintsBool(node: any): boolean;
     printCondition(node: any, identation: any): any;
     csharpConditionParensIfNeeded(node: any, printed: string): string;

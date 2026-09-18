@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2763,18 +2763,6 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
-var CSHARP_BOOL_CALLEES_NATIVE = {
-  "this.isEmpty": true,
-  "this.isJsonEncodedObject": true,
-  "this.isBinaryMessage": true,
-  "Precise.stringGt": true,
-  "Precise.stringGe": true,
-  "Precise.stringLt": true,
-  "Precise.stringLe": true,
-  "Precise.stringEq": true,
-  "Precise.stringEquals": true
-};
-var CSHARP_HANDWRITTEN_CALLEES_NATIVE = ["isDictionary"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -4475,56 +4463,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpLocalTypes.get(declaration) === "bool";
   }
-  // the printed callee text of a method call the printer can name statically: `this.<name>` and
-  // `<Ident>.<name>`. A deeper receiver (`a.b.c(...)`) or a plain function call stays undefined —
-  // the hand-written-callee proof must know exactly which callee the emitted text binds
-  csharpCalleeName_Native(node) {
-    const expression = node?.expression;
-    if (expression?.kind !== ts4.SyntaxKind.PropertyAccessExpression) {
-      return void 0;
-    }
-    const receiver = expression.expression;
-    const name = expression.name?.escapedText;
-    if (receiver?.kind === ts4.SyntaxKind.ThisKeyword) {
-      return "this." + name;
-    }
-    if (receiver?.kind === ts4.SyntaxKind.Identifier) {
-      return receiver.escapedText + "." + name;
-    }
-    return void 0;
-  }
-  // cs-14: `isTrue(<call>)` is the identity on a C# bool, so it can go bare when the call's own
-  // C# signature is that non-nullable `bool`. Beyond the declared-return tables: (a) callees
-  // hand-written in cs/ccxt/base with a `bool` signature (CSHARP_BOOL_CALLEES_NATIVE), and (b) a
-  // `this.<name>(...)` whose TS declaration the generator itself prints — the method definition
-  // is spelled by the same csharpBooleanReturnType this asks, so declaration and call cannot
-  // disagree. Hand-written C# overrides of such names (CSHARP_HANDWRITTEN_CALLEES_NATIVE) and
-  // callees the printer renders as `callDynamically` (object) keep the wrapper.
-  csharpBoolCall_Native(node) {
-    const callee = this.csharpCalleeName_Native(node);
-    if (callee !== void 0 && CSHARP_BOOL_CALLEES_NATIVE[callee] === true) {
-      return true;
-    }
-    if (callee === void 0 || callee.indexOf("this.") !== 0) {
-      return false;
-    }
-    if (CSHARP_HANDWRITTEN_CALLEES_NATIVE.indexOf(callee.substring("this.".length)) > -1) {
-      return false;
-    }
-    if (!this.csharpCalleeResolves(node)) {
-      return false;
-    }
-    const signature = this.getChecker().getResolvedSignature(node);
-    const declaration = signature?.declaration;
-    if (declaration?.kind !== ts4.SyntaxKind.MethodDeclaration || declaration.body === void 0) {
-      return false;
-    }
-    return this.csharpBooleanReturnType(declaration) === "bool";
-  }
   // calls the printer gives a concrete bool signature (inArray, valueIsDefined, startsWith,
   // Array.isArray, ...); safeBool and friends are `bool?` / `object` and keep the wrapper
   csharpCallPrintsBool(node) {
-    return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === "bool" || this.csharpBoolCall_Native(node));
+    return this.csharpIsCheckedBoolean(node) && this.csharpCallReturnType(node) === "bool";
   }
   // same emission as the base implementation except for the bare-bool branch: the node is
   // printed once and only wrapped in isTrue(...) when the printer did not already render a bool
