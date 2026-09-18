@@ -106,6 +106,136 @@ const JAVA_SCALAR_TYPE_FLAGS: number = ts.TypeFlags.String | ts.TypeFlags.String
 const JAVA_NULLISH_TYPE_FLAGS: number = ts.TypeFlags.Undefined | ts.TypeFlags.Null
     | ts.TypeFlags.Void | ts.TypeFlags.Never;
 
+// hand-written `boolean` fields in the class body of BaseExchange.java / PredictionExchange.java
+// (the half hand-written base files the generated exchanges inherit): a read of one prints a
+// primitive Java boolean, so `this.<field>` IS the wrapper's result.
+const JAVA_BOOLEAN_BASE_FIELDS = new Set([
+    'this.alias',
+    'this.verbose',
+    'this.validateServerSsl',
+    'this.enableRateLimit',
+    'this.pro',
+    'this.certified',
+    'this.reloadingMarkets',
+    'this.marketsLoaded',
+    'this.reduceFees',
+    'this.substituteCommonCurrencyCodes',
+    'this.isSandboxModeEnabled',
+    'this.returnResponseHeaders',
+    'this.newUpdates',
+    'this.syncSleep',
+    // PredictionExchange.java
+    'this.reloadingEvents',
+]);
+
+// hand-written base methods declared `public boolean` (BaseExchange.java): a call prints a
+// primitive Java boolean, so a local fed by one holds a Boolean box or null.
+const JAVA_BOOLEAN_BASE_CALLS = new Set([
+    'valueIsDefined',
+    'inArray',
+    'isEmpty',
+    'isJsonEncodedObject',
+    'isBinaryMessage',
+]);
+
+// operators whose printed Java form is a primitive boolean on every path: the logical ones and
+// every comparison / `in` / `instanceof`-style test the printer lowers to Helpers.isEqual /
+// isGreaterThan / inOp (all declared `public static boolean`) or to a native Java boolean
+const JAVA_BOOLEAN_OPERATOR_KINDS: Set<number> = (() => {
+    const k: any = ts.SyntaxKind;
+    return new Set<number>([
+        k.AmpersandAmpersandToken,
+        k.BarBarToken,
+        k.EqualsEqualsToken,
+        k.EqualsEqualsEqualsToken,
+        k.ExclamationEqualsToken,
+        k.ExclamationEqualsEqualsToken,
+        k.LessThanToken,
+        k.LessThanEqualsToken,
+        k.GreaterThanToken,
+        k.GreaterThanEqualsToken,
+        k.InKeyword,
+        k.InstanceOfKeyword,
+    ]);
+})();
+
+// the relational `Precise.string*` statics are declared `public static boolean` in the
+// hand-written java/lib/src/main/java/io/github/ccxt/base/Precise.java, so their printed call is
+// already a Java primitive boolean (the String-returning statics are NOT listed here)
+const JAVA_PRECISE_BOOLEAN_STATICS: Set<string> = new Set([
+    'stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe',
+]);
+
+// The printer erases every TS return annotation to `Object` (DEFAULT_RETURN_TYPE), so a
+// condition wrapping one of these calls in Helpers.isTrue re-tests a value the port's
+// hand-written Java base already returns as a boolean. The Java declaration is the proof:
+// these methods are hand-written in java/lib/src/main/java/io/github/ccxt/BaseExchange.java,
+// above the "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT" delimiter, with exactly
+// these returns -- and a Java override must be covariant, so no generated venue method can
+// widen them (census: no ts/src/exchanges, pro or prediction file declares any of them).
+const JAVA_THIS_BOOLEAN_METHODS = new Set<string>([
+    'inArray',              // public boolean inArray (Object elem, Object list2)
+    'isArray',              // public boolean isArray (Object a)
+    'isEmpty',              // public boolean isEmpty (Object a)
+    'valueIsDefined',       // public boolean valueIsDefined (Object value)
+    'isJsonEncodedObject',  // public boolean isJsonEncodedObject (Object str)
+    'isBinaryMessage',      // public boolean isBinaryMessage (Object message)
+]);
+
+// The boolean accessors that are GENERATED below the delimiter (`Object safeBool (...)`) hand
+// the caller's own `defaultValue` back untouched whenever the found value is not a Boolean,
+// so the box is Boolean-or-null only when the call's default argument is absent or a boolean
+// literal (same proof as build/java-local-types.js HANDLE_ELEMENT_TYPES.defaultArg).
+// Value = the index of that default argument in the printed call.
+const JAVA_THIS_BOOLEAN_BOX_METHODS: { [name: string]: number } = {
+    'safeBool': 2,
+    'safeBool2': 3,
+    'safeBoolN': 2,
+};
+
+// the Java spellings a consumer declares a dict local with (import-shortened forms
+// included); every other declared type keeps Helpers.GetValue
+const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
+
+// receiver node kinds whose printed Java is a primary expression, so the `(String)`
+// checkcast in front of them binds the whole receiver (a native `+` prints its own parens)
+const JAVA_SPLIT_RECEIVER_KINDS: Set<number> = new Set<number>([
+    ts.SyntaxKind.Identifier,
+    ts.SyntaxKind.PropertyAccessExpression,
+    ts.SyntaxKind.ElementAccessExpression,
+    ts.SyntaxKind.CallExpression,
+    ts.SyntaxKind.ParenthesizedExpression,
+    ts.SyntaxKind.StringLiteral,
+    ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+]);
+
+// TS classes/interfaces whose hand-written java counterpart extends java.util.ArrayList<Object>
+// (java/lib/.../ws/ArrayCache.java and ws/OrderBookSide.java, plus the IndexedOrderBookSide and
+// Asks/Bids subclasses); every runtime value of these types answers `.length` with the list size
+const JAVA_LIST_BACKED_TS_CLASSES: Set<string> = new Set([
+    'ArrayCache',
+    'ArrayCacheByTimestamp',
+    'ArrayCacheBySymbolById',
+    'ArrayCacheByOutcomeById',
+    'ArrayCacheBySymbolBySide',
+    'OrderBookSide',
+    'IndexedOrderBookSide',
+    'Asks',
+    'Bids',
+    'IndexedAsks',
+    'IndexedBids',
+    'IOrderBookSide',
+]);
+
+// the Java spelling that lets the printed key go straight to containsKey: the helper only
+// looks a key up when it is a String, and a String-typed operand is one on every path
+const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
+
+const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
+    ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Null
+    | ts.TypeFlags.Void | ts.TypeFlags.Never | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional
+    | ts.TypeFlags.Enum | ts.TypeFlags.EnumLiteral;
+
 export class JavaTranspiler extends BaseTranspiler {
 
     // optional proof of the concrete printed Java type of an expression, installed by
@@ -118,7 +248,6 @@ export class JavaTranspiler extends BaseTranspiler {
     // the embedding build layer (build/java-local-types.js) installs this: it names the
     // Java type of a local whose printed declaration line it rewrote (`Long`/`Double`).
     // The arithmetic rule reads it for identifier operands only.
-    javaExpressionTypeResolver?: (node) => string | undefined;
 
     countRequiredParameters(declaration) {
         // parameters with no default, no question token and no rest are required positionally
@@ -1559,54 +1688,18 @@ export class JavaTranspiler extends BaseTranspiler {
     // declaration text (build/java-local-types.js): it records every name it typed here.
     // Reads consult it; with no consumer installed the table is empty and every read keeps
     // the helper.
-    javaDeclaredLocalTypeResolver: ((declaration: ts.Node) => string | undefined) | undefined;
-
-    // the declaration node behind an identifier, when the checker resolves one
-    javaDeclarationOfIdentifier(expression) {
-        if (!ts.isIdentifier(expression)) {
-            return undefined;
-        }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(expression);
-        } catch (e) {
-            return undefined;
-        }
-        const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
-        if (declaration === undefined) {
-            return undefined;
-        }
-        const kind = declaration.kind;
-        if (kind !== ts.SyntaxKind.VariableDeclaration && kind !== ts.SyntaxKind.Parameter) {
-            return undefined;
-        }
-        return declaration;
-    }
-
     // the declared Java type of an identifier, when a consumer installed the table
     javaDeclaredTypeOf(expression): string | undefined {
         const resolver = this.javaDeclaredLocalTypeResolver;
-        if (resolver === undefined) {
+        if (resolver === undefined || expression === undefined || !ts.isIdentifier(expression)) {
             return undefined;
         }
         const declaration = this.javaDeclarationOfIdentifier(expression);
-        if (declaration === undefined) {
+        if (declaration === undefined || expression.escapedText !== declaration.name?.escapedText) {
             return undefined;
         }
-        let type;
-        try {
-            type = resolver(declaration);
-        } catch (e) {
-            return undefined;
-        }
+        const type = resolver(declaration);
         return typeof type === 'string' ? type.trim() : undefined;
-    }
-
-    // `x` where the consumer declares x as a Java map: the declaration already carries the
-    // type, so `x.containsKey(k)` binds with no cast
-    javaDeclaredMapReceiver(expression) {
-        const type = this.javaDeclaredTypeOf(expression);
-        return type !== undefined && JAVA_DECLARED_MAP_TYPES.test(type);
     }
 
     // `k` where the consumer declares k as a Java String: the helper's String branch (the

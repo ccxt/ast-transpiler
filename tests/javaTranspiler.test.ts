@@ -3440,8 +3440,8 @@ describe('java string-concat chains anchored by a declared String', () => {
         "    }\n" +
         "}"
         const output = withStrings({ 'a': 'String' }, input);
-        expect(output).toContain('Object x = (a + b);');
-        expect(output).toContain('Object y = ((a + b) + a);');
+        expect(output).toContain('String x = (a + b);');
+        expect(output).toContain('String y = ((a + b) + a);');
         expect(output).not.toContain('Helpers.add(');
     });
     test('a String anchor on the right side is enough', () => {
@@ -3452,7 +3452,7 @@ describe('java string-concat chains anchored by a declared String', () => {
         "    }\n" +
         "}"
         const output = withStrings({ 'b': 'String' }, input);
-        expect(output).toContain('Object x = (a + b);');
+        expect(output).toContain('String x = (a + b);');
         expect(output).not.toContain('Helpers.add(');
     });
     test('no resolver verdict keeps the helper', () => {
@@ -3493,7 +3493,7 @@ describe('java string-concat chains anchored by a declared String', () => {
         "    }\n" +
         "}"
         const output = withStrings({ 'name': 'String' }, input);
-        expect(output).toContain('Object x = (name + this.tag());');
+        expect(output).toContain('String x = (name + this.tag());');
         expect(output).not.toContain('Helpers.add(');
     });
 });
@@ -4354,7 +4354,7 @@ describe('helper removal: native comparison / containsKey / size', () => {
         "    }\\n" +
         "}"
         const greaterOutput = transpiler.transpileJava(greater).content;
-        expect(greaterOutput).toContain("Helpers.mathPow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y))) > 5");
+        expect(greaterOutput).toContain("Math.pow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y))) > 5");
         expect(greaterOutput).not.toContain("Helpers.isGreaterThan");
         const greaterEqual =
         "class T {\\n" +
@@ -4363,7 +4363,7 @@ describe('helper removal: native comparison / containsKey / size', () => {
         "    }\\n" +
         "}"
         const greaterEqualOutput = transpiler.transpileJava(greaterEqual).content;
-        expect(greaterEqualOutput).toContain("Helpers.isGreaterThanOrEqual(Helpers.mathPow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y))), 5)");
+        expect(greaterEqualOutput).toContain("Helpers.isGreaterThanOrEqual(Math.pow(Double.parseDouble(Helpers.toString(x)), Double.parseDouble(Helpers.toString(y))), 5)");
     });
 
     test('two numeric literals compare natively, a fractional literal one-sidedly', () => {
@@ -4678,7 +4678,7 @@ describe('java replaceAll native emission', () => {
             "    }\n" +
             "}"
             const output = transpiler.transpileJava(input).content;
-            expect(output).toContain('Object x = (now - 7776000000L);');
+            expect(output).toContain('Long x = (now - 7776000000L);');
             expect(output).not.toContain('Helpers.subtract(');
         });
     });
@@ -4694,7 +4694,7 @@ describe('java replaceAll native emission', () => {
             "    }\n" +
             "}"
             const output = transpiler.transpileJava(input).content;
-            expect(output).toContain('Object x = (a * b);');
+            expect(output).toContain('Long x = (a * b);');
             expect(output).not.toContain('Helpers.multiply(');
         });
     });
@@ -4709,7 +4709,7 @@ describe('java replaceAll native emission', () => {
             "    }\n" +
             "}"
             const output = transpiler.transpileJava(input).content;
-            expect(output).toContain('Object x = (((double) ratio) / ((double) 1000));');
+            expect(output).toContain('Double x = (((double) ratio) / ((double) 1000));');
             expect(output).not.toContain('Helpers.divide(');
         });
     });
@@ -5464,7 +5464,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         expect(output).toContain("(Math.floor(Double.parseDouble(String.valueOf(10))))");
         expect(output).toContain("Math.round(Double.parseDouble(String.valueOf(1.5)))");
         expect(output).toContain("Math.ceil(Double.parseDouble(String.valueOf((((2L * 3L)) * 4L))))");
-        expect(output).toContain("Helpers.mathPow(Double.parseDouble(String.valueOf(2)), Double.parseDouble(String.valueOf(8)))");
+        expect(output).toContain("Math.pow(Double.parseDouble(String.valueOf(2)), Double.parseDouble(String.valueOf(8)))");
         expect(output).not.toContain("Helpers.toString(");
     });
 
@@ -5478,7 +5478,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("(Math.floor(Double.parseDouble(Helpers.toString(o))))");
-        expect(output).toContain("Helpers.mathPow(Double.parseDouble(String.valueOf(10)), Double.parseDouble(Helpers.toString(o)))");
+        expect(output).toContain("Math.pow(Double.parseDouble(String.valueOf(10)), Double.parseDouble(Helpers.toString(o)))");
         expect(output).not.toContain("String.valueOf(o)");
     });
 
@@ -6001,7 +6001,7 @@ describe('helper removal: Array.isArray -> native instanceof java.util.List', ()
         "    }\n" +
         "}\n"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.isArray(Helpers.GetValue(xs, 0))");
+        expect(output).toContain("Helpers.isArray((xs == null || 0 >= ((java.util.List<?>)xs).size() ? null : ((java.util.List<?>)xs).get(0)))");
         expect(output).not.toContain("instanceof java.util.List");
     });
 
