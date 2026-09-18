@@ -3853,6 +3853,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
           return inlined;
         }
       }
+      if (op === ts4.SyntaxKind.PlusToken) {
+        const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
+        if (nativeConcat !== void 0) {
+          return nativeConcat;
+        }
+      }
       const wrapper = this.binaryExpressionsWrappers[op];
       const open = wrapper[0];
       const close = wrapper[1];
@@ -4604,6 +4610,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the printer printed it, so the printer cannot see that rewrite on its own. Undefined by
   // default: the untyped emission is unchanged (every caller above keeps the helper form).
   csharpLocalTypeOf(node) {
+    return void 0;
+  }
+  // `add (x, y)` -> `(x + y)` when the consumer's classifier proves the LEFT operand's
+  // emitted declaration is a string (unit U57). The helper call such a left operand binds
+  // is add(string, string) (`a + b`) or add(string, object) (`a + b?.ToString()`), and C#'s
+  // string concatenation computes exactly that for both, null operands included -- so the
+  // operator and the helper are the same value. Undefined by default: without the hook the
+  // helper emission is byte-identical. The result is parenthesised because the printer
+  // embeds a subexpression's text in receivers and arguments, where `+` binds looser.
+  csharpNativeStringConcat(left, right, leftText, rightText) {
     return void 0;
   }
   // is this receiver expression, as printed, a local declared List<object> /

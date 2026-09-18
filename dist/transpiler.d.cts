@@ -599,6 +599,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     csharpLocalTypeOf(node: any): string | undefined;
+    csharpNativeStringConcat(left: any, right: any, leftText: string, rightText: string): string | undefined;
     csharpReceiverIsDeclaredList(receiver: any): boolean;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
