@@ -529,6 +529,10 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpTypeHasValueScalar(type: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpNullComparison(text: string, isEquality: boolean): string;
+    csharpNativeNumericCallEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpNumericCallKind(node: any): string | undefined;
+    csharpIntegerLiteralKind(node: any): string | undefined;
+    csharpNumericKindHoldsLiteral(callKind: string, literalKind: string): boolean;
     csharpExpressionTypeOf(node: any): string | undefined;
     csharpOperandsAreNumbers(node: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
