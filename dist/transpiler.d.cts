@@ -534,6 +534,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredTypeOfBinding(node: any): string | undefined;
     csharpValueEqualityKind(csharpType: any): string | undefined;
     csharpIsNullComparableType(csharpType: any): boolean;
+    csharpNullComparisonTypeIsProvable(csharpType: any): boolean;
     csharpOperandIsValueTyped(node: any): boolean;
     csharpTypeHasValueScalar(type: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
@@ -556,6 +557,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLengthExpression(expression: any): string | undefined;
     csharpLengthReceiverType(expression: any): string | undefined;
     csharpStringLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    csharpNullLiteralEquality(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    csharpOperandIsNullLiteral(node: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     csharpCallReturnType(initializer: any): string | undefined;
     csharpCalleeResolves(node: any): boolean;
@@ -602,6 +605,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     csharpLocalTypeOf(node: any): string | undefined;
+    csharpNullComparisonTypeOf(node: any): string | undefined;
     csharpReceiverIsDeclaredList(receiver: any): boolean;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;

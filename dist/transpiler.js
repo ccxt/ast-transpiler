@@ -2783,8 +2783,7 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
-var CSHARP_COUNT_TYPES = ["List<", "IList<", "Dictionary<", "IDictionary<", "ConcurrentDictionary<"];
-var CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)\)/;
+var CSHARP_NULL_COMPARISON_REFERENCE_HEADS = ["string", "IDictionary<", "Dictionary<", "IList<", "List<", "ConcurrentDictionary<", "ccxt.pro.", "ArrayCache", "IOrderBook", "Future", "WebSocketClient", "Delegates"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -3540,6 +3539,18 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpValueEqualityKind(csharpType) === void 0;
   }
+  // U55: the null-comparison rule's gate, stricter than csharpIsNullComparableType above:
+  // only a type the hook names (the emitted declaration's own text) is accepted, `object` /
+  // `var` included in the refusal because those are the boxes the classifier did not name.
+  csharpNullComparisonTypeIsProvable(csharpType) {
+    if (csharpType === void 0 || csharpType === "" || csharpType === "object" || csharpType === "var" || csharpType === "null") {
+      return false;
+    }
+    if (csharpType.endsWith("?")) {
+      return true;
+    }
+    return CSHARP_NULL_COMPARISON_REFERENCE_HEADS.some((head) => csharpType.startsWith(head));
+  }
   // TypeScript numbers and booleans are C# value types in this port (double / bool /
   // Int64 / int), and the ccxt build script retypes some `object` declarations to exactly
   // those from its own tables (precisionFromString -> int, milliseconds -> Int64,
@@ -3754,46 +3765,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
   // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
   csharpNativeLengthExpression(expression) {
-    if (this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
-      const receiver = this.csharpNativeReceiver(expression);
-      if (receiver !== void 0) {
-        return `${receiver.text}.Count`;
-      }
-    }
-    return this.csharpDeclaredLengthExpression(expression);
-  }
-  // the member that replaces getArrayLength on a declared C# type: Count counts the same
-  // elements the helper's IList / ICollection branches count, Length is its string branch.
-  // Any other declared type keeps the helper
-  csharpCountMemberOf(csharpType) {
-    if (csharpType === "string" || csharpType === "string?") {
-      return "Length";
-    }
-    return CSHARP_COUNT_TYPES.some((prefix) => csharpType.indexOf(prefix) === 0) ? "Count" : void 0;
-  }
-  // `x.length` -> `(x?.Count ?? 0)` for a receiver whose PRINTED declaration carries a
-  // collection / string type. The type comes from the embedding build layer's hook
-  // (csharpLengthReceiverType, installed by ccxt build/csharp-local-types.js for the
-  // receivers its own post-print passes do not rewrite), or from a cast the printer itself
-  // printed around the receiver. `?.` + `?? 0` is exactly the helper's null -> 0 and reads
-  // the receiver once, so no write scan is needed; without the hook (and without a cast)
-  // the emission is the unchanged getArrayLength call.
-  csharpDeclaredLengthExpression(expression) {
-    const printed = this.printNode(expression, 0).trim();
-    const cast = CSHARP_LENGTH_CAST.exec(printed);
-    const named = cast === null ? this.csharpLengthReceiverType(expression) : cast[1];
-    const member = named === void 0 ? void 0 : this.csharpCountMemberOf(named);
-    if (member === void 0) {
+    if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
       return void 0;
     }
-    const receiver = ts4.isIdentifier(expression) ? printed : `(${printed})`;
-    return `(${receiver}?.${member} ?? 0)`;
-  }
-  // the C# type the emitted declaration gives a `.length` receiver, or undefined when this
-  // printer names none. Installed by build/csharp-local-types.js; undefined by default, so
-  // the untyped emission is byte-identical without the override
-  csharpLengthReceiverType(expression) {
-    return void 0;
+    const receiver = this.csharpNativeReceiver(expression);
+    if (receiver === void 0) {
+      return void 0;
+    }
+    return `${receiver.text}.Count`;
   }
   // `isEqual (x, "lit")` -> `x == "lit"` when the operand's emitted declaration is a string.
   // A string literal is never null, and isEqual's string branch is `((string)a) == ((string)b)`,
@@ -3821,6 +3800,42 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     return `${leftText} ${inequality ? "!=" : "=="} ${rightText}`;
+  }
+  // U55: `isEqual (x, null)` -> `x == null` (and `!isEqual (x, null)` -> `x != null`) when the
+  // operand's emitted declaration is a typed reference or a nullable value scalar. The helper's
+  // first two guards are `a == null && b == null` / `a == null || b == null`, so with the null
+  // literal on one side it returns exactly the C# null test — reference equality for a reference
+  // type, `!HasValue` for `T?` — and never reaches a typed branch. `null` and the `undefined`
+  // identifier print as the same literal. Gated on the csharpNullComparisonTypeOf hook: an
+  // operand the embedding classifier cannot name (a parameter, a member read, an `object` local,
+  // a call result) keeps the helper call, so the untyped emission is byte-identical.
+  csharpNullLiteralEquality(op, left, right, leftText, rightText) {
+    const equality = op === ts4.SyntaxKind.EqualsEqualsToken || op === ts4.SyntaxKind.EqualsEqualsEqualsToken;
+    const inequality = op === ts4.SyntaxKind.ExclamationEqualsToken || op === ts4.SyntaxKind.ExclamationEqualsEqualsToken;
+    if (!equality && !inequality) {
+      return void 0;
+    }
+    const leftNull = this.csharpOperandIsNullLiteral(left);
+    const rightNull = this.csharpOperandIsNullLiteral(right);
+    if (leftNull === rightNull) {
+      return void 0;
+    }
+    let operand = leftNull ? right : left;
+    while (operand?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
+      operand = operand.expression;
+    }
+    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const operandType = typeof this.csharpNullComparisonTypeOf === "function" ? this.csharpNullComparisonTypeOf(operand) : void 0;
+    if (!this.csharpNullComparisonTypeIsProvable(operandType)) {
+      return void 0;
+    }
+    return this.csharpNullComparison(leftNull ? rightText : leftText, equality);
+  }
+  // `null` and the `undefined` identifier both print as the C# null literal
+  csharpOperandIsNullLiteral(node) {
+    return node?.kind === ts4.SyntaxKind.NullKeyword || node?.kind === ts4.SyntaxKind.Identifier && node.escapedText === "undefined";
   }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
@@ -3881,6 +3896,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const nativeEquality = this.csharpStringLiteralEquality(op, left, right, leftText, rightText);
         if (nativeEquality !== void 0) {
           return nativeEquality;
+        }
+        const nativeNullEquality = this.csharpNullLiteralEquality(op, left, right, leftText, rightText);
+        if (nativeNullEquality !== void 0) {
+          return nativeNullEquality;
         }
         const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
         if (inlined !== void 0) {
@@ -4638,6 +4657,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the printer printed it, so the printer cannot see that rewrite on its own. Undefined by
   // default: the untyped emission is unchanged (every caller above keeps the helper form).
   csharpLocalTypeOf(node) {
+    return void 0;
+  }
+  // U55: the emitted C# type of an identifier operand of a null comparison, installed by
+  // build/csharp-local-types.js from the PRINTED declaration lines (the same record the
+  // string-equality hook reads) — a type the printer cannot see for itself, because the
+  // classifier retypes the declaration after printing it. Undefined by default: without the
+  // embedding classifier every null comparison keeps the isEqual helper, byte-identical.
+  csharpNullComparisonTypeOf(node) {
     return void 0;
   }
   // is this receiver expression, as printed, a local declared List<object> /
