@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2762,7 +2762,6 @@ var CSHARP_NATIVE_FIELDS = {
   "ids": "List<object>"
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
-var CSHARP_MISSING_KEY_FIELDS_NATIVE = ["has", "options", "urls"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
@@ -3012,7 +3011,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
     const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
     if (!builtFromLiteral && !guarded) {
-      return this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey);
+      return void 0;
     }
     const receiver = this.printNode(expression, 0);
     const printedKey = this.printNode(argumentExpression, 0);
@@ -3020,25 +3019,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
     }
     return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
-  }
-  // a read of a hand-written BaseExchange dictionary field whose key may be absent: the key
-  // test plus the indexer print what the helper computes, so a missing key still reads null
-  // (a bare indexer would throw). Any other receiver or a numeric key keeps the helper
-  csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey) {
-    if (!isStringKey) {
-      return void 0;
-    }
-    if (!ts4.isPropertyAccessExpression(expression) || expression.expression.kind !== ts4.SyntaxKind.ThisKeyword) {
-      return void 0;
-    }
-    const name = expression.name?.escapedText;
-    if (CSHARP_MISSING_KEY_FIELDS_NATIVE.indexOf(name) < 0) {
-      return void 0;
-    }
-    const field = this.printNode(expression, 0);
-    const printedKey = this.printNode(argumentExpression, 0);
-    const receiver = CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0 ? `((IDictionary<string, object>)${field})` : field;
-    return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
   }
   // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
   // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`

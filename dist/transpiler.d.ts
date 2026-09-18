@@ -506,7 +506,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
-    csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
     csharpGuardAdmitsRead(guard: any, read: any): boolean;
     csharpInGuardsOf(func: any): Map<string, any[]>;
