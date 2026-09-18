@@ -4786,32 +4786,6 @@ var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.LessThanEqualsToken]: "<="
 };
 var GO_STRING_FIELD_NAMES = ["Id", "Name", "Version"];
-var GO_NIL_EQUIVALENT_POINTER_TYPES_Native = /* @__PURE__ */ new Set([
-  "*sync.Map",
-  "*string",
-  "*int64",
-  "*float64",
-  "*bool",
-  "*int",
-  "*[]string",
-  "*[]any",
-  "*map[string]any"
-]);
-var GO_NILABLE_FIELDS_Typed = {
-  "this.Options": "*sync.Map",
-  "this.Markets": "*sync.Map",
-  "this.Markets_by_id": "*sync.Map",
-  "this.MarketsById": "*sync.Map",
-  "this.Currencies": "*sync.Map",
-  "this.Currencies_by_id": "*sync.Map",
-  "this.CurrenciesById": "*sync.Map",
-  "this.BaseCurrencies": "*sync.Map",
-  "this.QuoteCurrencies": "*sync.Map",
-  "this.Tickers": "*sync.Map",
-  "this.Orderbooks": "*sync.Map",
-  "this.Bidsasks": "*sync.Map",
-  "this.Transactions": "*sync.Map"
-};
 var GO_ARITHMETIC_KINDS = [
   ts5.SyntaxKind.PlusToken,
   ts5.SyntaxKind.MinusToken,
@@ -6647,12 +6621,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const declared = this.goDeclaredTypeOfIdentifier(node);
     if (typeof declared === "string" && declared.startsWith("*")) {
       return declared;
-    }
-    if (node?.kind === ts5.SyntaxKind.PropertyAccessExpression) {
-      const fieldType = GO_NILABLE_FIELDS_Typed[printedText];
-      if (typeof fieldType === "string" && GO_NIL_EQUIVALENT_POINTER_TYPES_Native.has(fieldType)) {
-        return fieldType;
-      }
     }
     if (node?.kind === ts5.SyntaxKind.CallExpression) {
       const goType = this.goTypeOfInitializer(node, printedText);
