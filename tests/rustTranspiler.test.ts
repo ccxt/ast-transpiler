@@ -321,6 +321,132 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('is_less_than(&a, &b)');
     });
 
+    // One number at runtime already pins `<`/`>` to the helper's f64 compare
+    // (its lexical branch needs two strings), so an `any` other side folds too.
+    test('less than with a single typed number operand is native', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x < y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) < y.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_less_than(');
+    });
+
+    test('greater than with a single typed number operand is native', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x > y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) > y.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_greater_than(');
+    });
+
+    // `>=`/`<=` also OR `is_equal` in, which is TRUE for two Nulls — an `any`
+    // operand can be Null, so a nullable number is not enough for them.
+    test('greater or equal with a single typed number operand keeps the helper', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x >= y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_greater_than_or_equal(&x, &y)');
+    });
+
+    test('less or equal with a single typed number operand keeps the helper', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if (x <= y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_less_than_or_equal(&x, &y)');
+    });
+
+    // A numeric literal / `.length` / `indexOf` is Int or Float at runtime,
+    // never Null, so it satisfies even the is_equal-folding operators.
+    test('greater or equal against a numeric literal is native', () => {
+        const ts =
+        "function f(x: any) {\n" +
+        "    if (x >= 0) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) >= Value::Int(0).as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_greater_than_or_equal(');
+    });
+
+    test('less or equal with the literal on the left is native', () => {
+        const ts =
+        "function f(x: any) {\n" +
+        "    if (0 <= x) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if Value::Int(0).as_f64().unwrap_or(f64::NAN) <= x.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_less_than_or_equal(');
+    });
+
+    test('less or equal on two lengths is native', () => {
+        const ts =
+        "function f(xs: any, ys: any) {\n" +
+        "    if (xs.length <= ys.length) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_array_length(&xs).as_f64().unwrap_or(f64::NAN) <= get_array_length(&ys).as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_less_than_or_equal(');
+    });
+
+    test('greater or equal on an indexOf result is native', () => {
+        const ts =
+        "function f(s: any, n: any) {\n" +
+        "    if (s.indexOf('a') >= n) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_index_of(&s, &Value::Str("a".to_string())).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
+        expect(output).not.toContain('is_greater_than_or_equal(');
+    });
+
+    // `x as T` prints as `x`, so the assertion must not hide the operand's shape.
+    test('as-asserted number operand compares natively', () => {
+        const ts =
+        "function f(x: any, y: number) {\n" +
+        "    if ((x as number) > y) {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if x.as_f64().unwrap_or(f64::NAN) > y.as_f64().unwrap_or(f64::NAN) {');
+        expect(output).not.toContain('is_greater_than(');
+    });
+
+    // Two strings are the helper's lexical branch — a numeric-string literal
+    // goes through the same path, so it must keep the helper.
+    test('string against a numeric-string literal keeps the helper', () => {
+        const ts =
+        "function f(hex: string) {\n" +
+        "    if (hex >= '80') {\n" +
+        "        const z = 1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_greater_than_or_equal(&hex, &Value::Str("80".to_string()))');
+    });
+
     test('object keys', () => {
         const ts = "const k = Object.keys(d);"
         const output = transpiler.transpileRust(ts).content;

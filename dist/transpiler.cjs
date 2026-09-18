@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -11081,6 +11081,51 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
     return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
   }
+  // How numeric an ordered-comparison operand is: 'definite' (numeric
+  // literal / `.length` / `indexOf` — Int/Float at runtime, never Null),
+  // 'number' (checker-typed — Int, Float or Null, never a string), undefined.
+  rustNumericOperandKind(node) {
+    const inner = this.orderedComparisonOperand(node);
+    if (inner.kind === SyntaxKind4.NumericLiteral) {
+      return "definite";
+    }
+    if (_typescript2.default.isPropertyAccessExpression(inner) && inner.name.escapedText === "length") {
+      return "definite";
+    }
+    if (inner.kind === SyntaxKind4.CallExpression && this.callExpressionName(inner) === "indexOf") {
+      return "definite";
+    }
+    return this.isNumberTyped(node) ? "number" : void 0;
+  }
+  // Parens and `x as T` print as the operand itself (printAsExpression drops
+  // the assertion), so the operand's own shape drives the emission.
+  orderedComparisonOperand(node) {
+    let inner = node;
+    while (inner !== void 0 && (_typescript2.default.isParenthesizedExpression(inner) || _typescript2.default.isAsExpression(inner))) {
+      inner = inner.expression;
+    }
+    return inner;
+  }
+  // Native text for an `is_less_than`-family call, undefined unless the
+  // operands prove the helper's answer: one number pins `<`/`>`; `>=`/`<=`
+  // OR `is_equal` in (TRUE for two Nulls) and need a 'definite' operand.
+  printNativeOrderedComparison(node, op, left, right) {
+    const operator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+    if (operator === void 0) {
+      return void 0;
+    }
+    if (!this.printsValueExpression(this.orderedComparisonOperand(left)) || !this.printsValueExpression(this.orderedComparisonOperand(right))) {
+      return void 0;
+    }
+    const leftKind = this.rustNumericOperandKind(left);
+    const rightKind = this.rustNumericOperandKind(right);
+    const ordered = op === SyntaxKind4.LessThanToken || op === SyntaxKind4.GreaterThanToken;
+    const proven = leftKind === "definite" || rightKind === "definite" || (ordered ? leftKind !== void 0 || rightKind !== void 0 : leftKind === "number" && rightKind === "number");
+    if (!proven) {
+      return void 0;
+    }
+    return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+  }
   // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
   // When the checker proves both operands are numbers (`Int`/`Float` at
   // runtime) or, for `+`, both are strings, the helper call is replaced by
@@ -11264,8 +11309,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (op in this.binaryExpressionsWrappers) {
       const nativeOperator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
-      if (nativeOperator !== void 0 && this.isNumberTyped(left) && this.isNumberTyped(right)) {
-        return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
+      if (nativeOperator !== void 0) {
+        const native2 = this.printNativeOrderedComparison(node, op, left, right);
+        if (native2 !== void 0) {
+          return native2;
+        }
       }
       const [fnName, close] = this.binaryExpressionsWrappers[op];
       const leftText = this.printNode(left, 0);
