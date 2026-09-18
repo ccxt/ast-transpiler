@@ -1912,9 +1912,123 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined {
-        if (!this.isProvenMapExpression(receiverNode)) return undefined;
+        if (!this.isProvenMapExpression(receiverNode)) {
+            // Declared-Dict locals read natively too (see the classifier below).
+            if (!this.rustIsDeclaredDictLocal(receiverNode)) return undefined;
+            if (RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText)) return undefined;
+            if (keyText === '' || /^\d+$/.test(keyText)) return undefined;
+        }
         const key = this.escapeRustStringLiteral(keyText);
         return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+    }
+
+    // ── declared-Dict locals ──────────────────────────────────────────────────
+    // The TS checker types many dict-holding locals `any` (an element read off
+    // a `Dictionary<T>`, a default-valued bag, a reader whose return type is
+    // `any`), which costs them the proof above. The declaration still proves a
+    // plain dict: object literal, `getArg(.., {})` bag, `this.safeDict`, an
+    // `extend` onto one of those, or an element of a container whose declared
+    // element type is a map. Such a local holds a `Value::Dict` at every read.
+
+    /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
+     *  live `__live_id` snapshot instead of from the dict itself: those routes
+     *  are invisible to a plain map read, so they keep the helper. */
+    static readonly RUST_DICT_LOCAL_UNSAFE_KEYS = new Set([
+        'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache',
+        'hashmap', 'subscriptions', 'futures',
+    ]);
+
+    rustDeclarationOfIdentifier(node: ts.Node): ts.Declaration | undefined {
+        if (!ts.isIdentifier(node)) return undefined;
+        try {
+            const symbol: any = this.getChecker().getSymbolAtLocation(node);
+            return symbol?.valueDeclaration;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /** Initializer shapes that construct or return a plain dict. */
+    rustDictProducingInitializer(node: ts.Node | undefined, seen: Set<ts.Node>): boolean {
+        if (node === undefined || node === null || seen.has(node)) return false;
+        seen.add(node);
+        if (ts.isObjectLiteralExpression(node)) return true;
+        if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+            ts.isNonNullExpression(node) || ts.isTypeAssertionExpression(node)) {
+            return this.rustDictProducingInitializer((node as any).expression, seen);
+        }
+        if (ts.isIdentifier(node)) {
+            const declaration: any = this.rustDeclarationOfIdentifier(node);
+            if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return false;
+            return this.rustDictProducingInitializer(declaration.initializer, seen);
+        }
+        if (ts.isElementAccessExpression(node)) {
+            // `this.markets[symbol]`: the container's declared element type is
+            // what the rust port stores there.
+            const containerType = this.getCheckedTypeOf((node as any).expression);
+            if (containerType === undefined) return false;
+            const elementType = this.getChecker().getIndexTypeOfType(containerType, ts.IndexKind.String);
+            return elementType !== undefined && this.isProvenMapType(elementType);
+        }
+        if (!ts.isCallExpression(node)) return false;
+        const callee: any = (node as any).expression;
+        if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = String(callee.name.escapedText);
+        // Readers whose rust counterpart returns the stored dict itself.
+        if (name === 'safeDict' || name === 'safeMarketStructure' || name === 'market' ||
+            name === 'currency' || name === 'safeMarket' || name === 'safeCurrency') {
+            return true;
+        }
+        // `extend`/`deepExtend` merge onto their first argument.
+        if (name === 'extend' || name === 'deepExtend') {
+            return this.rustDictProducingInitializer((node as any).arguments[0], seen);
+        }
+        return false;
+    }
+
+    /** D2: the proof holds only while nothing re-assigns the local. */
+    rustLocalIsReassigned(declaration: ts.Declaration, name: string): boolean {
+        let scope: ts.Node | undefined = declaration;
+        while (scope !== undefined && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) {
+            scope = scope.parent;
+        }
+        if (scope === undefined) return true;
+        let reassigned = false;
+        const visit = (node: ts.Node) => {
+            if (reassigned) return;
+            if (ts.isBinaryExpression(node)) {
+                const operator = node.operatorToken.kind;
+                if (operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment &&
+                    ts.isIdentifier(node.left) && node.left.text === name) {
+                    reassigned = true;
+                    return;
+                }
+            }
+            ts.forEachChild(node, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return reassigned;
+    }
+
+    /** True when the receiver is a local declared as (or provably holding) a
+     *  plain dict — `get_value(_k)` and this read agree on every key the
+     *  runtime does not route elsewhere. */
+    rustIsDeclaredDictLocal(node: ts.Node): boolean {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined) return false;
+        const name = declaration.name?.text;
+        if (typeof name !== 'string') return false;
+        let initializer: ts.Node | undefined;
+        if (ts.isParameter(declaration)) {
+            initializer = declaration.initializer;
+        } else if (ts.isVariableDeclaration(declaration)) {
+            initializer = declaration.initializer;
+        }
+        if (initializer === undefined) return false;
+        if (!this.rustDictProducingInitializer(initializer, new Set())) return false;
+        return !this.rustLocalIsReassigned(declaration, name);
     }
 
     isNodeInsideNode(node: ts.Node, container: ts.Node): boolean {
