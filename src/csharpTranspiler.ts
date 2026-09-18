@@ -88,6 +88,20 @@ const CSHARP_STATIC_RETURN_TYPES: { [name: string]: string } = {
     'Number.isInteger': 'bool',
 };
 
+// delegate-valued members of the hand-written C# base (cs/ccxt/base/Exchange.Options.cs):
+// `Func<...>` with this many parameters, so `this.<name>(args)` with that arity is a direct
+// delegate invocation. `proxy` is a `string` there — not callable — and stays out.
+const CSHARP_NATIVE_THIS_DELEGATE_ARITY: { [name: string]: number } = {
+    'proxyUrlCallback': 3,
+    'proxy_url_callback': 3,
+    'httpProxyCallback': 4,
+    'http_proxy_callback': 4,
+    'httpsProxyCallback': 4,
+    'https_proxy_callback': 4,
+    'socksProxyCallback': 3,
+    'socks_proxy_callback': 3,
+};
+
 // base-class helpers whose C# signature is already concrete
 const CSHARP_THIS_RETURN_TYPES: { [name: string]: string } = {
     'extend': 'Dictionary<string, object>',
@@ -744,6 +758,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             let parsedArguments = node.arguments?.map((a) => this.printNode(a, 0)).join(", ");
             parsedArguments = parsedArguments ? parsedArguments : "";
             const propName = node.expression?.name.escapedText;
+            const nativeDelegateCall = this.csharpNativeDelegateCall(node, propName);
+            if (nativeDelegateCall !== undefined) {
+                return nativeDelegateCall;
+            }
             // const isAsyncDecl = true;
             const isAsyncDecl = node?.parent?.kind === ts.SyntaxKind.AwaitExpression;
             // const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
@@ -756,6 +774,24 @@ export class CSharpTranspiler extends BaseTranspiler {
             return statement;
         }
         return undefined;
+    }
+
+    // A `this.<name>(...)` call the checker cannot resolve on a function-valued property is a
+    // delegate in the hand-written C# base, which `ResolveMethod` never finds (the helper throws
+    // there); matching arity prints the same property invocation directly.
+    csharpNativeDelegateCall(node, propName): string | undefined {
+        const arity = CSHARP_NATIVE_THIS_DELEGATE_ARITY[propName as string];
+        if (arity === undefined) {
+            return undefined;
+        }
+        if (node?.parent?.kind === ts.SyntaxKind.AwaitExpression) {
+            return undefined; // the delegate returns object, not a Task
+        }
+        const args = node.arguments ?? [];
+        if (args.length !== arity) {
+            return undefined;
+        }
+        return `this.${propName as string}(${args.map((a) => this.printNode(a, 0)).join(", ")})`;
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {

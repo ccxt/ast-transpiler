@@ -1803,4 +1803,61 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('public virtual object main(object key)');
         expect(output).toContain('if (inOp(this.options, key))');
     });
+    test('a this-call on a delegate-valued base member prints the direct invocation', () => {
+        // httpProxyCallback is `Func<object, object, object, object, object>` in
+        // cs/ccxt/base/Exchange.Options.cs (4 parameters), so a 4-argument call is the
+        // delegate invocation; ResolveMethod only finds methods, so the helper cannot
+        // invoke it (callDynamically throws there)
+        const input =
+        "class Exchange {\n" +
+        "    httpProxyCallback: any;\n" +
+        "    main(url, method, headers, body) {\n" +
+        "        const a = this.httpProxyCallback(url, method, headers, body);\n" +
+        "        const b = this.https_proxy_callback(url, method, headers, body);\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = this.httpProxyCallback(url, method, headers, body);');
+        expect(output).toContain('object b = this.https_proxy_callback(url, method, headers, body);');
+        expect(output).not.toContain('callDynamically(this, "httpProxyCallback"');
+        expect(output).not.toContain('callDynamically(this, "https_proxy_callback"');
+    });
+    test('a 3-parameter delegate member takes exactly three arguments', () => {
+        // proxyUrlCallback is `Func<object, object, object, object>` (3 parameters):
+        // the matching call goes native, the 4-argument one the TS corpus writes keeps
+        // the helper (a 4-argument call of a 3-parameter delegate does not compile)
+        const input =
+        "class Exchange {\n" +
+        "    proxyUrlCallback: any;\n" +
+        "    main(url, method, headers, body) {\n" +
+        "        const three = this.proxyUrlCallback(url, method, headers);\n" +
+        "        const four = this.proxyUrlCallback(url, method, headers, body);\n" +
+        "        return [three, four];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object three = this.proxyUrlCallback(url, method, headers);');
+        expect(output).toContain('object four = callDynamically(this, "proxyUrlCallback", new object[] { url, method, headers, body })');
+    });
+    test('an awaited delegate-member call or a non-delegate name keeps callDynamically', () => {
+        // the delegates return object, not a Task, so an awaited call cannot go native;
+        // `proxy` is a `string` member there and `someAnyFn` is not in the table at all
+        const input =
+        "class Exchange {\n" +
+        "    httpProxyCallback: any;\n" +
+        "    proxy: any;\n" +
+        "    someAnyFn: any;\n" +
+        "    async main(url, method, headers, body) {\n" +
+        "        const a = await this.httpProxyCallback(url, method, headers, body);\n" +
+        "        const b = this.proxy(url, method, headers, body);\n" +
+        "        const c = this.someAnyFn(url, method, headers, body);\n" +
+        "        return [a, b, c];\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object a = await ((Task<object>)callDynamically(this, "httpProxyCallback", new object[] { url, method, headers, body }));');
+        expect(output).toContain('object b = callDynamically(this, "proxy", new object[] { url, method, headers, body })');
+        expect(output).toContain('object c = callDynamically(this, "someAnyFn", new object[] { url, method, headers, body })');
+    });
 });

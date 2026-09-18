@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2666,6 +2666,16 @@ var CSHARP_STATIC_RETURN_TYPES = {
   "Array.isArray": "bool",
   "Number.isInteger": "bool"
 };
+var CSHARP_NATIVE_THIS_DELEGATE_ARITY = {
+  "proxyUrlCallback": 3,
+  "proxy_url_callback": 3,
+  "httpProxyCallback": 4,
+  "http_proxy_callback": 4,
+  "httpsProxyCallback": 4,
+  "https_proxy_callback": 4,
+  "socksProxyCallback": 3,
+  "socks_proxy_callback": 3
+};
 var CSHARP_THIS_RETURN_TYPES = {
   "extend": "Dictionary<string, object>",
   "deepExtend": "Dictionary<string, object>",
@@ -3224,6 +3234,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
       let parsedArguments = node.arguments?.map((a) => this.printNode(a, 0)).join(", ");
       parsedArguments = parsedArguments ? parsedArguments : "";
       const propName = node.expression?.name.escapedText;
+      const nativeDelegateCall = this.csharpNativeDelegateCall(node, propName);
+      if (nativeDelegateCall !== void 0) {
+        return nativeDelegateCall;
+      }
       const isAsyncDecl = node?.parent?.kind === ts4.SyntaxKind.AwaitExpression;
       const argsArray = `new object[] { ${parsedArguments} }`;
       const open = this.DYNAMIC_CALL_OPEN;
@@ -3232,6 +3246,23 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return statement;
     }
     return void 0;
+  }
+  // A `this.<name>(...)` call the checker cannot resolve on a function-valued property is a
+  // delegate in the hand-written C# base, which `ResolveMethod` never finds (the helper throws
+  // there); matching arity prints the same property invocation directly.
+  csharpNativeDelegateCall(node, propName) {
+    const arity = CSHARP_NATIVE_THIS_DELEGATE_ARITY[propName];
+    if (arity === void 0) {
+      return void 0;
+    }
+    if (node?.parent?.kind === ts4.SyntaxKind.AwaitExpression) {
+      return void 0;
+    }
+    const args = node.arguments ?? [];
+    if (args.length !== arity) {
+      return void 0;
+    }
+    return `this.${propName}(${args.map((a) => this.printNode(a, 0)).join(", ")})`;
   }
   printOutOfOrderCallExpressionIfAny(node, identation) {
     if (node.expression.kind === ts4.SyntaxKind.PropertyAccessExpression) {
