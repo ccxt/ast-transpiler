@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4374,6 +4374,20 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.warnIfAnyType(node, type.flags, leftSide, "length");
     return this.isStringType(type.flags) ? `((string)${leftSide}).Length` : this.csharpNativeLengthExpression(node.expression) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
   }
+  // a for-header incrementor discards the postfix value, so an operand whose printed C#
+  // type this printer can name as `int` takes the native operator: the same unchecked
+  // +1 / -1 as the (ref int) helper twin (whose return value nothing here reads). Any
+  // other operand keeps the helper, whose overload set is what binds an `object` counter.
+  csharpNativePostFixIncrement(node) {
+    if (node.operand?.kind !== ts4.SyntaxKind.Identifier) {
+      return false;
+    }
+    const parent = node.parent;
+    if (parent?.kind !== ts4.SyntaxKind.ForStatement || parent.incrementor !== node) {
+      return false;
+    }
+    return this.csharpExpressionTypeOf(node.operand) === "int";
+  }
   printPostFixUnaryExpression(node, identation) {
     const { operand, operator } = node;
     if (operand.kind === ts4.SyntaxKind.NumericLiteral) {
@@ -4381,6 +4395,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const leftSide = this.printNode(operand, 0);
     const op = this.PostFixOperators[operator];
+    if (this.csharpNativePostFixIncrement(node)) {
+      return `${leftSide}${op}`;
+    }
     if (op === "--") {
       return `postFixDecrement(ref ${leftSide})`;
     }

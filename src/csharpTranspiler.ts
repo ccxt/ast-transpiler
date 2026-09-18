@@ -2531,6 +2531,21 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.isStringType(type.flags) ? `((string)${leftSide}).Length` : (this.csharpNativeLengthExpression(node.expression) ?? `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`);
     }
 
+    // a for-header incrementor discards the postfix value, so an operand whose printed C#
+    // type this printer can name as `int` takes the native operator: the same unchecked
+    // +1 / -1 as the (ref int) helper twin (whose return value nothing here reads). Any
+    // other operand keeps the helper, whose overload set is what binds an `object` counter.
+    csharpNativePostFixIncrement(node): boolean {
+        if (node.operand?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const parent = node.parent;
+        if (parent?.kind !== ts.SyntaxKind.ForStatement || parent.incrementor !== node) {
+            return false;
+        }
+        return this.csharpExpressionTypeOf(node.operand) === 'int';
+    }
+
     printPostFixUnaryExpression(node, identation) {
         const {operand, operator} = node;
         if (operand.kind === ts.SyntaxKind.NumericLiteral) {
@@ -2538,6 +2553,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const leftSide = this.printNode(operand, 0);
         const op = this.PostFixOperators[operator]; // todo: handle --
+        if (this.csharpNativePostFixIncrement(node)) {
+            return `${leftSide}${op}`;
+        }
         if (op === '--') {
             return `postFixDecrement(ref ${leftSide})`;
         }
