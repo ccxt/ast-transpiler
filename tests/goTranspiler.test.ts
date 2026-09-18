@@ -1,5 +1,7 @@
 import { assert } from 'console';
-import { Transpiler } from '../src/transpiler';
+import { Transpiler, alignGoTrailingComments } from '../src/transpiler';
+
+import { SyntaxKind } from 'typescript';
 import { readFileSync } from 'fs';
 
 jest.mock('module',()=>({
@@ -42,8 +44,8 @@ describe('go transpiling tests', () => {
         "}"
         const go =
         "for true {\n" +
-        "    var x any = 1\n" +
-        "    break\n" +
+        "\tvar x any = 1\n" +
+        "\tbreak\n" +
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -57,17 +59,49 @@ describe('go transpiling tests', () => {
         "}";
         const go =
         "type Test struct {\n"+
-        "\n"+
         "}\n"+
         "\n"+
         "func NewTest() *Test {\n"+
-        "    p := &Test{}\n"+
-        "    setDefaults(p)\n"+
-        "    return p\n"+
+        "\tp := &Test{}\n"+
+        "\tsetDefaults(p)\n"+
+        "\treturn p\n"+
         "}\n"+
         "\n"+
-        "func  (this *Test) Main() any  {\n"+
-        "    return 1\n"+
+        "func (this *Test) Main() any {\n"+
+        "\treturn 1\n"+
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toBe(go);
+    });
+    test('struct field columns are aligned like go/printer (tabwriter, block per column)', () => {
+        // gofmt pads every field cell to the widest cell of its column block plus one: the
+        // embedded `Base` has no type cell, so it terminates the block it opens, and the
+        // untagged `NoTag` terminates the type block (its type is the trailing cell).
+        const ts =
+        "class Test extends Base {\n" +
+        "    short: string = '';\n" +
+        "    aLongerPropertyName: any = {};\n" +
+        "    noTag: any;\n" +
+        "    main() {\n" +
+        "        return 1\n" +
+        "    }\n" +
+        "}";
+        const go =
+        "type Test struct {\n" +
+        "\tBase\n" +
+        "\tShort               string `default:\"\"`\n" +
+        "\tALongerPropertyName any    `default:\"map[string]any{}\"`\n" +
+        "\tNoTag               any\n" +
+        "}\n" +
+        "\n" +
+        "func NewTest() *Test {\n" +
+        "\tp := &Test{}\n" +
+        "\tsetDefaults(p)\n" +
+        "\treturn p\n" +
+        "}\n" +
+        "\n" +
+        "func (this *Test) Main() any {\n" +
+        "\treturn 1\n" +
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -88,8 +122,8 @@ describe('go transpiling tests', () => {
         "var c bool = (a != \"\") && b\n" +
         "var d bool = !(a != \"\") && !b\n" +
         "var e bool = ((a != \"\") || !b)\n" +
-        "if (a != \"\") {\n" +
-        "    var f any = 1\n" +
+        "if a != \"\" {\n" +
+        "\tvar f any = 1\n" +
         "}"
         const output = transpiler.transpileGo(ts).content;
         expect(output).toBe(go);
@@ -119,7 +153,7 @@ describe('go transpiling tests', () => {
     // "   return p\n"+
     // "}\n"+
     // "\n"+
-    // "func  (this *A) Main() any  {\n"+
+    // "func (this *A) Main() any {\n"+
     // "    \n"+
     // "    {		ret__ := func(this *A) (ret_ any) {\n"+
     // "    		defer func() {\n"+
@@ -237,7 +271,7 @@ describe('go transpiling tests', () => {
         "}"
         const output = transpiler.transpileGo(input).content;
         // the trampoline
-        expect(output).toContain("func  (this *Exchange) FetchTicker(symbol any) <- chan any {");
+        expect(output).toContain("func (this *Exchange) FetchTicker(symbol any) <-chan any {");
         expect(output).toContain("ch := make(chan any, 1)");
         expect(output).toContain("go this.fetchTickerBody(ch, symbol)");
         expect(output).toContain("return ch");
@@ -284,11 +318,11 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(symbol any, optionalArgs ...any) <- chan any");
+        expect(output).toContain("FetchTicker(symbol any, optionalArgs ...any) <-chan any");
         expect(output).toContain("go this.fetchTickerBody(ch, symbol, optionalArgs...)");
         expect(output).toContain("fetchTickerBody(ch chan any, symbol any, optionalArgs ...any) any");
         // the defaults are unpacked in the BODY, not in the trampoline
-        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any {})");
+        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any{})");
         expect(output.indexOf("params := GetArg")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
     });
     test('a colliding body name is uniquified instead of clobbered', () => {
@@ -309,7 +343,7 @@ describe('go transpiling tests', () => {
         // With the trampoline the recover (`defer ReturnPanicError(ch)`) lives on the
         // BODY method, not on the trampoline, so the trampoline's `return ch` always
         // runs and can never hand back a zero-value nil channel. The named result
-        // (`out <- chan any` / `out = ch`) that the flat emitter needed is therefore
+        // (`out <-chan any` / `out = ch`) that the flat emitter needed is therefore
         // gone, and the signature is the plain Go one again.
         const input =
         "class Exchange {\n" +
@@ -318,8 +352,8 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(symbol any) <- chan any");
-        expect(output).not.toContain("(out <- chan any)");
+        expect(output).toContain("FetchTicker(symbol any) <-chan any");
+        expect(output).not.toContain("(out <-chan any)");
         expect(output).not.toContain("out = ch");
         // the recover must sit on the body, i.e. AFTER the `go this....Body(...)` handoff
         expect(output.indexOf("go this.fetchTickerBody(")).toBeLessThan(output.indexOf("defer ReturnPanicError(ch)"));
@@ -333,7 +367,7 @@ describe('go transpiling tests', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("FetchTicker(out any) <- chan any");
+        expect(output).toContain("FetchTicker(out any) <-chan any");
         expect(output).not.toContain("out1");
         expect(output).toContain("ch <- out");
     });
@@ -373,16 +407,32 @@ describe('go transpiling tests', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("go this.fetchTickerBody(ch, symbol)");
         expect(output).toContain("func (this *Exchange) fetchTickerBody(ch chan any, symbol any) any {");
-        expect(output).not.toContain("(out <- chan any)");
+        expect(output).not.toContain("(out <-chan any)");
         expect(output).toContain("recover()");
         expect(output).toContain("return ret__");
         expect(output).toContain("return ch");
+    });
+    test('object literals open with `map[string]any{`, never `map[string]any {` (gofmt)', () => {
+        // gofmt writes `map[string]any{` / `map[string]any{}`: a space before the brace
+        // puts one extra char on every object literal line of the generated tree.
+        const input =
+        "class Exchange {\n" +
+        "    fetchTicker(symbol: string) {\n" +
+        "        const empty = {};\n" +
+        "        const opts = { 'symbol': symbol, 'nested': { 'a': 1 } };\n" +
+        "        return [ empty, opts ];\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("map[string]any{");
+        expect(output).toContain("map[string]any{}");
+        expect(output).not.toContain("map[string]any {");
     });
 });
 
 describe('go typed body locals', () => {
     // the printer indents nested call expressions; gofmt collapses that downstream
-    const squash = (output: string) => output.replace(/ +/g, ' ');
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
     test('locals whose initializer has a concrete Go type are declared with it', () => {
         const input =
         "class Exchange {\n" +
@@ -479,7 +529,7 @@ describe('go typed body locals', () => {
 
 describe('go pointer-typed Safe* body locals', () => {
     // the printer indents nested call expressions; gofmt collapses that downstream
-    const squash = (output: string) => output.replace(/ +/g, ' ');
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
     test('a local initialized from a Safe* accessor is declared with its pointer type', () => {
         const input =
         "class Exchange {\n" +
@@ -638,7 +688,7 @@ describe('go pointer-typed Safe* body locals', () => {
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("IsEqual(rows, nil)");
-        expect(output).toContain("(flag != nil && *flag)");
+        expect(output).toContain("if flag != nil && *flag {");
     });
     test('a local initialized from Precise arithmetic is declared as *string', () => {
         const input =
@@ -730,7 +780,12 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         // the direct call IS the concurrent start now
         expect(output).toContain("var spotMarketPromise any = this.FetchSpotMarkets(params)");
         expect(output).toContain("var swapMarketPromise any = this.FetchSwapMarkets(params)");
-        expect(output).toContain("spotMarketswapMarketVariable := (<-promiseAll([]any{spotMarketPromise, swapMarketPromise}));");
+        expect(output).toContain("spotMarketswapMarketVariable := (<-promiseAll([]any{spotMarketPromise, swapMarketPromise}))");
+        // the array binding is newline-separated Go: no explicit ';' terminators,
+        // and the GetValue index argument is separated by a space
+        expect(output).toContain("spotMarket := GetValue(spotMarketswapMarketVariable, 0)");
+        expect(output).toContain("swapMarket := GetValue(spotMarketswapMarketVariable, 1)");
+        expect(output).not.toMatch(/;[ \t]*\n/);
         // no call-site wrapper of any kind
         expect(output).not.toContain("Spawn");
         expect(output).not.toContain(".Await()");
@@ -770,7 +825,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "}"
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("AppendToArray(&promises, this.FetchTicker(GetValue(symbols, i)))");
-        expect(output).toContain("results:= (<-promiseAll(promises))");
+        expect(output).toContain("results := (<-promiseAll(promises))");
         expect(output).not.toContain("Spawn");
     });
     test('a zero-argument deferred call needs no wrapper', () => {
@@ -788,7 +843,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(output).toContain("var p any = this.LoadMarkets()");
         expect(output).not.toContain("Spawn");
         // the deferred value is still awaited through a plain channel receive
-        expect(normalize(output)).toContain("retRes :=  (<-p)");
+        expect(normalize(output)).toContain("retRes := (<-p)");
     });
     test('an immediately awaited async call keeps its direct receive', () => {
         const input =
@@ -805,9 +860,32 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         // trampoline/body pairs: FetchSpotMarkets, fetchSpotMarketsBody, DoAwait, doAwaitBody
         const [, , doAwaitTrampoline, doAwaitBody] = methodBodies(output);
         expect(doAwaitTrampoline).toContain("go this.doAwaitBody(ch, optionalArgs...)");
-        expect(doAwaitBody).toContain("a:= (<-this.FetchSpotMarkets(params))");
+        expect(doAwaitBody).toContain("a := (<-this.FetchSpotMarkets(params))");
         expect(doAwaitBody).toContain("PanicOnError(a)");
         expect(doAwaitBody).not.toContain("Spawn");
+    });
+    test('receive assignments use gofmt spacing', () => {
+        // gofmt writes `x := (<-this.X())`: one space either side of `:=`, none after `<-`
+        const input =
+        "class Exchange {\n" +
+        "    async fetchSpotMarkets (params = {}): Promise<any> {\n" +
+        "        return [];\n" +
+        "    }\n" +
+        "    async doAwait (params = {}): Promise<any> {\n" +
+        "        const a = await this.fetchSpotMarkets (params);\n" +
+        "        return await this.fetchSpotMarkets (params);\n" +
+        "    }\n" +
+        "}"
+        const output = normalize(transpiler.transpileGo(input).content);
+        // declaration path and awaited-return path both keep the single space
+        expect(output).toContain("a := (<-this.FetchSpotMarkets(params))");
+        expect(output).toContain("retRes := (<-this.FetchSpotMarkets(params))");
+        // no `name:=`, no double space after `:=` and no space after `<-`
+        expect(output).not.toMatch(/\w:= /);
+        expect(output).not.toMatch(/:= {2}\(<-/);
+        expect(output).not.toMatch(/<-\(/);
+        // sends keep their space
+        expect(output).toContain("ch <- retRes");
     });
     test('a stored SYNC method call is unchanged', () => {
         const input =
@@ -850,7 +928,7 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "    await Promise.all ([ withSymbol, withoutSymbol ]);\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("func TestWatchTickersHelper(exchange any, skippedProperties any, argSymbols any) <- chan any");
+        expect(output).toContain("func TestWatchTickersHelper(exchange any, skippedProperties any, argSymbols any) <-chan any");
         expect(output).toContain("var withoutSymbol any = TestWatchTickersHelper(exchange, skippedProperties, nil)");
         expect(output).toContain("var withSymbol any = TestWatchTickersHelper(exchange, skippedProperties, []any{symbol})");
         expect(output).not.toContain("Spawn");
@@ -910,10 +988,10 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         "}";
         const output = suffixed.transpileGo(input).content;
         // declarations: async (explicit and implicit) get the suffix, sync does not
-        expect(output).toMatch(/func\s+HelperAsync\(x any\) <- chan any/);
-        expect(output).toMatch(/func\s+\(this \*Base\) FetchTickerAsync\(symbol any\) <- chan any/);
-        expect(output).toMatch(/func\s+\(this \*Exchange\) FetchTickerAsync\(symbol any\) <- chan any/);
-        expect(output).toMatch(/func\s+\(this \*Exchange\) WatchTickerAsync\(symbol any\) <- chan any/);
+        expect(output).toMatch(/func\s+HelperAsync\(x any\) <-chan any/);
+        expect(output).toMatch(/func\s+\(this \*Base\) FetchTickerAsync\(symbol any\) <-chan any/);
+        expect(output).toMatch(/func\s+\(this \*Exchange\) FetchTickerAsync\(symbol any\) <-chan any/);
+        expect(output).toMatch(/func\s+\(this \*Exchange\) WatchTickerAsync\(symbol any\) <-chan any/);
         expect(output).toMatch(/func\s+\(this \*Base\) ParseTicker\(t any\) any/);
         // call sites follow the callee's declaration through this/super/bare-identifier
         expect(output).toContain("<-base.FetchTickerAsync(symbol)");
@@ -1052,10 +1130,10 @@ describe('go inline equality', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("if (s != nil && *s != \"\") {");
-        expect(output).toContain("if (n != nil && *n != 0) {");
+        expect(output).toContain("if s != nil && *s != \"\" {");
+        expect(output).toContain("if n != nil && *n != 0 {");
         expect(output).toContain("if flag {");
-        expect(output).toContain("if (len(parts) > 0) {");
+        expect(output).toContain("if len(parts) > 0 {");
     });
     test('EvalTruthy stays for any locals, params and non-identifiers', () => {
         const input =
@@ -1152,9 +1230,9 @@ describe('go inline equality', () => {
         // operator still parses the same way) instead of the Ternary helper
         expect(output).toContain("var picked any = func() any { if (isWsProxyDefined) { return 1 }; return 2 }()");
         expect(output).not.toContain("Ternary(");
-        expect(output).toContain("if (s != nil && *s != \"\") {");
+        expect(output).toContain("if s != nil && *s != \"\" {");
         // an `any` operand still needs the helper, parentheses or not
-        expect(output).toContain("if EvalTruthy((opt)) {");
+        expect(output).toContain("if EvalTruthy(opt) {");
     });
     test('hand-written bool fields need no truthiness helper', () => {
         const input =
@@ -1185,7 +1263,7 @@ describe('go ordered comparisons inline to native operators', () => {
         "    }\\n" +
         "}\\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("for i := 0; (i < GetArrayLength(arr)); i++ {");
+        expect(output).toContain("for i := 0; i < GetArrayLength(arr); i++ {");
         expect(output).not.toContain("IsLessThan(i, GetArrayLength(arr))");
     });
     test('an int local compared to an int literal emits `>` `>=` `<=`', () => {
@@ -1261,7 +1339,7 @@ describe('go ordered comparisons inline to native operators', () => {
         "    }\\n" +
         "}\\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("if (n > 0) {");
+        expect(output).toContain("if n > 0 {");
         expect(output).not.toContain("EvalTruthy((n > 0))");
     });
 });
@@ -1279,7 +1357,7 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var request map[string]any = map[string]any {}");
+        expect(output).toContain("var request map[string]any = map[string]any{}");
         expect(output).toContain("request[\"symbol\"] = \"BTC/USDT\"");
         expect(output).not.toContain("AddElementToObject");
     });
@@ -1346,7 +1424,7 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var request any = map[string]any {}");
+        expect(output).toContain("var request any = map[string]any{}");
         expect(output).toContain("AddElementToObject(request, \"symbol\", 1)");
     });
     test('a map local from a map-returning helper assigns natively', () => {
@@ -1360,7 +1438,7 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var request map[string]any = this.Extend(map[string]any {}, params)");
+        expect(output).toContain("var request map[string]any = this.Extend(map[string]any{}, params)");
         expect(output).toContain("request[\"symbol\"] = \"BTC/USDT\"");
         expect(output).not.toContain("AddElementToObject");
     });
@@ -1509,7 +1587,7 @@ describe('go native element assignment', () => {
         // the printer typed the `{}` literal as a Go map, so the receiver is proven
         // indexable: the write goes through the native index exactly like the read
         // does, and no boxed receiver keeps the helper alive
-        expect(output).toContain("var x map[string]any = map[string]any {}");
+        expect(output).toContain("var x map[string]any = map[string]any{}");
         expect(output).toContain('x["a"] = 1');
         expect(output).not.toContain('AddElementToObject');
     });
@@ -1749,5 +1827,451 @@ describe('go array push onto an element access', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).not.toContain('AppendToArray(&request["base"]');
         expect(output).toMatch(/retRes\d+ := request\["base"\]\n\s*AppendToArray\(&retRes\d+, /);
+    });
+});
+
+// gofmt's go/printer/nodes.go controlClause() prints the condition of if/for through
+// stripParens(): the outermost fully enclosing parentheses pair is dropped, and the
+// rule repeats while the enclosed expression is parenthesized as well. Every expected
+// line below was fed to /usr/local/go/bin/gofmt to prove it is a gofmt fixed point.
+describe('go control-clause parens (gofmt stripParens)', () => {
+    test('the outer parentheses of an if condition are dropped', () => {
+        const input =
+        "const a = \"x\";\n" +
+        "const b = \"y\";\n" +
+        "if ((a !== b)) {\n" +
+        "    return 1;\n" +
+        "}\n" +
+        "return 0;";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if a != b {");
+        expect(output).not.toContain("if (a != b) {");
+    });
+    test('a parenthesised else-if condition loses its parentheses too', () => {
+        const input =
+        "const a = \"x\";\n" +
+        "if ((a !== \"\")) {\n" +
+        "    const f = 1;\n" +
+        "} else if ((a !== \"y\")) {\n" +
+        "    const f = 2;\n" +
+        "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if a != \"\" {");
+        expect(output).toContain("} else if !IsEqual(a, \"y\") {");
+    });
+    test('while and the condition of a three-clause for follow the same rule', () => {
+        const whileInput =
+        "const calls = 0;\n" +
+        "const maxCalls = 10;\n" +
+        "while ((calls < maxCalls)) {\n" +
+        "    break;\n" +
+        "}";
+        expect(transpiler.transpileGo(whileInput).content).toContain("for IsLessThan(calls, maxCalls) {");
+        const forInput =
+        "const n = 3;\n" +
+        "for (let i = 0; (i < n); i++) {\n" +
+        "    const f = 1;\n" +
+        "}";
+        expect(transpiler.transpileGo(forInput).content).toContain("for i := 0; IsLessThan(i, n); i++ {");
+    });
+    test('parentheses around an operand are not a control clause and stay', () => {
+        const input =
+        "class T {\n" +
+        "    inArray2 (a: any) { return true; }\n" +
+        "    f (params: any) {\n" +
+        "        if ((this.inArray2 (params)) || (this.inArray2 (params))) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if EvalTruthy((this.InArray2(params))) || EvalTruthy((this.InArray2(params))) {");
+    });
+    test('the composite-literal guard of stripParens keeps the parentheses', () => {
+        const go = (transpiler as any).goTranspiler;
+        // `if T{} == x` does not parse and `if x == T{} {}` is rejected by gofmt too
+        expect(go.goEnclosedExpression("(T{1} == x)")).toBeUndefined();
+        expect(go.goEnclosedExpression("(x == MyStruct{a: 1})")).toBeUndefined();
+        // a type literal is not a type name, so those parentheses go
+        expect(go.goEnclosedExpression("(x == map[string]any{\"a\": 1})")).toBe("x == map[string]any{\"a\": 1}");
+        expect(go.goEnclosedExpression("(x == []any{1})")).toBe("x == []any{1}");
+        // parentheses inside a nested pair are protected, the pair itself is not
+        expect(go.goEnclosedExpression("((x == 1))")).toBe("(x == 1)");
+        expect(go.goEnclosedExpression("((x == 1) && (x == 2))")).toBe("(x == 1) && (x == 2)");
+        expect(go.goEnclosedExpression("(a) && (b)")).toBeUndefined();
+        expect(go.goEnclosedExpression("(len(parts) > 0)")).toBe("len(parts) > 0");
+    });
+});
+
+describe('go redundant parentheses', () => {
+    // gofmt prints a ParenExpr whose child is itself a ParenExpr without its own pair
+    // (`((x))` prints as `(x)`): a source parenthesis around an expression the printer
+    // already prints parenthesised must emit the single pair gofmt keeps.
+    test('a parenthesised expression that already prints parenthesised collapses to one pair', () => {
+        const input =
+        "function f (x: string, o: any) {\n" +
+        "    const a = (x === 'delivery');\n" +
+        "    const b = ((x === 'delivery'));\n" +
+        "    const c = (o === 'delivery');\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toMatch(/var a bool =\s+\(x == "delivery"\)/);
+        expect(output).toMatch(/var b bool =\s+\(x == "delivery"\)/);
+        expect(output).toMatch(/var c bool =\s+\(o == "delivery"\)/);
+        expect(output).not.toContain("((x == \"delivery\"");
+        expect(output).not.toContain("((IsEqual");
+    });
+    test('a parenthesised ternary condition emits one pair', () => {
+        const input =
+        "function f (x: string) {\n" +
+        "    const a = (x === 'delivery') ? 'yes' : 'no';\n" +
+        "    return a;\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("func() any { if (x == \"delivery\") { return \"yes\" }; return \"no\" }()");
+        expect(output).not.toContain("Ternary(((x == \"delivery\")");
+    });
+    test('parentheses that are not redundant stay: call arguments and operand pairs', () => {
+        const input =
+        "function f (n: number) {\n" +
+        "    const a = Math.abs((n));\n" +
+        "    const b = (n === 1) || (n === 2);\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the parentheses of a call are not a ParenExpr, the argument keeps its own pair
+        expect(output).toContain("mathAbs((n))");
+        // the source pairs sit on the operands, not around the whole disjunction
+        expect(output).toContain("(n == 1) || (n == 2)");
+        expect(output).not.toContain("((n == 1))");
+    });
+});
+
+describe('go composite literal column alignment', () => {
+    // F09: gofmt aligns the values of the consecutive single-line `key: value` entries of a
+    // composite literal to the widest key of the block (go/printer exprList emits `:` +
+    // vtab, text/tabwriter pads the column). The assertions below drop the leading
+    // indentation so they stay independent of the indent unit.
+    test('consecutive single-line entries align on the widest key', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'id': 'binance',\n" +
+        "            'rateLimit': 50,\n" +
+        "            'pro': true\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // "rateLimit" is the widest key cell (`"rateLimit":`, 12) -> column 13
+        expect(output).toContain('"id":        "binance",');
+        expect(output).toContain('"rateLimit": 50,');
+        expect(output).toContain('"pro":       true,');
+    });
+    test('an entry whose value spans lines ends the alignment block', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'a': 1,\n" +
+        "            'bb': 2,\n" +
+        "            'nested': { 'longerKey': 1, 'x': 2 },\n" +
+        "            'c': 3,\n" +
+        "            'dd': 4\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('"a":  1,');
+        expect(output).toContain('"bb": 2,');
+        // the nested literal is not padded, and its own body starts a new block
+        expect(output).toContain('"nested": map[string]any{');
+        expect(output).toContain('"longerKey": 1,');
+        expect(output).toContain('"x":         2,');
+        // entries after the multi-line value align against each other, not against "a"/"bb"
+        expect(output).toContain('"c":  3,');
+        expect(output).toContain('"dd": 4,');
+    });
+    test('a key larger than 40 bytes breaks the section when it leaves the 2.5 ratio', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'short': 1,\n" +
+        "            'thisIsAVeryLongKeyNameThatIsLongerThanFortyCharactersForSure': 2,\n" +
+        "            'b': 3,\n" +
+        "            'c': 4\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // 65 / 7 > 2.5 -> formfeed section break, so neither neighbour is padded
+        expect(output).toContain('"short": 1,');
+        expect(output).toContain('"thisIsAVeryLongKeyNameThatIsLongerThanFortyCharactersForSure": 2,');
+        // the ratio of "b" against the new section's geomean is under 1/2.5 -> one more break
+        expect(output).toContain('"b": 3,');
+        expect(output).toContain('"c": 4,');
+        expect(output).not.toContain('"b":   3,');
+    });
+    test('a trailing comment keeps its comma in front and aligns on the comment column', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'a': 1,\n" +
+        "            'bb': 2 // last property keeps its trailing comment\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // gofmt prints `value, // comment`; the printer used to emit `// comment,` (the
+        // comma landed inside the comment) which is not valid Go
+        expect(output).toContain('"a":  1,');
+        expect(output).toContain('"bb": 2, // last property keeps its trailing comment');
+        expect(output).not.toContain('// last property keeps its trailing comment,');
+    });
+});
+
+describe('go trailing comment alignment', () => {
+    test('adjacent statements share one comment column', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const x = 1; // one\n" +
+        "        const yyyy = 2222; // two\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // gofmt pads both code cells to the widest one plus one space (tabwriter column)
+        expect(output).toContain("var x any = 1       // one");
+        expect(output).toContain("var yyyy any = 2222 // two");
+    });
+    test('a lone trailing comment is padded with exactly one space', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        return null; // fallback\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the return emitter separates the comment with two spaces; a one-line column gets one
+        expect(output).toContain("return nil // fallback");
+        expect(output).not.toContain("return nil  // fallback");
+    });
+    test('a nested block starts a new comment column', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const xxxxxxxxxx = 1; // one\n" +
+        "        if (a) {\n" +
+        "            return a; // inner\n" +
+        "        }\n" +
+        "        const y = 2; // two\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var xxxxxxxxxx any = 1 // one");
+        expect(output).toContain("return a // inner");
+        expect(output).toContain("var y any = 2 // two");
+    });
+    test('//nolint comments are aligned like any other comment', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const a1 = 1; //nolint:gosec\n" +
+        "        const bbbb = 2; //nolint\n" +
+        "        return a1;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var a1 any = 1   //nolint:gosec");
+        expect(output).toContain("var bbbb any = 2 //nolint");
+    });
+    test('a // inside a string literal is not a trailing comment', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const url = 'https://example.com/x';\n" +
+        "        const yyyy = 2222; // two\n" +
+        "        return url;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the URL line carries no comment, so it neither joins nor shapes a column
+        expect(output).toContain("var url string = \"https://example.com/x\"\n");
+        expect(output).toContain("var yyyy any = 2222 // two");
+    });
+    test('the alignment pass is idempotent', () => {
+        const input =
+        "class T {\n" +
+        "    f (a: any) {\n" +
+        "        const x = 1; // one\n" +
+        "        const yyyy = 2222; // two\n" +
+        "        return null; // fallback\n" +
+        "    }\n" +
+        "}\n"
+        const once = transpiler.transpileGo(input).content;
+        expect(alignGoTrailingComments(once)).toBe(once);
+    });
+});
+
+describe('go comment placement on the trampoline body half (gofmt)', () => {
+    // The body half of an async method is a plain function whose statements, default
+    // initializers and leading `/** */` doc block all sit at the defers' level, and every
+    // `*` continuation line keeps its single leading space: gofmt re-indents a /* */ block
+    // to `<indent> * text` (go/printer stripCommonPrefix + one tab per level).
+    test('a doc block on the body first statement keeps its * alignment and level', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchMarkOHLCV (symbol: string, timeframe = '1m', params = {}): Promise<any> {\n" +
+        "        /**\n" +
+        "         * @method\n" +
+        "         * @name exchange#fetchMarkOHLCV\n" +
+        "         */\n" +
+        "        if (!this.has['fetchMarkOHLCV']) {\n" +
+        "            throw new NotSupported(this.id + ' fetchMarkOHLCV not supported');\n" +
+        "        }\n" +
+        "        return { 'symbol': symbol };\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        const lines = output.slice(output.indexOf("func (this *Exchange) fetchMarkOHLCVBody(")).split("\n");
+        const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
+        expect(lines[2]).toBe(`${indent}defer ReturnPanicError(ch)`);
+        expect(lines[3]).toBe(`${indent}/**`);
+        expect(lines[4]).toBe(`${indent} * @method`);
+        expect(lines[5]).toBe(`${indent} * @name exchange#fetchMarkOHLCV`);
+        expect(lines[6]).toBe(`${indent} */`);
+        expect(lines[7]).toBe(`${indent}timeframe := GetArg(optionalArgs, 0, "1m")`);
+        expect(lines[8]).toBe(`${indent}_ = timeframe`);
+        expect(lines[9]).toBe(`${indent}params := GetArg(optionalArgs, 1, map[string]any{})`);
+    });
+    test('the body statements are not indented one level deeper than the defers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTime (params = {}): Promise<any> {\n" +
+        "        return this.milliseconds();\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        const lines = output.slice(output.indexOf("func (this *Exchange) fetchTimeBody(")).split("\n");
+        const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
+        expect(lines[3]).toBe(`${indent}params := GetArg(optionalArgs, 0, map[string]any{})`);
+        expect(lines[4]).toBe(`${indent}_ = params`);
+        const chLine = lines.findIndex((line) => line.includes('ch <- callDynamically("milliseconds"'));
+        expect(lines[chLine]).toBe(`${indent}ch <- callDynamically("milliseconds", )`);
+        expect(lines[chLine + 1]).toBe(`${indent}return nil`);
+    });
+    test('a leading comment on a return statement does not swallow the ch <- indentation', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async fetchTicker (symbol: string, params = {}): Promise<any> {\n" +
+        "        const x = 1;\n" +
+        "        // parse the ticker through the helper\n" +
+        "        return this.parseTicker(x);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        const lines = output.slice(output.indexOf("func (this *Exchange) fetchTickerBody(")).split("\n");
+        const commentLine = lines.findIndex((line) => line.trim() === '// parse the ticker through the helper');
+        const indent = /^([ \t]*)/.exec(lines[commentLine])[1];
+        expect(commentLine).toBeGreaterThan(-1);
+        expect(lines[commentLine + 1]).toBe(`${indent}ch <- callDynamically("parseTicker", x)`);
+        expect(lines[commentLine + 2]).toBe(`${indent}return nil`);
+
+    });
+});
+// ---------------------------------------------------------------------------
+// gofmt binary expression spacing (go/printer nodes.go: binaryExpr/cutoff)
+// ---------------------------------------------------------------------------
+// gofmt prints a level-4/5 operator (`+ - * / % & | ^ << >>`) with a blank around
+// it only at the top level of a statement - `x := "a" + "b"` - and compact one
+// level down: as an argument of a call with more than one argument, inside an
+// index expression (`a[i+1]`), or as the operand that a `+`/`*` chain nests
+// (`a*b + c`). Every expectation below was checked against `/usr/local/go/bin/gofmt`
+// (the same Go text is what gofmt prints, i.e. `gofmt -d` reports no difference).
+describe('gofmt binary expression spacing', () => {
+    let native: Transpiler;
+
+    beforeAll(() => {
+        const config = {
+            'verbose': false,
+            'go': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                }
+            }
+        }
+        native = new Transpiler(config);
+        // the Go printer routes `+ - * / %` through the numeric helpers
+        // (Add/Subtract/Multiply/Divide/Mod); printing them natively exercises the
+        // gofmt spacing rule itself, which is what the campaign removes gofmt for
+        const goTranspiler: any = (native as any).goTranspiler;
+        goTranspiler.binaryExpressionsWrappers = {};
+        Object.assign(goTranspiler.SupportedKindNames, {
+            [SyntaxKind.PlusToken]: '+',
+            [SyntaxKind.MinusToken]: '-',
+            [SyntaxKind.AsteriskToken]: '*',
+            [SyntaxKind.SlashToken]: '/',
+            [SyntaxKind.PercentToken]: '%',
+            [SyntaxKind.LessThanLessThanToken]: '<<',
+        });
+    });
+
+    const go = (source: string) => native.transpileGo(source).content;
+
+    test('top level of a statement keeps the blanks', () => {
+        expect(go('const x = a + b;')).toBe('var x any = a + b');
+        expect(go('const x = a + b + c;')).toBe('var x any = a + b + c');
+        expect(go('const x = a + b * c;')).toBe('var x any = a + b*c');
+        expect(go('const x = a * b + c;')).toBe('var x any = a*b + c');
+        expect(go('const x = a % b + c % d;')).toBe('var x any = a%b + c%d');
+        expect(go('const x = (a + b) * c;')).toBe('var x any = (a + b) * c');
+    });
+
+    test('an index expression prints its operand one level deeper', () => {
+        expect(go('const x = y[i + 1];')).toBe('var x any = GetValue(y, i+1)');
+        expect(go('const x = y[i] + 1;')).toBe('var x any = GetValue(y, i) + 1');
+    });
+
+    test('arguments of a call with more than one argument print one level deeper', () => {
+        expect(go('const x = this.f2(a, b + c);')).toBe('var x any = callDynamically("f2", a, b+c)');
+        expect(go('const x = this.f2(a + b);')).toBe('var x any = callDynamically("f2", a+b)');
+        expect(go('const x = this.f3(a, b, c + d);')).toBe('var x any = callDynamically("f3", a, b, c+d)');
+        expect(go('const x = this.f4(this.g(a, b + c));')).toBe('var x any = callDynamically("f4", callDynamically("g", a, b+c))');
+    });
+
+    test('composite literal elements and assignment right sides stay at the top level', () => {
+        expect(go("const p = { 'k': a + b };")).toBe('var p map[string]any = map[string]any{\n\t"k": a + b,\n}');
+        expect(go("const p = { 'k': this.f2(a, b + c) };")).toBe('var p map[string]any = map[string]any{\n\t"k": callDynamically("f2", a, b+c),\n}');
+        expect(go('let z = 1; z = a + b;')).toBe('var z any = 1\nz = a + b');
+    });
+
+    test('parentheses undo one level of depth', () => {
+        expect(go('const x = a * (b - c);')).toBe('var x any = a * (b - c)');
+        expect(go('const x = (a << b) + c;')).toBe('var x any = (a << b) + c');
+    });
+
+    test('levels 3 and below always keep their blanks', () => {
+        expect(go('const x = (a && b) || c;')).toBe('var x bool = (EvalTruthy(a) && EvalTruthy(b)) || EvalTruthy(c)');
+        expect(go('if (a == b) { return 1; }')).toBe('if IsEqual(a, b) {\n\treturn 1\n}');
+    });
+
+    test('inside a single argument call nothing is compacted', () => {
+        expect(go('const x = this.f2(a + b);').startsWith('var x any = callDynamically')).toBe(true);
+        expect(go('const x = f(a + b);')).toBe('var x any = F(a + b)');
+    });
+
+    test('without the native operator mapping the helper calls are unchanged', () => {
+        expect(transpiler.transpileGo('const x = a + b;').content).toBe('var x any = Add(a, b)');
+        expect(transpiler.transpileGo('const x = a + b * c;').content).toBe('var x any = Add(a, Multiply(b, c))');
+        expect(transpiler.transpileGo('let z = 1; z = a + b;').content).toBe('var z any = 1\nz = Add(a, b)');
     });
 });

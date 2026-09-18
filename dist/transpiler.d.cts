@@ -622,6 +622,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printPropertyAccessModifiers(node: any): string;
 }
 
+declare function alignGoTrailingComments(content: string): string;
+
 declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
@@ -633,15 +635,38 @@ declare class GoTranspiler extends BaseTranspiler {
     };
     DEFAULT_RETURN_TYPE: string;
     ASYNC_BODY_SUFFIX: string;
+    DEFAULT_IDENTATION: string;
     constructor(config?: {});
     initConfig(): void;
     printSuperCallInsideConstructor(node: any, identation: any): string;
     printStringLiteral(node: any): any;
     transformFunctionNameIfNeeded(name: any): string;
+    getStructFieldCells(node: any): string[];
     printPropertyDeclaration(node: any, identation: any): string;
     printStruct(node: any, indentation: any): string;
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
+    /**
+     * gofmt's declaration-list rule (go/printer nodes.go `declList`): a top-level
+     * declaration that carries a doc comment is separated from the previous declaration
+     * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
+     * keeps the source's own separation (the printer emits members adjacent to the
+     * closing brace above them). `printClass` used to join every member with a bare
+     * "\n", so a method whose leading `/** ... *` + `/` comment follows the previous
+     * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
+     */
+    joinTopLevelDecls(decls: string[]): string;
+    /**
+     * True when the emitted declaration text opens with its doc comment - the comment
+     * group gofmt attaches to the declaration (`getDoc(d) != nil` in go/printer).
+     */
+    startsWithComment(decl: string): boolean;
+    /**
+     * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
+     * whitespace, so an indented *blank* line (only the indentation of a blank source
+     * line) must stay empty instead of becoming whitespace-only text.
+     */
+    indentLines(lines: string[], identation: number): string[];
     printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
@@ -673,7 +698,7 @@ declare class GoTranspiler extends BaseTranspiler {
     /**
      * The trampoline: an async core hands back a *hot handle*.
      *
-     *     func (this *Exchange) FetchTicker(symbol any) <- chan any {
+     *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
      *         ch := make(chan any, 1)
      *         go this.fetchTickerBody(ch, symbol)
      *         return ch
@@ -686,7 +711,7 @@ declare class GoTranspiler extends BaseTranspiler {
      *     with work already in flight. That is what makes
      *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
      *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-     *   - the result stays UNNAMED (`<- chan any`): `return ch` is the trampoline's only
+     *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
      *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
      *     lives on the body, not here.
      */
@@ -729,11 +754,27 @@ declare class GoTranspiler extends BaseTranspiler {
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
+    printObjectLiteralBody(node: any, identation: any): any;
+    alignGoCompositeEntries(entries: any): any;
+    parseGoCompositeEntry(entry: any): {
+        indent: string;
+        key: string;
+        size: number;
+        singleLine: boolean;
+        value: any;
+        comment: any;
+    };
+    findGoTrailingCommentStart(line: any): number;
+    getGoCompositePaddings(parsedEntries: any): any;
+    renderGoCompositeEntry(entry: any, parsed: any, padding: any): string;
+    appendGoTrailingComma(entry: any): string;
+    getGoRuneLength(text: any): number;
+    getGoByteLength(text: any): number;
     printConstructorDeclaration(node: any, identation: any): string;
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): string;
-    printWrappedUnknownThisProperty(node: any): string;
+    printWrappedUnknownThisProperty(node: any, identation?: number): string;
     transformMethodNameIfNeeded(name: string): string;
     transformCallExpressionName(name: string, nameNode?: any): string;
     transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
@@ -765,6 +806,18 @@ declare class GoTranspiler extends BaseTranspiler {
     printInlineOpNeg(node: any, printedText: string): string | undefined;
     printInlineTruthy(node: any): string | undefined;
     goNativeCondition(node: any): string | undefined;
+    goControlClauseParens(node: any, expression: string): string;
+    goEnclosedExpression(text: string): string | undefined;
+    goIsControlClauseCondition(node: any): boolean;
+    goHasTypeNameCompositeLiteral(text: string): boolean;
+    goCompositeLitHasTypeName(text: string, braceIndex: number): boolean;
+    goSkipBalanced(text: string, start: number, open: string, close: string): number;
+    goSkipQuoted(text: string, start: number): number;
+    printLeadingComments(node: any, identation: any): string;
+    goStatementLevel: number;
+    printSourceFileStatements(node: any, identation: any): string;
+    printNode(node: any, identation?: number): string;
+    printObjectLiteralExpression(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
@@ -774,6 +827,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goLiteralFitsKind(node: any, kind: string): boolean;
     goComparisonKind(left: any, leftKind: string, right: any, rightKind: string): string | undefined;
     printInlineOrderedComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    printParenthesizedExpression(node: any, identation: any): string;
+    goIsParenthesizedExpression(printed: string): boolean;
+    goSkipGoLiteral(text: string, start: number): number;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
@@ -794,7 +850,7 @@ declare class GoTranspiler extends BaseTranspiler {
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
-    printArrayLiteralExpression(node: any): string;
+    printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
@@ -833,9 +889,38 @@ declare class GoTranspiler extends BaseTranspiler {
     printConditionalExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
+    goExprDepth: number;
+    goWithExprDepth<T>(depth: number, callback: () => T): T;
+    goOperatorPrecedence(operator: string): number;
+    goNativeBinaryOperator(node: any): string | undefined;
+    goWalkBinary(operator: string, left: any, right: any, rightText: string): {
+        has4: boolean;
+        has5: boolean;
+        maxProblem: number;
+    };
+    goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
     printBinaryExpression(node: any, identation: any): string;
     goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;
     printTryStatement(node: any, identation: number): string;
+    /**
+     * Strip the printer's own leading indentation from every line of a printed
+     * statement block so the caller can re-place it at an explicit level. Only the
+     * common prefix goes away: relative nesting (one tab per level) is preserved.
+     */
+    dedentBlock(block: string): string;
+    /**
+     * Re-place a printed statement block at `level` (a run of tabs): the block's own
+     * leading indentation is dropped and every non-blank line is prefixed with `level`,
+     * so relative nesting (one tab per level) survives the move.
+     */
+    indentBlock(block: string, level: string): string;
+    /**
+     * gofmt writes blank lines with no whitespace at all. A multi-line statement template
+     * opens on a fresh line, so the inherited `getIden(identation) + <statement>` prefix
+     * lands on a line that carries nothing else: drop that prefix instead of leaving a
+     * whitespace-only line behind. Only blank lines are touched, never printed content.
+     */
+    stripWhitespaceOnlyLines(block: string): string;
     printPrefixUnaryExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     /**
@@ -1333,4 +1418,4 @@ declare class TranspileProgramBatch {
     transpileCppByPath(filePath: string): ITranspiledFile;
 }
 
-export { TranspileProgramBatch, Transpiler, Transpiler as default };
+export { TranspileProgramBatch, Transpiler, alignGoTrailingComments, Transpiler as default };

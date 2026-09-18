@@ -172,7 +172,7 @@ describe('go unary minus -> -x', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('var g any =     -f');
+        expect(output).toContain('var g any = -f');
         expect(output).not.toContain('OpNeg(');
     });
     test('a declaration initializer keeps OpNeg (int64 box)', () => {
