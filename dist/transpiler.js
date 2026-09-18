@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4981,44 +4981,6 @@ var GoTranspiler = class extends BaseTranspiler {
     // level of the statement being printed: a multi-line composite literal is laid out
     // relative to it (go/printer), whatever level the expression printers hand down
     this.goStatementLevel = 0;
-    // check this out later
-    // IsArray(v) answers true exactly for the slice types its runtime type switch lists
-    // and false for every other box, a nil box included. On an operand whose Go type the
-    // printer can name the predicate is that constant.
-    this.isArraySliceTypes = [
-      "[]any",
-      "[][]any",
-      "[]map[string]any",
-      "[]string",
-      "[]bool",
-      "[]int",
-      "[]int8",
-      "[]int16",
-      "[]int32",
-      "[]int64",
-      "[]float32",
-      "[]float64",
-      "[]uint",
-      "[]uint8",
-      "[]uint16",
-      "[]uint32",
-      "[]uint64"
-    ];
-    // the other Go types the printer can name: a map, a string, a bool, a number, or a
-    // pointer to a scalar — none of them is a slice the switch matches
-    this.isArrayNonSliceTypes = [
-      "map[string]any",
-      "string",
-      "bool",
-      "int",
-      "int64",
-      "float64",
-      "*string",
-      "*int64",
-      "*float64",
-      "*bool",
-      "*int"
-    ];
     // -----------------------------------------------------------------------
     // gofmt-compatible spacing of the binary expressions this printer emits
     // -----------------------------------------------------------------------
@@ -6956,9 +6918,6 @@ ${this.getIden(level)}}()`;
     if (this.goTypeOfInitializer(node, printed) === "bool") {
       return printed;
     }
-    if (node?.kind === ts5.SyntaxKind.CallExpression && (printed === "true" || printed === "false")) {
-      return printed;
-    }
     return GO_BOOL_FIELDS.has(printed) ? printed : void 0;
   }
   // gofmt prints the condition of every `if`/`for`/`switch` through
@@ -7697,109 +7656,9 @@ ${this.getIden(identation)}${returnStatement}`;
     }
     return super.printArgsForCallExpression(node, identation);
   }
-  // true when the identifier keeps a reference besides this one: the constant fold
-  // drops the call's reference to the operand, and Go rejects a local that ends up
-  // unused, so an operand without another use keeps the helper
-  goIdentifierUsedElsewhere(nameNode) {
-    const scope = this.goEnclosingFunction(nameNode);
-    if (scope === void 0) {
-      return false;
-    }
-    const name = nameNode.escapedText;
-    let used = false;
-    const visit = (n) => {
-      if (used) {
-        return;
-      }
-      if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === name && n !== nameNode) {
-        const parent = n.parent;
-        const isDeclarationName = parent?.kind === ts5.SyntaxKind.VariableDeclaration && parent.name === n;
-        const isPropertyName = parent?.kind === ts5.SyntaxKind.PropertyAccessExpression && parent.name === n;
-        if (!isDeclarationName && !isPropertyName) {
-          used = true;
-          return;
-        }
-      }
-      ts5.forEachChild(n, visit);
-    };
-    ts5.forEachChild(scope, visit);
-    return used;
-  }
-  // the local is printed `any` yet every value that reaches it is a []any: it starts
-  // from a slice initializer and no later statement rebinds it (a push only appends
-  // to the same slice), so the box holds a []any at every use
-  goLocalHoldsOnlyArrays(nameNode) {
-    let symbol;
-    try {
-      symbol = this.getChecker().getSymbolAtLocation(nameNode);
-    } catch (e) {
-      return false;
-    }
-    const declaration = symbol?.valueDeclaration;
-    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.initializer === void 0) {
-      return false;
-    }
-    if (this.goTypeOfInitializer(declaration.initializer, this.printNode(declaration.initializer, 0)) !== "[]any") {
-      return false;
-    }
-    const scope = this.goEnclosingFunction(declaration);
-    if (scope === void 0) {
-      return false;
-    }
-    const name = declaration.name.escapedText;
-    let safe = true;
-    const visit = (n) => {
-      if (!safe) {
-        return;
-      }
-      if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === name && n !== declaration.name && n !== nameNode) {
-        const parent = n.parent;
-        if (parent?.kind === ts5.SyntaxKind.VariableDeclaration && parent.name === n) {
-          return;
-        }
-        if (this.goRebindingTargetOf(n) !== void 0) {
-          safe = false;
-          return;
-        }
-      }
-      ts5.forEachChild(n, visit);
-    };
-    ts5.forEachChild(scope, visit);
-    return safe;
-  }
-  // native IsArray: a constant for an operand whose Go type the printer proves, and
-  // the two-value assertion on an `any` box that only ever holds a []any
-  printNativeIsArray(node, parsedArg) {
-    if (typeof parsedArg !== "string" || parsedArg.includes("\n")) {
-      return void 0;
-    }
-    const argNode = node.arguments?.[0];
-    if (argNode?.kind !== ts5.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    const goType = this.goPrintedTypeOfExpression(argNode, parsedArg);
-    if (goType !== void 0) {
-      const isSlice = this.isArraySliceTypes.indexOf(goType) >= 0;
-      if (isSlice || this.isArrayNonSliceTypes.indexOf(goType) >= 0) {
-        return this.goIdentifierUsedElsewhere(argNode) ? isSlice ? "true" : "false" : void 0;
-      }
-      return void 0;
-    }
-    if (!this.goLocalHoldsOnlyArrays(argNode)) {
-      return void 0;
-    }
-    const read = `_, ok := ${parsedArg}.([]any)`;
-    if (11 + read.length + 2 + "return ok".length <= 100) {
-      return `func() bool { ${read}; return ok }()`;
-    }
-    const level = this.goStatementLevel;
-    return `func() bool {
-${this.getIden(level + 1)}${read}
-${this.getIden(level + 1)}return ok
-${this.getIden(level)}}()`;
-  }
+  // check this out later
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
-    return this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
+    return `IsArray(${parsedArg})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
     return `ObjectKeys(${parsedArg})`;
