@@ -2445,6 +2445,27 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return false;
     }
 
+    // an element read prints either a native map[string]any index or the
+    // GetValue(container, key) helper call — an `any` box in both cases
+    goBoxedElementRead(node, printedText: string): boolean {
+        while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if (node?.kind !== ts.SyntaxKind.ElementAccessExpression) {
+            return false;
+        }
+        if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) {
+            return true; // GetValue(container, key)
+        }
+        let base = node.expression;
+        while (ts.isElementAccessExpression(base)) {
+            base = base.expression;
+        }
+        // the printed base is unknown here: `goIndexableTypeOf` answers on the
+        // declared table alone for every shape but a call, which stays a box anyway
+        return this.goIndexableTypeOf(base, '') === 'map[string]any';
+    }
+
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     goAnyLocalHoldsPointerCache = new Map<any, boolean>();
@@ -3287,6 +3308,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         if (rBox && literalMatchesBox(rNilFam, left, lFam)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        // IsEqual(GetValue(market, "spot"), true): the checker proves the read holds
+        // a bool or nil (Market.spot), and every other dynamic type is unequal to a
+        // Go bool, nil included — the same predicate as the helper
+        const isBoolLiteral = (node): boolean =>
+            (node?.kind === ts.SyntaxKind.TrueKeyword) || (node?.kind === ts.SyntaxKind.FalseKeyword);
+        if (!lPtr && isBoolLiteral(right) && (this.goScalarFamilyWithNil(left) === 'bool')
+            && this.goBoxedElementRead(left, leftText)) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
+        if (!rPtr && isBoolLiteral(left) && (this.goScalarFamilyWithNil(right) === 'bool')
+            && this.goBoxedElementRead(right, rightText)) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         // two boxes of one non-numeric family: both hold that scalar or nil

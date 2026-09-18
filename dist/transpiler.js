@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6480,6 +6480,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return false;
   }
+  // an element read prints either a native map[string]any index or the
+  // GetValue(container, key) helper call — an `any` box in both cases
+  goBoxedElementRead(node, printedText) {
+    while (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    if (node?.kind !== ts5.SyntaxKind.ElementAccessExpression) {
+      return false;
+    }
+    if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) {
+      return true;
+    }
+    let base = node.expression;
+    while (ts5.isElementAccessExpression(base)) {
+      base = base.expression;
+    }
+    return this.goIndexableTypeOf(base, "") === "map[string]any";
+  }
   goAnyLocalHoldsPointer(decl) {
     if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts5.SyntaxKind.Identifier) {
       return false;
@@ -7215,6 +7233,13 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     if (rBox && literalMatchesBox(rNilFam, left, lFam)) {
+      return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+    const isBoolLiteral = (node) => node?.kind === ts5.SyntaxKind.TrueKeyword || node?.kind === ts5.SyntaxKind.FalseKeyword;
+    if (!lPtr && isBoolLiteral(right) && this.goScalarFamilyWithNil(left) === "bool" && this.goBoxedElementRead(left, leftText)) {
+      return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+    if (!rPtr && isBoolLiteral(left) && this.goScalarFamilyWithNil(right) === "bool" && this.goBoxedElementRead(right, rightText)) {
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     if (lBox && rBox && lNilFam !== void 0 && lNilFam !== "number" && lNilFam === rNilFam) {
