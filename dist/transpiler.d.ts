@@ -531,7 +531,10 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpNullComparison(text: string, isEquality: boolean): string;
     csharpExpressionTypeOf(node: any): string | undefined;
     csharpOperandsAreNumbers(node: any): boolean;
+    csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
+    csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
+    csharpMinMaxResultIsPlainValue(node: any): boolean;
     csharpNativeReceiver(node: any): {
         text: string;
         type: string;

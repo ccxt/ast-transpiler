@@ -1804,3 +1804,116 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('if (inOp(this.options, key))');
     });
 });
+
+describe('csharp Math.min/Math.max native emission', () => {
+    // the printer names the C# kind of int-range literals and `.length` itself; the locals the
+    // embedding build layer retypes come back through csharpExpressionTypeResolver — these
+    // tests stub that resolver with a name map, like the numeric-comparison block above
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('two operands of one integer kind print the native calls', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number) {\n" +
+        "        const smaller = Math.min (alpha, beta);\n" +
+        "        const larger = Math.max (alpha, beta);\n" +
+        "        return [ smaller, larger ];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ alpha: 'Int64', beta: 'Int64' }, input);
+        expect(output).toContain("object smaller = Math.Min(alpha, beta);");
+        expect(output).toContain("object larger = Math.Max(alpha, beta);");
+        expect(output).not.toContain("mathMin(");
+        expect(output).not.toContain("mathMax(");
+    });
+    test('a literal and a printer-named .length print Math.Max on the same kind', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(integerPart: string) {\n" +
+        "        const significantDigits = Math.max (5, integerPart.length);\n" +
+        "        return significantDigits;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("Math.Max(5, ((string)integerPart).Length)");
+        expect(output).not.toContain("mathMax(");
+    });
+    test('the result value still boxes into a dictionary value like the helper box', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(alpha: number, beta: number) {\n" +
+        "        const params = {};\n" +
+        "        params['limit'] = Math.min (alpha, beta);\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ alpha: 'int', beta: 'int' }, input);
+        expect(output).toContain("Math.Min(alpha, beta)");
+        expect(output).not.toContain("mathMin(");
+    });
+    test('two doubles keep the helper: Math.Min propagates a NaN operand', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(gamma: number, delta: number) {\n" +
+        "        return [ Math.min (gamma, delta), Math.max (gamma, delta) ];\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ gamma: 'double', delta: 'double' }, input);
+        expect(output).toContain("mathMin(gamma, delta)");
+        expect(output).toContain("mathMax(gamma, delta)");
+    });
+    test('mixed kinds keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(epsilon: number, zeta: number) {\n" +
+        "        return Math.min (epsilon, zeta);\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ epsilon: 'int', zeta: 'Int64' }, input);
+        expect(output).toContain("mathMin(epsilon, zeta)");
+    });
+    test('an operand the checker does not see as a plain number keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(eta: any, theta: number) {\n" +
+        "        return Math.min (eta, theta);\n" +
+        "    }\n" +
+        "}";
+        // the resolver claims int for both, the checker sees `any` on the left
+        expect(withKinds({ eta: 'int', theta: 'int' }, input)).toContain("mathMin(eta, theta)");
+        const nullable =
+        "class Exchange {\n" +
+        "    main(iota: number | undefined, kappa: number) {\n" +
+        "        return Math.min (iota, kappa);\n" +
+        "    }\n" +
+        "}";
+        // the helper returns null when either side is null
+        expect(withKinds({ iota: 'Int64', kappa: 'Int64' }, nullable)).toContain("mathMin(iota, kappa)");
+    });
+    test('a receiver position keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(lambda: number, mu: number) {\n" +
+        "        return Math.min (lambda, mu).toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ lambda: 'Int64', mu: 'Int64' }, input);
+        expect(output).toContain("((object)mathMin(lambda, mu)).ToString()");
+    });
+    test('an `as` wrapper keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(nu: number, xi: number) {\n" +
+        "        return (Math.min (nu, xi) as any as string);\n" +
+        "    }\n" +
+        "}";
+        const output = withKinds({ nu: 'Int64', xi: 'Int64' }, input);
+        expect(output).toContain("mathMin(nu, xi)");
+    });
+});
