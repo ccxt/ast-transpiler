@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2754,7 +2754,6 @@ var CSHARP_NATIVE_COMPARISON_TOKENS = {
 };
 var CSHARP_NATIVE_FIELDS = {
   "options": "ConcurrentDictionary<string, object>",
-  "has": "Dictionary<string, object>",
   "features": "Dictionary<string, object>",
   "httpExceptions": "Dictionary<string, object>",
   "markets_by_id": "IDictionary<string, object>",
@@ -2764,8 +2763,6 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
-var CSHARP_SCALAR_ELEMENT_BOOL = 1;
-var CSHARP_SCALAR_ELEMENT_STRING = 2;
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -3615,87 +3612,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return `${receiver.text}.Count`;
   }
-  // the C# type of a dictionary element read is `object`: isEqual compares the boxed
-  // element, which `as` + the operator reproduce exactly (any other box reads as null,
-  // where isEqual also answers false)
-  csharpNativeElementLiteralEquality(left, right, leftText, rightText, isEquality) {
-    let element;
-    let literal;
-    if (this.csharpStringKeyedElementAccess(left)) {
-      element = left;
-      literal = right;
-    } else if (this.csharpStringKeyedElementAccess(right)) {
-      element = right;
-      literal = left;
-    } else {
-      return void 0;
-    }
-    const isBoolLiteral = literal.kind === ts4.SyntaxKind.TrueKeyword || literal.kind === ts4.SyntaxKind.FalseKeyword;
-    const isStringLiteral = ts4.isStringLiteralLike(literal);
-    if (!isBoolLiteral && !isStringLiteral) {
-      return void 0;
-    }
-    if (this.csharpDictionaryReceiverType(element.expression) === void 0) {
-      return void 0;
-    }
-    const wanted = isBoolLiteral ? CSHARP_SCALAR_ELEMENT_BOOL : CSHARP_SCALAR_ELEMENT_STRING;
-    if ((this.csharpScalarElementKinds(element) & wanted) === 0) {
-      return void 0;
-    }
-    const token = isEquality ? "==" : "!=";
-    if (isStringLiteral && this.csharpNumericStringLiteral(literal)) {
-      return void 0;
-    }
-    const cast = isBoolLiteral ? "bool?" : "string";
-    const elementIsLeft = element === left;
-    const castElement = `(${elementIsLeft ? leftText : rightText} as ${cast})`;
-    const otherText = elementIsLeft ? rightText : leftText;
-    return elementIsLeft ? `(${castElement} ${token} ${otherText})` : `(${otherText} ${token} ${castElement})`;
-  }
-  // `x["k"]` — the element read of a dictionary key this printer prints as getValue(x, "k")
-  csharpStringKeyedElementAccess(node) {
-    return node?.kind === ts4.SyntaxKind.ElementAccessExpression && ts4.isStringLiteralLike(node.argumentExpression);
-  }
-  // isEqual compares a boxed number with a numeric string by converting both, which the
-  // string cast of the native form cannot reproduce: a numeric-looking literal stays on
-  // the helper (the element proof says the box is a string, and a number box would differ)
-  csharpNumericStringLiteral(node) {
-    const text = String(node.text).trim();
-    return text !== "" && !isNaN(Number(text));
-  }
-  // the declared C# type of a dictionary receiver: a local the embedding build layer retypes
-  // (csharpExpressionTypeResolver) or a hand-written BaseExchange field; undefined keeps the
-  // runtime helper, since the printer cannot name the box the key lives in
-  csharpDictionaryReceiverType(node) {
-    const native = this.csharpNativeReceiver(node);
-    const declared = native !== void 0 ? native.type : this.csharpExpressionTypeOf(node);
-    if (declared === void 0 || declared.indexOf("Dictionary<") < 0) {
-      return void 0;
-    }
-    return declared;
-  }
-  // the scalar branches isEqual can compare an element with: every member of the element's
-  // TypeScript type must be a boolean, a string or undefined, or the helper stays
-  csharpScalarElementKinds(node) {
-    try {
-      const type = this.getChecker().getTypeAtLocation(node);
-      const members = (type.flags & ts4.TypeFlags.Union) !== 0 ? type.types ?? [] : [type];
-      let kinds = 0;
-      for (const member of members) {
-        const flags = member.flags;
-        if (flags & (ts4.TypeFlags.Boolean | ts4.TypeFlags.BooleanLiteral)) {
-          kinds |= CSHARP_SCALAR_ELEMENT_BOOL;
-        } else if (flags & (ts4.TypeFlags.String | ts4.TypeFlags.StringLiteral | ts4.TypeFlags.TemplateLiteral)) {
-          kinds |= CSHARP_SCALAR_ELEMENT_STRING;
-        } else if (!(flags & ts4.TypeFlags.Undefined)) {
-          return 0;
-        }
-      }
-      return kinds;
-    } catch (e) {
-      return 0;
-    }
-  }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
     const right = node.right;
@@ -3752,10 +3668,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
         if (inlined !== void 0) {
           return inlined;
-        }
-        const nativeElement = this.csharpNativeElementLiteralEquality(left, right, leftText, rightText, isEquality);
-        if (nativeElement !== void 0) {
-          return nativeElement;
         }
       }
       const wrapper = this.binaryExpressionsWrappers[op];

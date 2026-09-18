@@ -543,11 +543,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsArrayType(type: any): boolean;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
     csharpNativeLengthExpression(expression: any): string | undefined;
-    csharpNativeElementLiteralEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
-    csharpStringKeyedElementAccess(node: any): boolean;
-    csharpNumericStringLiteral(node: any): boolean;
-    csharpDictionaryReceiverType(node: any): string | undefined;
-    csharpScalarElementKinds(node: any): number;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     csharpCallReturnType(initializer: any): string | undefined;
     csharpCalleeResolves(node: any): boolean;
