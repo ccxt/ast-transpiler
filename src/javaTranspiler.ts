@@ -93,152 +93,18 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
-// ===== falsy-wrapper removal: `Helpers.isTrue(<X>)` -> native when <X> is already a Java boolean
-//
-// The falsy wrapper wraps every condition the printer cannot prove boolean. `isTrue` itself
-// does `null -> false`; `Boolean -> value`; `Long/Integer/Double -> != 0`; everything else
-// `!= false`. So the wrapper is redundant when the Java value is a primitive `boolean`, and
-// becomes `Boolean.TRUE.equals(x)` when it is a `Boolean` box (or null), which is exactly the
-// same answer for a box the wrapper would test and cannot throw where the helper did not.
+// TS type flags whose Java print is a scalar final class or a primitive: `instanceof
+// java.util.List` is not convertible on those operands, so they keep the helper
+const JAVA_SCALAR_TYPE_FLAGS: number = ts.TypeFlags.String | ts.TypeFlags.StringLiteral
+    | ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral
+    | ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral
+    | ts.TypeFlags.BigInt | ts.TypeFlags.BigIntLiteral
+    | ts.TypeFlags.Enum | ts.TypeFlags.EnumLiteral
+    | ts.TypeFlags.ESSymbol | ts.TypeFlags.UniqueESSymbol;
 
-// hand-written `boolean` fields in the class body of BaseExchange.java / PredictionExchange.java
-// (the half hand-written base files the generated exchanges inherit): a read of one prints a
-// primitive Java boolean, so `this.<field>` IS the wrapper's result.
-const JAVA_BOOLEAN_BASE_FIELDS = new Set([
-    'this.alias',
-    'this.verbose',
-    'this.validateServerSsl',
-    'this.enableRateLimit',
-    'this.pro',
-    'this.certified',
-    'this.reloadingMarkets',
-    'this.marketsLoaded',
-    'this.reduceFees',
-    'this.substituteCommonCurrencyCodes',
-    'this.isSandboxModeEnabled',
-    'this.returnResponseHeaders',
-    'this.newUpdates',
-    'this.syncSleep',
-    // PredictionExchange.java
-    'this.reloadingEvents',
-]);
-
-// hand-written base methods declared `public boolean` (BaseExchange.java): a call prints a
-// primitive Java boolean, so a local fed by one holds a Boolean box or null.
-const JAVA_BOOLEAN_BASE_CALLS = new Set([
-    'valueIsDefined',
-    'inArray',
-    'isEmpty',
-    'isJsonEncodedObject',
-    'isBinaryMessage',
-]);
-
-// operators whose printed Java form is a primitive boolean on every path: the logical ones and
-// every comparison / `in` / `instanceof`-style test the printer lowers to Helpers.isEqual /
-// isGreaterThan / inOp (all declared `public static boolean`) or to a native Java boolean
-const JAVA_BOOLEAN_OPERATOR_KINDS: Set<number> = (() => {
-    const k: any = ts.SyntaxKind;
-    return new Set<number>([
-        k.AmpersandAmpersandToken,
-        k.BarBarToken,
-        k.EqualsEqualsToken,
-        k.EqualsEqualsEqualsToken,
-        k.ExclamationEqualsToken,
-        k.ExclamationEqualsEqualsToken,
-        k.LessThanToken,
-        k.LessThanEqualsToken,
-        k.GreaterThanToken,
-        k.GreaterThanEqualsToken,
-        k.InKeyword,
-        k.InstanceOfKeyword,
-    ]);
-})();
-
-// the TypeScript side of the box proof: `boolean` (or a boolean literal type) and nothing else -
-// an `any`, an `undefined`/`null` union, a type parameter or the nullable aliases (Bool/...) can
-// hold a non-boolean box at runtime, which the wrapper absorbs and `Boolean.TRUE.equals` must not
-const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
-    ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Null
-    | ts.TypeFlags.Void | ts.TypeFlags.Never | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional
-    | ts.TypeFlags.Enum | ts.TypeFlags.EnumLiteral;
-
-
-// the relational `Precise.string*` statics are declared `public static boolean` in the
-// hand-written java/lib/src/main/java/io/github/ccxt/base/Precise.java, so their printed call is
-// already a Java primitive boolean (the String-returning statics are NOT listed here)
-const JAVA_PRECISE_BOOLEAN_STATICS: Set<string> = new Set([
-    'stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe',
-]);
-
-// ===== `this.<name>(...)` calls whose Java return is a boolean =====
-//
-// The printer erases every TS return annotation to `Object` (DEFAULT_RETURN_TYPE), so a
-// condition wrapping one of these calls in Helpers.isTrue re-tests a value the port's
-// hand-written Java base already returns as a boolean. The Java declaration is the proof:
-// these methods are hand-written in java/lib/src/main/java/io/github/ccxt/BaseExchange.java,
-// above the "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT" delimiter, with exactly
-// these returns -- and a Java override must be covariant, so no generated venue method can
-// widen them (census: no ts/src/exchanges, pro or prediction file declares any of them).
-const JAVA_THIS_BOOLEAN_METHODS = new Set<string>([
-    'inArray',              // public boolean inArray (Object elem, Object list2)
-    'isArray',              // public boolean isArray (Object a)
-    'isEmpty',              // public boolean isEmpty (Object a)
-    'valueIsDefined',       // public boolean valueIsDefined (Object value)
-    'isJsonEncodedObject',  // public boolean isJsonEncodedObject (Object str)
-    'isBinaryMessage',      // public boolean isBinaryMessage (Object message)
-]);
-
-// The boolean accessors that are GENERATED below the delimiter (`Object safeBool (...)`) hand
-// the caller's own `defaultValue` back untouched whenever the found value is not a Boolean,
-// so the box is Boolean-or-null only when the call's default argument is absent or a boolean
-// literal (same proof as build/java-local-types.js HANDLE_ELEMENT_TYPES.defaultArg).
-// Value = the index of that default argument in the printed call.
-const JAVA_THIS_BOOLEAN_BOX_METHODS: { [name: string]: number } = {
-    'safeBool': 2,
-    'safeBool2': 3,
-    'safeBoolN': 2,
-};
-
-// the Java spellings a consumer declares a dict local with (import-shortened forms
-// included); every other declared type keeps Helpers.GetValue
-const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
-
-// receiver node kinds whose printed Java is a primary expression, so the `(String)`
-// checkcast in front of them binds the whole receiver (a native `+` prints its own parens)
-const JAVA_SPLIT_RECEIVER_KINDS: Set<number> = new Set<number>([
-    ts.SyntaxKind.Identifier,
-    ts.SyntaxKind.PropertyAccessExpression,
-    ts.SyntaxKind.ElementAccessExpression,
-    ts.SyntaxKind.CallExpression,
-    ts.SyntaxKind.ParenthesizedExpression,
-    ts.SyntaxKind.StringLiteral,
-    ts.SyntaxKind.NoSubstitutionTemplateLiteral,
-]);
-
-// TS classes/interfaces whose hand-written java counterpart extends java.util.ArrayList<Object>
-// (java/lib/.../ws/ArrayCache.java and ws/OrderBookSide.java, plus the IndexedOrderBookSide and
-// Asks/Bids subclasses); every runtime value of these types answers `.length` with the list size
-const JAVA_LIST_BACKED_TS_CLASSES: Set<string> = new Set([
-    'ArrayCache',
-    'ArrayCacheByTimestamp',
-    'ArrayCacheBySymbolById',
-    'ArrayCacheByOutcomeById',
-    'ArrayCacheBySymbolBySide',
-    'OrderBookSide',
-    'IndexedOrderBookSide',
-    'Asks',
-    'Bids',
-    'IndexedAsks',
-    'IndexedBids',
-    'IOrderBookSide',
-]);
-
-// the Java spellings a consumer declares a dict local with (import-shortened forms
-// included); every other declared type keeps Helpers.inOp
-const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
-// the Java spelling that lets the printed key go straight to containsKey: the helper only
-// looks a key up when it is a String, and a String-typed operand is one on every path
-const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
+// TS type flags that are never an array (JS `Array.isArray(null)` / `(undefined)` is false)
+const JAVA_NULLISH_TYPE_FLAGS: number = ts.TypeFlags.Undefined | ts.TypeFlags.Null
+    | ts.TypeFlags.Void | ts.TypeFlags.Never;
 
 export class JavaTranspiler extends BaseTranspiler {
 
@@ -4229,11 +4095,112 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, signature);
     }
 
-    // Route through Helpers so consumers control semantics (thread-safety,
-    // null-handling, type coercion) in one place — same pattern as
-    // Helpers.add / Helpers.isEqual / Helpers.GetValue / Helpers.json.
-    printArrayIsArrayCall(_node, _identation, parsedArg = undefined) {
-        return `Helpers.isArray(${parsedArg})`;
+    // `Array.isArray(x)` prints `(x instanceof java.util.List)` — the helper answers
+    // false for null (not an instance of anything) and true for a List, which is the
+    // same answer for every operand the printer types as a Java object. The helper
+    // only stays where the operand prints as a Java array (a rest-parameter reference:
+    // the helper's `getClass().isArray()` branch is true there) or as a final Java
+    // class, on which `instanceof List` is not convertible.
+    printArrayIsArrayCall(node, _identation, parsedArg = undefined) {
+        const native = this.printNativeArrayIsArray(node, parsedArg);
+        return native === undefined ? `Helpers.isArray(${parsedArg})` : native;
+    }
+
+    printNativeArrayIsArray(node, parsedArg) {
+        const operand: any = node?.arguments?.[0];
+        if (operand === undefined || parsedArg === undefined) {
+            return undefined;
+        }
+        // the whole call is the value of an expression statement: a bare `true;`/`false;` is
+        // not a Java statement, so that position keeps the helper call
+        if (node.parent !== undefined && ts.isExpressionStatement(node.parent)) {
+            return undefined;
+        }
+        // a side-effect-free array literal prints as a fresh ArrayList (never null), so the
+        // answer is true without evaluating anything the helper would have to keep
+        if (ts.isArrayLiteralExpression(operand)) {
+            return this.javaArrayLiteralDropsNothing(operand) ? 'true' : undefined;
+        }
+        if (!this.javaPrimaryIsArrayOperand(operand)) {
+            return undefined;
+        }
+        const type = this.javaOperandType(operand);
+        // a plain identifier of a type that can never hold a List: the helper answers false
+        // for null/undefined and for every scalar, and the reference stays untouched
+        if (operand.kind === ts.SyntaxKind.Identifier && this.javaNonArrayType(type)) {
+            return 'false';
+        }
+        if (this.isVarargsArrayReference(operand)) {
+            return undefined;
+        }
+        if (this.javaScalarType(type)) {
+            return undefined;
+        }
+        return `(${parsedArg} instanceof java.util.List)`;
+    }
+
+    // Operand shapes whose print is a primary expression: `instanceof` binds tighter than the
+    // low-precedence operators, so a ternary/binary operand would re-parse, and a constructor
+    // or cast print can be a final Java class on which `instanceof List` is not convertible.
+    javaPrimaryIsArrayOperand(node): boolean {
+        const kind = node.kind;
+        return kind === ts.SyntaxKind.Identifier
+            || kind === ts.SyntaxKind.PropertyAccessExpression
+            || kind === ts.SyntaxKind.ElementAccessExpression
+            || kind === ts.SyntaxKind.CallExpression;
+    }
+
+    javaOperandType(operand) {
+        try {
+            return (this.getChecker() as TypeChecker).getTypeAtLocation(operand);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // literals and identifiers have nothing an array-literal wrapper could skip by dropping
+    javaArrayLiteralDropsNothing(node, depth = 0): boolean {
+        if (depth > 4) {
+            return false;
+        }
+        return node.elements.every((element) => ts.isStringLiteral(element)
+            || ts.isNumericLiteral(element)
+            || element.kind === ts.SyntaxKind.TrueKeyword
+            || element.kind === ts.SyntaxKind.FalseKeyword
+            || element.kind === ts.SyntaxKind.NullKeyword
+            || element.kind === ts.SyntaxKind.Identifier
+            || (ts.isArrayLiteralExpression(element) && this.javaArrayLiteralDropsNothing(element, depth + 1)));
+    }
+
+    // types whose Java print is a scalar final class (`instanceof java.util.List` is not
+    // convertible on them): the scalar family, and unions made only of scalars/nulls
+    javaScalarType(type, depth = 0): boolean {
+        if (type === undefined || type === null || depth > 3) {
+            return false;
+        }
+        const flags: any = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const parts: any[] = type.types ?? [];
+            return parts.length > 0 && parts.every((part) => this.javaScalarType(part, depth + 1));
+        }
+        return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
+    }
+
+    // types that provably never hold a List: every scalar (Java String/Long/Double/Boolean
+    // answer false) and the nullish types (JS Array.isArray(null) is false)
+    javaNonArrayType(type, depth = 0): boolean {
+        if (type === undefined || type === null || depth > 3) {
+            return false;
+        }
+        const flags: any = type.flags;
+        if (flags & ts.TypeFlags.Union) {
+            const parts: any[] = type.types ?? [];
+            return parts.length > 0 && parts.every((part) => this.javaNonArrayType(part, depth + 1));
+        }
+        if ((flags & JAVA_NULLISH_TYPE_FLAGS) !== 0) {
+            return true;
+        }
+        return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
     }
 
     // A checker-proven dict prints a Map on every path, so the key copy is native;
