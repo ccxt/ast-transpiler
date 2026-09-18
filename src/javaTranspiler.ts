@@ -887,8 +887,13 @@ export class JavaTranspiler extends BaseTranspiler {
             if (this.javaOperandPrintsPrimitiveNumber(node.left) && this.javaOperandPrintsPrimitiveNumber(node.right)) {
                 return `(${leftText} ${negated ? '!=' : '=='} ${rightText})`;
             }
-            const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
-            return negated ? `!${equalCall}` : equalCall;
+            // a boxed double compares through Double.equals, which separates -0.0 from 0.0
+            // where the helper's toDouble compare does not: doubles stay native only as
+            // primitives (there the native operator is the same value compare)
+            if (leftKind !== 'double') {
+                const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+                return negated ? `!${equalCall}` : equalCall;
+            }
         }
         return undefined;
     }

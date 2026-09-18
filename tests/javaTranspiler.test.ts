@@ -2676,17 +2676,21 @@ describe('java numeric equality (Helpers.isEqual -> native compare, java-15)', (
         expect(output).not.toContain("Helpers.isEqual");
     });
 
-    test('a double pair compares natively, a mixed int/double pair keeps the helper', () => {
+    test('a boxed double keeps the helper (-0.0/0.0), a literal pair compares natively', () => {
         const input =
         "function f (xs: number[]) {\n" +
         "    const rate = 0.5;\n" +
         "    const n = xs.length;\n" +
         "    const a = rate === 0.5;\n" +
-        "    const b = n === 0.5;\n" +
-        "    return [ a, b ];\n" +
+        "    const b = 1.5 === 0.5;\n" +
+        "    const c = n === 0.5;\n" +
+        "    return [ a, b, c ];\n" +
         "}\n"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("java.util.Objects.equals(rate, 0.5)");
+        // Double.equals separates -0.0 from 0.0 while the helper's toDouble compare does not
+        expect(output).toContain("Helpers.isEqual(rate, 0.5)");
+        expect(output).toContain("(1.5 == 0.5)");
+        // a mixed int/double pair keeps the helper (the box classes differ)
         expect(output).toContain("Helpers.isEqual(n, 0.5)");
     });
 

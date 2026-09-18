@@ -9072,8 +9072,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (this.javaOperandPrintsPrimitiveNumber(node.left) && this.javaOperandPrintsPrimitiveNumber(node.right)) {
         return `(${leftText} ${negated ? "!=" : "=="} ${rightText})`;
       }
-      const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
-      return negated ? `!${equalCall}` : equalCall;
+      if (leftKind !== "double") {
+        const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+        return negated ? `!${equalCall}` : equalCall;
+      }
     }
     return void 0;
   }
