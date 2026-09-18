@@ -2361,7 +2361,7 @@ describe('csharp typed condition operands', () => {
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain("if (flag == true)");
-            expect(output).toContain("if (!(flag == true))");
+            expect(output).toContain("if (flag != true)");
             expect(output).toContain("bool both = flag == true && isTrue(a);");
             expect(output).toContain("bool either = flag == true || isTrue(a);");
             expect(output).not.toContain("isTrue(flag)");
@@ -2398,30 +2398,109 @@ describe('csharp typed condition operands', () => {
         expect(output).toContain("if (isTrue(flag))");
         expect(output).not.toContain("if (flag)");
     });
-    test('a ternary condition is not this hook\'s position and keeps the base emission', () => {
+    test('a ternary condition named by the hook prints natively (bool bare, bool? == true)', () => {
         const input =
         "class Exchange {\n" +
         "    main (market, a, b) {\n" +
         "        const isSpot = market['spot'] === true;\n" +
-        "        return isSpot ? a : b;\n" +
+        "        const pick = isSpot ? a : b;\n" +
+        "        const paren = (isSpot) ? a : b;\n" +
+        "        return [pick, paren];\n" +
         "    }\n" +
-        "}";
+        "}\n";
+        // the printer itself declares `isSpot` bool, so the hook names it without any override:
+        // the `((bool) …)` wrapper and the isTrue call are both gone from the condition
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("bool isSpot = isEqual(getValue(market, \"spot\"), true)");
+        expect(output).toContain("object pick = isSpot ? a : b;");
+        expect(output).toContain("object paren = isSpot ? a : b;");
+        expect(output).not.toContain("isTrue(isSpot)");
+        expect(output).not.toContain("isSpot == true");
+    });
+    test('a bool? ternary condition prints x == true (source parens unwrapped)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, b) {\n" +
+        "        const flag = a;\n" +
+        "        const pick = flag ? a : b;\n" +
+        "        const paren = (flag) ? a : b;\n" +
+        "        return [pick, paren];\n" +
+        "    }\n" +
+        "}\n";
         const csharp = transpiler.csharpTranspiler;
         const upstream = csharp.csharpConditionOperandType.bind(csharp);
-        // wave-1's ternary unit (printTernaryCondition + csharpConditionPrintsAsBool) owns this
-        // site: the printer itself declares `isSpot` bool, so the condition prints natively and
-        // neither the `((bool) …)` wrapper nor the isTrue call survives. S61's hook must never
-        // fire in a ternary, so it answers `bool?` here and the ` == true` spelling below must
-        // stay absent.
-        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'isSpot') ? 'bool?' : upstream(node));
+        // what the ccxt classifier's installCsharpConditionOperands override answers for a
+        // declaration its tables retype to `bool?`
+        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'flag') ? 'bool?' : upstream(node));
         try {
             const output = transpiler.transpileCSharp(input).content;
-            expect(output).toContain("return isSpot ? a : b;");
-            expect(output).not.toContain("isSpot == true");
-            expect(output).not.toContain("isTrue(isSpot)");
+            expect(output).toContain("object pick = flag == true ? a : b;");
+            expect(output).toContain("object paren = flag == true ? a : b;");
+            expect(output).not.toContain("isTrue(flag)");
         } finally {
             csharp.csharpConditionOperandType = upstream;
         }
+    });
+    test('a ternary condition the hook cannot name keeps the isTrue wrapper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, b) {\n" +
+        "        const read = a;\n" +
+        "        const pick = read ? a : b;\n" +
+        "        return pick;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("object read = a;");
+        expect(output).toContain("object pick = isTrue(read) ? a : b;");
+    });
+    test('a bool? operand under ! prints x != true', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, b) {\n" +
+        "        const flag = a;\n" +
+        "        if (!flag) { b = 1; }\n" +
+        "        const not = !flag;\n" +
+        "        return not;\n" +
+        "    }\n" +
+        "}\n";
+        const csharp = transpiler.csharpTranspiler;
+        const upstream = csharp.csharpConditionOperandType.bind(csharp);
+        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'flag') ? 'bool?' : upstream(node));
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("if (flag != true)");
+            expect(output).toContain("bool not = flag != true;");
+            expect(output).not.toContain("isTrue(flag)");
+            expect(output).not.toContain("!(flag == true)");
+        } finally {
+            csharp.csharpConditionOperandType = upstream;
+        }
+    });
+    test('a ! operand the hook cannot name keeps !isTrue', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a, b) {\n" +
+        "        const read = a;\n" +
+        "        if (!read) { b = 1; }\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (!isTrue(read))");
+    });
+    test('a typed bool operand keeps the printer\'s !x under !', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (market, b) {\n" +
+        "        const isSpot = market['spot'] === true;\n" +
+        "        if (!isSpot) { b = 1; }\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain("if (!isSpot)");
+        expect(output).not.toContain("isSpot != true");
     });
 });
 
