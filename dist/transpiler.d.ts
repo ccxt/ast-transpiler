@@ -998,11 +998,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaLengthKind(expression: any): "List" | "String";
     printJavaLength(expression: any, leftSide: any): string;
     isJavaPrimitiveForCounter(node: any): boolean;
-    javaPrimitiveOperandKind(node: any): any;
-    isJavaFloatLiteral(node: any): boolean;
-    javaPrintedCallKind(node: any): "int" | "double" | "long";
-    javaComparisonOperandsAreExact(left: any, leftKind: any, right: any, rightKind: any): boolean;
-    javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
+    javaPrimitiveOperandKind(node: any): "int" | "long";
     isJavaMapType(type: any): boolean;
     isJavaStringType(type: any): any;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
