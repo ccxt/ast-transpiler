@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11841,110 +11841,10 @@ ${classMethods}
     return void 0;
   }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
-    if (!this.isProvenMapExpression(receiverNode)) {
-      if (!this.rustIsDeclaredDictLocal(receiverNode))
-        return void 0;
-      if (_RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText))
-        return void 0;
-      if (keyText === "" || /^\d+$/.test(keyText))
-        return void 0;
-    }
+    if (!this.isProvenMapExpression(receiverNode))
+      return void 0;
     const key = this.escapeRustStringLiteral(keyText);
     return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
-  }
-  rustDeclarationOfIdentifier(node) {
-    if (!ts7.isIdentifier(node))
-      return void 0;
-    try {
-      const symbol = this.getChecker().getSymbolAtLocation(node);
-      return symbol?.valueDeclaration;
-    } catch (e) {
-      return void 0;
-    }
-  }
-  /** Initializer shapes that construct or return a plain dict. */
-  rustDictProducingInitializer(node, seen) {
-    if (node === void 0 || node === null || seen.has(node))
-      return false;
-    seen.add(node);
-    if (ts7.isObjectLiteralExpression(node))
-      return true;
-    if (ts7.isParenthesizedExpression(node) || ts7.isAsExpression(node) || ts7.isNonNullExpression(node) || ts7.isTypeAssertionExpression(node)) {
-      return this.rustDictProducingInitializer(node.expression, seen);
-    }
-    if (ts7.isIdentifier(node)) {
-      const declaration = this.rustDeclarationOfIdentifier(node);
-      if (declaration === void 0 || !ts7.isVariableDeclaration(declaration))
-        return false;
-      return this.rustDictProducingInitializer(declaration.initializer, seen);
-    }
-    if (ts7.isElementAccessExpression(node)) {
-      const containerType = this.getCheckedTypeOf(node.expression);
-      if (containerType === void 0)
-        return false;
-      const elementType = this.getChecker().getIndexTypeOfType(containerType, ts7.IndexKind.String);
-      return elementType !== void 0 && this.isProvenMapType(elementType);
-    }
-    if (!ts7.isCallExpression(node))
-      return false;
-    const callee = node.expression;
-    if (!ts7.isPropertyAccessExpression(callee) || callee.expression.kind !== ts7.SyntaxKind.ThisKeyword) {
-      return false;
-    }
-    const name = String(callee.name.escapedText);
-    if (name === "safeDict" || name === "safeMarketStructure" || name === "market" || name === "currency" || name === "safeMarket" || name === "safeCurrency") {
-      return true;
-    }
-    if (name === "extend" || name === "deepExtend") {
-      return this.rustDictProducingInitializer(node.arguments[0], seen);
-    }
-    return false;
-  }
-  /** D2: the proof holds only while nothing re-assigns the local. */
-  rustLocalIsReassigned(declaration, name) {
-    let scope = declaration;
-    while (scope !== void 0 && !ts7.isFunctionLike(scope) && !ts7.isSourceFile(scope)) {
-      scope = scope.parent;
-    }
-    if (scope === void 0)
-      return true;
-    let reassigned = false;
-    const visit = (node) => {
-      if (reassigned)
-        return;
-      if (ts7.isBinaryExpression(node)) {
-        const operator = node.operatorToken.kind;
-        if (operator >= SyntaxKind4.FirstAssignment && operator <= SyntaxKind4.LastAssignment && ts7.isIdentifier(node.left) && node.left.text === name) {
-          reassigned = true;
-          return;
-        }
-      }
-      ts7.forEachChild(node, visit);
-    };
-    ts7.forEachChild(scope, visit);
-    return reassigned;
-  }
-  /** True when the receiver is a local declared as (or provably holding) a
-   *  plain dict — `get_value(_k)` and this read agree on every key the
-   *  runtime does not route elsewhere. */
-  rustIsDeclaredDictLocal(node) {
-    const declaration = this.rustDeclarationOfIdentifier(node);
-    if (declaration === void 0)
-      return false;
-    const name = declaration.name?.text;
-    if (typeof name !== "string")
-      return false;
-    let initializer;
-    if (ts7.isParameter(declaration)) {
-      initializer = declaration.initializer;
-    } else if (ts7.isVariableDeclaration(declaration)) {
-      initializer = declaration.initializer;
-    }
-    if (initializer === void 0)
-      return false;
-    if (!this.rustDictProducingInitializer(initializer, /* @__PURE__ */ new Set()))
-      return false;
-    return !this.rustLocalIsReassigned(declaration, name);
   }
   isNodeInsideNode(node, container) {
     return node.pos >= container.pos && node.end <= container.end;
@@ -12563,27 +12463,6 @@ _RustTranspiler.MUT_SELF_METHODS = /* @__PURE__ */ new Set([
   "extend",
   "fetch",
   "send_evm_transaction"
-]);
-// ── declared-Dict locals ──────────────────────────────────────────────────
-// The TS checker types many dict-holding locals `any` (an element read off
-// a `Dictionary<T>`, a default-valued bag, a reader whose return type is
-// `any`), which costs them the proof above. The declaration still proves a
-// plain dict: object literal, `getArg(.., {})` bag, `this.safeDict`, an
-// `extend` onto one of those, or an element of a container whose declared
-// element type is a map. Such a local holds a `Value::Dict` at every read.
-/** Keys `get_value(_k)` serves from the book store, a cache bucket or a
- *  live `__live_id` snapshot instead of from the dict itself: those routes
- *  are invisible to a plain map read, so they keep the helper. */
-_RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS = /* @__PURE__ */ new Set([
-  "timestamp",
-  "datetime",
-  "nonce",
-  "symbol",
-  "checksum",
-  "cache",
-  "hashmap",
-  "subscriptions",
-  "futures"
 ]);
 _RustTranspiler.COMPARISON_OPS = /* @__PURE__ */ new Set([
   SyntaxKind4.EqualsEqualsToken,

@@ -1209,19 +1209,6 @@ declare class RustTranspiler extends BaseTranspiler {
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
-    /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
-     *  live `__live_id` snapshot instead of from the dict itself: those routes
-     *  are invisible to a plain map read, so they keep the helper. */
-    static readonly RUST_DICT_LOCAL_UNSAFE_KEYS: Set<string>;
-    rustDeclarationOfIdentifier(node: ts.Node): ts.Declaration | undefined;
-    /** Initializer shapes that construct or return a plain dict. */
-    rustDictProducingInitializer(node: ts.Node | undefined, seen: Set<ts.Node>): boolean;
-    /** D2: the proof holds only while nothing re-assigns the local. */
-    rustLocalIsReassigned(declaration: ts.Declaration, name: string): boolean;
-    /** True when the receiver is a local declared as (or provably holding) a
-     *  plain dict — `get_value(_k)` and this read agree on every key the
-     *  runtime does not route elsewhere. */
-    rustIsDeclaredDictLocal(node: ts.Node): boolean;
     isNodeInsideNode(node: ts.Node, container: ts.Node): boolean;
     /** Root place of an access chain (`x` for `x['a']['b']`, `this.balance` for
      *  `this.balance['usdt']`), or undefined for a temporary. */
