@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4758,6 +4758,7 @@ var GO_HELPER_RETURN_TYPES = {
   "Precise.StringNeg": "*string",
   "Precise.StringMod": "*string"
 };
+var GO_JSON_PARSE_CALLS = ["Json", "JsonParse", "ParseJson", "ParseJSON"];
 var GO_BOOL_FIELDS = /* @__PURE__ */ new Set([
   "this.Verbose",
   "this.EnableRateLimit",
@@ -4957,6 +4958,10 @@ var GoTranspiler = class extends BaseTranspiler {
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
+    // true when every value written into an `any` local is a non-pointer source: the
+    // box holds a container, a scalar or nil, so IsEqual(x, nil) is exactly `x == nil`.
+    // A write of any other shape in the enclosing function (D2 scan) keeps the helper
+    this.goAnyLocalHoldsNonPointerCache = /* @__PURE__ */ new Map();
     // the Go type this identifier is actually *declared* with, or undefined when it
     // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
     // declaration the reject filters demoted back to `any` is reported as `any` here
@@ -6526,6 +6531,136 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     this.goAnyLocalHoldsPointerCache.set(decl, holds);
     return holds;
   }
+  // the callee name of a call, read from the AST and capitalised the way the
+  // printer names Go functions (`this.parseJson` -> `this.ParseJson`). Printing the
+  // callee would re-enter the equality classifier that asks this question.
+  goAstCalleeName(call) {
+    const callee = call?.expression;
+    if (callee?.kind === ts5.SyntaxKind.Identifier) {
+      const name = callee.escapedText;
+      return typeof name === "string" && name.length > 0 ? name.charAt(0).toUpperCase() + name.substring(1) : void 0;
+    }
+    if (callee?.kind === ts5.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts5.SyntaxKind.ThisKeyword) {
+      const name = callee.name?.escapedText;
+      return typeof name === "string" && name.length > 0 ? "this." + name.charAt(0).toUpperCase() + name.substring(1) : void 0;
+    }
+    return void 0;
+  }
+  // true when every declaration of the awaited callee is a bodyless method signature:
+  // TS never implements it, the endpoint generator does, and the Go body is the
+  // `<-chan any` wrapper over callEndpointAsync (decoded JSON / "panic: " / nil)
+  goAwaitedCallIsImplicitEndpoint(expression) {
+    let call = expression;
+    while (call?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      call = call.expression;
+    }
+    if (call?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const callee = call.expression;
+    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    const nameNode = callee.name;
+    if (nameNode?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(nameNode);
+    } catch (e) {
+      return false;
+    }
+    const declarations = symbol?.declarations;
+    if (!declarations || declarations.length === 0) {
+      return false;
+    }
+    return declarations.every((d) => d.kind === ts5.SyntaxKind.MethodSignature && d.body === void 0 && d.parent?.kind === ts5.SyntaxKind.InterfaceDeclaration);
+  }
+  // true when the printed value of this expression is never a *T whose nil
+  // derefScalar folds to nil (nor a *sync.Map): null/undefined, an object/array
+  // literal, an endpoint await or a JSON decode. Everything else stays unproven.
+  goIsNonPointerValueSource(expr) {
+    while (expr?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      expr = expr.expression;
+    }
+    if (expr === void 0) {
+      return true;
+    }
+    switch (expr.kind) {
+      case ts5.SyntaxKind.NullKeyword:
+        return true;
+      case ts5.SyntaxKind.Identifier:
+        return expr.escapedText === "undefined";
+      case ts5.SyntaxKind.ObjectLiteralExpression:
+      case ts5.SyntaxKind.ArrayLiteralExpression:
+        return true;
+      case ts5.SyntaxKind.AwaitExpression:
+        return this.goAwaitedCallIsImplicitEndpoint(expr.expression);
+      case ts5.SyntaxKind.CallExpression: {
+        const name = this.goAstCalleeName(expr);
+        if (name === void 0) {
+          return false;
+        }
+        return GO_JSON_PARSE_CALLS.indexOf(name.replace(/^this\./, "")) >= 0;
+      }
+    }
+    return false;
+  }
+  goAnyLocalHoldsNonPointer(decl) {
+    if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    if (this.goAnyLocalHoldsNonPointerCache.has(decl)) {
+      return this.goAnyLocalHoldsNonPointerCache.get(decl);
+    }
+    let holds = !this.goAnyLocalHoldsPointer(decl) && this.goIsNonPointerValueSource(decl.initializer);
+    if (holds) {
+      const name = decl.name.escapedText;
+      const scope = this.goEnclosingFunction(decl);
+      if (scope === void 0) {
+        holds = false;
+      } else {
+        const visit = (n) => {
+          if (!holds) {
+            return;
+          }
+          if (n.kind === ts5.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && this.goAssignmentWritesName(n.left, name) && !this.goIsNonPointerValueSource(n.right)) {
+            holds = false;
+            return;
+          }
+          ts5.forEachChild(n, visit);
+        };
+        ts5.forEachChild(scope, visit);
+      }
+    }
+    this.goAnyLocalHoldsNonPointerCache.set(decl, holds);
+    return holds;
+  }
+  // true when this assignment target binds the named local: a plain identifier, or a
+  // destructuring element (`[ a, b ] = …` prints GetValue(<tuple>, i) writes)
+  goAssignmentWritesName(left, name) {
+    if (left?.kind === ts5.SyntaxKind.Identifier) {
+      return left.escapedText === name;
+    }
+    if (left?.kind === ts5.SyntaxKind.ArrayLiteralExpression) {
+      return left.elements.some((e) => e?.kind === ts5.SyntaxKind.Identifier && e.escapedText === name);
+    }
+    return false;
+  }
+  // the variable declaration an identifier resolves to, when it is one
+  goAnyBoxLocalDeclaration(node) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    return symbol?.valueDeclaration;
+  }
   goScalarFamilyOfType(type, allowNil = false) {
     if (type === void 0) {
       return void 0;
@@ -7198,6 +7333,12 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
     }
     if (rBox && lFam === "nil" && rNilFam !== void 0 && rNilFam !== "number") {
+      return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+    }
+    if (lBox && rFam === "nil" && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(left))) {
+      return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+    }
+    if (rBox && lFam === "nil" && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(right))) {
       return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
     }
     const isLiteral = (node) => {

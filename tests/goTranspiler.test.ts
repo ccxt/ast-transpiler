@@ -2363,3 +2363,116 @@ describe('go gofmt-clean native shapes', () => {
         expect(output).toContain("Slice(this.Id, idx+1, nil)");
     });
 });
+
+describe('go IsEqual(x, nil) on an any local whose every write is a non-pointer source', () => {
+    // an implicit-API endpoint: TS never implements the method, the endpoint generator
+    // does, and its Go body is the `<-chan any` wrapper over callEndpointAsync
+    const endpointInterface =
+        "interface Test {\n" +
+        "    publicGetTime (params?: {}): Promise<any>;\n" +
+        "}\n";
+    test('a local only ever assigned endpoint awaits and undefined compares natively', () => {
+        const input = endpointInterface +
+            "class Test {\n" +
+            "    async f (params: any) {\n" +
+            "        let response: any = undefined;\n" +
+            "        if (params['type'] !== undefined) {\n" +
+            "            response = await this.publicGetTime (params);\n" +
+            "        }\n" +
+            "        if (response === undefined) {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        if (response !== undefined) {\n" +
+            "            return response;\n" +
+            "        }\n" +
+            "        return 2;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if response == nil {");
+        expect(output).toContain("if response != nil {");
+        expect(output).not.toContain("IsEqual(response, nil)");
+    });
+    test('a local assigned a JSON parse and an object literal compares natively', () => {
+        const input =
+            "class Test {\n" +
+            "    f (raw: any) {\n" +
+            "        let fetchData: any = undefined;\n" +
+            "        if (raw) {\n" +
+            "            fetchData = { 'response': undefined };\n" +
+            "            fetchData = this.parseJson (raw);\n" +
+            "        }\n" +
+            "        if (fetchData !== undefined) {\n" +
+            "            return fetchData;\n" +
+            "        }\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if fetchData != nil {");
+        expect(output).not.toContain("IsEqual(fetchData, nil)");
+    });
+    test('an await of a method TypeScript implements keeps the helper', () => {
+        const input =
+            "class Test {\n" +
+            "    async fetchTime (params: any) {\n" +
+            "        return this.safeInteger (params, 'serverTime');\n" +
+            "    }\n" +
+            "    async f (params: any) {\n" +
+            "        let response: any = undefined;\n" +
+            "        response = await this.fetchTime (params);\n" +
+            "        if (response === undefined) {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return response;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(response, nil)");
+    });
+    test('a destructuring write of an unproven call keeps the helper', () => {
+        const input =
+            "class Test {\n" +
+            "    handleOptionAndParams (params: any, a: any, b: any) { return [ a, params ]; }\n" +
+            "    f (params: any) {\n" +
+            "        let value: any = undefined;\n" +
+            "        [ value, params ] = this.handleOptionAndParams (params, 'a', 'b');\n" +
+            "        if (value !== undefined) {\n" +
+            "            return value;\n" +
+            "        }\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(value, nil)");
+    });
+    test('a GetValue or SafeList write keeps the helper', () => {
+        const input =
+            "class Test {\n" +
+            "    f (item: any, rows: any) {\n" +
+            "        let response: any = undefined;\n" +
+            "        response = GetValue (rows, 0);\n" +
+            "        response = this.safeList (item, 'data', []);\n" +
+            "        if (response !== undefined) {\n" +
+            "            return response;\n" +
+            "        }\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(response, nil)");
+    });
+    test('a parameter compared with undefined keeps the helper', () => {
+        const input =
+            "class Test {\n" +
+            "    f (params: any, since: any) {\n" +
+            "        if (since !== undefined) {\n" +
+            "            params['startTime'] = since;\n" +
+            "        }\n" +
+            "        return params;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(since, nil)");
+    });
+});

@@ -788,6 +788,13 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsAnyBoxExpression(node: any, printedText: string): boolean;
     goAnyLocalHoldsPointerCache: Map<any, boolean>;
     goAnyLocalHoldsPointer(decl: any): boolean;
+    goAstCalleeName(call: any): string | undefined;
+    goAwaitedCallIsImplicitEndpoint(expression: any): boolean;
+    goIsNonPointerValueSource(expr: any): boolean;
+    goAnyLocalHoldsNonPointerCache: Map<any, boolean>;
+    goAnyLocalHoldsNonPointer(decl: any): boolean;
+    goAssignmentWritesName(left: any, name: any): boolean;
+    goAnyBoxLocalDeclaration(node: any): any;
     goScalarFamilyOfType(type: any, allowNil?: boolean): string | undefined;
     goDeclaredTypeCache: Map<any, string>;
     goDeclaredTypeInProgress: Set<any>;
