@@ -213,3 +213,133 @@ describe('go len() keeps the int classification', () => {
         expect(output).toContain('var n int = ');
     });
 });
+
+// IsArray folds to a constant on an operand whose Go type the printer names, and to the
+// two-value assertion on a box that only ever holds a []any; every other box keeps the helper
+describe('go IsArray -> constant / type assertion', () => {
+    test('a []string-typed local folds to true', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const parts = ObjectKeys(a)\n" +
+        "        if (Array.isArray(parts)) {\n" +
+        "            return parts.length\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if true {');
+        expect(output).not.toContain('IsArray(');
+    });
+    test('a []any-typed local folds to true', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const res = [a]\n" +
+        "        if (Array.isArray(res)) {\n" +
+        "            return res[0]\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if true {');
+        expect(output).not.toContain('IsArray(');
+    });
+    test('a map-typed local folds to false', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const d = { 'x': 1 }\n" +
+        "        if (Array.isArray(d)) {\n" +
+        "            return d['x']\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if false {');
+        expect(output).not.toContain('IsArray(');
+    });
+    test('a negated fold keeps the negation', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const parts = ObjectKeys(a)\n" +
+        "        if (!Array.isArray(parts)) {\n" +
+        "            return parts.length\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if !true {');
+    });
+    test('a slice-typed local without another use keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const parts = ObjectKeys(a)\n" +
+        "        return Array.isArray(parts)\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('IsArray(parts)');
+    });
+    test('an any-typed local keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const v = GetValue(a, 'k')\n" +
+        "        if (Array.isArray(v)) {\n" +
+        "            return v\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('IsArray(v)');
+    });
+    test('an any-typed local reassigned from a call keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        let res = []\n" +
+        "        res = this.parseTrades(a)\n" +
+        "        if (Array.isArray(res)) {\n" +
+        "            return res\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('IsArray(res)');
+    });
+    test('a boxed local that only ever holds a []any prints the assertion', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const res = []\n" +
+        "        res.push(a)\n" +
+        "        if (Array.isArray(res)) {\n" +
+        "            return res\n" +
+        "        }\n" +
+        "        return 0\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('if func() bool { _, ok := res.([]any); return ok }() {');
+        expect(output).not.toContain('IsArray(');
+    });
+    test('a call operand keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        return Array.isArray(GetValue(a, 'k'))\n" +
+        "    }\n" +
+        "}";
+        const output = transpile(ts);
+        expect(output).toContain('IsArray(GetValue(a, "k"))');
+    });
+});
