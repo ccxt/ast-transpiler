@@ -77,6 +77,13 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
+// the Java spellings a consumer declares a dict local with (import-shortened forms
+// included); every other declared type keeps Helpers.inOp
+const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
+// the Java spelling that lets the printed key go straight to containsKey: the helper only
+// looks a key up when it is a String, and a String-typed operand is one on every path
+const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -914,6 +921,105 @@ export class JavaTranspiler extends BaseTranspiler {
         return type.types.every((member) => this.isStringType(member.flags));
     }
 
+    // `Dictionary | undefined` (what a no-overload safe* signature widens to): the helper
+    // answers false for the nullish arm and the guarded emission keeps exactly that; every
+    // non-map member (arrays, classes, scalars) keeps the helper
+    isJavaNullableMapType(type) {
+        if (type === undefined || (type.flags & ts.TypeFlags.Union) === 0) {
+            return false;
+        }
+        const members = (type as any).types ?? [];
+        let maps = 0;
+        for (const member of members) {
+            if ((member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) !== 0) {
+                continue;
+            }
+            if (!this.isJavaMapType(member)) {
+                return false;
+            }
+            maps++;
+        }
+        return maps > 0;
+    }
+
+    // the guarded emission reads the receiver twice, so it is only printed for an operand
+    // that cannot run anything twice: a name or a `this.` field. Everything else (calls,
+    // element reads) keeps the helper so the operand is still evaluated once.
+    javaRepeatableOperand(node) {
+        if (node === undefined) {
+            return false;
+        }
+        if (ts.isIdentifier(node)) {
+            return true;
+        }
+        if (ts.isParenthesizedExpression(node)) {
+            return this.javaRepeatableOperand(node.expression);
+        }
+        return ts.isPropertyAccessExpression(node) && node.expression?.kind === ts.SyntaxKind.ThisKeyword;
+    }
+
+    // The declared Java type of a local/parameter is known to the pass that rewrites the
+    // declaration text (build/java-local-types.js): it records every name it typed here.
+    // Reads consult it; with no consumer installed the table is empty and every read keeps
+    // the helper.
+    javaDeclaredLocalTypeResolver: ((declaration: ts.Node) => string | undefined) | undefined;
+
+    // the declaration node behind an identifier, when the checker resolves one
+    javaDeclarationOfIdentifier(expression) {
+        if (!ts.isIdentifier(expression)) {
+            return undefined;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(expression);
+        } catch (e) {
+            return undefined;
+        }
+        const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const kind = declaration.kind;
+        if (kind !== ts.SyntaxKind.VariableDeclaration && kind !== ts.SyntaxKind.Parameter) {
+            return undefined;
+        }
+        return declaration;
+    }
+
+    // the declared Java type of an identifier, when a consumer installed the table
+    javaDeclaredTypeOf(expression): string | undefined {
+        const resolver = this.javaDeclaredLocalTypeResolver;
+        if (resolver === undefined) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(expression);
+        if (declaration === undefined) {
+            return undefined;
+        }
+        let type;
+        try {
+            type = resolver(declaration);
+        } catch (e) {
+            return undefined;
+        }
+        return typeof type === 'string' ? type.trim() : undefined;
+    }
+
+    // `x` where the consumer declares x as a Java map: the declaration already carries the
+    // type, so `x.containsKey(k)` binds with no cast
+    javaDeclaredMapReceiver(expression) {
+        const type = this.javaDeclaredTypeOf(expression);
+        return type !== undefined && JAVA_DECLARED_MAP_TYPES.test(type);
+    }
+
+    // `k` where the consumer declares k as a Java String: the helper's String branch (the
+    // only one that can answer true for a map) is the native lookup, and no null key can
+    // reach containsKey
+    javaDeclaredStringType(expression) {
+        const type = this.javaDeclaredTypeOf(expression);
+        return type !== undefined && JAVA_DECLARED_STRING_TYPE.test(type);
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -1005,10 +1111,25 @@ export class JavaTranspiler extends BaseTranspiler {
         if (op === ts.SyntaxKind.InKeyword) {
             const objectType = this.getChecker().getTypeAtLocation(right);
             const keyType = this.getChecker().getTypeAtLocation(left);
-            if (this.isJavaMapType(objectType) && this.isJavaStringType(keyType)) {
-                return `((java.util.Map<?, ?>)${this.printNode(right, 0)}).containsKey(${this.printNode(left, 0)})`;
+            const objText = this.printNode(right, 0);
+            const keyText = this.printNode(left, 0);
+            const keyOk = this.isJavaStringType(keyType) || this.javaDeclaredStringType(left);
+            if (keyOk) {
+                // the declaration the pass rewrote already carries the map type (and, for a
+                // `this.` field or a retyped local, the surface that names it): no cast needed
+                if (this.javaDeclaredMapReceiver(right)) {
+                    return `${objText}.containsKey(${keyText})`;
+                }
+                if (this.isJavaMapType(objectType)) {
+                    return `((java.util.Map<?, ?>)${objText}).containsKey(${keyText})`;
+                }
+                // `Dictionary | undefined` (a no-overload safe* signature): the helper answers
+                // false for the nullish arm, the guard keeps exactly that
+                if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
+                    return `(${objText} != null && ((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
+                }
             }
-            return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+            return `Helpers.inOp(${objText}, ${keyText})`;
         }
 
         // native comparison for two operands that are provably Java int/long

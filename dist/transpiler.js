@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8396,6 +8396,8 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
+var JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
+var JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -9109,6 +9111,93 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return type.types.every((member) => this.isStringType(member.flags));
   }
+  // `Dictionary | undefined` (what a no-overload safe* signature widens to): the helper
+  // answers false for the nullish arm and the guarded emission keeps exactly that; every
+  // non-map member (arrays, classes, scalars) keeps the helper
+  isJavaNullableMapType(type) {
+    if (type === void 0 || (type.flags & ts6.TypeFlags.Union) === 0) {
+      return false;
+    }
+    const members = type.types ?? [];
+    let maps = 0;
+    for (const member of members) {
+      if ((member.flags & (ts6.TypeFlags.Undefined | ts6.TypeFlags.Null)) !== 0) {
+        continue;
+      }
+      if (!this.isJavaMapType(member)) {
+        return false;
+      }
+      maps++;
+    }
+    return maps > 0;
+  }
+  // the guarded emission reads the receiver twice, so it is only printed for an operand
+  // that cannot run anything twice: a name or a `this.` field. Everything else (calls,
+  // element reads) keeps the helper so the operand is still evaluated once.
+  javaRepeatableOperand(node) {
+    if (node === void 0) {
+      return false;
+    }
+    if (ts6.isIdentifier(node)) {
+      return true;
+    }
+    if (ts6.isParenthesizedExpression(node)) {
+      return this.javaRepeatableOperand(node.expression);
+    }
+    return ts6.isPropertyAccessExpression(node) && node.expression?.kind === ts6.SyntaxKind.ThisKeyword;
+  }
+  // the declaration node behind an identifier, when the checker resolves one
+  javaDeclarationOfIdentifier(expression) {
+    if (!ts6.isIdentifier(expression)) {
+      return void 0;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(expression);
+    } catch (e) {
+      return void 0;
+    }
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (declaration === void 0) {
+      return void 0;
+    }
+    const kind = declaration.kind;
+    if (kind !== ts6.SyntaxKind.VariableDeclaration && kind !== ts6.SyntaxKind.Parameter) {
+      return void 0;
+    }
+    return declaration;
+  }
+  // the declared Java type of an identifier, when a consumer installed the table
+  javaDeclaredTypeOf(expression) {
+    const resolver = this.javaDeclaredLocalTypeResolver;
+    if (resolver === void 0) {
+      return void 0;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(expression);
+    if (declaration === void 0) {
+      return void 0;
+    }
+    let type;
+    try {
+      type = resolver(declaration);
+    } catch (e) {
+      return void 0;
+    }
+    return typeof type === "string" ? type.trim() : void 0;
+  }
+  // `x` where the consumer declares x as a Java map: the declaration already carries the
+  // type, so `x.containsKey(k)` binds with no cast
+  javaDeclaredMapReceiver(expression) {
+    const type = this.javaDeclaredTypeOf(expression);
+    return type !== void 0 && JAVA_DECLARED_MAP_TYPES.test(type);
+  }
+  // `k` where the consumer declares k as a Java String: the helper's String branch (the
+  // only one that can answer true for a map) is the native lookup, and no null key can
+  // reach containsKey
+  javaDeclaredStringType(expression) {
+    const type = this.javaDeclaredTypeOf(expression);
+    return type !== void 0 && JAVA_DECLARED_STRING_TYPE.test(type);
+  }
   printCustomBinaryExpressionIfAny(node, identation) {
     const left = node.left;
     const right = node.right;
@@ -9174,10 +9263,21 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (op === ts6.SyntaxKind.InKeyword) {
       const objectType = this.getChecker().getTypeAtLocation(right);
       const keyType = this.getChecker().getTypeAtLocation(left);
-      if (this.isJavaMapType(objectType) && this.isJavaStringType(keyType)) {
-        return `((java.util.Map<?, ?>)${this.printNode(right, 0)}).containsKey(${this.printNode(left, 0)})`;
+      const objText = this.printNode(right, 0);
+      const keyText = this.printNode(left, 0);
+      const keyOk = this.isJavaStringType(keyType) || this.javaDeclaredStringType(left);
+      if (keyOk) {
+        if (this.javaDeclaredMapReceiver(right)) {
+          return `${objText}.containsKey(${keyText})`;
+        }
+        if (this.isJavaMapType(objectType)) {
+          return `((java.util.Map<?, ?>)${objText}).containsKey(${keyText})`;
+        }
+        if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
+          return `(${objText} != null && ((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
+        }
       }
-      return `Helpers.inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
+      return `Helpers.inOp(${objText}, ${keyText})`;
     }
     if (op === ts6.SyntaxKind.LessThanToken || op === ts6.SyntaxKind.GreaterThanToken || op === ts6.SyntaxKind.LessThanEqualsToken || op === ts6.SyntaxKind.GreaterThanEqualsToken) {
       if (this.javaPrimitiveOperandKind(left) !== void 0 && this.javaPrimitiveOperandKind(right) !== void 0) {

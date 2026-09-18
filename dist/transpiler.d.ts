@@ -1001,6 +1001,13 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaPrimitiveOperandKind(node: any): "int" | "long";
     isJavaMapType(type: any): boolean;
     isJavaStringType(type: any): any;
+    isJavaNullableMapType(type: any): boolean;
+    javaRepeatableOperand(node: any): any;
+    javaDeclaredLocalTypeResolver: ((declaration: ts.Node) => string | undefined) | undefined;
+    javaDeclarationOfIdentifier(expression: any): any;
+    javaDeclaredTypeOf(expression: any): string | undefined;
+    javaDeclaredMapReceiver(expression: any): boolean;
+    javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     isJavaMapStructureType(type: any): boolean;
     isJavaListStructureType(type: any): boolean;

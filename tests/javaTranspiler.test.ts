@@ -3239,6 +3239,159 @@ describe('helper removal: native comparison / containsKey / size', () => {
     });
 });
 
+describe('java inOp -> containsKey: declared Map receivers and nullable dicts', () => {
+    // the consumer-side hook build/java-local-types.js installs: declaration -> declared
+    // Java type, for the names its slices retyped
+    const declared = new Map<string, string>();
+    const install = (entries: Array<[string, string]>) => {
+        declared.clear();
+        entries.forEach(([name, type]) => declared.set(name, type));
+        (transpiler as any).javaTranspiler.javaDeclaredLocalTypeResolver =
+            (declaration: any) => declared.get(String(declaration?.name?.escapedText));
+    };
+    afterEach(() => {
+        (transpiler as any).javaTranspiler.javaDeclaredLocalTypeResolver = undefined;
+    });
+
+    test('a receiver declared Map prints containsKey with no cast', () => {
+        install([['x', 'java.util.Map<String, Object>']]);
+        const input =
+        "class T {\n" +
+        "    f(x: any, k: string): void {\n" +
+        "        if (k in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("if (x.containsKey(k))");
+        expect(output).not.toContain("Helpers.inOp");
+        expect(output).not.toContain("((java.util.Map<?, ?>)x)");
+    });
+
+    test('the same receiver with no declared type keeps the helper', () => {
+        install([]);
+        const input =
+        "class T {\n" +
+        "    f(x: any, k: string): void {\n" +
+        "        if (k in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(x, k)");
+    });
+
+    test('a declared Map local whose declaration the consumer left Object keeps the helper', () => {
+        install([['x', 'Object']]);
+        const input =
+        "class T {\n" +
+        "    f(x: any, k: string): void {\n" +
+        "        if (k in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(x, k)");
+    });
+
+    test('a declared String key unlocks the lookup on an any-typed key', () => {
+        install([['x', 'java.util.Map<String, Object>'], ['raw', 'String']]);
+        const input =
+        "class T {\n" +
+        "    f(x: any, raw: any): void {\n" +
+        "        if (raw in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("if (x.containsKey(raw))");
+        expect(output).not.toContain("Helpers.inOp");
+    });
+
+    test('a nullable dict receiver prints the guarded containsKey', () => {
+        install([]);
+        const input =
+        "interface D { [key: string]: any; }\n" +
+        "class T {\n" +
+        "    f(x: D | undefined, k: string): void {\n" +
+        "        if (k in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(x != null && ((java.util.Map<?, ?>)x).containsKey(k))");
+        expect(output).not.toContain("Helpers.inOp");
+    });
+
+    test('a null member joins the same guard', () => {
+        install([]);
+        const input =
+        "interface D { [key: string]: any; }\n" +
+        "class T {\n" +
+        "    f(x: D | null | undefined, k: string): void {\n" +
+        "        if (k in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(x != null && ((java.util.Map<?, ?>)x).containsKey(k))");
+        expect(output).not.toContain("Helpers.inOp");
+    });
+
+    test('a nullable dict receiver that is a call keeps the helper (single evaluation)', () => {
+        install([]);
+        const input =
+        "interface D { [key: string]: any; }\n" +
+        "class T {\n" +
+        "    safe(x: any): D | undefined {\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    f(k: string): void {\n" +
+        "        if (k in this.safe(1)) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(this.safe(1), k)");
+    });
+
+    test('a nullable non-dict union keeps the helper', () => {
+        install([]);
+        const input =
+        "class T {\n" +
+        "    f(x: number[] | undefined, k: string): void {\n" +
+        "        if (k in x) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(x, k)");
+    });
+
+    test('a declared Map field receiver keeps the helper (only names resolve)', () => {
+        install([['x', 'java.util.Map<String, Object>']]);
+        const input =
+        "class T {\n" +
+        "    m: any;\n" +
+        "    f(k: string): void {\n" +
+        "        if (k in this.m) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.inOp(this.m, k)");
+    });
+});
+
 describe('java replaceAll native emission', () => {
     // Literal pattern and replacement on a side-effect-free receiver: the helper's null /
     // empty-pattern guards cannot fire, so the call is emitted as a native String.replace
