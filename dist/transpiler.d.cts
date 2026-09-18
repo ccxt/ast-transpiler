@@ -518,7 +518,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpAlwaysExits(statement: any): boolean;
     csharpContains(outer: any, inner: any): boolean;
     printWrappedUnknownThisProperty(node: any): string;
-    csharpNativeDelegateCall(node: any, propName: any): string | undefined;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     csharpEqualityOperandType(node: any): string | undefined;
