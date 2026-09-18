@@ -1701,6 +1701,102 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("Add(MathFloor(a), 1)");
     });
+    test('an inferred `:=` counter is a Go int, so Add on it is a bare addition', () => {
+        const input =
+        "class T {\n" +
+        "    f (n: number) {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            var index = i + 1;\n" +
+        "            return index;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var index any = i + 1");
+        expect(output).not.toContain("Add(i, 1)");
+    });
+    test('an inferred counter keeps Subtract and Multiply (both helpers return int64)', () => {
+        const input =
+        "class T {\n" +
+        "    f (n: number) {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            var a = i - 1;\n" +
+        "            var b = i * 2;\n" +
+        "            return a;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Subtract(i, 1)");
+        expect(output).toContain("Multiply(i, 2)");
+    });
+    test('an inferred counter keeps Add when its literal would not fit a Go int', () => {
+        const input =
+        "class T {\n" +
+        "    f (n: number) {\n" +
+        "        for (let i = 4294967296; i < n; i++) {\n" +
+        "            var index = i + 1;\n" +
+        "            return index;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(i, 1)");
+    });
+    test('a float-initialised inferred counter keeps Add (the helper collapses integral results)', () => {
+        const input =
+        "class T {\n" +
+        "    f (n: number) {\n" +
+        "        for (let i = 0.5; i < n; i++) {\n" +
+        "            var index = i + 1;\n" +
+        "            return index;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(i, 1)");
+    });
+    test('a statement-level literal local keeps the helper (its own declaration names the type)', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f (n: number) {\n" +
+        "        let i = 0;\n" +
+        "        while (i < n) {\n" +
+        "            var index = i + 1;\n" +
+        "            i = i + 1;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(i, 1)");
+    });
+    test('a native Add on an inferred counter keeps its parentheses inside a call argument', () => {
+        const input =
+        "class T {\n" +
+        "    f (n: number, a: any) {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            this.log (i + 1, a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("callDynamically(\"log\", i+1, a)");
+    });
+    test('an int64 call plus an int counter keeps the helper (mixed kinds)', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f (n: number) {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            var t = this.milliseconds () + i;\n" +
+        "            return t;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("Add(this.Milliseconds(), i)");
+    });
     test('concatenating into a typed string field is a compound assignment', () => {
         const input =
         "class T {\n" +

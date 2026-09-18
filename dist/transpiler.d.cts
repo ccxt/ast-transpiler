@@ -738,6 +738,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
     goUnwrapPrintedParens(printedText: string): string;
     goLocalStaticType(node: any): string | undefined;
+    goInferredLocalStaticType(node: any): string | undefined;
     goStringFieldStaticType(node: any, printedText: string): string | undefined;
     goOperandStaticType(node: any, printedText: string): string | undefined;
     goStringCallStaticType(node: any, printedText: string): string | undefined;
