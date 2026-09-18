@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -11330,9 +11330,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
   }
-  // `<box><expr>)` spanning the whole printed value → `<expr>`. The payload is
-  // only reachable this way: the printer prints the value, not its parts.
-  peelValueBox(printedValue, prefix) {
+  // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
+  peelValueBoolBox(printedValue) {
+    const prefix = "Value::Bool(";
     if (!printedValue.startsWith(prefix) || !printedValue.endsWith(")")) {
       return void 0;
     }
@@ -11358,14 +11358,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
     }
     return void 0;
-  }
-  // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
-  peelValueBoolBox(printedValue) {
-    return this.peelValueBox(printedValue, "Value::Bool(");
-  }
-  // `Value::Str(<expr>)` spanning the whole expression → `<expr>` (a String).
-  peelValueStrBox(printedValue) {
-    return this.peelValueBox(printedValue, "Value::Str(");
   }
   // `((expr))` → `expr` — a redundant layer kept from the TS source; the
   // right-hand side of a declaration binds the whole expression anyway.
@@ -11430,13 +11422,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return true;
       }
       return this.getChecker().typeToString(type).trim() === "boolean";
-    } catch (e) {
-      return false;
-    }
-  }
-  rustTypeIsString(node) {
-    try {
-      return this.isStringLikeType(this.getChecker().getTypeAtLocation(node));
     } catch (e) {
       return false;
     }
@@ -11716,41 +11701,18 @@ ${classMethods}
   printThisKeyword(node, identation) {
     return "self";
   }
-  // A string literal prints as the bare `"lit"` (`&str` — no String
-  // allocation); a checker-proven string drops the redundant `Value::Str` box.
-  printErrorConstructorArg(name, index, node, identation) {
-    const kind = _optionalChain([_RustTranspiler, 'access', _539 => _539.RUST_ERROR_CONSTRUCTOR_ARGS, 'access', _540 => _540[name], 'optionalAccess', _541 => _541[index]]);
-    if (kind === void 0) {
-      return this.printNode(node, identation);
-    }
-    if (_typescript2.default.isStringLiteral(node) && !(node.text in this.StringLiteralReplacements)) {
-      return this.quotedStringLiteral(node.text);
-    }
-    const printed = this.printNode(node, identation).trim();
-    if (kind !== "msg" || !this.rustTypeIsString(node)) {
-      return printed;
-    }
-    return _nullishCoalesce(_nullishCoalesce(this.peelValueStrBox(printed), () => ( this.peelValueStrBox(this.stripOuterParens(printed)))), () => ( printed));
-  }
-  // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
-  // post-pass applies to `X::new(..)` calls.
-  rustErrorConstructorName(className) {
-    return className.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
-  }
   printNewExpression(node, identation) {
-    let expression = _optionalChain([node, 'access', _542 => _542.expression, 'optionalAccess', _543 => _543.escapedText]);
+    let expression = _optionalChain([node, 'access', _539 => _539.expression, 'optionalAccess', _540 => _540.escapedText]);
     expression = expression ? expression : this.printNode(node.expression);
+    const args = node.arguments.map((a) => this.printNode(a, identation)).join(", ");
     if (expression === "Error") {
-      const args2 = node.arguments.map((a) => this.printNode(a, identation)).join(", ");
-      return args2 || "Value::Null";
+      return args || "Value::Null";
     }
     const errorClassPattern = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
     if (typeof expression === "string" && errorClassPattern.test(expression)) {
-      const snake = this.rustErrorConstructorName(expression);
-      const args2 = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(", ");
-      return `crate::exchange_errors::${snake}(${args2})`;
+      const snake = expression.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z\d])([A-Z])/g, "$1_$2").toLowerCase();
+      return `crate::exchange_errors::${snake}(${args})`;
     }
-    const args = typeof expression === "string" ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(", ") : node.arguments.map((a) => this.printNode(a, identation)).join(", ");
     return `${expression}::new(${args})`;
   }
   printPropertyAccessExpression(node, identation) {
@@ -11790,14 +11752,14 @@ ${classMethods}
   typeSymbolOf(type) {
     if (type === void 0 || type === null)
       return void 0;
-    return _nullishCoalesce(_nullishCoalesce(_optionalChain([type, 'access', _544 => _544.getSymbol, 'optionalCall', _545 => _545()]), () => ( type.symbol)), () => ( type.aliasSymbol));
+    return _nullishCoalesce(_nullishCoalesce(_optionalChain([type, 'access', _541 => _541.getSymbol, 'optionalCall', _542 => _542()]), () => ( type.symbol)), () => ( type.aliasSymbol));
   }
   /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
    *  backed by a plain `Value` map in the rust port. */
   isLibDeclaredType(type) {
-    const declarations = _nullishCoalesce(_optionalChain([this, 'access', _546 => _546.typeSymbolOf, 'call', _547 => _547(type), 'optionalAccess', _548 => _548.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([this, 'access', _543 => _543.typeSymbolOf, 'call', _544 => _544(type), 'optionalAccess', _545 => _545.declarations]), () => ( []));
     return declarations.some((d) => {
-      const file = _nullishCoalesce(_optionalChain([d, 'optionalAccess', _549 => _549.getSourceFile, 'optionalCall', _550 => _550(), 'optionalAccess', _551 => _551.fileName]), () => ( ""));
+      const file = _nullishCoalesce(_optionalChain([d, 'optionalAccess', _546 => _546.getSourceFile, 'optionalCall', _547 => _547(), 'optionalAccess', _548 => _548.fileName]), () => ( ""));
       return /[\\/]lib\.[^\\/]*\.d\.ts$/.test(file) || /[\\/]node_modules[\\/]typescript[\\/]/.test(file);
     });
   }
@@ -11808,9 +11770,9 @@ ${classMethods}
       return (_nullishCoalesce(type.types, () => ( []))).some((member) => this.isClassInstanceType(member));
     }
     const symbol = _nullishCoalesce(this.typeSymbolOf(type), () => ( type.aliasSymbol));
-    if (_optionalChain([symbol, 'optionalAccess', _552 => _552.flags]) & _typescript2.default.SymbolFlags.Class)
+    if (_optionalChain([symbol, 'optionalAccess', _549 => _549.flags]) & _typescript2.default.SymbolFlags.Class)
       return true;
-    const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _553 => _553.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _550 => _550.declarations]), () => ( []));
     return declarations.some((d) => _typescript2.default.isClassDeclaration(d) || _typescript2.default.isClassExpression(d));
   }
   hasCallableShape(type) {
@@ -11820,13 +11782,13 @@ ${classMethods}
   isProvenListType(type) {
     if (!(type.flags & _typescript2.default.TypeFlags.Object))
       return false;
-    const objectFlags = (_nullishCoalesce(type.objectFlags, () => ( 0))) | (_nullishCoalesce(_optionalChain([type, 'access', _554 => _554.target, 'optionalAccess', _555 => _555.objectFlags]), () => ( 0)));
+    const objectFlags = (_nullishCoalesce(type.objectFlags, () => ( 0))) | (_nullishCoalesce(_optionalChain([type, 'access', _551 => _551.target, 'optionalAccess', _552 => _552.objectFlags]), () => ( 0)));
     if (objectFlags & _typescript2.default.ObjectFlags.Tuple)
       return true;
-    const name = _optionalChain([this, 'access', _556 => _556.typeSymbolOf, 'call', _557 => _557(type), 'optionalAccess', _558 => _558.getName, 'optionalCall', _559 => _559()]);
+    const name = _optionalChain([this, 'access', _553 => _553.typeSymbolOf, 'call', _554 => _554(type), 'optionalAccess', _555 => _555.getName, 'optionalCall', _556 => _556()]);
     if (name === "Array" || name === "ReadonlyArray")
       return true;
-    const targetName = _optionalChain([this, 'access', _560 => _560.typeSymbolOf, 'call', _561 => _561(type.target), 'optionalAccess', _562 => _562.getName, 'optionalCall', _563 => _563()]);
+    const targetName = _optionalChain([this, 'access', _557 => _557.typeSymbolOf, 'call', _558 => _558(type.target), 'optionalAccess', _559 => _559.getName, 'optionalCall', _560 => _560()]);
     return targetName === "Array" || targetName === "ReadonlyArray";
   }
   /** True only for object types the rust port represents as `Value::Dict`
@@ -12140,9 +12102,9 @@ ${idn}}`;
       ifComplete = `${this.getIden(identation)}if ${ifComplete}`;
     }
     const elseStatement = node.elseStatement;
-    if (_optionalChain([elseStatement, 'optionalAccess', _564 => _564.kind]) === SyntaxKind4.Block) {
+    if (_optionalChain([elseStatement, 'optionalAccess', _561 => _561.kind]) === SyntaxKind4.Block) {
       ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
-    } else if (_optionalChain([elseStatement, 'optionalAccess', _565 => _565.kind]) === SyntaxKind4.IfStatement) {
+    } else if (_optionalChain([elseStatement, 'optionalAccess', _562 => _562.kind]) === SyntaxKind4.IfStatement) {
       ifComplete += " " + this.printIfStatement(elseStatement, identation);
     }
     return this.printNodeCommentsIfAny(node, identation, ifComplete);
@@ -12319,7 +12281,7 @@ ${this.getIden(identation)}})`;
     return `append_to_array(&mut ${name}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
-    const pRef = _optionalChain([parsedArg, 'optionalAccess', _566 => _566.startsWith, 'call', _567 => _567("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
+    const pRef = _optionalChain([parsedArg, 'optionalAccess', _563 => _563.startsWith, 'call', _564 => _564("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
     return `Value::Bool(contains(&${name}, ${pRef}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
@@ -12381,7 +12343,7 @@ ${this.getIden(identation)}})`;
   printTryStatement(node, identation) {
     const tryBody = node.tryBlock.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
     const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-    const rawName = _optionalChain([node, 'access', _568 => _568.catchClause, 'optionalAccess', _569 => _569.variableDeclaration, 'optionalAccess', _570 => _570.name, 'optionalAccess', _571 => _571.escapedText]);
+    const rawName = _optionalChain([node, 'access', _565 => _565.catchClause, 'optionalAccess', _566 => _566.variableDeclaration, 'optionalAccess', _567 => _567.name, 'optionalAccess', _568 => _568.escapedText]);
     const errorName = rawName ? `_${rawName}` : "_e";
     const iden = this.getIden(identation);
     return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -12476,53 +12438,6 @@ _RustTranspiler.RUST_BOOL_RESULT_HELPERS = /* @__PURE__ */ new Set([
   "in_op",
   "contains"
 ]);
-// ── native string args to the runtime error constructors ────────────────
-// Audited against rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl
-// ToErrorMessage` (`&str`/`String`/`Value` all yield the same string) and
-// `create_error`'s class name is `&str` (bare literal only).
-_RustTranspiler.RUST_ERROR_CONSTRUCTOR_ARGS = {
-  exchange_error: ["msg"],
-  authentication_error: ["msg"],
-  permission_denied: ["msg"],
-  account_not_enabled: ["msg"],
-  account_suspended: ["msg"],
-  arguments_required: ["msg"],
-  bad_request: ["msg"],
-  bad_symbol: ["msg"],
-  operation_rejected: ["msg"],
-  no_change: ["msg"],
-  margin_mode_already_set: ["msg"],
-  market_closed: ["msg"],
-  manual_interaction_needed: ["msg"],
-  restricted_location: ["msg"],
-  insufficient_funds: ["msg"],
-  invalid_address: ["msg"],
-  address_pending: ["msg"],
-  invalid_order: ["msg"],
-  order_not_found: ["msg"],
-  order_not_cached: ["msg"],
-  order_immediately_fillable: ["msg"],
-  order_not_fillable: ["msg"],
-  duplicate_order_id: ["msg"],
-  contract_unavailable: ["msg"],
-  not_supported: ["msg"],
-  invalid_proxy_settings: ["msg"],
-  exchange_closed_by_user: ["msg"],
-  operation_failed: ["msg"],
-  network_error: ["msg"],
-  d_do_s_protection: ["msg"],
-  rate_limit_exceeded: ["msg"],
-  exchange_not_available: ["msg"],
-  on_maintenance: ["msg"],
-  invalid_nonce: ["msg"],
-  checksum_error: ["msg"],
-  request_timeout: ["msg"],
-  bad_response: ["msg"],
-  null_response: ["msg"],
-  cancel_pending: ["msg"],
-  unsubscribe_error: ["msg"],
-  create_error: ["str", "msg"]
-};
 // ── native container access (`get_value(...)` -> `.get(...)`) ─────────────
 // When the TypeScript checker proves the receiver is a plain Map/List value
 // and the key is a literal, the runtime `get_value` key-marker / `__live_id`
@@ -12732,7 +12647,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _572 => _572.body, 'optionalAccess', _573 => _573.statements, 'access', _574 => _574.forEach, 'call', _575 => _575((statement) => {
+    _optionalChain([node, 'access', _569 => _569.body, 'optionalAccess', _570 => _570.statements, 'access', _571 => _571.forEach, 'call', _572 => _572((statement) => {
       if (_typescript2.default.isExpressionStatement(statement)) {
         const expression = statement.expression;
         if (_typescript2.default.isCallExpression(expression)) {
@@ -12893,7 +12808,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _576 => _576.name, 'access', _577 => _577.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _573 => _573.name, 'access', _574 => _574.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -13146,14 +13061,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _578 => _578.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _575 => _575.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _579 => _579.getChecker, 'call', _580 => _580(), 'access', _581 => _581.getDeclaredTypeOfSymbol, 'call', _582 => _582(symbol), 'access', _583 => _583.symbol, 'optionalAccess', _584 => _584.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _576 => _576.getChecker, 'call', _577 => _577(), 'access', _578 => _578.getDeclaredTypeOfSymbol, 'call', _579 => _579(symbol), 'access', _580 => _580.symbol, 'optionalAccess', _581 => _581.declarations]), () => ( []));
           const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -13288,7 +13203,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
     options,
     rootNames: [inMemoryFilePath, globalsShimPath],
     host,
-    oldProgram: _optionalChain([cache, 'optionalAccess', _585 => _585.memoryOldProgram])
+    oldProgram: _optionalChain([cache, 'optionalAccess', _582 => _582.memoryOldProgram])
   });
   if (cache !== void 0) {
     cache.memoryOldProgram = program;

@@ -1158,14 +1158,11 @@ declare class RustTranspiler extends BaseTranspiler {
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): string;
     private static readonly RUST_BOOL_RESULT_HELPERS;
-    peelValueBox(printedValue: string, prefix: string): string | undefined;
     peelValueBoolBox(printedValue: string): string | undefined;
-    peelValueStrBox(printedValue: string): string | undefined;
     stripOuterParens(printedValue: string): string;
     printedBoolHelperCall(printedValue: string): boolean;
     rustNodeIsBoolExpression(node: any): boolean;
     rustTypeIsBoolean(node: any): boolean;
-    rustTypeIsString(node: any): boolean;
     rustEnclosingFunction(node: any): any;
     rustBindsName(node: any, name: string): boolean;
     rustIdentifierUseIsCondition(node: any): boolean;
@@ -1187,9 +1184,6 @@ declare class RustTranspiler extends BaseTranspiler {
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     printCallExpression(node: any, identation: any): any;
     printThisKeyword(node: any, identation: any): string;
-    private static readonly RUST_ERROR_CONSTRUCTOR_ARGS;
-    printErrorConstructorArg(name: string, index: number, node: any, identation: number): string;
-    rustErrorConstructorName(className: string): string;
     printNewExpression(node: any, identation: any): any;
     printPropertyAccessExpression(node: any, identation: any): any;
     /** Methods whose Rust counterpart takes `&mut self`: a `self.<field>` read in
