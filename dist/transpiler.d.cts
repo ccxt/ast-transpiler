@@ -532,6 +532,12 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpExpressionTypeOf(node: any): string | undefined;
     csharpOperandsAreNumbers(node: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
+    printCallExpression(node: any, identation: any): any;
+    csharpNativeParseCall(node: any): string;
+    csharpCalleeIsGlobalFunction(node: any): boolean;
+    csharpNativeParseCallOnDeclaredLocal(callee: any, arg: any): string;
+    csharpNativeModExpression(left: any, right: any, leftText: any): string;
+    csharpNativeNegatedLocal(operand: any, leftSide: any): string;
     csharpNativeReceiver(node: any): {
         text: string;
         type: string;
