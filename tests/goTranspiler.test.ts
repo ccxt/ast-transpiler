@@ -2458,17 +2458,21 @@ describe('go native element assignment', () => {
         expect(output).toContain("var q any = this.Milliseconds() / 2");
         expect(output).toContain("var z any = Divide(this.Milliseconds(), 0)");
     });
-    test('Mod stays a helper (float semantics, no panic on a zero divisor)', () => {
+    test('Mod inlines an int64 value with a nonzero literal, a zero divisor or a float operand keeps the helper', () => {
         const input =
         "class T {\n" +
         "    milliseconds (): number { return 1; }\n" +
-        "    f () {\n" +
+        "    f (value) {\n" +
         "        var r = this.milliseconds() % 2;\n" +
-        "        return r;\n" +
+        "        var z = this.milliseconds() % 0;\n" +
+        "        var float2 = Math.floor(value) % 2.5;\n" +
+        "        return [r, z, float2];\n" +
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var r any = Mod(this.Milliseconds(), 2)");
+        expect(output).toContain("var r any = this.Milliseconds() % 2");
+        expect(output).toContain("var z any = Mod(this.Milliseconds(), 0)");
+        expect(output).toContain("var float2 any = Mod(MathFloor(value), 2.5)");
     });
     test('Subtract on an int-typed helper result keeps the helper (it returns int64)', () => {
         const input =
@@ -4129,5 +4133,89 @@ describe('go ToString -> the receiver when it is a declared string', () => {
         const output = transpiler.transpileGo(ts).content;
         expect(output).toContain('var id any = "x"');
         expect(output).toContain('return ToString(id)');
+    });
+});
+
+describe('go native arithmetic result rows (Divide/Multiply/Subtract/Mod)', () => {
+    // the printer indents nested call expressions; gofmt collapses that downstream
+    const squash = (output: string) => output.replace(/[\t\n ]+/g, ' ');
+    const body = (input: string) => {
+        const output = squash(transpiler.transpileGo(input).content);
+        const match = /func \(this \*Exchange\) Main\([^)]*\) any \{ (.*?)\}/.exec(output);
+        return match ? match[1] : output;
+    };
+    const main = (statements: string) =>
+        "class Exchange {\n" +
+        "    milliseconds() { return 1; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
+        "    main(value, other, arr, days) {\n" +
+        statements +
+        "    }\n" +
+        "}\n";
+    test('Mod of an int64 value and a nonzero literal uses %', () => {
+        expect(body(main("        const rest = this.milliseconds() % 1000;\n        return rest;\n")))
+            .toContain("var rest any = this.Milliseconds() % 1000");
+    });
+    test('Subtract/Multiply of a Go int value and a literal drop the helper outside a declaration', () => {
+        expect(body(main("        return this.safeValue(arr, arr.length - 1);\n")))
+            .toContain("this.SafeValue(arr, GetArrayLength(arr)-1)");
+        expect(body(main("        return this.safeValue(arr, arr.length - 1);\n")))
+            .not.toContain("Subtract(");
+    });
+    test('literal-only integer expressions fold to the operator', () => {
+        expect(body(main("        return { 'a': 10 * 1000, 'b': 1440 * 3, 'c': 10 / 3 };\n")))
+            .toContain("\"a\": 10 * 1000, \"b\": 1440 * 3, \"c\": 10 / 3");
+    });
+    test('float64 operands next to a float literal use the float operator', () => {
+        expect(body(main("        const floor = Math.floor(value);\n        const half = floor * 2.5;\n        const less = floor - 0.5;\n        const part = floor / 2.5;\n        return [half, less, part];\n")))
+            .toContain("var floor float64 = MathFloor(value) var half any = floor * 2.5 var less any = floor - 0.5 var part any = floor / 2.5");
+    });
+    test('a Mod literal divisor is required: a variable divisor keeps the helper', () => {
+        expect(body(main("        const rest = this.milliseconds() % other;\n        return rest;\n")))
+            .toContain("var rest any = Mod(this.Milliseconds(), other)");
+    });
+    test('a zero literal divisor keeps the helper, the operator would panic', () => {
+        expect(body(main("        const rest = this.milliseconds() % 0;\n        return rest;\n")))
+            .toContain("var rest any = Mod(this.Milliseconds(), 0)");
+        expect(body(main("        return { 'a': 1 / 0 };\n"))).toContain("\"a\": Divide(1, 0)");
+        expect(body(main("        return this.milliseconds() / 0;\n"))).toContain("Divide(this.Milliseconds(), 0)");
+    });
+    test('a declaration position keeps the call for the declared-local table', () => {
+        expect(body(main("        const last = arr.length - 1;\n        const rest = arr.length % 7;\n        return [last, rest];\n")))
+            .toContain("var last any = Subtract(GetArrayLength(arr), 1) var rest any = Mod(GetArrayLength(arr), 7)");
+        expect(body(main("        const scaled = 10 * 1000;\n        return scaled;\n")))
+            .toContain("var scaled any = Multiply(10, 1000)");
+    });
+    test('an int literal next to a float64 operand keeps the helper frontend int path', () => {
+        expect(body(main("        const floor = Math.floor(value);\n        const scaled = floor * 1000;\n        return scaled;\n")))
+            .toContain("var scaled any = Multiply(floor, 1000)");
+        expect(body(main("        return { 'a': 100 * 1.1, 'b': 5 * 1.67 };\n")))
+            .toContain("\"a\": Multiply(100, 1.1), \"b\": Multiply(5, 1.67)");
+    });
+    test('two float literals keep the helper: Go folds them exactly, the helper rounds', () => {
+        expect(body(main("        return { 'a': 2.5 * 1.5, 'b': 2.5 - 1.5 };\n")))
+            .toContain("\"a\": Multiply(2.5, 1.5), \"b\": Subtract(2.5, 1.5)");
+    });
+    test('float64 modulo keeps the helper: Go has no float operator', () => {
+        expect(body(main("        const floor = Math.floor(value);\n        const rest = floor % 2.5;\n        return rest;\n")))
+            .toContain("var rest any = Mod(floor, 2.5)");
+    });
+    test('float64 division by a float64 value keeps the helper: a zero divisor returns nil', () => {
+        expect(body(main("        const a = Math.floor(value);\n        const b = Math.floor(other);\n        return a / b;\n")))
+            .toContain("Divide(a, b)");
+    });
+    test('`any` operands keep every helper', () => {
+        expect(body(main("        return [value * other, value - other, value / other, value % other];\n")))
+            .toContain("[]any{Multiply(value, other), Subtract(value, other), Divide(value, other), Mod(value, other)");
+    });
+    test('a constant product too large for an exact int keeps the helper', () => {
+        expect(body(main("        return { 'a': 1000000000000 * 1000000000000 };\n")))
+            .toContain("Multiply(1000000000000, 1000000000000)");
+    });
+    test('int64 operands keep their existing native rows', () => {
+        expect(body(main("        return this.milliseconds() - 1000;\n")))
+            .toContain("return this.Milliseconds() - 1000");
+        expect(body(main("        return this.milliseconds() % 1000;\n")))
+            .toContain("return this.Milliseconds() % 1000");
     });
 });
