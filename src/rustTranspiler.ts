@@ -563,6 +563,62 @@ export class RustTranspiler extends BaseTranspiler {
         return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
     }
 
+    // How numeric an ordered-comparison operand is: 'definite' (numeric
+    // literal / `.length` / `indexOf` — Int/Float at runtime, never Null),
+    // 'number' (checker-typed — Int, Float or Null, never a string), undefined.
+    rustNumericOperandKind(node): string | undefined {
+        const inner = this.orderedComparisonOperand(node);
+        if (inner.kind === SyntaxKind.NumericLiteral) {
+            return 'definite';
+        }
+        // `.length` prints through printArrayLength: `Value::Int(len)` or
+        // `get_array_length`, both always `Value::Int`.
+        if (ts.isPropertyAccessExpression(inner) && inner.name.escapedText === 'length') {
+            return 'definite';
+        }
+        // `.indexOf(x)` prints through printIndexOfCall: `get_index_of`, which
+        // returns `Value::Int` on every path.
+        if (inner.kind === SyntaxKind.CallExpression && this.callExpressionName(inner) === 'indexOf') {
+            return 'definite';
+        }
+        return this.isNumberTyped(node) ? 'number' : undefined;
+    }
+
+    // Parens and `x as T` print as the operand itself (printAsExpression drops
+    // the assertion), so the operand's own shape drives the emission.
+    orderedComparisonOperand(node) {
+        let inner = node;
+        while (inner !== undefined && (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner))) {
+            inner = inner.expression;
+        }
+        return inner;
+    }
+
+    // Native text for an `is_less_than`-family call, undefined unless the
+    // operands prove the helper's answer: one number pins `<`/`>`; `>=`/`<=`
+    // OR `is_equal` in (TRUE for two Nulls) and need a 'definite' operand.
+    printNativeOrderedComparison(node, op, left, right): string | undefined {
+        const operator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+        if (operator === undefined) {
+            return undefined;
+        }
+        if (!this.printsValueExpression(this.orderedComparisonOperand(left)) ||
+            !this.printsValueExpression(this.orderedComparisonOperand(right))) {
+            return undefined;
+        }
+        const leftKind = this.rustNumericOperandKind(left);
+        const rightKind = this.rustNumericOperandKind(right);
+        const ordered = op === SyntaxKind.LessThanToken || op === SyntaxKind.GreaterThanToken;
+        const proven = leftKind === 'definite' || rightKind === 'definite' ||
+            (ordered
+                ? (leftKind !== undefined || rightKind !== undefined)
+                : (leftKind === 'number' && rightKind === 'number'));
+        if (!proven) {
+            return undefined;
+        }
+        return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+    }
+
     // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
     // When the checker proves both operands are numbers (`Int`/`Float` at
     // runtime) or, for `+`, both are strings, the helper call is replaced by
@@ -776,8 +832,11 @@ export class RustTranspiler extends BaseTranspiler {
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
         if (op in this.binaryExpressionsWrappers) {
             const nativeOperator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
-            if (nativeOperator !== undefined && this.isNumberTyped(left) && this.isNumberTyped(right)) {
-                return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
+            if (nativeOperator !== undefined) {
+                const native = this.printNativeOrderedComparison(node, op, left, right);
+                if (native !== undefined) {
+                    return native;
+                }
             }
             const [fnName, close] = this.binaryExpressionsWrappers[op];
             const leftText = this.printNode(left, 0);

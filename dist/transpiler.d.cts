@@ -1145,6 +1145,9 @@ declare class RustTranspiler extends BaseTranspiler {
     isNumberTyped(node: any): boolean;
     isBooleanPosition(node: any): boolean;
     printNativeNumericComparison(node: any, operator: any, leftText: any, rightText: any): string;
+    rustNumericOperandKind(node: any): string | undefined;
+    orderedComparisonOperand(node: any): any;
+    printNativeOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
     isNumberLikeType(type: any): boolean;
     isStringLikeType(type: any): boolean;
     printNativeAssignmentArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
