@@ -230,6 +230,14 @@ const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dicti
 const CSHARP_SCALAR_ELEMENT_BOOL = 1;
 const CSHARP_SCALAR_ELEMENT_STRING = 2;
 
+// C# dictionary types this printer can name on a local
+const CSHARP_NATIVE_DICTIONARY_TYPES = [ 'Dictionary<string, object>', 'IDictionary<string, object>' ];
+
+// the market-row receiver family of the cs-08 unit: `getValue (market, "lit")` on a local the
+// declared table proves is a dictionary prints natively. Other receivers belong to their own
+// units (cs-09 fields, cs-10 response/result/balance locals, ...)
+const CSHARP_NATIVE_MARKET_RECEIVERS = [ 'market' ];
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -512,7 +520,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     // reads print getValue(recv, key), which yields null for a missing key; a C# indexer
     // throws instead, so the native form is only emitted where the source guarantees the key
     // is there: a dominating `key in recv` guard, or a receiver local built by a literal that
-    // declares the key. every other read keeps the helper.
+    // declares the key, or a receiver the declared table proves is a dictionary (the native
+    // form then keeps the helper's null-for-a-missing-key result). every other read keeps the
+    // helper.
     printElementAccessExpression(node, identation) {
         const native = this.csharpNativeElementAccess(node);
         if (native !== undefined) {
@@ -546,7 +556,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
         const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
         if (!builtFromLiteral && !guarded) {
-            return undefined;
+            return this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression);
         }
         const receiver = this.printNode(expression, 0);
         const printedKey = this.printNode(argumentExpression, 0);
@@ -554,6 +564,39 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
         }
         return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
+    }
+
+    // `getValue (market, "lit")` on a market-row local whose DECLARED C# type the table proves
+    // is a dictionary: the helper itself is a ContainsKey lookup, so the native form tests the
+    // key and hands back null when it is missing, exactly like the helper does. The declared
+    // table is the embedding build layer's proof (ccxt: build/csharp-local-types.js, which
+    // retypes these locals) and then the locals this printer typed itself; an untyped
+    // receiver keeps the helper.
+    csharpNativeDeclaredDictionaryRead(expression, argumentExpression): string | undefined {
+        if (!ts.isIdentifier(expression) || !ts.isStringLiteralLike(argumentExpression)) {
+            return undefined;
+        }
+        if (CSHARP_NATIVE_MARKET_RECEIVERS.indexOf(expression.escapedText as string) < 0) {
+            return undefined;
+        }
+        if (this.csharpDeclaredDictionaryType(expression) === undefined) {
+            return undefined;
+        }
+        const receiver = this.printNode(expression, 0);
+        const printedKey = this.printNode(argumentExpression, 0);
+        return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+    }
+
+    // the concrete C# dictionary type the declared table names for a local read, or undefined
+    csharpDeclaredDictionaryType(node): string | undefined {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const named = this.csharpTypedLocalType(node) ?? this.csharpExpressionTypeOf(node);
+        if (named === undefined || CSHARP_NATIVE_DICTIONARY_TYPES.indexOf(named) < 0) {
+            return undefined;
+        }
+        return named;
     }
 
     // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
