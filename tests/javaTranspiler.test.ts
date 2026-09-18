@@ -3305,3 +3305,90 @@ describe('java replaceAll native emission', () => {
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 });
+
+describe('java native indexOf (Helpers.getIndexOf -> String/List.indexOf)', () => {
+    // a receiver the checker types as a plain string: String.indexOf(target) is the same
+    // call the helper performs for that receiver, with -1 for a missing target on both paths
+    test('checker-proven string receiver with a literal target prints String.indexOf', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const i = s.indexOf(\".\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)s).indexOf(\".\")");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    test('string receiver with a string-typed identifier target casts the target too', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string, t: string): void {\n" +
+        "        const i = s.indexOf(t);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)s).indexOf(((String)t))");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    // a List receiver: List.indexOf(target) is literally the call Helpers.getIndexOf makes
+    // for that receiver, and List.indexOf takes any Object target
+    test('checker-proven list receiver prints List.indexOf and keeps an untyped target', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: string[], y: any): void {\n" +
+        "        const i = xs.indexOf(y);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.List<Object>)xs).indexOf(y)");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    // fallbacks: every shape without the proof keeps the runtime helper
+    test('an any receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const i = x.indexOf(\"a\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(x, \"a\")");
+    });
+
+    test('a nullable/nullable-union receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string | undefined): void {\n" +
+        "        const i = s.indexOf(\"a\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(s, \"a\")");
+    });
+
+    test('a string receiver with an untyped target keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string, t: any): void {\n" +
+        "        const i = s.indexOf(t);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(s, t)");
+    });
+
+    test('a rest parameter (varargs array, not a List) keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(...xs: string[]): void {\n" +
+        "        const i = xs.indexOf(\"a\");\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(xs, \"a\")");
+    });
+});

@@ -2512,7 +2512,63 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${name}.contains(${parsedArg})`;
     }
 
-    printIndexOfCall(_node, _identation, name = undefined, parsedArg = undefined) {
+    // Helpers.getIndexOf(str, target) is List.indexOf(target) for a List receiver and
+    // String.indexOf(target) for a String receiver with a String target, -1 otherwise. The
+    // printer declares every local a `Object`/`var`, so the native call carries the same
+    // checkcast the `.length()` / `containsKey` families emit; the target takes one too when
+    // it is not already a printed String (String.indexOf takes a String, List takes Object).
+    javaNativeIndexOfCall(node, name, parsedArg) {
+        if (node === undefined || name === undefined || parsedArg === undefined) {
+            return undefined;
+        }
+        const receiver = node?.expression?.expression;
+        if (receiver === undefined) {
+            return undefined;
+        }
+        const checker: any = this.getChecker();
+        let receiverType: any;
+        try {
+            receiverType = checker.getTypeAtLocation(receiver);
+        } catch (e) {
+            return undefined;
+        }
+        // a rest parameter is a Java array, not a List: the helper's `instanceof List`
+        // test fails there and so must the native call
+        if (this.isJavaListType(receiverType) && !this.isVarargsArrayReference(receiver)) {
+            return `((java.util.List<Object>)${name}).indexOf(${parsedArg})`;
+        }
+        // plain `string` only: the nullable aliases (`Str`) and every union can hold
+        // undefined, which the helper absorbs as -1 but String.indexOf has no receiver for
+        if (receiverType.aliasSymbol !== undefined || !this.isStringType(receiverType.flags)) {
+            return undefined;
+        }
+        const arg = node.arguments?.[0];
+        if (arg === undefined) {
+            return undefined;
+        }
+        if (this.javaProvableString(arg)) {
+            return `((String)${name}).indexOf(${parsedArg})`;
+        }
+        let argType: any;
+        try {
+            argType = checker.getTypeAtLocation(arg);
+        } catch (e) {
+            return undefined;
+        }
+        // a bare identifier / field target the checker types as a plain string: the cast is
+        // the printer's own startsWith/endsWith argument shape
+        if (argType.aliasSymbol === undefined && this.isStringType(argType.flags)
+            && (ts.isIdentifier(arg) || ts.isPropertyAccessExpression(arg))) {
+            return `((String)${name}).indexOf(((String)${parsedArg}))`;
+        }
+        return undefined;
+    }
+
+    printIndexOfCall(node, _identation, name = undefined, parsedArg = undefined) {
+        const native = this.javaNativeIndexOfCall(node, name, parsedArg);
+        if (native !== undefined) {
+            return native;
+        }
         return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
