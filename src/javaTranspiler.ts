@@ -543,9 +543,15 @@ export class JavaTranspiler extends BaseTranspiler {
                 const parsedArg2 = this.printNode(args[1], 0);
                 switch (expressionText) {
                 case "Math.min":
-                    return `Helpers.mathMin(${parsedArg1}, ${parsedArg2})`;
-                case "Math.max":
-                    return `Helpers.mathMax(${parsedArg1}, ${parsedArg2})`;
+                case "Math.max": {
+                    const native = this.printNativeMathMinMax(
+                        node, args[0], args[1], parsedArg1, parsedArg2, expressionText === "Math.min" ? "min" : "max");
+                    if (native !== undefined) {
+                        return native;
+                    }
+                    const wrapper = expressionText === "Math.min" ? "Helpers.mathMin(" : "Helpers.mathMax(";
+                    return `${wrapper}${parsedArg1}, ${parsedArg2})`;
+                }
                 case "Math.pow":
                     return `Helpers.mathPow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
                 }
@@ -1328,6 +1334,62 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const operator = isPlus ? '+' : (isMinus ? '-' : '*');
         return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
+    }
+
+    // Helpers.mathMin/mathMax take Object, tolerate null and hand the ORIGINAL operand
+    // box back, while java.lang.Math.min/max take primitives, so the native call is only
+    // emitted when both operands print as primitives of one numeric family: int/long
+    // literals, `for` counters, `.length`/`.size()` and native long arithmetic are
+    // integral; the only NaN-free double is a double literal (a computed double can be
+    // NaN, which the helpers order as "not smaller/greater" and so return the other side)
+    javaNativeMathMinMaxOperandKind(node) {
+        if (this.javaIntegerLiteralKind(node) !== undefined) {
+            return 'integral';
+        }
+        if (this.isJavaPrimitiveForCounter(node)) {
+            return 'integral';
+        }
+        if (ts.isPropertyAccessExpression(node) && node.name.escapedText === 'length'
+            && this.javaLengthKind(node.expression) !== undefined) {
+            return 'integral';
+        }
+        if (ts.isNumericLiteral(node)) {
+            return this.javaProvableNumericKind(node) === 'double' ? 'double' : undefined;
+        }
+        return this.javaProvableNumericKind(node) === 'long' ? 'integral' : undefined;
+    }
+
+    // a primitive has no members, so a receiver position (and the printer's cast
+    // wrappers) keep the helper - every other position boxes the primitive exactly like
+    // the helper's own box (Jackson, isEqual and toString all read an Integer and a Long
+    // the same way)
+    javaNativeMathMinMaxResultIsPlainValue(node) {
+        let parent = node.parent;
+        while (parent !== undefined && ts.isParenthesizedExpression(parent)) {
+            parent = parent.parent;
+        }
+        if (parent === undefined) {
+            return false;
+        }
+        if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)
+            || ts.isCallExpression(parent)) && parent.expression === node) {
+            return false;
+        }
+        return parent.kind !== ts.SyntaxKind.AsExpression
+            && parent.kind !== ts.SyntaxKind.TypeAssertionExpression
+            && parent.kind !== ts.SyntaxKind.NonNullExpression;
+    }
+
+    // the native form of Math.min/Math.max, or undefined to keep the helper
+    printNativeMathMinMax(node, left, right, leftText, rightText, name) {
+        if (!this.javaNativeMathMinMaxResultIsPlainValue(node)) {
+            return undefined;
+        }
+        const kind = this.javaNativeMathMinMaxOperandKind(left);
+        if (kind === undefined || kind !== this.javaNativeMathMinMaxOperandKind(right)) {
+            return undefined;
+        }
+        return `Math.${name}(${leftText}, ${rightText})`;
     }
 
     getObjectLiteralFromCallExpressionArguments(node) {

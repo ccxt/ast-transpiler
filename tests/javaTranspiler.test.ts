@@ -3305,3 +3305,98 @@ describe('java replaceAll native emission', () => {
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 });
+
+describe('java Math.min/Math.max native emission', () => {
+    // Helpers.mathMin/mathMax take Object and hand the ORIGINAL operand box back (null when
+    // either operand is null); java.lang.Math.min/max take primitives, so the native call is
+    // emitted only when BOTH operands print as primitives of one numeric family: int/long
+    // literals, `.length`/`.size()` and native long arithmetic are integral, a double literal
+    // is the only NaN-free double.
+    test('an integer literal and a proved integer .length emit Math.max', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string, list: any[]): void {\n" +
+        "        const a = Math.max (5, s.length);\n" +
+        "        const b = Math.min (3, list.length);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object a = Math.max(5, ((String)s).length());");
+        expect(output).toContain("Object b = Math.min(3, ((java.util.List<?>)list).size());");
+        expect(output).not.toContain("Helpers.mathMax(");
+        expect(output).not.toContain("Helpers.mathMin(");
+    });
+
+    test('two double literals emit Math.min (a computed double can be NaN and keeps the helper)', () => {
+        const input =
+        "class T {\n" +
+        "    test(a: number, b: number): void {\n" +
+        "        const x = Math.min (1.5, 2.5);\n" +
+        "        const y = Math.min (a / 100, b);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object x = Math.min(1.5, 2.5);");
+        expect(output).toContain("Helpers.mathMin(");
+    });
+
+    test('native long arithmetic of literals emits Math.min', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = Math.min (1 + 2, 4);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Object x = Math.min((1L + 2L), 4);");
+    });
+
+    // Fallbacks: every shape the native rule cannot prove keeps the runtime helper.
+    test('an Object local operand keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(list: any[], params: any): void {\n" +
+        "        const x = Math.min (10, params['limit']);\n" +
+        "        const y = Math.min (list.length, params['limit']);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.mathMin(10, Helpers.GetValue(parameters, \"limit\"))");
+        expect(output).toContain("Helpers.mathMin(");
+        expect(output).not.toContain("Math.min(");
+    });
+
+    test('mixed int and double literal operands keep the helper (box kind would change)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const x = Math.min (5, 1.5);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.mathMin(5, 1.5)");
+    });
+
+    test('an `as number` operand keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(limit: any): void {\n" +
+        "        const x = Math.min ((limit as number), 100);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.mathMin(limit, 100)");
+    });
+
+    test('a receiver position keeps the helper (a primitive has no members)', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const x = Math.min (5, s.length).toString ();\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("String.valueOf(Helpers.mathMin(5, ((String)s).length()))");
+        expect(output).not.toContain("Math.min(");
+    });
+});

@@ -1015,6 +1015,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeArithmeticKind(node: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
+    javaNativeMathMinMaxOperandKind(node: any): "double" | "integral";
+    javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
+    printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
     collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;
