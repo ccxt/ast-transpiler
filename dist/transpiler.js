@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -10988,19 +10988,27 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   // Object-typed values are Dicts at runtime, so `key in obj` is a plain
   // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
+  // A `Dict`/`Dictionary<T>` receiver is a Reference to its index-signature
+  // interface, so the class/lib guards — not the Reference flag — decide it.
   isDictShapedType(type) {
-    if (type === void 0 || !(type.flags & ts7.TypeFlags.Object)) {
+    if (type === void 0) {
+      return false;
+    }
+    if (type.flags & ts7.TypeFlags.Union) {
+      const parts = type.types ?? [];
+      return parts.length > 0 && parts.every((part) => this.isDictShapedType(part));
+    }
+    if (!(type.flags & ts7.TypeFlags.Object)) {
       return false;
     }
     const checker = this.getChecker();
     if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
       return false;
     }
-    const objectFlags = type.objectFlags;
-    if (objectFlags & (ts7.ObjectFlags.Class | ts7.ObjectFlags.Reference)) {
+    if (type.getCallSignatures().length !== 0) {
       return false;
     }
-    return type.getCallSignatures().length === 0;
+    return !this.isClassInstanceType(type) && !this.isLibDeclaredType(type);
   }
   // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
   // In the TS AST `key` is the left operand and `obj` the right one.
@@ -11012,12 +11020,20 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     }
     const printedKey = this.printStringLiteral(key);
-    const keyLiteral = printedKey.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
-    if (!keyLiteral) {
+    const keyLiteral = this.rustStringLiteralOf(printedKey);
+    if (keyLiteral === void 0) {
       return void 0;
     }
     const objExpr = this.printNode(obj, 0);
-    return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral[1]})))`;
+    return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral})))`;
+  }
+  // The Rust string literal behind a printed TS string literal — the boxed
+  // shapes the printer emits today (`Value::Str("k".to_string())`,
+  // `Value::from("k")`) plus a bare `"k"` once an arg-shape unit drops the box.
+  rustStringLiteralOf(printedKey) {
+    const boxed = printedKey.match(/^(?:Value::Str|Value::from)\((.+)\)$/);
+    const literal = (boxed ? boxed[1].replace(/\.to_string\(\)$/, "") : printedKey).trim();
+    return /^"(?:[^"\\]|\\.)*"$/.test(literal) ? literal : void 0;
   }
   // `negate(&Value::Int(n))` is `Value::Int(-n)` (same for Float) — fold the
   // literal so no helper call is needed. Runtime `negate` also coerces
