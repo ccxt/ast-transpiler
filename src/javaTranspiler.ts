@@ -1330,6 +1330,237 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
     }
 
+    // ---- typed locals for native arithmetic ---------------------------------
+    // A local whose initializer prints as native arithmetic (the classification above)
+    // holds a Java String / Long / Double box, so the declaration can carry that type
+    // instead of Object. The proof is the printer's own classification, so the declared
+    // type always matches the printed expression; every other use of the local in the
+    // enclosing function is scanned first (D2), because naming the type can change
+    // javac's overload and operator resolution.
+
+    javaUnwrapParentheses(node) {
+        let current = node;
+        while (current?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    // the Java type of the native arithmetic this printer prints for a `+ - * / +=`
+    // node, or undefined when the node keeps the helper (its printed value is an
+    // Object box). Mirrors printInlineHelperArithmetic operand-for-operand.
+    javaNativeArithmeticType(node) {
+        const value = this.javaUnwrapParentheses(node);
+        if (value?.kind !== ts.SyntaxKind.BinaryExpression) {
+            return undefined;
+        }
+        const op = value.operatorToken.kind;
+        if (op === ts.SyntaxKind.PlusToken && this.javaNativeConcat(value)) {
+            return 'String';
+        }
+        if (op === ts.SyntaxKind.PlusEqualsToken) {
+            // the inlined `x = (x + y)` shape needs the same operand pair the concat
+            // branch of printInlineHelperArithmetic needs
+            const isStringPair = this.javaScalarFamily(value.left) === 'string'
+                && this.javaScalarFamily(value.right) === 'string'
+                && (this.javaProvableString(value.left) || this.javaProvableString(value.right));
+            return isStringPair ? 'String' : undefined;
+        }
+        const kind = this.javaNativeArithmeticKind(value);
+        if (kind === 'long') {
+            return 'Long';
+        }
+        if (kind === 'double') {
+            return 'Double';
+        }
+        return undefined;
+    }
+
+    // the enclosing function-like node: the D2 scan scope of a typed local
+    javaEnclosingFunction(node) {
+        let current = node?.parent;
+        while (current !== undefined) {
+            const kind = current.kind;
+            if (kind === ts.SyntaxKind.MethodDeclaration || kind === ts.SyntaxKind.FunctionDeclaration
+                || kind === ts.SyntaxKind.FunctionExpression || kind === ts.SyntaxKind.ArrowFunction
+                || kind === ts.SyntaxKind.GetAccessor || kind === ts.SyntaxKind.SetAccessor
+                || kind === ts.SyntaxKind.Constructor) {
+                return current;
+            }
+            current = current.parent;
+        }
+        return undefined;
+    }
+
+    // a reassignment may keep the narrowed declaration only when its printed value is the
+    // same Java type (the helper's box stays an Object, so it keeps the box)
+    javaArithmeticWriteIsSafe(right, javaType) {
+        const value = this.javaUnwrapParentheses(right);
+        if (value === undefined) {
+            return false;
+        }
+        if (value.kind === ts.SyntaxKind.NullKeyword) {
+            return true; // `null` is assignable to every box
+        }
+        if (value.kind === ts.SyntaxKind.Identifier && value.escapedText === 'undefined') {
+            return true;
+        }
+        if (javaType === 'String' && (value.kind === ts.SyntaxKind.StringLiteral
+            || value.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return true;
+        }
+        return this.javaNativeArithmeticType(value) === javaType;
+    }
+
+    // the innermost block that scopes a declaration (Java locals live to the end of
+    // their block; sibling blocks may reuse the name, nested ones may not)
+    javaScopingBlock(node) {
+        let current = node?.parent;
+        let last = undefined;
+        while (current !== undefined) {
+            if (current.kind === ts.SyntaxKind.Block || current.kind === ts.SyntaxKind.SourceFile) {
+                return current;
+            }
+            last = current;
+            current = current.parent;
+        }
+        return last;
+    }
+
+    javaNodeContains(outer, inner) {
+        return outer !== undefined && inner !== undefined && outer.pos <= inner.pos && inner.end <= outer.end;
+    }
+
+    // two same-named bindings may both keep their own printed type only in disjoint
+    // blocks: a nested one would already be an illegal Java shadowing of the Object
+    // declaration the corpus compiles with
+    javaBindingsAreDisjoint(declaration, other) {
+        const mine = this.javaScopingBlock(declaration);
+        const theirs = this.javaScopingBlock(other);
+        if (mine === undefined || theirs === undefined) {
+            return false;
+        }
+        return !this.javaNodeContains(mine, theirs) && !this.javaNodeContains(theirs, mine);
+    }
+
+    // is this occurrence of the local compatible with the narrowed declaration?
+    javaArithmeticLocalUseIsSafe(node, declaration, javaType) {
+        const sourceName = declaration.name.escapedText;
+        const parent = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        if ((parent.kind === ts.SyntaxKind.PropertyAccessExpression || parent.kind === ts.SyntaxKind.PropertyAssignment)
+            && parent.name === node) {
+            return true; // a member name, not a use of the local
+        }
+        if ((parent.kind === ts.SyntaxKind.VariableDeclaration || parent.kind === ts.SyntaxKind.Parameter
+            || parent.kind === ts.SyntaxKind.BindingElement) && parent.name === node) {
+            // a second binding of the same source name: only a disjoint sibling block may
+            // keep its own type (no shadowing of the narrowed declaration)
+            return this.javaBindingsAreDisjoint(declaration, parent);
+        }
+        if (parent.kind === ts.SyntaxKind.PostfixUnaryExpression || parent.kind === ts.SyntaxKind.PrefixUnaryExpression) {
+            return false; // ++/--/-x/+x print an unboxing or primitive operator
+        }
+        if (parent.kind === ts.SyntaxKind.SpreadElement || parent.kind === ts.SyntaxKind.DeleteExpression) {
+            return false;
+        }
+        if (parent.kind === ts.SyntaxKind.ForOfStatement || parent.kind === ts.SyntaxKind.ForInStatement) {
+            return false;
+        }
+        if (parent.kind === ts.SyntaxKind.TypeOfExpression) {
+            // prints \`x instanceof String\`, the same test the Object declaration printed
+            return javaType === 'String';
+        }
+        if (parent.kind === ts.SyntaxKind.AsExpression || parent.kind === ts.SyntaxKind.TypeAssertionExpression) {
+            // \`x as string\` prints the identity ((String) x); any other asserted type
+            // prints a cast the narrower declaration cannot satisfy
+            return javaType === 'String' && parent.type?.kind === ts.SyntaxKind.StringKeyword;
+        }
+        if (parent.kind === ts.SyntaxKind.ConditionalExpression) {
+            // a numeric arm next to a numeric arm makes the conditional numeric and javac
+            // unboxes it (an NPE where the Object declaration carried null)
+            return javaType === 'String';
+        }
+        if (parent.kind === ts.SyntaxKind.ElementAccessExpression && parent.expression === node) {
+            const grand = parent.parent;
+            if (grand?.kind === ts.SyntaxKind.DeleteExpression) {
+                return false;
+            }
+            if (grand?.kind === ts.SyntaxKind.BinaryExpression && grand.left === parent
+                && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(grand.operatorToken.kind)) {
+                return false; // `x[k] = v` prints a receiver cast the box cannot satisfy
+            }
+        }
+        if (parent.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+            const grand = parent.parent;
+            if (grand?.kind === ts.SyntaxKind.BinaryExpression && grand.left === parent
+                && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(grand.operatorToken.kind)) {
+                return false; // `[x, y] = f()` prints a destructuring write into the local
+            }
+        }
+        if (parent.kind === ts.SyntaxKind.BinaryExpression && parent.left === node) {
+            const op = parent.operatorToken.kind;
+            if (op === ts.SyntaxKind.EqualsToken) {
+                return this.javaArithmeticWriteIsSafe(parent.right, javaType);
+            }
+            if (op === ts.SyntaxKind.PlusEqualsToken) {
+                // `x += y` prints a native `x = (x + y)` or the Object-typed helper
+                return this.javaNativeArithmeticType(parent) === javaType;
+            }
+            if (JAVA_ASSIGNMENT_OPERATOR_KINDS.has(op)) {
+                return false; // every other compound assignment writes a helper result
+            }
+            if (op === ts.SyntaxKind.PlusToken && javaType === 'String') {
+                // the overload trap: once the local is String, a printed Helpers.add(local, y)
+                // binds add(String, Object) instead of add(Object, Object), and the two
+                // diverge for a non-string y. A printed native concat has no helper call.
+                return this.javaNativeArithmeticType(parent) === 'String';
+            }
+        }
+        return true;
+    }
+
+    // D2: the narrowed declaration needs every later use of the local in the enclosing
+    // function to still compile and resolve the way the Object declaration did
+    javaArithmeticLocalIsSafeToType(scope, declaration, javaType) {
+        if (scope === undefined) {
+            return false;
+        }
+        const sourceName = declaration.name.escapedText;
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) {
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
+                if (!this.javaArithmeticLocalUseIsSafe(n, declaration, javaType)) {
+                    safe = false;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    // the Java type a declaration can carry because its initializer prints as native
+    // arithmetic, or undefined to keep the Object declaration
+    javaArithmeticLocalType(declaration) {
+        if (!ts.isIdentifier(declaration.name) || declaration.initializer === undefined) {
+            return undefined;
+        }
+        const javaType = this.javaNativeArithmeticType(declaration.initializer);
+        if (javaType === undefined) {
+            return undefined;
+        }
+        const scope = this.javaEnclosingFunction(declaration);
+        return this.javaArithmeticLocalIsSafeToType(scope, declaration, javaType)
+            ? javaType : undefined;
+    }
+
     getObjectLiteralFromCallExpressionArguments(node) {
         const res = [];
         if (!node?.arguments) {
@@ -1994,7 +2225,15 @@ export class JavaTranspiler extends BaseTranspiler {
         const isNew =
             declaration?.initializer &&
             declaration.initializer.kind === ts.SyntaxKind.NewExpression;
-        const varToken = isNew ? "var " : this.VAR_TOKEN + " ";
+        let varToken = isNew ? "var " : this.VAR_TOKEN + " ";
+        if (!isNew) {
+            // a native-arithmetic initializer prints a String/Long/Double value: the
+            // declaration can name that type instead of Object (D3, scanned by java-31)
+            const arithmeticType = this.javaArithmeticLocalType(declaration);
+            if (arithmeticType !== undefined) {
+                varToken = arithmeticType + " ";
+            }
+        }
 
         // handle `let x;`
         if (!declaration.initializer) {

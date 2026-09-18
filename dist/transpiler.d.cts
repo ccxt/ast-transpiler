@@ -1015,6 +1015,16 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeArithmeticKind(node: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
+    javaUnwrapParentheses(node: any): any;
+    javaNativeArithmeticType(node: any): "String" | "Long" | "Double";
+    javaEnclosingFunction(node: any): any;
+    javaArithmeticWriteIsSafe(right: any, javaType: any): boolean;
+    javaScopingBlock(node: any): any;
+    javaNodeContains(outer: any, inner: any): boolean;
+    javaBindingsAreDisjoint(declaration: any, other: any): boolean;
+    javaArithmeticLocalUseIsSafe(node: any, declaration: any, javaType: any): boolean;
+    javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
+    javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
     collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;

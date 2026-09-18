@@ -2769,7 +2769,7 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Object x = ("a" + b);');
+        expect(output).toContain('String x = ("a" + b);');
         expect(output).not.toContain('Helpers.add(');
     });
 
@@ -2781,7 +2781,7 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Object x = ((("a" + b)) + "c");');
+        expect(output).toContain('String x = ((("a" + b)) + "c");');
         expect(output).not.toContain('Helpers.add(');
     });
 
@@ -2809,10 +2809,10 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Object x = (2L * 3L);');
-        expect(output).toContain('Object w = (7L + 1L);');
-        expect(output).toContain('Object y = (((double) 10) / ((double) 4));');
-        expect(output).toContain('Object q = (((2L * 3L)) * 4L);');
+        expect(output).toContain('Long x = (2L * 3L);');
+        expect(output).toContain('Long w = (7L + 1L);');
+        expect(output).toContain('Double y = (((double) 10) / ((double) 4));');
+        expect(output).toContain('Long q = (((2L * 3L)) * 4L);');
         expect(output).not.toContain('Helpers.multiply(');
         expect(output).not.toContain('Helpers.divide(');
     });
@@ -3303,5 +3303,181 @@ describe('java replaceAll native emission', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
+    });
+});
+
+describe('java native-arithmetic locals (java-31)', () => {
+    test('a native concat initializer declares the local String', () => {
+        const input =
+        "class T {\n" +
+        "    f(symbol: string, settle: string): void {\n" +
+        "        const futuresSymbol = symbol + ':' + settle;\n" +
+        "        this.g(futuresSymbol);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('String futuresSymbol = ((symbol + ":") + settle);');
+        expect(output).not.toContain('Object futuresSymbol');
+    });
+
+    test('a native long initializer declares the local Long', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const oneWeek = 7 * 24 * 60 * 60 * 1000;\n" +
+        "        this.g(oneWeek);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Long oneWeek = ((((7L * 24L) * 60L) * 60L) * 1000L);');
+    });
+
+    test('a native double initializer declares the local Double', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const ratio = 10 / 4;\n" +
+        "        this.g(ratio);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Double ratio = (((double) 10) / ((double) 4));');
+    });
+
+    test('an initializer that keeps the helper also keeps the Object declaration', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: Str, b: Str): void {\n" +
+        "        const x = a + b;\n" +
+        "        this.g(x);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.add(a, b);');
+    });
+
+    test('a later write of a helper result keeps the box (D2)', () => {
+        const input =
+        "class T {\n" +
+        "    f(symbol: string, settle: string): void {\n" +
+        "        let futuresSymbol = symbol + ':' + settle;\n" +
+        "        futuresSymbol = this.safeDict(this.options, 'x');\n" +
+        "        this.g(futuresSymbol);\n" +
+        "    }\n" +
+        "    safeDict(a: any, b: any): any { return undefined; }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object futuresSymbol = ((symbol + ":") + settle);');
+        expect(output).not.toContain('String futuresSymbol');
+    });
+
+    test('a later write of the same native type keeps the narrowed declaration', () => {
+        const input =
+        "class T {\n" +
+        "    f(symbol: string, settle: string): void {\n" +
+        "        let futuresSymbol = symbol + ':' + settle;\n" +
+        "        futuresSymbol = symbol + '/' + settle;\n" +
+        "        this.g(futuresSymbol);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('String futuresSymbol = ((symbol + ":") + settle);');
+        expect(output).toContain('futuresSymbol = ((symbol + "/") + settle);');
+    });
+
+    test('a compound numeric assignment keeps the box', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        let oneWeek = 7 * 24 * 60 * 60 * 1000;\n" +
+        "        oneWeek += 1;\n" +
+        "        this.g(oneWeek);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object oneWeek = ((((7L * 24L) * 60L) * 60L) * 1000L);');
+    });
+
+    test('sibling blocks may each declare their own type for the same name', () => {
+        const input =
+        "class T {\n" +
+        "    f(symbol: string, settle: string, b: any, s: string): void {\n" +
+        "        if (s === 'a') {\n" +
+        "            const futuresSymbol = symbol + ':' + settle;\n" +
+        "            this.g(futuresSymbol);\n" +
+        "        } else {\n" +
+        "            const futuresSymbol = b + ':' + settle;\n" +
+        "            this.g(futuresSymbol);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('String futuresSymbol = ((symbol + ":") + settle);');
+        expect(output).toContain('Object futuresSymbol = Helpers.add(Helpers.add(b, ":"), settle);');
+    });
+
+    test('a String local as the left of a helper add keeps the box (overload trap)', () => {
+        const input =
+        "class T {\n" +
+        "    f(symbol: string, x: string): void {\n" +
+        "        const y = symbol + ':';\n" +
+        "        this.g(y + x);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object y = (symbol + ":");');
+    });
+
+    test('typeof, length and string casts stay valid on a String local', () => {
+        const input =
+        "class T {\n" +
+        "    f(symbol: string, x: string): void {\n" +
+        "        const y = symbol + ':';\n" +
+        "        if (typeof y === 'string') {\n" +
+        "            this.g(y.length, (y as string).toUpperCase());\n" +
+        "        }\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('String y = (symbol + ":");');
+        expect(output).toContain('((String)y).length()');
+    });
+
+    test('a numeric local in a conditional keeps the box (unboxing risk)', () => {
+        const input =
+        "class T {\n" +
+        "    f(c: boolean): void {\n" +
+        "        const oneWeek = 7 * 24 * 60 * 60 * 1000;\n" +
+        "        this.g(c ? oneWeek : 0);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object oneWeek = ((((7L * 24L) * 60L) * 60L) * 1000L);');
+    });
+
+    test('a numeric local as an argument of its own arithmetic stays boxed', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const oneWeek = 7 * 24 * 60 * 60 * 1000;\n" +
+        "        this.g(oneWeek + 1);\n" +
+        "    }\n" +
+        "    g(...args: any[]): void {}\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        // the printed helper keeps the Object parameter, so the local is still typed
+        expect(output).toContain('Long oneWeek = ((((7L * 24L) * 60L) * 60L) * 1000L);');
+        expect(output).toContain('this.g(Helpers.add(oneWeek, 1));');
     });
 });

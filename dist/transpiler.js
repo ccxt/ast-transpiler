@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9459,6 +9459,202 @@ var JavaTranspiler = class extends BaseTranspiler {
     const operator = isPlus ? "+" : isMinus ? "-" : "*";
     return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
   }
+  // ---- typed locals for native arithmetic ---------------------------------
+  // A local whose initializer prints as native arithmetic (the classification above)
+  // holds a Java String / Long / Double box, so the declaration can carry that type
+  // instead of Object. The proof is the printer's own classification, so the declared
+  // type always matches the printed expression; every other use of the local in the
+  // enclosing function is scanned first (D2), because naming the type can change
+  // javac's overload and operator resolution.
+  javaUnwrapParentheses(node) {
+    let current = node;
+    while (current?.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      current = current.expression;
+    }
+    return current;
+  }
+  // the Java type of the native arithmetic this printer prints for a `+ - * / +=`
+  // node, or undefined when the node keeps the helper (its printed value is an
+  // Object box). Mirrors printInlineHelperArithmetic operand-for-operand.
+  javaNativeArithmeticType(node) {
+    const value = this.javaUnwrapParentheses(node);
+    if (value?.kind !== ts6.SyntaxKind.BinaryExpression) {
+      return void 0;
+    }
+    const op = value.operatorToken.kind;
+    if (op === ts6.SyntaxKind.PlusToken && this.javaNativeConcat(value)) {
+      return "String";
+    }
+    if (op === ts6.SyntaxKind.PlusEqualsToken) {
+      const isStringPair = this.javaScalarFamily(value.left) === "string" && this.javaScalarFamily(value.right) === "string" && (this.javaProvableString(value.left) || this.javaProvableString(value.right));
+      return isStringPair ? "String" : void 0;
+    }
+    const kind = this.javaNativeArithmeticKind(value);
+    if (kind === "long") {
+      return "Long";
+    }
+    if (kind === "double") {
+      return "Double";
+    }
+    return void 0;
+  }
+  // the enclosing function-like node: the D2 scan scope of a typed local
+  javaEnclosingFunction(node) {
+    let current = node?.parent;
+    while (current !== void 0) {
+      const kind = current.kind;
+      if (kind === ts6.SyntaxKind.MethodDeclaration || kind === ts6.SyntaxKind.FunctionDeclaration || kind === ts6.SyntaxKind.FunctionExpression || kind === ts6.SyntaxKind.ArrowFunction || kind === ts6.SyntaxKind.GetAccessor || kind === ts6.SyntaxKind.SetAccessor || kind === ts6.SyntaxKind.Constructor) {
+        return current;
+      }
+      current = current.parent;
+    }
+    return void 0;
+  }
+  // a reassignment may keep the narrowed declaration only when its printed value is the
+  // same Java type (the helper's box stays an Object, so it keeps the box)
+  javaArithmeticWriteIsSafe(right, javaType) {
+    const value = this.javaUnwrapParentheses(right);
+    if (value === void 0) {
+      return false;
+    }
+    if (value.kind === ts6.SyntaxKind.NullKeyword) {
+      return true;
+    }
+    if (value.kind === ts6.SyntaxKind.Identifier && value.escapedText === "undefined") {
+      return true;
+    }
+    if (javaType === "String" && (value.kind === ts6.SyntaxKind.StringLiteral || value.kind === ts6.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+      return true;
+    }
+    return this.javaNativeArithmeticType(value) === javaType;
+  }
+  // the innermost block that scopes a declaration (Java locals live to the end of
+  // their block; sibling blocks may reuse the name, nested ones may not)
+  javaScopingBlock(node) {
+    let current = node?.parent;
+    let last = void 0;
+    while (current !== void 0) {
+      if (current.kind === ts6.SyntaxKind.Block || current.kind === ts6.SyntaxKind.SourceFile) {
+        return current;
+      }
+      last = current;
+      current = current.parent;
+    }
+    return last;
+  }
+  javaNodeContains(outer, inner) {
+    return outer !== void 0 && inner !== void 0 && outer.pos <= inner.pos && inner.end <= outer.end;
+  }
+  // two same-named bindings may both keep their own printed type only in disjoint
+  // blocks: a nested one would already be an illegal Java shadowing of the Object
+  // declaration the corpus compiles with
+  javaBindingsAreDisjoint(declaration, other) {
+    const mine = this.javaScopingBlock(declaration);
+    const theirs = this.javaScopingBlock(other);
+    if (mine === void 0 || theirs === void 0) {
+      return false;
+    }
+    return !this.javaNodeContains(mine, theirs) && !this.javaNodeContains(theirs, mine);
+  }
+  // is this occurrence of the local compatible with the narrowed declaration?
+  javaArithmeticLocalUseIsSafe(node, declaration, javaType) {
+    const sourceName = declaration.name.escapedText;
+    const parent = node.parent;
+    if (parent === void 0) {
+      return false;
+    }
+    if ((parent.kind === ts6.SyntaxKind.PropertyAccessExpression || parent.kind === ts6.SyntaxKind.PropertyAssignment) && parent.name === node) {
+      return true;
+    }
+    if ((parent.kind === ts6.SyntaxKind.VariableDeclaration || parent.kind === ts6.SyntaxKind.Parameter || parent.kind === ts6.SyntaxKind.BindingElement) && parent.name === node) {
+      return this.javaBindingsAreDisjoint(declaration, parent);
+    }
+    if (parent.kind === ts6.SyntaxKind.PostfixUnaryExpression || parent.kind === ts6.SyntaxKind.PrefixUnaryExpression) {
+      return false;
+    }
+    if (parent.kind === ts6.SyntaxKind.SpreadElement || parent.kind === ts6.SyntaxKind.DeleteExpression) {
+      return false;
+    }
+    if (parent.kind === ts6.SyntaxKind.ForOfStatement || parent.kind === ts6.SyntaxKind.ForInStatement) {
+      return false;
+    }
+    if (parent.kind === ts6.SyntaxKind.TypeOfExpression) {
+      return javaType === "String";
+    }
+    if (parent.kind === ts6.SyntaxKind.AsExpression || parent.kind === ts6.SyntaxKind.TypeAssertionExpression) {
+      return javaType === "String" && parent.type?.kind === ts6.SyntaxKind.StringKeyword;
+    }
+    if (parent.kind === ts6.SyntaxKind.ConditionalExpression) {
+      return javaType === "String";
+    }
+    if (parent.kind === ts6.SyntaxKind.ElementAccessExpression && parent.expression === node) {
+      const grand = parent.parent;
+      if (grand?.kind === ts6.SyntaxKind.DeleteExpression) {
+        return false;
+      }
+      if (grand?.kind === ts6.SyntaxKind.BinaryExpression && grand.left === parent && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(grand.operatorToken.kind)) {
+        return false;
+      }
+    }
+    if (parent.kind === ts6.SyntaxKind.ArrayLiteralExpression) {
+      const grand = parent.parent;
+      if (grand?.kind === ts6.SyntaxKind.BinaryExpression && grand.left === parent && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(grand.operatorToken.kind)) {
+        return false;
+      }
+    }
+    if (parent.kind === ts6.SyntaxKind.BinaryExpression && parent.left === node) {
+      const op = parent.operatorToken.kind;
+      if (op === ts6.SyntaxKind.EqualsToken) {
+        return this.javaArithmeticWriteIsSafe(parent.right, javaType);
+      }
+      if (op === ts6.SyntaxKind.PlusEqualsToken) {
+        return this.javaNativeArithmeticType(parent) === javaType;
+      }
+      if (JAVA_ASSIGNMENT_OPERATOR_KINDS.has(op)) {
+        return false;
+      }
+      if (op === ts6.SyntaxKind.PlusToken && javaType === "String") {
+        return this.javaNativeArithmeticType(parent) === "String";
+      }
+    }
+    return true;
+  }
+  // D2: the narrowed declaration needs every later use of the local in the enclosing
+  // function to still compile and resolve the way the Object declaration did
+  javaArithmeticLocalIsSafeToType(scope, declaration, javaType) {
+    if (scope === void 0) {
+      return false;
+    }
+    const sourceName = declaration.name.escapedText;
+    let safe = true;
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (n.kind === ts6.SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
+        if (!this.javaArithmeticLocalUseIsSafe(n, declaration, javaType)) {
+          safe = false;
+          return;
+        }
+      }
+      ts6.forEachChild(n, visit);
+    };
+    ts6.forEachChild(scope, visit);
+    return safe;
+  }
+  // the Java type a declaration can carry because its initializer prints as native
+  // arithmetic, or undefined to keep the Object declaration
+  javaArithmeticLocalType(declaration) {
+    if (!ts6.isIdentifier(declaration.name) || declaration.initializer === void 0) {
+      return void 0;
+    }
+    const javaType = this.javaNativeArithmeticType(declaration.initializer);
+    if (javaType === void 0) {
+      return void 0;
+    }
+    const scope = this.javaEnclosingFunction(declaration);
+    return this.javaArithmeticLocalIsSafeToType(scope, declaration, javaType) ? javaType : void 0;
+  }
   getObjectLiteralFromCallExpressionArguments(node) {
     const res = [];
     if (!node?.arguments) {
@@ -9949,7 +10145,13 @@ var JavaTranspiler = class extends BaseTranspiler {
       return arrayBindingStatement;
     }
     const isNew = declaration?.initializer && declaration.initializer.kind === ts6.SyntaxKind.NewExpression;
-    const varToken = isNew ? "var " : this.VAR_TOKEN + " ";
+    let varToken = isNew ? "var " : this.VAR_TOKEN + " ";
+    if (!isNew) {
+      const arithmeticType = this.javaArithmeticLocalType(declaration);
+      if (arithmeticType !== void 0) {
+        varToken = arithmeticType + " ";
+      }
+    }
     if (!declaration.initializer) {
       return this.getIden(identation) + "Object " + this.printNode(declaration.name) + " = " + this.UNDEFINED_TOKEN;
     }
