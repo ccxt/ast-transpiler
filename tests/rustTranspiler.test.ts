@@ -1442,3 +1442,86 @@ describe('rust hand-written bool-returning calls', () => {
         expect(output).toContain('if is_true(&isTemporaryFailure(ex)) {');
     });
 });
+
+// ── is_true over a checker-proved boolean Value ─────────────────────────────
+// `safeBool(...)` and element accesses whose checker type is boolean|undefined
+// can only be `Value::Bool(..)` or `Value::Null` at runtime, where the truthy
+// helper is exactly `matches!(.., Value::Bool(true))`.
+describe('rust is_true over a proven boolean Value', () => {
+    const boolClass = (body: string) =>
+        'class A {\n' +
+        '    safeBool(obj: any, key: any, defaultValue?: boolean): boolean | undefined { return undefined; }\n' +
+        '    safeBool2(obj: any, k1: any, k2: any, defaultValue?: boolean): boolean | undefined { return undefined; }\n' +
+        '    isLinear(market: any): boolean { return true; }\n' +
+        '    run() {\n' + body + '\n    }\n' +
+        '}';
+
+    test('safeBool in a condition emits the native matches!', () => {
+        const ts = boolClass("        if (this.safeBool(this.options, 'foo', false)) { return 1; }");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("foo".to_string()), &[Value::Bool(false)]), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&self.safeBool');
+    });
+
+    test('negated safeBool keeps the negation around the matches!', () => {
+        const ts = boolClass("        if (!this.safeBool(this.options, 'foo')) { return 1; }");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !matches!(self.safeBool(self.options, Value::Str("foo".to_string()), &[]), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&self.safeBool');
+    });
+
+    test('safeBool2 and a ternary condition emit the native matches!', () => {
+        const ts = boolClass("        return this.safeBool2(this.options, 'a', 'b', false) ? 1 : 2;");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(if matches!(self.safeBool2(self.options, Value::Str("a".to_string()), Value::Str("b".to_string()), &[Value::Bool(false)]), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&self.safeBool2');
+    });
+
+    test('a boolean-returning method keeps the helper', () => {
+        const ts = boolClass('        if (this.isLinear(this.options)) { return 1; }');
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&self.isLinear(self.options))');
+        expect(output).not.toContain('matches!(self.isLinear');
+    });
+
+    test('a logical stored in a Value local keeps the helper', () => {
+        const ts = boolClass("        const x = this.safeBool(this.options, 'a') || this.safeBool(this.options, 'b');\n        return x;");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&self.safeBool(self.options, Value::Str("a".to_string()), &[])) || is_true(&self.safeBool');
+        expect(output).not.toContain('matches!(self.safeBool');
+    });
+
+    test('a logical inside a condition emits the native matches! operand', () => {
+        const ts = boolClass("        if (this.safeBool(this.options, 'a') && this.safeBool(this.options, 'b')) { return 1; }");
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("a".to_string()), &[]), Value::Bool(true)) && matches!(self.safeBool');
+    });
+
+    test('a boolean-typed element access emits the native matches!', () => {
+        const ts =
+            'class B {\n' +
+            '    run(options: { foo?: boolean }) {\n' +
+            "        if (options['foo']) { return 1; }\n" +
+            '        return 2;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if matches!(options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null), Value::Bool(true))');
+        expect(output).not.toContain('is_true(&options');
+    });
+
+    test('a non-boolean element access keeps the helper', () => {
+        const ts =
+            'class C {\n' +
+            '    run(options: { foo?: string }, i: number) {\n' +
+            "        if (options['foo']) { return 1; }\n" +
+            '        if (options[i]) { return 2; }\n' +
+            '        return 3;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('is_true(&options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null))');
+        expect(output).toContain('is_true(&get_value(&options, &i))');
+        expect(output).not.toContain('matches!(options');
+    });
+});
