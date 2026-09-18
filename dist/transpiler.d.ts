@@ -1167,6 +1167,14 @@ declare class RustTranspiler extends BaseTranspiler {
     rustBindsName(node: any, name: string): boolean;
     rustIdentifierUseIsCondition(node: any): boolean;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
+    private static readonly RUST_STRING_LOCAL_HELPERS;
+    private rustStringLocalDecisions;
+    rustSafeStringLocalInitializer(declaration: any): boolean;
+    rustStringLocalUseIsNative(node: any): boolean;
+    rustSafeStringLocalIsTyped(declaration: any): boolean;
+    rustSafeStringLocalIsTypedUncached(declaration: any): boolean;
+    rustIdentifierIsPropertyName(node: any): boolean;
+    rustStringLocalIdentifierIsTyped(node: any): boolean;
     getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
     printPropertyDeclaration(node: any, identation: any): string;
     getStructFields(node: any): Array<{
