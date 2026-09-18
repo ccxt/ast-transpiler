@@ -5222,3 +5222,167 @@ describe('java Math.min/Math.max native emission', () => {
         expect(output).not.toContain("Math.min(");
     });
 });
+
+describe('java slice native emission (Helpers.slice -> substring / subList)', () => {
+    // Literal bounds on a checker-proven String/List receiver: JS clamps both bounds into
+    // [0, length], which the native call reproduces with Math.min / Math.max over the
+    // receiver length behind the helper's null -> null guard.
+    test('two literal bounds emit substring with min-clamped start and end', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(0, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(s == null ? null : ((String)s).substring(0, Math.min(2, ((String)s).length())))");
+        expect(output).not.toContain("Helpers.slice");
+    });
+
+    test('a negative start counts from the end and clamps at zero', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(-64);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(s == null ? null : ((String)s).substring(Math.max(((String)s).length() - 64, 0)))");
+    });
+
+    test('a single positive bound keeps the open end', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(18);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(s == null ? null : ((String)s).substring(Math.min(18, ((String)s).length())))");
+    });
+
+    test('a negative end clamps from the end', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(0, -1);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(s == null ? null : ((String)s).substring(0, Math.max(((String)s).length() - 1, 0)))");
+    });
+
+    test('two ordered negative bounds are both measured from the end', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(-5, -1);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("substring(Math.max(((String)s).length() - 5, 0), Math.max(((String)s).length() - 1, 0))");
+    });
+
+    // A bound pair whose order is not provable for every length keeps substring valid by
+    // taking the smaller of the two as the start: an inverted pair is the empty slice.
+    test('an unprovably ordered pair guards the start with Math.min', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(-8, 5);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("substring(Math.min(Math.max(((String)s).length() - 8, 0), Math.min(5, ((String)s).length())), Math.min(5, ((String)s).length()))");
+    });
+
+    test('a proven List receiver emits subList with size-clamped bounds', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: string[]): void {\n" +
+        "        const y = xs.slice(0, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(xs == null ? null : ((java.util.List<Object>)xs).subList(0, Math.min(2, ((java.util.List<Object>)xs).size())))");
+        expect(output).not.toContain("Helpers.slice");
+    });
+
+    // Fallbacks: every shape the native rule cannot prove keeps the runtime helper.
+    test('a non-literal bound keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string, a: number): void {\n" +
+        "        const y = s.slice(a, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(s, a, 2)");
+    });
+
+    test('an unproven (any) receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: any): void {\n" +
+        "        const y = s.slice(0, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(s, 0, 2)");
+    });
+
+    test('a nullable string receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string | undefined): void {\n" +
+        "        const y = s.slice(0, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(s, 0, 2)");
+    });
+
+    test('a call receiver keeps the helper (single evaluation of the receiver)', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.trim().slice(0, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(((String)s).trim(), 0, 2)");
+    });
+
+    test('a varargs array receiver keeps the helper (it is an array, not a List)', () => {
+        const input =
+        "class T {\n" +
+        "    f(...xs: any[]): void {\n" +
+        "        const y = xs.slice(0, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(xs, 0, 2)");
+    });
+
+    test('a non-integer bound keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(0.5, 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(s, 0.5, 2)");
+    });
+
+    test('a bound outside the Java int range keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const y = s.slice(0, 9007199254740993);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.slice(s, 0, 9007199254740992L)");
+    });
+});
