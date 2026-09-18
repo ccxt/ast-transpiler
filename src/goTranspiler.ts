@@ -4646,6 +4646,23 @@ ${tryBodyBlock}
         return false;
     }
 
+    // true when the printed key is a Safe*-boxed string: an identifier declared `*string`,
+    // i.e. a nilable Go pointer. The native read needs GetValue's `*` deref and its nil
+    // answer, neither of which an index expression expresses.
+    goIsDerefStringKeyExpression(node): boolean {
+        return (node?.kind === ts.SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node) === '*string');
+    }
+
+    // the nil-guarded native read of a declared map with a `*string` key, reproducing
+    // GetValue's key deref: a nil key reads nil, otherwise the map index (a missing key
+    // is the `any` nil, like the helper's map case). gofmt keeps a func literal holding
+    // an `if` on its own lines, so the guard is laid out at the statement's level.
+    printNilGuardedMapIndex(containerStr: string, keyStr: string): string {
+        const level = this.goStatementLevel;
+        const body = this.getIden(level + 1);
+        return `func() any {\n${body}if ${keyStr} == nil {\n${this.getIden(level + 2)}return nil\n${body}}\n${body}return ${containerStr}[*${keyStr}]\n${this.getIden(level)}}()`;
+    }
+
     // true for `this.<field>` — the one property-access shape whose Go type the
     // printer itself cannot name (the fields live in the hand-written Go structs)
     isGoThisPropertyAccessExpression(node) {
@@ -4701,6 +4718,13 @@ ${tryBodyBlock}
         if (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') {
             if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)) {
                 return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
+            }
+            // a Safe*-boxed string key holds a nilable `*string`, so the read needs the
+            // helper's nil answer and deref around the same map index. A multi-line
+            // receiver cannot carry the guard's own indentation, so it keeps the helper.
+            if (this.goIsDerefStringKeyExpression(keys[0]) && !containerStr.includes('\n')
+                && !this.isGoElementAccessAssignmentTarget(node)) {
+                return this.goElementAccessChain(this.printNilGuardedMapIndex(containerStr, keyStrs[0]), keyStrs);
             }
         }
 

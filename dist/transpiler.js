@@ -8219,6 +8219,26 @@ ${tryBodyBlock}
     }
     return false;
   }
+  // true when the printed key is a Safe*-boxed string: an identifier declared `*string`,
+  // i.e. a nilable Go pointer. The native read needs GetValue's `*` deref and its nil
+  // answer, neither of which an index expression expresses.
+  goIsDerefStringKeyExpression(node) {
+    return node?.kind === ts5.SyntaxKind.Identifier && this.goDeclaredTypeOfIdentifier(node) === "*string";
+  }
+  // the nil-guarded native read of a declared map with a `*string` key, reproducing
+  // GetValue's key deref: a nil key reads nil, otherwise the map index (a missing key
+  // is the `any` nil, like the helper's map case). gofmt keeps a func literal holding
+  // an `if` on its own lines, so the guard is laid out at the statement's level.
+  printNilGuardedMapIndex(containerStr, keyStr) {
+    const level = this.goStatementLevel;
+    const body = this.getIden(level + 1);
+    return `func() any {
+${body}if ${keyStr} == nil {
+${this.getIden(level + 2)}return nil
+${body}}
+${body}return ${containerStr}[*${keyStr}]
+${this.getIden(level)}}()`;
+  }
   // true for `this.<field>` — the one property-access shape whose Go type the
   // printer itself cannot name (the fields live in the hand-written Go structs)
   isGoThisPropertyAccessExpression(node) {
@@ -8254,6 +8274,9 @@ ${tryBodyBlock}
     if (this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any") {
       if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)) {
         return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
+      }
+      if (this.goIsDerefStringKeyExpression(keys[0]) && !containerStr.includes("\n") && !this.isGoElementAccessAssignmentTarget(node)) {
+        return this.goElementAccessChain(this.printNilGuardedMapIndex(containerStr, keyStrs[0]), keyStrs);
       }
     }
     let acc = containerStr;
