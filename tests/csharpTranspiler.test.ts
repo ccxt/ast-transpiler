@@ -571,6 +571,102 @@ describe('csharp transpiling tests', () => {
             "object x = new Dictionary<string, object>() {};\n" +
             "((List<object>)x)[Convert.ToInt32(1)] = 1;");
     })
+    // U58: the same declared-receiver proof reaches every other shape the printer wraps around a
+    // dictionary element access — the element READ, Object.keys/values and `delete`. The unhooked
+    // emission is the base printer's, byte for byte.
+    test('a dict-typed receiver drops the cast on reads, Object.keys/values and delete', () => {
+        const config = {
+            'verbose': false,
+            'csharp': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                    'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+                    'ELEMENT_ACCESS_WRAPPER_CLOSE': ')'
+                }
+            }
+        }
+        const ts =
+        "const x = { \"a\": 1 };\n" +
+        "const v = x[\"a\"];\n" +
+        "const k = Object.keys(x);\n" +
+        "const w = Object.values(x);\n" +
+        "delete x[\"a\"];\n" +
+        "x[\"b\"] = 2;";
+        expect(new Transpiler(config).transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {\n" +
+            "    { \"a\", 1 },\n" +
+            "};\n" +
+            "object v = ((IDictionary<string,object>)x)[\"a\"];\n" +
+            "List<object> k = new List<object>(((IDictionary<string,object>)x).Keys);\n" +
+            "List<object> w = new List<object>(((IDictionary<string,object>)x).Values);\n" +
+            "((IDictionary<string,object>)x).Remove((string)\"a\");\n" +
+            "((IDictionary<string,object>)x)[\"b\"] = 2;");
+        const hooked = new Transpiler(config);
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'Dictionary<string, object>' : undefined;
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {\n" +
+            "    { \"a\", 1 },\n" +
+            "};\n" +
+            "object v = x[\"a\"];\n" +
+            "List<object> k = new List<object>(x.Keys);\n" +
+            "List<object> w = new List<object>(x.Values);\n" +
+            "x.Remove((string)\"a\");\n" +
+            "x[\"b\"] = 2;");
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'IDictionary<string, object>' : undefined;
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "object x = new Dictionary<string, object>() {\n" +
+            "    { \"a\", 1 },\n" +
+            "};\n" +
+            "object v = x[\"a\"];\n" +
+            "List<object> k = new List<object>(x.Keys);\n" +
+            "List<object> w = new List<object>(x.Values);\n" +
+            "x.Remove((string)\"a\");\n" +
+            "x[\"b\"] = 2;");
+    })
+    // U58: a receiver that binds to a PARAMETER is answered by csharpPrintedParamType — the type
+    // the printed signature carries (INFER_ARG_TYPE). Without a hook the same snippet keeps every
+    // cast, and a parameter the printer leaves `object` keeps it too.
+    test('the declared-receiver hook reaches a parameter receiver', () => {
+        const config = {
+            'verbose': false,
+            'csharp': {
+                'parser': {
+                    'NUM_LINES_END_FILE': 0,
+                    'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(',
+                    'ELEMENT_ACCESS_WRAPPER_CLOSE': ')',
+                    'INFER_ARG_TYPE': true
+                }
+            }
+        }
+        const ts =
+        "type Dict = { [key: string]: any };\n" +
+        "class Test {\n" +
+        "    async createOrder (params: Dict, amount: object) {\n" +
+        "        params[\"type\"] = 'limit';\n" +
+        "        amount[\"type\"] = 'limit';\n" +
+        "    }\n" +
+        "}\n";
+        expect(new Transpiler(config).transpileCSharp(ts).content).toBe(
+            "class Test\n" +
+            "{\n" +
+            "    public async virtual Task createOrder(Dictionary<string, object> parameters, object amount)\n" +
+            "    {\n" +
+            "        ((IDictionary<string,object>)parameters)[\"type\"] = \"limit\";\n" +
+            "        ((IDictionary<string,object>)amount)[\"type\"] = \"limit\";\n" +
+            "    }\n" +
+            "}");
+        const hooked = new Transpiler(config);
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = function (node) { return this.csharpPrintedParamType(node); };
+        expect(hooked.transpileCSharp(ts).content).toBe(
+            "class Test\n" +
+            "{\n" +
+            "    public async virtual Task createOrder(Dictionary<string, object> parameters, object amount)\n" +
+            "    {\n" +
+            "        parameters[\"type\"] = \"limit\";\n" +
+            "        ((IDictionary<string,object>)amount)[\"type\"] = \"limit\";\n" +
+            "    }\n" +
+            "}");
+    })
     // the typed dict read family: the consumer's classifier proves the receiver's declared C# type
     // (see build/csharp-local-types.js), the printer then binds the typed static twin. Without the
     // hook (undefined) every read keeps the `getValue (...)` wrapper byte for byte.

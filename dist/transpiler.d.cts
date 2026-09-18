@@ -496,6 +496,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpGuardIndex: WeakMap<ts.Node, Map<string, any[]>>;
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
     csharpTypedLocals: WeakMap<ts.Node, string>;
+    csharpParamTypes: WeakMap<ts.Node, string>;
     stringReceiverTypes: WeakMap<ts.Node, string>;
     conditionOperandTypes: WeakMap<ts.Node, string>;
     constructor(config?: {});
@@ -507,6 +508,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     csharpDeclaredReceiverType(node: any): string | undefined;
+    csharpPrintedParamType(receiver: any): string | undefined;
+    csharpReceiverIsDeclaredDictionary(expression: any): boolean;
     csharpDictionaryElementWriteTarget(node: any): string | undefined;
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
