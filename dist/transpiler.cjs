@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -3411,53 +3411,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return (flags & (_typescript2.default.TypeFlags.Number | _typescript2.default.TypeFlags.NumberLiteral | _typescript2.default.TypeFlags.Boolean | _typescript2.default.TypeFlags.BooleanLiteral)) !== 0;
   }
-  // `x == "lit"` / `x != "lit"` prints natively when x is a read of a local whose printed
-  // declaration is a C# string: the printer's declared-local table, then the embedding build
-  // layer's proof for the declarations it retypes itself (ccxt's csharp-local-types.js).
-  csharpDeclaredStringLiteralComparison(left, right, leftText, rightText, isEquality) {
-    const ident = _typescript2.default.isIdentifier(left) ? left : _typescript2.default.isIdentifier(right) ? right : void 0;
-    if (ident === void 0 || !_typescript2.default.isStringLiteralLike(ident === left ? right : left)) {
-      return void 0;
-    }
-    const declared = this.csharpDeclaredReadType(ident);
-    if (declared === void 0 || !this.csharpTypeIsStringType(declared)) {
-      return void 0;
-    }
-    return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
-  }
-  // the C# type the declaration behind a local read was printed with, or undefined: the
-  // printer's own declared-local table first, then the embedding build layer's answer for a
-  // declaration it retyped after the printer had left it `object`
-  csharpDeclaredReadType(node) {
-    let named;
-    try {
-      named = this.csharpTypedLocalType(node);
-    } catch (e) {
-      named = void 0;
-    }
-    if (named !== void 0) {
-      return named;
-    }
-    const resolver = this.csharpExpressionTypeResolver;
-    if (typeof resolver !== "function") {
-      return void 0;
-    }
-    let resolved;
-    try {
-      resolved = resolver(node);
-    } catch (e) {
-      return void 0;
-    }
-    return typeof resolved === "string" ? resolved : void 0;
-  }
   // `==` / `!=` in place of the isEqual wrapper when both operands are C# values of one
   // family, or one side is null/undefined against a type `== null` compiles for. Both
   // operands are printed once, so neither is evaluated twice.
   printInlineEquality(left, right, leftText, rightText, isEquality) {
-    const stringComparison = this.csharpDeclaredStringLiteralComparison(left, right, leftText, rightText, isEquality);
-    if (stringComparison !== void 0) {
-      return stringComparison;
-    }
     const leftType = this.csharpEqualityOperandType(left);
     const rightType = this.csharpEqualityOperandType(right);
     if (leftType === void 0 || rightType === void 0) {
