@@ -2062,8 +2062,295 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `${name}.Contains(${parsedArg})`;
     }
 
+    // `x.indexOf (y)` prints `x`'s own member when the printer proves the receiver holds a
+    // string or a list at this read and can name that C# type; every other receiver keeps the
+    // runtime getIndexOf helper, which is the only form that answers -1 for a null box.
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
+        const native = this.csharpNativeIndexOfCall(node, name, parsedArg);
+        if (native !== undefined) {
+            return native;
+        }
         return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
+    }
+
+    // the helper's `(string)` branch spelled natively: `((string)x).IndexOf(needle, Ordinal)` is
+    // the ordinal scan TS indexOf performs (not-found stays -1, an empty needle stays 0); a
+    // `List<object>` local takes its own IndexOf, a possibly-null box keeps the helper
+    csharpNativeIndexOfCall(node, name = undefined, parsedArg = undefined): string | undefined {
+        const receiver = node?.expression?.expression;
+        if (receiver === undefined || name === undefined) {
+            return undefined;
+        }
+        const declared = this.csharpExpressionTypeOf(receiver);
+        if (this.csharpIndexOfReceiverHoldsString(node, receiver, declared)) {
+            const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
+            if (needle === undefined) {
+                return undefined;
+            }
+            // the helper's own `((string)str)` cast; a cast the printer already emitted is final
+            const casted = name.startsWith('((string)') ? name : `((string)${name})`;
+            return `${casted}.IndexOf(${needle}, StringComparison.Ordinal)`;
+        }
+        if (this.csharpIndexOfReceiverIsDeclaredList(declared)) {
+            return `((${declared})${name}).IndexOf(${parsedArg})`;
+        }
+        return undefined;
+    }
+
+    // the receiver is a string the helper would scan and no null can reach the read: a C#
+    // `string` declaration, a checker `string`/literal whose own declaration is a plain
+    // non-optional `string` (`as string` included), or a value a `!== undefined` test admits
+    csharpIndexOfReceiverHoldsString(node, receiver, declared): boolean {
+        if (declared === 'string') {
+            return true;
+        }
+        if ((declared !== undefined) && (declared !== 'string?')) {
+            return false; // a named C# type that is not a string
+        }
+        if (!this.csharpIndexOfReceiverIsCheckedString(receiver)) {
+            return false;
+        }
+        return this.csharpNullGuardAdmitsRead(node, receiver) || ((declared === undefined) && this.csharpReceiverDeclaredNonNullString(receiver));
+    }
+
+    // the checker's view of the receiver: exactly `string` / a string literal. `any` (could box
+    // anything) and `string[]` (boxes a List<string> where the helper casts its target) are not
+    csharpIndexOfReceiverIsCheckedString(receiver): boolean {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(receiver);
+        } catch (e) {
+            return false; // in-memory program without a checker
+        }
+        return this.isStringType(type?.flags);
+    }
+
+    // `List<object>` / `IList<object>` locals (split, Object.keys, the retyped collection
+    // returns) hold exactly the box the helper's own IList<object> branch scans
+    csharpIndexOfReceiverIsDeclaredList(declared): boolean {
+        return (declared === 'List<object>') || (declared === 'IList<object>');
+    }
+
+    // the receiver's own declaration says non-optional `string` (params, fields, locals), or the
+    // source pinned a string itself (a literal, an `as string` assertion). The `Str` alias and
+    // `= undefined` fields hold the undefined the helper answers -1 for: they need the guard
+    csharpReceiverDeclaredNonNullString(receiver): boolean {
+        const kind = receiver?.kind;
+        if ((kind === ts.SyntaxKind.StringLiteral) || (kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return true;
+        }
+        if (kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.csharpReceiverDeclaredNonNullString(receiver.expression);
+        }
+        if ((kind === ts.SyntaxKind.AsExpression) && (receiver.type?.kind === ts.SyntaxKind.StringKeyword)) {
+            return true; // the source itself pinned a string here
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(receiver);
+        } catch (e) {
+            return false;
+        }
+        const declarations: any[] = symbol?.declarations ?? [];
+        return (declarations.length > 0) && declarations.every((declaration) => this.csharpDeclarationIsNonNullString(declaration));
+    }
+
+    csharpDeclarationIsNonNullString(declaration): boolean {
+        const annotation: any = declaration?.type;
+        if (declaration?.kind === ts.SyntaxKind.Parameter) {
+            return (declaration.questionToken === undefined) && (declaration.dotDotDotToken === undefined)
+                && ((annotation?.kind === ts.SyntaxKind.StringKeyword) || ((annotation === undefined) && ts.isStringLiteralLike(declaration.initializer)));
+        }
+        const isField = ts.isPropertyDeclaration(declaration) || ts.isPropertySignature(declaration);
+        if (ts.isVariableDeclaration(declaration) || isField) {
+            if ((declaration as any).questionToken !== undefined) {
+                return false;
+            }
+            if (annotation !== undefined) {
+                // `apiKey: string = undefined` holds undefined until the credentials are set
+                return (annotation.kind === ts.SyntaxKind.StringKeyword) && !this.csharpInitializerIsUndefined((declaration as any).initializer);
+            }
+            return ts.isStringLiteralLike((declaration as any).initializer);
+        }
+        return false;
+    }
+
+    csharpInitializerIsUndefined(initializer): boolean {
+        if (initializer === undefined) {
+            return false;
+        }
+        return (initializer.kind === ts.SyntaxKind.NullKeyword)
+            || ((initializer.kind === ts.SyntaxKind.Identifier) && (initializer.escapedText === 'undefined'));
+    }
+
+    // a `x !== undefined` / `x !== null` (or `!= null`) test in a branch that admits the read:
+    // inside the right operand of its `&&`, inside the then-branch of its `if`, or after an
+    // early-exiting `if (x === undefined) { return/throw/continue/break }`
+    csharpNullGuardAdmitsRead(node, receiver): boolean {
+        if (!ts.isIdentifier(receiver)) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(receiver);
+        } catch (e) {
+            return false;
+        }
+        if (symbol === undefined) {
+            return false;
+        }
+        const scope = this.csharpEnclosingFunction(node);
+        let current: any = node;
+        while (current !== undefined) {
+            const parent: any = current.parent;
+            if (parent === undefined) {
+                return false;
+            }
+            if ((parent.kind === ts.SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+                && this.csharpContains(parent.right, current) && this.csharpTestIsNonNullCheck(parent.left, symbol, true)) {
+                return true;
+            }
+            if (parent.kind === ts.SyntaxKind.IfStatement) {
+                if (this.csharpContains(parent.thenStatement, current) && this.csharpTestIsNonNullCheck(parent.expression, symbol, true)) {
+                    return true;
+                }
+                if (this.csharpContains(parent.elseStatement, current) && this.csharpTestIsNonNullCheck(parent.expression, symbol, false)) {
+                    return true;
+                }
+            }
+            if (ts.isBlock(parent) || ts.isSourceFile(parent)) {
+                if (this.csharpEarlyExitNonNullGuarded(parent, current, symbol, scope)) {
+                    return true;
+                }
+            }
+            if (this.csharpIsFunctionLike(parent)) {
+                return false; // a guard outside this function cannot dominate a read inside it
+            }
+            current = parent;
+        }
+        return false;
+    }
+
+    csharpIsFunctionLike(node): boolean {
+        switch (node?.kind) {
+        case ts.SyntaxKind.MethodDeclaration:
+        case ts.SyntaxKind.FunctionDeclaration:
+        case ts.SyntaxKind.FunctionExpression:
+        case ts.SyntaxKind.ArrowFunction:
+        case ts.SyntaxKind.Constructor:
+            return true;
+        }
+        return false;
+    }
+
+    // `if (x === undefined) { return/throw/... }` (or the same test with an exiting else) in the
+    // same block, with no write to x in between: every statement after it runs with x bound
+    csharpEarlyExitNonNullGuarded(block, statement, symbol, scope): boolean {
+        for (const sibling of block.statements) {
+            if (sibling.getStart() >= statement.getStart()) {
+                return false;
+            }
+            if (!ts.isIfStatement(sibling)) {
+                continue;
+            }
+            const exitsOnNull = this.csharpTestIsNonNullCheck(sibling.expression, symbol, false) && this.csharpAlwaysExits(sibling.thenStatement);
+            const continuesOnNonNull = this.csharpTestIsNonNullCheck(sibling.expression, symbol, true) && this.csharpAlwaysExits(sibling.elseStatement);
+            if ((exitsOnNull || continuesOnNonNull) && !this.csharpReceiverWrittenBetween(scope, sibling.getEnd(), statement.getStart(), symbol)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the test proves the binding non-null when it evaluates to `truthy`: `x != null`, `x !==
+    // undefined` (either operand order), and both sides of an `&&` (a false `||`). Everything
+    // else — `any` comparisons, a different binding — proves nothing
+    csharpTestIsNonNullCheck(test, symbol, truthy): boolean {
+        switch (test?.kind) {
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.csharpTestIsNonNullCheck(test.expression, symbol, truthy);
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            return (test.operator === ts.SyntaxKind.ExclamationToken) && this.csharpTestIsNonNullCheck(test.operand, symbol, !truthy);
+        case ts.SyntaxKind.BinaryExpression: {
+            const op = test.operatorToken.kind;
+            if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+                return truthy && (this.csharpTestIsNonNullCheck(test.left, symbol, true) || this.csharpTestIsNonNullCheck(test.right, symbol, true));
+            }
+            if (op === ts.SyntaxKind.BarBarToken) {
+                return !truthy && (this.csharpTestIsNonNullCheck(test.left, symbol, false) || this.csharpTestIsNonNullCheck(test.right, symbol, false));
+            }
+            const inequality = (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+            const isNullTest = (op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken) || inequality;
+            if (!isNullTest || (truthy !== inequality)) {
+                return false;
+            }
+            const tested = ts.isIdentifier(test.left) ? test.left : test.right;
+            const literal = ts.isIdentifier(test.left) ? test.right : test.left;
+            return ts.isIdentifier(tested) && this.csharpInitializerIsUndefined(literal) && this.csharpSameBinding(tested, symbol);
+        }
+        }
+        return false;
+    }
+
+    csharpSameBinding(node, symbol): boolean {
+        try {
+            const resolved = this.getChecker().getSymbolAtLocation(node);
+            return (resolved !== undefined) && (resolved === symbol);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // any write to the same binding inside the window voids a dominance proof
+    csharpReceiverWrittenBetween(scope, from: number, to: number, symbol): boolean {
+        if (scope === undefined) {
+            return true;
+        }
+        let written = false;
+        const visit = (n: any) => {
+            if (written || (n.getStart() >= to) || (n.getEnd() <= from)) {
+                return;
+            }
+            if (ts.isIdentifier(n) && this.csharpIsWriteTarget(n) && this.csharpSameBinding(n, symbol)) {
+                written = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return written;
+    }
+
+    csharpIsWriteTarget(node): boolean {
+        const parent: any = node?.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        if (ts.isBinaryExpression(parent) && (parent.left === node)) {
+            const op = parent.operatorToken.kind;
+            return (op >= ts.SyntaxKind.FirstAssignment) && (op <= ts.SyntaxKind.LastAssignment);
+        }
+        if ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) && (parent.operand === node)) {
+            return (parent.operator === ts.SyntaxKind.PlusPlusToken) || (parent.operator === ts.SyntaxKind.MinusMinusToken);
+        }
+        return ts.isDeleteExpression(parent);
+    }
+
+    // the C# string the native `IndexOf` takes as its needle: a value the printer types a C#
+    // string prints as-is, an `object`-printed operand takes the helper's own `(string)` cast.
+    // A value of any other named C# type (number, bool, collection) keeps the helper
+    csharpNativeIndexOfNeedle(key, printed = undefined): string | undefined {
+        if (key === undefined || printed === undefined) {
+            return undefined;
+        }
+        const keyType = this.csharpExpressionTypeOf(key);
+        if (keyType === undefined) {
+            return `((string)${printed})`;
+        }
+        if (keyType === 'string') {
+            return printed;
+        }
+        return (keyType === 'string?') ? `((string)${printed})` : undefined;
     }
 
     printSearchCall(node, identation, name = undefined, parsedArg = undefined) {
