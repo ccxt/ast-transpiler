@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4706,16 +4706,6 @@ var GO_HELPER_RETURN_TYPES = {
   "IsDictionary": "bool",
   "StartsWith": "bool",
   "EndsWith": "bool",
-  // the native string operations (emitted with a proven Go `string` receiver) return exactly
-  // the type of the helper they replace, so a local initialised by one keeps its declared type
-  "strings.Split": "[]string",
-  "strings.Join": "string",
-  "strings.ToUpper": "string",
-  "strings.ToLower": "string",
-  "strings.Replace": "string",
-  "strings.ReplaceAll": "string",
-  "strings.HasPrefix": "bool",
-  "strings.HasSuffix": "bool",
   "IsInstance": "bool",
   "IsInteger": "bool",
   "this.InArray": "bool",
@@ -4788,7 +4778,6 @@ var GO_ANY_BOX_CALLS = [
   "this.SafeNumber"
 ];
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
-var METHODS_BOUNDARY_MARKER = "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT";
 var GO_NUMERIC_KINDS = ["int", "int64", "float64"];
 var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.GreaterThanToken]: ">",
@@ -4965,13 +4954,6 @@ var GoTranspiler = class extends BaseTranspiler {
     // gofmt indents every nesting level with exactly one tab; the printer emits the
     // same bytes so the generated tree needs no `gofmt` pass (campaign go-gofmt F01)
     this.DEFAULT_IDENTATION = "	";
-    // stdlib packages the source file being printed references. A Go import may only be
-    // declared before the file's first declaration, i.e. in the head of the printed body
-    // (printSourceFileStatements), so the file-level print collects the names here and
-    // prepends `import "..."` to its own output. Nested prints keep their own list.
-    this.goStdlibPackages = [];
-    // memo of goStdlibImportIsPlaceable() for the file being printed (reset per source file)
-    this.goStdlibImportPlaceable = void 0;
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
@@ -7100,31 +7082,8 @@ ${this.getIden(level)}}()`;
   // declaration by a blank line (go/printer declList: min = 2 when the decl has a doc
   // comment); the file members are joined with a bare newline otherwise
   printSourceFileStatements(node, identation) {
-    const previousPackages = this.goStdlibPackages;
-    const previousPlaceable = this.goStdlibImportPlaceable;
-    this.goStdlibPackages = [];
-    this.goStdlibImportPlaceable = void 0;
-    let statements = "";
-    let packages = [];
-    try {
-      const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
-      statements = printed.map((st, index) => index > 0 && /^\s*(\/\/|\/\*)/.test(st) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
-    } finally {
-      packages = this.goStdlibPackages;
-      this.goStdlibPackages = previousPackages;
-      this.goStdlibImportPlaceable = previousPlaceable;
-    }
-    return this.goStdlibImportPreamble(packages) + statements;
-  }
-  // Go requires every import declaration before the file's first declaration, so a stdlib
-  // reference emitted inside the body needs its `import` in the head of that body; go/printer
-  // keeps exactly one blank line between the import and what follows (both orders around a
-  // leading comment are gofmt-stable, verified with `gofmt -l`).
-  goStdlibImportPreamble(packages) {
-    if (packages.length === 0) {
-      return "";
-    }
-    return packages.map((name) => `import "${name}"`).join("\n") + "\n\n";
+    const printed = node.statements.map((m) => this.printNode(m, identation + 1)).filter((st) => st.length > 0);
+    return printed.map((st, index) => index > 0 && /^\s*(\/\/|\/\*)/.test(st) ? "\n" + st : st).join("\n") + "\n".repeat(this.NUM_LINES_END_FILE);
   }
   printNode(node, identation = 0) {
     if (node !== void 0 && ts5.isSourceFile(node)) {
@@ -7754,86 +7713,19 @@ ${this.getIden(identation)}`;
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
     return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
   }
-  // A native string operation needs every operand to be a printed Go `string` — the helper
-  // takes `any` and re-derives the same string at runtime, so a proven operand cannot change
-  // the result. A regex literal is never a Go string (its printed text is a pattern, not the
-  // value the helper's ToString would produce), so those keep the helper call.
-  goNativeStringOperands(operands, texts, expected) {
-    for (let i = 0; i < expected.length; i++) {
-      const operand = operands[i];
-      if (operand === void 0 || operand.kind === ts5.SyntaxKind.RegularExpressionLiteral) {
-        return false;
-      }
-      if (this.goOperandStaticType(operand, texts[i]) !== expected[i]) {
-        return false;
-      }
-    }
-    return true;
-  }
-  // the emission entry point: undefined when the file's stdlib import could not be placed
-  // (see goStdlibImportIsPlaceable), else the native call text, with the file-level import
-  // recorded for printSourceFileStatements
-  goNativeStringCall(nativeCall) {
-    if (!this.goStdlibImportIsPlaceable()) {
-      return void 0;
-    }
-    if (this.goStdlibPackages.indexOf("strings") < 0) {
-      this.goStdlibPackages.push("strings");
-    }
-    return nativeCall;
-  }
-  // The native string calls below need `import "strings"` in front of the file's first
-  // declaration. Every ccxt consumer splices the printed body at the head of the file it
-  // writes (createGoExchange, the test/example emitters), except the two base sources:
-  // build/goTranspiler.ts#transpileBaseMethods drops everything above the `METHODS BELOW THIS
-  // LINE` boundary and #transpilePredictionBaseMethods splices the methods after its own struct
-  // declaration, so neither can carry the import — those files keep the boxed helper call until
-  // the emitter declares the import itself (getGoImports(file)).
-  goStdlibImportIsPlaceable() {
-    if (this.goStdlibImportPlaceable === void 0) {
-      const source = this.getSrc();
-      const text = source?.getFullText() ?? "";
-      this.goStdlibImportPlaceable = !text.includes(METHODS_BOUNDARY_MARKER);
-    }
-    return this.goStdlibImportPlaceable;
-  }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.HasPrefix(${name}, ${parsedArg})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `StartsWith(${name}, ${parsedArg})`;
   }
   printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.HasSuffix(${name}, ${parsedArg})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `EndsWith(${name}, ${parsedArg})`;
   }
   printTrimCall(node, identation, name = void 0) {
     return `Trim(${name})`;
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["[]string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Join(${name}, ${parsedArg})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `Join(${name}, ${parsedArg})`;
   }
   printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Split(${name}, ${parsedArg})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `Split(${name}, ${parsedArg})`;
   }
   printToFixedCall(node, identation, name = void 0, parsedArg = void 0) {
@@ -7846,21 +7738,9 @@ ${this.getIden(identation)}`;
     return `Concat(${name}, ${parsedArg})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
-    if (this.goNativeStringOperands([node.expression?.expression], [name], ["string"])) {
-      const native = this.goNativeStringCall(`strings.ToUpper(${name})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `ToUpper(${name})`;
   }
   printToLowerCaseCall(node, identation, name = void 0) {
-    if (this.goNativeStringOperands([node.expression?.expression], [name], ["string"])) {
-      const native = this.goNativeStringCall(`strings.ToLower(${name})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `ToLower(${name})`;
   }
   printShiftCall(node, identation, name = void 0) {
@@ -7884,21 +7764,9 @@ ${this.getIden(identation)}`;
     return `Slice(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    if (parsedArg !== void 0 && parsedArg2 !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ["string", "string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Replace(${name}, ${parsedArg}, ${parsedArg2}, 1)`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    if (parsedArg !== void 0 && parsedArg2 !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ["string", "string", "string"])) {
-      const native = this.goNativeStringCall(`strings.ReplaceAll(${name}, ${parsedArg}, ${parsedArg2})`);
-      if (native !== void 0) {
-        return native;
-      }
-    }
     return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
