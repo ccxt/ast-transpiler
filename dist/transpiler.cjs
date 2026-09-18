@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -11083,8 +11083,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
   // When the checker proves both operands are numbers (`Int`/`Float` at
-  // runtime) or that one is always a string and the other a string or the
-  // null the helper stringifies the same way, the helper call is replaced by
+  // runtime) or, for `+`, both are strings, the helper call is replaced by
   // the arithmetic itself: a 4-arm `Value` match reproducing the helper's
   // Int/Float dispatch, `as_f64()` division, or a `format!` string concat.
   // Anything the checker cannot prove keeps the runtime helper.
@@ -11112,29 +11111,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return false;
   }
-  isStringOrNullishType(type) {
-    if (!type) {
-      return false;
-    }
-    if (_RustTranspiler.RUST_CONCAT_SAFE_FLAGS.has(type.flags)) {
-      return true;
-    }
-    if (type.flags === _typescript2.default.TypeFlags.Union && Array.isArray(type.types)) {
-      return type.types.length > 0 && type.types.every((member) => this.isStringOrNullishType(member));
-    }
-    return false;
-  }
-  // `Str` (`string | undefined`) operands are safe to concatenate natively
-  // only against an operand the checker proves is ALWAYS a string: the
-  // helper then takes its string branch, whose result `format!` reproduces.
-  // Without that anchor (`Str + Str`) the helper's both-null case returns
-  // `Value::Null` where `format!` would build "nullnull".
-  isNativeStringConcatPair(leftType, rightType) {
-    if (!this.isStringOrNullishType(leftType) || !this.isStringOrNullishType(rightType)) {
-      return false;
-    }
-    return this.isStringLikeType(leftType) || this.isStringLikeType(rightType);
-  }
   // `(+|-)` with the left operand of `+=`/`-=`: assignment plus the same
   // native emission as the plain binary form.
   printNativeAssignmentArithmetic(op, left, right, leftText, rightText) {
@@ -11146,7 +11122,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     } catch (e) {
       return void 0;
     }
-    if (op === SyntaxKind4.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
+    if (op === SyntaxKind4.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
       return `${leftText} = ${this.printNativeStringConcat(leftText, rightText)}`;
     }
     if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -11166,7 +11142,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     } catch (e) {
       return void 0;
     }
-    if (op === SyntaxKind4.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
+    if (op === SyntaxKind4.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
       return this.printNativeStringConcat(leftText, rightText);
     }
     if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -12431,17 +12407,6 @@ _RustTranspiler.PAYLOAD_ACCESSORS = {
   "number": "as_f64",
   "boolean": "as_bool"
 };
-// Types whose runtime value the `add` helper stringifies exactly as
-// `format!` does: a string, or the `undefined`/`null` the printer boxes as
-// `Value::Null` (helper `stringify_simple(Value::Null)` is "null", and so
-// is `Display`). `any` is deliberately absent — the helper's Precise-dict
-// branch has no `Display` equivalent.
-_RustTranspiler.RUST_CONCAT_SAFE_FLAGS = /* @__PURE__ */ new Set([
-  _typescript2.default.TypeFlags.String,
-  _typescript2.default.TypeFlags.StringLiteral,
-  _typescript2.default.TypeFlags.Undefined,
-  _typescript2.default.TypeFlags.Null
-]);
 // ── native-typed locals ───────────────────────────────────────────────────
 //
 // A local is declared `bool` (instead of `Value`) when its initializer is
