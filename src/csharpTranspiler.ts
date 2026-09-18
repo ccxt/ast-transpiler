@@ -182,6 +182,7 @@ const CSHARP_NATIVE_COMPARISON_TOKENS = {
 // that static type, so its own members (`Count`, `ContainsKey`) replace the helper
 const CSHARP_NATIVE_FIELDS: { [name: string]: string } = {
     'options': 'ConcurrentDictionary<string, object>',
+    'has': 'Dictionary<string, object>',
     'features': 'Dictionary<string, object>',
     'httpExceptions': 'Dictionary<string, object>',
     'markets_by_id': 'IDictionary<string, object>',
@@ -197,6 +198,11 @@ const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks',
 
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
+
+// C# types isEqual's own branches can compare an element with: the box an element read
+// yields is unboxed with `as`, which answers null for every other box
+const CSHARP_SCALAR_ELEMENT_BOOL = 1;
+const CSHARP_SCALAR_ELEMENT_STRING = 2;
 
 export class CSharpTranspiler extends BaseTranspiler {
 
@@ -1188,6 +1194,92 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `${receiver.text}.Count`;
     }
 
+    // the C# type of a dictionary element read is `object`: isEqual compares the boxed
+    // element, which `as` + the operator reproduce exactly (any other box reads as null,
+    // where isEqual also answers false)
+    csharpNativeElementLiteralEquality(left, right, leftText: string, rightText: string, isEquality: boolean): string | undefined {
+        let element;
+        let literal;
+        if (this.csharpStringKeyedElementAccess(left)) {
+            element = left;
+            literal = right;
+        } else if (this.csharpStringKeyedElementAccess(right)) {
+            element = right;
+            literal = left;
+        } else {
+            return undefined;
+        }
+        const isBoolLiteral = (literal.kind === ts.SyntaxKind.TrueKeyword) || (literal.kind === ts.SyntaxKind.FalseKeyword);
+        const isStringLiteral = ts.isStringLiteralLike(literal);
+        if (!isBoolLiteral && !isStringLiteral) {
+            return undefined;
+        }
+        if (this.csharpDictionaryReceiverType(element.expression) === undefined) {
+            return undefined;
+        }
+        const wanted = isBoolLiteral ? CSHARP_SCALAR_ELEMENT_BOOL : CSHARP_SCALAR_ELEMENT_STRING;
+        if ((this.csharpScalarElementKinds(element) & wanted) === 0) {
+            return undefined;
+        }
+        const token = isEquality ? '==' : '!=';
+        if (isStringLiteral && this.csharpNumericStringLiteral(literal)) {
+            return undefined; // isEqual's double/decimal branches coerce a numeric string
+        }
+        const cast = isBoolLiteral ? 'bool?' : 'string';
+        const elementIsLeft = (element === left);
+        const castElement = `(${elementIsLeft ? leftText : rightText} as ${cast})`;
+        const otherText = elementIsLeft ? rightText : leftText;
+        return elementIsLeft ? `(${castElement} ${token} ${otherText})` : `(${otherText} ${token} ${castElement})`;
+    }
+
+    // `x["k"]` — the element read of a dictionary key this printer prints as getValue(x, "k")
+    csharpStringKeyedElementAccess(node): boolean {
+        return (node?.kind === ts.SyntaxKind.ElementAccessExpression) && ts.isStringLiteralLike(node.argumentExpression);
+    }
+
+    // isEqual compares a boxed number with a numeric string by converting both, which the
+    // string cast of the native form cannot reproduce: a numeric-looking literal stays on
+    // the helper (the element proof says the box is a string, and a number box would differ)
+    csharpNumericStringLiteral(node): boolean {
+        const text = String(node.text).trim();
+        return (text !== '') && !isNaN(Number(text));
+    }
+
+    // the declared C# type of a dictionary receiver: a local the embedding build layer retypes
+    // (csharpExpressionTypeResolver) or a hand-written BaseExchange field; undefined keeps the
+    // runtime helper, since the printer cannot name the box the key lives in
+    csharpDictionaryReceiverType(node): string | undefined {
+        const native = this.csharpNativeReceiver(node);
+        const declared = (native !== undefined) ? native.type : this.csharpExpressionTypeOf(node);
+        if ((declared === undefined) || (declared.indexOf('Dictionary<') < 0)) {
+            return undefined;
+        }
+        return declared;
+    }
+
+    // the scalar branches isEqual can compare an element with: every member of the element's
+    // TypeScript type must be a boolean, a string or undefined, or the helper stays
+    csharpScalarElementKinds(node): number {
+        try {
+            const type = this.getChecker().getTypeAtLocation(node);
+            const members = ((type.flags & ts.TypeFlags.Union) !== 0) ? ((type as any).types ?? []) : [ type ];
+            let kinds = 0;
+            for (const member of members) {
+                const flags = member.flags;
+                if (flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
+                    kinds |= CSHARP_SCALAR_ELEMENT_BOOL;
+                } else if (flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral | ts.TypeFlags.TemplateLiteral)) {
+                    kinds |= CSHARP_SCALAR_ELEMENT_STRING;
+                } else if (!(flags & ts.TypeFlags.Undefined)) {
+                    return 0;
+                }
+            }
+            return kinds;
+        } catch (e) {
+            return 0; // in-memory program without a checker
+        }
+    }
+
     printCustomBinaryExpressionIfAny(node, identation) {
         const left = node.left;
         const right = node.right;
@@ -1264,6 +1356,10 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
                 if (inlined !== undefined) {
                     return inlined;
+                }
+                const nativeElement = this.csharpNativeElementLiteralEquality(left, right, leftText, rightText, isEquality);
+                if (nativeElement !== undefined) {
+                    return nativeElement;
                 }
             }
 

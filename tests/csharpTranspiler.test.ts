@@ -1909,3 +1909,110 @@ describe('csharp helper removal: own bool-returning calls type their locals', ()
         expect(output).not.toContain('isTrue');
     });
 });
+
+describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', () => {
+    // the receiver's C# declaration comes from the embedding build layer (the resolver the
+    // numeric-comparison installer sets), the element's type from the checker
+    const withReceiverTypes = (types, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('a bool-proven dictionary element compared with a bool literal', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }) {\n" +
+        "    const isLinear = market['linear'] === true;\n" +
+        "    const notInverse = market['inverse'] !== false;\n" +
+        "    return [isLinear, notInverse];\n" +
+        "}");
+        expect(output).toContain('bool isLinear = ((getValue(market, "linear") as bool?) == true);');
+        expect(output).toContain('bool notInverse = ((getValue(market, "inverse") as bool?) != false);');
+        expect(output).not.toContain('isEqual(getValue(market, "linear"), true)');
+        expect(output).not.toContain('isEqual(getValue(market, "inverse"), false)');
+    });
+    test('a string-proven dictionary element compared with a string literal', () => {
+        const output = withReceiverTypes({ entry: 'Dictionary<string, object>' },
+        "function f (entry: { [key: string]: string | undefined }) {\n" +
+        "    const isPrimary = entry['default'] === 'primary';\n" +
+        "    return isPrimary;\n" +
+        "}");
+        expect(output).toContain('bool isPrimary = ((getValue(entry, "default") as string) == "primary");');
+        expect(output).not.toContain('isEqual(getValue(entry, "default"), "primary")');
+    });
+    test('the hand-written has field keeps the emulated string member comparable', () => {
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    has: { [key: string]: boolean | 'emulated' | undefined } = {};\n" +
+        "    main() {\n" +
+        "        const enabled = this.has['fetchTrades'] !== false;\n" +
+        "        const emulated = this.has['fetchCurrencies'] === 'emulated';\n" +
+        "        return [enabled, emulated];\n" +
+        "    }\n" +
+        "}").content;
+        // a hard (bool?) cast would throw on the 'emulated' box, `as` reads it as null, where
+        // isEqual answers false for the bool branch and true only for the string one
+        expect(output).toContain('bool enabled = ((getValue(this.has, "fetchTrades") as bool?) != false);');
+        expect(output).toContain('bool emulated = ((getValue(this.has, "fetchCurrencies") as string) == "emulated");');
+    });
+    test('an untyped dictionary element keeps isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: any }) {\n" +
+        "    const isLinear = market['linear'] === true;\n" +
+        "    return isLinear;\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(market, "linear"), true)');
+    });
+    test('an unproven receiver keeps isEqual', () => {
+        const output = transpiler.transpileCSharp(
+        "function f (market: { [key: string]: boolean | undefined }) {\n" +
+        "    const isLinear = market['linear'] === true;\n" +
+        "    return isLinear;\n" +
+        "}").content;
+        expect(output).toContain('isEqual(getValue(market, "linear"), true)');
+    });
+    test('a literal of the other family keeps isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }) {\n" +
+        "    const isLinear = market['linear'] === 'true';\n" +
+        "    return isLinear;\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(market, "linear"), "true")');
+    });
+    test('an identifier, a null and a numeric literal keep isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }, flag) {\n" +
+        "    const a = market['linear'] === flag;\n" +
+        "    const b = market['linear'] === undefined;\n" +
+        "    const c = market['linear'] === 1;\n" +
+        "    return [a, b, c];\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(market, "linear"), flag)');
+        expect(output).toContain('isEqual(getValue(market, "linear"), null)');
+        expect(output).toContain('isEqual(getValue(market, "linear"), 1)');
+    });
+    test('a non-literal key keeps isEqual', () => {
+        const output = withReceiverTypes({ market: 'Dictionary<string, object>' },
+        "function f (market: { [key: string]: boolean | undefined }, key: string) {\n" +
+        "    const isLinear = market[key] === true;\n" +
+        "    const first = market[0] === true;\n" +
+        "    return [isLinear, first];\n" +
+        "}");
+        expect(output).toContain('isEqual(getValue(market, key), true)');
+        expect(output).toContain('isEqual(getValue(market, 0), true)');
+    });
+    test('a numeric-looking string literal keeps isEqual', () => {
+        const output = withReceiverTypes({ code: 'Dictionary<string, object>' },
+        "function f (code: { [key: string]: string | undefined }) {\n" +
+        "    const one = code['value'] === '1';\n" +
+        "    const primary = code['value'] === 'primary';\n" +
+        "    return [one, primary];\n" +
+        "}");
+        // isEqual converts a boxed number and a numeric string on its double/decimal
+        // branches, which the string cast cannot reproduce
+        expect(output).toContain('isEqual(getValue(code, "value"), "1")');
+        expect(output).toContain('bool primary = ((getValue(code, "value") as string) == "primary");');
+    });
+});
