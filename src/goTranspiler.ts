@@ -3714,7 +3714,7 @@ ${this.getIden(identation)}${returnStatement}`;
         let returnRandName = name;
         parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
         // a map/slice index or a GetValue box is not addressable: copy it into a local first
-        if (name?.startsWith('GetValue') || /[\]\)]$/.test(name ?? '')) {
+        if (name?.startsWith('GetValue') || /[\])]$/.test(name ?? '')) {
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
             returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
         }

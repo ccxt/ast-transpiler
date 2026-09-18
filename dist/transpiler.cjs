@@ -3225,7 +3225,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // object the read evaluates unprovable, so the read falls back to the helper
   csharpReceiverIsRewritten(func, expression) {
     const text = expression.getText();
-    const name = _typescript2.default.isIdentifier(expression) ? text : text.split(/[.\[]/)[1];
+    const name = _typescript2.default.isIdentifier(expression) ? text : text.split(/[.[]/)[1];
     if (name === void 0) {
       return true;
     }
@@ -8082,7 +8082,7 @@ ${this.getIden(identation)}${returnStatement}`;
     let returnValue = "";
     let returnRandName = name;
     parsedArg = this.goPrintCallArgument(_optionalChain([node, 'access', _373 => _373.arguments, 'optionalAccess', _374 => _374[0]]), parsedArg);
-    if (_optionalChain([name, 'optionalAccess', _375 => _375.startsWith, 'call', _376 => _376("GetValue")]) || /[\]\)]$/.test(_nullishCoalesce(name, () => ( "")))) {
+    if (_optionalChain([name, 'optionalAccess', _375 => _375.startsWith, 'call', _376 => _376("GetValue")]) || /[\])]$/.test(_nullishCoalesce(name, () => ( "")))) {
       returnRandName = "retRes" + this.getLineBasedSuffix(node);
       returnValue = `${returnRandName} := ${name}
 ${this.getIden(identation)}`;
