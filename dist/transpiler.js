@@ -8396,20 +8396,6 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
-var JAVA_LIST_BACKED_TS_CLASSES = /* @__PURE__ */ new Set([
-  "ArrayCache",
-  "ArrayCacheByTimestamp",
-  "ArrayCacheBySymbolById",
-  "ArrayCacheByOutcomeById",
-  "ArrayCacheBySymbolBySide",
-  "OrderBookSide",
-  "IndexedOrderBookSide",
-  "Asks",
-  "Bids",
-  "IndexedAsks",
-  "IndexedBids",
-  "IOrderBookSide"
-]);
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -9015,61 +9001,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return type.target?.symbol?.escapedName === "ReadonlyArray";
   }
-  // `.length` is a Java int for exactly these receivers; every other receiver keeps
-  // Helpers.getArrayLength, whose result type is not proven
+  // `.length` is a Java int for exactly these two receivers; every other
+  // receiver keeps Helpers.getArrayLength, whose result type is not proven
   javaLengthKind(expression) {
     const type = this.getChecker().getTypeAtLocation(expression);
-    if (this.isJavaStringType(type)) {
+    if (this.isStringType(type.flags)) {
       return "String";
     }
-    if (this.isJavaListValueType(type) && !this.isVarargsArrayReference(expression)) {
+    if (this.isJavaListType(type) && !this.isVarargsArrayReference(expression)) {
       return "List";
     }
-    if (ts6.isIdentifier(expression)) {
-      if (this.isJavaNullishUnion(type, (member) => this.isStringType(member.flags))) {
-        return "StringOrNull";
-      }
-      if (this.isJavaNullishUnion(type, (member) => this.isJavaListValueType(member)) && !this.isVarargsArrayReference(expression)) {
-        return "ListOrNull";
-      }
-    }
     return void 0;
-  }
-  // every union member is a List-printing type (TS array/tuple/ReadonlyArray, or an
-  // Array-derived class whose hand-written java counterpart is an ArrayList)
-  isJavaListValueType(type) {
-    if (!type) {
-      return false;
-    }
-    if ((type.flags & ts6.TypeFlags.Union) !== 0) {
-      return type.types.length > 0 && type.types.every((member) => this.isJavaListValueType(member));
-    }
-    return this.isJavaListType(type) || this.isJavaListBackedClassType(type);
-  }
-  // TS class/interface whose java counterpart extends java.util.ArrayList<Object>:
-  // the ws caches (ws/ArrayCache.java) and the order-book sides (ws/OrderBookSide.java)
-  isJavaListBackedClassType(type) {
-    if (!type || (type.flags & ts6.TypeFlags.Object) === 0) {
-      return false;
-    }
-    let current = type.target ?? type;
-    for (let depth = 0; current && depth < 8; depth++) {
-      const name = current.symbol?.escapedName;
-      if (name !== void 0 && JAVA_LIST_BACKED_TS_CLASSES.has(name)) {
-        return true;
-      }
-      const bases = current.getBaseTypes?.() ?? [];
-      current = bases.length > 0 ? bases[0].target ?? bases[0] : void 0;
-    }
-    return false;
-  }
-  // union of one accepted member family plus null/undefined: the emitted guard is the
-  // helper's answer for the nullish case and the native read otherwise
-  isJavaNullishUnion(type, isMember) {
-    if (!type || (type.flags & ts6.TypeFlags.Union) === 0 || type.types.length === 0) {
-      return false;
-    }
-    return type.types.every((member) => isMember(member) || (member.flags & (ts6.TypeFlags.Undefined | ts6.TypeFlags.Null)) !== 0);
   }
   // shared by printLengthProperty and transformPropertyAcessExpressionIfNeeded
   printJavaLength(expression, leftSide) {
@@ -9079,12 +9021,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (kind === "List") {
       return `((java.util.List<?>)${leftSide}).size()`;
-    }
-    if (kind === "StringOrNull") {
-      return `(${leftSide} == null ? 0 : ((String)${leftSide}).length())`;
-    }
-    if (kind === "ListOrNull") {
-      return `(${leftSide} == null ? 0 : ((java.util.List<?>)${leftSide}).size())`;
     }
     return `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
   }
