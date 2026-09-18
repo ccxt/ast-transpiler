@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8396,14 +8396,6 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
-var JAVA_PRECISE_BOOLEAN_STATICS = /* @__PURE__ */ new Set([
-  "stringEq",
-  "stringEquals",
-  "stringGt",
-  "stringGe",
-  "stringLt",
-  "stringLe"
-]);
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -10454,34 +10446,14 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return this.javaBooleanOperators.includes(node.operatorToken.kind);
   }
-  // `Precise.<relational>(a, b)` where the callee resolves to a static of the base `Precise`
-  // class: the hand-written Precise.java declares those statics `public static boolean`, so the
-  // printed call is a Java primitive boolean; the printed receiver name alone is no proof (a
-  // shadowing local or another class prints the same text), so the resolution is checked too
-  javaPreciseBooleanCall(node) {
-    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression) {
-      return this.javaPreciseBooleanCall(node.expression);
-    }
-    if (node.kind === ts6.SyntaxKind.PrefixUnaryExpression) {
-      return node.operator === ts6.SyntaxKind.ExclamationToken && this.javaPreciseBooleanCall(node.operand);
-    }
-    if (node.kind !== ts6.SyntaxKind.CallExpression || node.expression.kind !== ts6.SyntaxKind.PropertyAccessExpression || node.expression.expression.kind !== ts6.SyntaxKind.Identifier || node.expression.expression.escapedText !== "Precise" || !JAVA_PRECISE_BOOLEAN_STATICS.has(node.expression.name.escapedText)) {
-      return false;
-    }
-    const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
-    if (declaration === void 0 || declaration.kind !== ts6.SyntaxKind.MethodDeclaration || declaration.parent?.kind !== ts6.SyntaxKind.ClassDeclaration || declaration.parent.name?.escapedText !== "Precise" || !declaration.modifiers?.some((modifier) => modifier.kind === ts6.SyntaxKind.StaticKeyword)) {
-      return false;
-    }
-    return (this.getChecker().getTypeAtLocation(node).flags & ts6.TypeFlags.Boolean) !== 0;
-  }
   // the printer already emits these conditions as Java `boolean` (the comparison helpers,
   // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
   // Helpers.isTrue would only re-test a value the checker proves is boolean
   javaConditionPrintsBoolean(node) {
-    if (this.javaBooleanCondition(node)) {
-      return (this.getChecker().getTypeAtLocation(node).flags & ts6.TypeFlags.Boolean) !== 0;
+    if (!this.javaBooleanCondition(node)) {
+      return false;
     }
-    return this.javaPreciseBooleanCall(node);
+    return (this.getChecker().getTypeAtLocation(node).flags & ts6.TypeFlags.Boolean) !== 0;
   }
   printCondition(node, identation) {
     if (this.javaConditionPrintsBoolean(node)) {
