@@ -1111,44 +1111,6 @@ declare class JavaTranspiler extends BaseTranspiler {
     private allBranchesTerminate;
 }
 
-/** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
- *  value provably holds a `Value::Dict` at every use. */
-type RustDeclaredLocalKind = 'dict';
-/** One `let x: Value = <dict-proven initialiser>` declaration. `kind` is only
- *  answered by the resolver when `alwaysDict && stable`. */
-interface RustDeclaredDictLocalEntry {
-    kind: RustDeclaredLocalKind;
-    name: string;
-    /** printed callee of the initialiser: a `safe_dict*` name, or `value_map`. */
-    source: string;
-    /** the `safe_dict*` `optionalArgs` default is itself Dict-proven, so the
-     *  helper returns a Dict on every path (it returns that default when the
-     *  key does not hold one). */
-    alwaysDict: boolean;
-    /** no later write in the enclosing function can change the kind (D2). */
-    stable: boolean;
-    /** use census: element-access receiver / kind-preserving mutator / anything else. */
-    uses: {
-        elementAccess: number;
-        mutHelper: number;
-        other: number;
-    };
-    declaration: ts.VariableDeclaration;
-    start: number;
-}
-/** Vocabulary of the declared-Dict locals table (see
- *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
-declare const RUST_DECLARED_DICT_LOCALS: {
-    /** value the resolver answers for a proven Dict local */
-    DICT: RustDeclaredLocalKind;
-    /** printed `self.<callee>` -> index of its `optionalArgs` parameter.
-     *  `safe_dict*` returns `optional_args[0]` whenever the key holds a non-Dict. */
-    SAFE_CALLEES: Record<string, number>;
-    /** `&mut` receivers whose writes land inside the container, so a Dict local
-     *  stays a Dict (`add_element_to_object` / `append_to_array` no-op on a
-     *  non-container, `set_value` / `remove` write a key). */
-    KIND_PRESERVING_MUTATORS: Set<string>;
-};
 declare class RustTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     methodSignatures: Record<string, {
@@ -1206,62 +1168,6 @@ declare class RustTranspiler extends BaseTranspiler {
     rustIdentifierUseIsCondition(node: any): boolean;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
     getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
-    private declaredDictLocalsCache;
-    /** All `let x: Value = <dict-proven initialiser>` declarations of the current
-     *  source file, keyed by local name in declaration order. */
-    rustDeclaredDictLocals(): Map<string, RustDeclaredDictLocalEntry[]>;
-    /** Printer hook for the helper-removal units: the proven kind of a declared
-     *  local, or undefined when the local is not proven Dict at every use.
-     *  Accepts the receiver node of the helper call (identifier, `x['k']` chain,
-     *  `this.x` chain) or the declaration itself. */
-    rustDeclaredLocalTypeResolver(node: ts.Node): RustDeclaredLocalKind | undefined;
-    /** The table entry a use site resolves to (the declaration whose binding the
-     *  use refers to, proven), or undefined. */
-    rustDeclaredLocalEntry(node: ts.Node): RustDeclaredDictLocalEntry | undefined;
-    /** The identifier at the head of a place (`x`, `x['k']`, `this.x` is not a
-     *  local) — the node the resolver matches against the table. */
-    private rustDeclaredLocalIdentifier;
-    /** Binding symbol of an identifier, or undefined when the checker cannot
-     *  answer (ByContent probes without a class context, for instance). */
-    private rustSymbolOf;
-    /** True when this identifier is a use of the given declaration's binding.
-     *  Without a checker answer the callers stay conservative (reject). */
-    private rustIdentifierRefersToDeclaration;
-    /** Census of the current source file's table, for reports and tests. */
-    rustDeclaredDictLocalCensus(): {
-        declarators: number;
-        dict: number;
-        alwaysDict: number;
-        kindUnstable: number;
-        retypeEligible: number;
-    };
-    private collectRustDeclaredDictLocals;
-    /** The Dict-proven initialiser shape of a declaration, or undefined. */
-    private rustDictInitializerInfo;
-    /** Printed `safe_dict*` callee name of `self.<name>(..)`, or undefined. */
-    private rustSafeDictCallee;
-    /** True when the expression can only be a Dict at run time: an object
-     *  literal, a `safe_dict*` call with a Dict-proven default, an element of a
-     *  one-element literal default, or an already-proven local. */
-    private rustDictProvenExpression;
-    /** D2 scan over the enclosing function: an assignment of a non-Dict-proven
-     *  value would let the kind change. Every other write path the printer emits
-     *  for a local is kind-preserving (`x['k'] = v` -> `add_element_to_object`,
-     *  `x.push(v)` -> `append_to_array`, `delete x[k]` -> `remove`, nested
-     *  `x['a']['b'] = v` -> `get_value_mut`/`set_value`). A *different* binding of
-     *  the same name (sibling block, parameter) is not this local and does not
-     *  count; when the checker cannot separate the two bindings the scan stays
-     *  conservative and rejects. */
-    private rustDictLocalWriteScan;
-    /** True when this assignment target writes the local ITSELF (`x = ..`,
-     *  `[x, y] = ..`, `({x} = ..)`), as opposed to a write *into* it
-     *  (`x['k'] = ..`, kind-preserving). */
-    private rustAssignmentWritesWholeLocal;
-    /** One use of a dict-proven local: an element-access chain (`x['k']`, also
-     *  the `x['k'] = v` write), a kind-preserving mutator (`x.push(v)`,
-     *  `delete x[k]`), or something that would need the local to still be a
-     *  `Value`. */
-    private rustDictLocalClassifyUse;
     printPropertyDeclaration(node: any, identation: any): string;
     getStructFields(node: any): Array<{
         name: string;
@@ -1518,4 +1424,4 @@ declare class TranspileProgramBatch {
     transpileCppByPath(filePath: string): ITranspiledFile;
 }
 
-export { RUST_DECLARED_DICT_LOCALS, type RustDeclaredDictLocalEntry, TranspileProgramBatch, Transpiler, alignGoTrailingComments, Transpiler as default };
+export { TranspileProgramBatch, Transpiler, alignGoTrailingComments, Transpiler as default };
