@@ -820,7 +820,6 @@ declare class GoTranspiler extends BaseTranspiler {
     goSkipQuoted(text: string, start: number): number;
     printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
-    goFileStdlibImports: Set<string>;
     printSourceFileStatements(node: any, identation: any): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
@@ -871,9 +870,6 @@ declare class GoTranspiler extends BaseTranspiler {
     goPrintCallArgument(argument: any, printedText: string | undefined): string | undefined;
     printArrayPushCall(node: CallExpression, identation: number, name?: string | undefined, parsedArg?: string | undefined): string;
     printIncludesCall(node: any, identation: any, name?: any, parsedArg?: any): string;
-    goIndexOfOperandType(node: any, printedText: string): string | undefined;
-    goFileKeepsFileLevelImports(): boolean;
-    goNativeIndexOf(node: any, name: any, parsedArg: any): string | undefined;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
