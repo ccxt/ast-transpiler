@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -4348,10 +4348,142 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return `assert(${parsedArgs})`;
   }
   printSliceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
+    const nativeCall = this.csharpNativeSliceCall(node, name);
+    if (nativeCall !== void 0) {
+      return nativeCall;
+    }
     if (parsedArg2 === void 0) {
       parsedArg2 = "null";
     }
     return `slice(${name}, ${parsedArg}, ${parsedArg2})`;
+  }
+  // `x.slice (a, b)` -> Substring / GetRange when the checker proves x is a C# string (or the
+  // printer declared it a `List<object>`) and every bound is an integer literal: JS clamps a
+  // negative / overflowing bound into [0, length] where the C# method throws, so the literals
+  // are clamped with Math.Min / Math.Max. Everything unproven keeps the runtime helper.
+  csharpNativeSliceCall(node, name) {
+    const args = node?.arguments ?? [];
+    if (args.length < 1 || args.length > 2) {
+      return void 0;
+    }
+    const start = this.csharpSliceLiteralBound(args[0]);
+    if (start === void 0) {
+      return void 0;
+    }
+    const hasEnd = args.length === 2;
+    const end = hasEnd ? this.csharpSliceLiteralBound(args[1]) : void 0;
+    if (hasEnd && end === void 0) {
+      return void 0;
+    }
+    const receiver = ts4.isPropertyAccessExpression(node?.expression) ? node.expression.expression : void 0;
+    if (!this.csharpSliceReceiverIsSideEffectFree(receiver)) {
+      return void 0;
+    }
+    const kind = this.csharpSliceReceiverKind(receiver);
+    if (kind === void 0) {
+      return void 0;
+    }
+    const isString = kind === "string";
+    const cast = isString && name.startsWith("((string)") ? name : `((${isString ? "string" : "List<object>"})${name})`;
+    const length = `${cast}.${isString ? "Length" : "Count"}`;
+    const from = this.csharpSliceBoundExpression(start, length);
+    const guard = `(${this.csharpNullComparison(name, true)} ? null : `;
+    const method = isString ? "Substring" : "GetRange";
+    if (!hasEnd) {
+      const open = isString ? `Substring(${from})` : `GetRange(${from}, ${from === "0" ? length : `${length} - ${from}`})`;
+      return `${guard}${cast}.${open})`;
+    }
+    const to = this.csharpSliceBoundExpression(end, length);
+    const ordered = start === 0 || start >= 0 && end >= 0 && start <= end || start < 0 && end < 0 && start <= end;
+    let count;
+    if (from === to) {
+      count = "0";
+    } else if (from === "0") {
+      count = to;
+    } else {
+      count = ordered ? `${to} - ${from}` : `Math.Max(${to} - ${from}, 0)`;
+    }
+    return `${guard}${cast}.${method}(${from}, ${count}))`;
+  }
+  // Integer value of a slice bound that is an integer literal (`18`, `-64`); anything
+  // else (expression, float, exponent, out of int range) keeps the helper — the bounds
+  // are clamped with the integer Math.Min / Math.Max of the native form.
+  csharpSliceLiteralBound(node) {
+    if (node === void 0) {
+      return void 0;
+    }
+    if (ts4.isNumericLiteral(node)) {
+      const text = String(node.text);
+      if (text.indexOf(".") !== -1 || text.indexOf("e") !== -1 || text.indexOf("E") !== -1) {
+        return void 0;
+      }
+      const value = Number(text);
+      return value <= 2147483647 ? value : void 0;
+    }
+    if (ts4.isPrefixUnaryExpression(node) && node.operator === ts4.SyntaxKind.MinusToken) {
+      const inner = this.csharpSliceLiteralBound(node.operand);
+      return inner === void 0 ? void 0 : -inner;
+    }
+    return void 0;
+  }
+  // JS slice clamps a literal bound into [0, length]: a non-negative bound is min
+  // (bound, length), a negative one counts from the end (max (length - |bound|, 0)).
+  // `0` stays `0` because the length of a string / list is never negative.
+  csharpSliceBoundExpression(value, length) {
+    if (value === 0) {
+      return "0";
+    }
+    return value > 0 ? `Math.Min(${value}, ${length})` : `Math.Max(${length} - ${-value}, 0)`;
+  }
+  // the receiver of a native slice: a `List<object>` this printer / the embedding build layer
+  // declared (the only receiver carrying GetRange), or a string the CHECKER proves. The string
+  // proof accepts `string`, a string literal and a union of those with null / undefined (`Str`
+  // is `string | undefined` in ccxt); `any`, Dict and every other type keep the helper.
+  csharpSliceReceiverKind(expression) {
+    const declared = (ts4.isIdentifier(expression) ? this.csharpTypedLocalType(expression) : void 0) ?? this.csharpExpressionTypeOf(expression);
+    if (declared === "List<object>") {
+      return "list";
+    }
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(expression);
+    } catch (e) {
+      return void 0;
+    }
+    return this.csharpSliceStringType(type) ? "string" : void 0;
+  }
+  // the checker's string view of a slice receiver: a string type, or a union of string
+  // members and nullish ones only. `boolean | string`, `any` and every unproven shape fail
+  csharpSliceStringType(type) {
+    if (this.isStringType(type?.flags)) {
+      return true;
+    }
+    if (type?.flags !== ts4.TypeFlags.Union) {
+      return false;
+    }
+    const members = type.types ?? [];
+    return members.length > 0 && members.every((member) => this.isStringType(member.flags) || this.csharpSliceNullishType(member.flags));
+  }
+  csharpSliceNullishType(flags) {
+    return flags === ts4.TypeFlags.Undefined || flags === ts4.TypeFlags.Null;
+  }
+  // True for receivers that read a value without calling anything: `x`, `x.y`, `this.x`,
+  // `(x as string)` and parenthesised forms of those. Guards the repeated receiver read —
+  // the clamp reads `Length` / `Count` and the call itself reads the receiver again.
+  csharpSliceReceiverIsSideEffectFree(expression) {
+    if (expression === void 0) {
+      return false;
+    }
+    if (ts4.isParenthesizedExpression(expression) || ts4.isAsExpression(expression) || ts4.isTypeAssertionExpression(expression)) {
+      return this.csharpSliceReceiverIsSideEffectFree(expression.expression);
+    }
+    if (ts4.isIdentifier(expression) || expression.kind === ts4.SyntaxKind.ThisKeyword) {
+      return true;
+    }
+    if (ts4.isPropertyAccessExpression(expression)) {
+      return this.csharpSliceReceiverIsSideEffectFree(expression.expression);
+    }
+    return false;
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     return `((string)${name}).Replace((string)${parsedArg}, (string)${parsedArg2})`;
