@@ -876,6 +876,34 @@ export class RustTranspiler extends BaseTranspiler {
         'is_instance', 'starts_with', 'ends_with', 'in_op', 'contains',
     ]);
 
+    // Hand-written Rust fns outside `runtime.rs` whose signature is `-> bool`,
+    // keyed by the TS callee name they are transpiled from (verified in
+    // `rust/tests/src/tests_support.rs`). A call to one is already a Rust bool,
+    // so the condition printer's `is_true(&…)` wrapper is the identity
+    // (`IsTruthy for bool`) and is dropped.
+    private static readonly RUST_BOOL_RESULT_CALLEES = new Set([
+        'tickerExceptionNeedsOhlcv',
+    ]);
+
+    // Call to a hand-written `-> bool` fn: the checker must agree the TS call
+    // is boolean-typed and the callee must be in the verified table above.
+    rustCallPrintsBool(node): boolean {
+        if (node?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee: any = node.expression;
+        let name: string | undefined;
+        if (callee?.kind === SyntaxKind.Identifier) {
+            name = callee.escapedText;
+        } else if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
+            name = callee.name?.escapedText;
+        }
+        if (name === undefined || !(RustTranspiler as any).RUST_BOOL_RESULT_CALLEES.has(name)) {
+            return false;
+        }
+        return this.rustTypeIsBoolean(node);
+    }
+
     // `<box><expr>)` spanning the whole printed value → `<expr>`. The payload is
     // only reachable this way: the printer prints the value, not its parts.
     peelValueBox(printedValue: string, prefix: string): string | undefined {
@@ -1802,6 +1830,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.kind === SyntaxKind.PrefixUnaryExpression &&
       node.operator === SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation);
+        }
+        // A call to a hand-written `-> bool` fn is already a Rust bool.
+        if (this.rustCallPrintsBool(node)) {
+            return `${this.getIden(identation)}${this.printNode(node, 0)}`;
         }
         const expression = this.printNode(node, 0);
         return `${this.getIden(identation)}is_true(&${expression})`;
