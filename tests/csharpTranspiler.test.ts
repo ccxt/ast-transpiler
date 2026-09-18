@@ -1334,6 +1334,77 @@ describe('csharp typed body locals', () => {
         expect(arrayOutput).toContain('object x = new List<object>() {1, 2};');
         expect(arrayOutput).toContain('object y = ((List<object>)x)[0];');
     });
+    test('a market-row local the declared table proves is a dictionary prints the null-safe native read', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const market = this.extend(a, b);\n" +
+        "        const id = market['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('Dictionary<string, object> market = this.extend(a, b);');
+        // getValue yields null for a missing key, a C# indexer throws: the native read keeps the
+        // ContainsKey test
+        expect(output).toContain('object id = (market.ContainsKey("id") ? market["id"] : null);');
+        expect(output).not.toContain('getValue(market, "id")');
+    });
+    test('market-row reads outside the declared table keep getValue', () => {
+        // the receiver local is not typed: no proof, the helper stays
+        const untyped =
+        "class Exchange {\n" +
+        "    getMarketFromSymbols(symbols: any): any { return symbols; }\n" +
+        "    main(symbols: any) {\n" +
+        "        const market = this.getMarketFromSymbols(symbols);\n" +
+        "        const id = market['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const untypedOutput = transpiler.transpileCSharp(untyped).content;
+        expect(untypedOutput).toContain('object market = this.getMarketFromSymbols(symbols);');
+        expect(untypedOutput).toContain('object id = getValue(market, "id");');
+        // another receiver name belongs to its own family
+        const otherReceiver =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const response = this.extend(a, b);\n" +
+        "        const id = response['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const otherOutput = transpiler.transpileCSharp(otherReceiver).content;
+        expect(otherOutput).toContain('Dictionary<string, object> response = this.extend(a, b);');
+        expect(otherOutput).toContain('object id = getValue(response, "id");');
+        // a numeric key is a list index, not a market key
+        const numberKey =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const market = this.extend(a, b);\n" +
+        "        const first = market[0];\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "}";
+        expect(transpiler.transpileCSharp(numberKey).content).toContain('object first = getValue(market, 0);');
+    });
+    test('a market-row local later written a different type stays a box', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        let market = this.extend(a, b);\n" +
+        "        market = a;\n" +
+        "        const id = market['id'];\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object market = this.extend(a, b);');
+        expect(output).toContain('object id = getValue(market, "id");');
+    });
     test('reads the checker cannot prove present keep getValue', () => {
         // no guard at all
         const unproven =

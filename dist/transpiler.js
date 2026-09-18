@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2763,6 +2763,8 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
+var CSHARP_NATIVE_DICTIONARY_TYPES = ["Dictionary<string, object>", "IDictionary<string, object>"];
+var CSHARP_NATIVE_MARKET_RECEIVERS = ["market"];
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -2980,7 +2982,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // reads print getValue(recv, key), which yields null for a missing key; a C# indexer
   // throws instead, so the native form is only emitted where the source guarantees the key
   // is there: a dominating `key in recv` guard, or a receiver local built by a literal that
-  // declares the key. every other read keeps the helper.
+  // declares the key, or a receiver the declared table proves is a dictionary (the native
+  // form then keeps the helper's null-for-a-missing-key result). every other read keeps the
+  // helper.
   printElementAccessExpression(node, identation) {
     const native = this.csharpNativeElementAccess(node);
     if (native !== void 0) {
@@ -3011,7 +3015,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
     const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
     if (!builtFromLiteral && !guarded) {
-      return void 0;
+      return this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression);
     }
     const receiver = this.printNode(expression, 0);
     const printedKey = this.printNode(argumentExpression, 0);
@@ -3019,6 +3023,37 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return `((${this.ARRAY_KEYWORD})${receiver})[${printedKey}]`;
     }
     return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
+  }
+  // `getValue (market, "lit")` on a market-row local whose DECLARED C# type the table proves
+  // is a dictionary: the helper itself is a ContainsKey lookup, so the native form tests the
+  // key and hands back null when it is missing, exactly like the helper does. The declared
+  // table is the embedding build layer's proof (ccxt: build/csharp-local-types.js, which
+  // retypes these locals) and then the locals this printer typed itself; an untyped
+  // receiver keeps the helper.
+  csharpNativeDeclaredDictionaryRead(expression, argumentExpression) {
+    if (!ts4.isIdentifier(expression) || !ts4.isStringLiteralLike(argumentExpression)) {
+      return void 0;
+    }
+    if (CSHARP_NATIVE_MARKET_RECEIVERS.indexOf(expression.escapedText) < 0) {
+      return void 0;
+    }
+    if (this.csharpDeclaredDictionaryType(expression) === void 0) {
+      return void 0;
+    }
+    const receiver = this.printNode(expression, 0);
+    const printedKey = this.printNode(argumentExpression, 0);
+    return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+  }
+  // the concrete C# dictionary type the declared table names for a local read, or undefined
+  csharpDeclaredDictionaryType(node) {
+    if (node?.kind !== ts4.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const named = this.csharpTypedLocalType(node) ?? this.csharpExpressionTypeOf(node);
+    if (named === void 0 || CSHARP_NATIVE_DICTIONARY_TYPES.indexOf(named) < 0) {
+      return void 0;
+    }
+    return named;
   }
   // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
   // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`
