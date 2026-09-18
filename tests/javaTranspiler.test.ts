@@ -2538,6 +2538,75 @@ describe('java boolean conditions emitted without the Helpers.isTrue wrapper', (
     });
 });
 
+describe('java boolean-returning `this.<name>(...)` conditions drop the Helpers.isTrue wrapper', () => {
+    // the Java base declares these methods with a concrete boolean return (BaseExchange.java,
+    // above the transpile delimiter), so the condition wrapper only re-tests the boolean the
+    // printed call already produced
+    const inputOf = (body: string) => `
+class T {
+    inArray(elem: any, list: any): boolean { return true; }
+    isArray(a: any): boolean { return true; }
+    isEmpty(a: any): boolean { return true; }
+    valueIsDefined(value: any): value is Object { return true; }
+    isBinaryMessage(msg: any) { return msg instanceof Uint8Array; }
+    safeBool(d: any, k: any, defaultValue: boolean | undefined = undefined): boolean | undefined { return true; }
+    safeBool2(d: any, k1: any, k2: any, defaultValue: boolean | undefined = undefined): boolean | undefined { return true; }
+    other(x: any): any { return x; }
+    test(x: any, y: any): void {
+${body}
+    }
+}
+`;
+
+    const conditionOf = (body: string) => transpiler.transpileJava(inputOf(body)).content;
+
+    test('primitive-boolean base calls print bare', () => {
+        expect(conditionOf('if (this.inArray(x, [])) { return; }'))
+            .toContain('if (this.inArray(x, new java.util.ArrayList<Object>(java.util.Arrays.asList())))');
+        expect(conditionOf('if (this.isEmpty(x)) { return; }')).toContain('if (this.isEmpty(x))');
+        expect(conditionOf('if (this.isArray(x)) { return; }')).toContain('if (this.isArray(x))');
+        // a type predicate and an inferred return are both a plain boolean to the checker
+        expect(conditionOf('if (this.valueIsDefined(x)) { return; }')).toContain('if (this.valueIsDefined(x))');
+        expect(conditionOf('if (this.isBinaryMessage(x)) { return; }')).toContain('if (this.isBinaryMessage(x))');
+        expect(conditionOf('if (this.inArray(x, [])) { return; }')).not.toContain('Helpers.isTrue(this.');
+    });
+
+    test('negated, logical and value-context calls stay native', () => {
+        const negated = conditionOf('if (!this.isEmpty(x) && this.inArray(x, [])) { return; }');
+        expect(negated).toContain('if (!this.isEmpty(x) && this.inArray(x,');
+        expect(negated).not.toContain('Helpers.isTrue(this.');
+        // the && operands of a value expression print through printCondition too
+        const value = conditionOf('const z = this.isEmpty(x) && !this.inArray(x, []);');
+        expect(value).toContain('Object z = this.isEmpty(x) && !this.inArray(x,');
+        expect(value).not.toContain('Helpers.isTrue(this.');
+    });
+
+    test('safeBool boxes print Boolean.TRUE.equals', () => {
+        expect(conditionOf("if (this.safeBool(x, 'k', false)) { return; }"))
+            .toContain('if (Boolean.TRUE.equals(this.safeBool(x, "k", false)))');
+        expect(conditionOf("if (this.safeBool2(x, 'a', 'b', true)) { return; }"))
+            .toContain('if (Boolean.TRUE.equals(this.safeBool2(x, "a", "b", true)))');
+        // absent default: the accessor hands back null, which is what TRUE.equals tests
+        expect(conditionOf("if (this.safeBool(x, 'k')) { return; }"))
+            .toContain('if (Boolean.TRUE.equals(this.safeBool(x, "k")))');
+        expect(conditionOf("if (this.safeBool(x, 'k', false)) { return; }")).not.toContain('Helpers.isTrue(this.');
+    });
+
+    test('an unprovable default argument keeps the wrapper', () => {
+        // safeBool hands the caller's default back untouched when the found value is not a
+        // Boolean, so anything but a boolean/nullish literal keeps the box arbitrary
+        expect(conditionOf("if (this.safeBool(x, 'k', y)) { return; }"))
+            .toContain('if (Helpers.isTrue(this.safeBool(x, "k", y)))');
+    });
+
+    test('non-boolean and unresolvable callees keep the wrapper', () => {
+        expect(conditionOf('if (this.other(x)) { return; }')).toContain('if (Helpers.isTrue(this.other(x)))');
+        // a name the checker cannot resolve prints the dynamic-call wrapper, whose return is Object
+        expect(conditionOf('if (this.unknownBaseCall(x)) { return; }'))
+            .toContain('Helpers.isTrue(Helpers.callDynamically(this, "unknownBaseCall"');
+    });
+});
+
 describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
     test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
         const input =

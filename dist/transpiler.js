@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8396,6 +8396,25 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
+var JAVA_THIS_BOOLEAN_METHODS = /* @__PURE__ */ new Set([
+  "inArray",
+  // public boolean inArray (Object elem, Object list2)
+  "isArray",
+  // public boolean isArray (Object a)
+  "isEmpty",
+  // public boolean isEmpty (Object a)
+  "valueIsDefined",
+  // public boolean valueIsDefined (Object value)
+  "isJsonEncodedObject",
+  // public boolean isJsonEncodedObject (Object str)
+  "isBinaryMessage"
+  // public boolean isBinaryMessage (Object message)
+]);
+var JAVA_THIS_BOOLEAN_BOX_METHODS = {
+  "safeBool": 2,
+  "safeBool2": 3,
+  "safeBoolN": 2
+};
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -10446,6 +10465,63 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return this.javaBooleanOperators.includes(node.operatorToken.kind);
   }
+  // the checker's view of the value a condition holds: BooleanLike is the plain `boolean`
+  // (`boolean` itself carries the Boolean bit; the `boolean | undefined` of an accessor with
+  // a default is a union of BooleanLiteral + Undefined and does not), while a union whose
+  // every member is boolean/nullish is the nullable box
+  javaBooleanValueKind(node) {
+    const type = this.getChecker().getTypeAtLocation(node);
+    const flags = type?.flags ?? 0;
+    if (flags & ts6.TypeFlags.BooleanLike) {
+      return "boolean";
+    }
+    if ((flags & ts6.TypeFlags.Union) === 0) {
+      return void 0;
+    }
+    const members = type.types ?? [];
+    const booleanishMembers = ts6.TypeFlags.BooleanLike | ts6.TypeFlags.Null | ts6.TypeFlags.Undefined | ts6.TypeFlags.Void;
+    const allBooleanish = members.length > 0 && members.every((member) => ((member.flags ?? 0) & booleanishMembers) !== 0);
+    return allBooleanish ? "nullableBoolean" : void 0;
+  }
+  // mirrors printWrappedUnknownThisProperty: a `this.<name>(...)` call the checker cannot
+  // resolve prints `Helpers.callDynamically(this, "<name>", ...)`, whose Java return is Object
+  javaCalleeResolves(node) {
+    let signature;
+    try {
+      signature = this.getChecker().getResolvedSignature(node);
+    } catch (e) {
+      return false;
+    }
+    return signature?.declaration !== void 0;
+  }
+  // the boolean the printed Java of a `this.<name>(...)` call already carries, from the
+  // hand-written base declarations in JAVA_THIS_BOOLEAN_METHODS / the box proof in
+  // JAVA_THIS_BOOLEAN_BOX_METHODS. undefined: not a direct boolean call, keep the wrapper.
+  javaCallBooleanKind(node) {
+    if (node?.kind !== ts6.SyntaxKind.CallExpression) {
+      return void 0;
+    }
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    const kind = this.javaBooleanValueKind(node);
+    if (kind === void 0 || !this.javaCalleeResolves(node)) {
+      return void 0;
+    }
+    const name = callee.name?.escapedText;
+    if (JAVA_THIS_BOOLEAN_METHODS.has(name)) {
+      return kind === "boolean" ? "boolean" : void 0;
+    }
+    const defaultArgumentIndex = JAVA_THIS_BOOLEAN_BOX_METHODS[name];
+    if (defaultArgumentIndex === void 0) {
+      return void 0;
+    }
+    const defaultArgument = node.arguments?.[defaultArgumentIndex];
+    const defaultIsNullish = defaultArgument === void 0 || defaultArgument.kind === ts6.SyntaxKind.NullKeyword || defaultArgument.kind === ts6.SyntaxKind.Identifier && defaultArgument.escapedText === "undefined";
+    const defaultIsBoolean = defaultIsNullish || defaultArgument?.kind === ts6.SyntaxKind.TrueKeyword || defaultArgument?.kind === ts6.SyntaxKind.FalseKeyword;
+    return defaultIsBoolean ? "nullableBoolean" : void 0;
+  }
   // the printer already emits these conditions as Java `boolean` (the comparison helpers,
   // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
   // Helpers.isTrue would only re-test a value the checker proves is boolean
@@ -10458,6 +10534,13 @@ var JavaTranspiler = class extends BaseTranspiler {
   printCondition(node, identation) {
     if (this.javaConditionPrintsBoolean(node)) {
       return this.getIden(identation) + this.printNode(node, 0);
+    }
+    const callKind = this.javaCallBooleanKind(node);
+    if (callKind === "boolean") {
+      return this.getIden(identation) + this.printNode(node, 0);
+    }
+    if (callKind === "nullableBoolean") {
+      return this.getIden(identation) + `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
     }
     return super.printCondition(node, identation);
   }
