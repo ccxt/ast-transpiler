@@ -77,6 +77,10 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
+// the Java spellings a consumer declares a dict local with (import-shortened forms
+// included); every other declared type keeps Helpers.GetValue
+const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -982,9 +986,17 @@ export class JavaTranspiler extends BaseTranspiler {
             const containerStr = this.printNode(baseExpr, 0);
             const keyStrs      = keys.map(k => this.printNode(k, 0));
 
-            // Build GetValue(GetValue( ... )) chain for all but the last key.
+            // Build GetValue(GetValue( ... )) chain for all but the last key; the first
+            // step reads the receiver itself, so a declared map indexes natively and only
+            // the `any` steps above it keep the helper (Go: goElementWriteChain).
             let acc = containerStr;
-            for (let i = 0; i < keyStrs.length - 1; i++) {
+            let firstKey = 0;
+            if ((keyStrs.length > 1) && this.javaDeclaredMapReceiver(baseExpr)
+                && ts.isStringLiteralLike(keys[0])) {
+                acc = `${containerStr}.get(${keyStrs[0]})`;
+                firstKey = 1;
+            }
+            for (let i = firstKey; i < keyStrs.length - 1; i++) {
                 acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
             }
 
@@ -1118,6 +1130,60 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_ASSIGNMENT_OPERATOR_KINDS.has(parent.operatorToken.kind);
     }
 
+    // The declared Java type of a local is known to the pass that rewrites the declaration
+    // text (build/java-local-types.js): it records every local it typed here. Reads consult
+    // it; with no consumer installed the table is empty and every read keeps the helper.
+    javaDeclaredLocalTypeResolver: ((declaration: ts.Node) => string | undefined) | undefined;
+
+    // the declaration node behind an identifier, when the checker resolves one
+    javaDeclarationOfIdentifier(expression) {
+        if (expression === undefined || !ts.isIdentifier(expression)) {
+            return undefined;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(expression);
+        } catch (e) {
+            return undefined;
+        }
+        const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const kind = declaration.kind;
+        if (kind !== ts.SyntaxKind.VariableDeclaration && kind !== ts.SyntaxKind.Parameter) {
+            return undefined;
+        }
+        return declaration;
+    }
+
+    // `x["lit"]` where the consumer declares x as a Java map: the native read returns the
+    // element or null, exactly what the helper's Map branch returns, and the declaration
+    // already carries the type, so no cast is needed.
+    javaDeclaredMapReceiver(expression) {
+        const resolver = this.javaDeclaredLocalTypeResolver;
+        if (resolver === undefined) {
+            return false;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(expression);
+        if (declaration === undefined) {
+            return false;
+        }
+        if (expression.escapedText !== declaration.name?.escapedText) {
+            return false; // a capture rename prints `final Object finalX = x` (Object)
+        }
+        let type;
+        try {
+            type = resolver(declaration);
+        } catch (e) {
+            return false;
+        }
+        if (typeof type !== 'string') {
+            return false;
+        }
+        return JAVA_DECLARED_MAP_TYPES.test(type.trim());
+    }
+
     // `x[k]` reads: emit the native container accessor when the checker proves the Java
     // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
     printCheckerTypedElementAccessRead(node) {
@@ -1136,7 +1202,11 @@ export class JavaTranspiler extends BaseTranspiler {
         const type = this.getChecker().getTypeAtLocation(node.expression);
         if (isStringKey) {
             if (!this.isJavaMapStructureType(type)) {
-                return undefined;
+                if (!this.javaDeclaredMapReceiver(node.expression)) {
+                    return undefined;
+                }
+                // the declared local is already a map: the accessor binds with no cast
+                return `${this.printNode(node.expression, 0)}.get(${this.printNode(key, 0)})`;
             }
             const target = this.printNode(node.expression, 0);
             return `((java.util.Map<String, Object>)${target}).get(${this.printNode(key, 0)})`;

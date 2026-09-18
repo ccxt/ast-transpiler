@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -8396,6 +8396,7 @@ var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
   const names = Object.keys(kinds).filter((name) => name.endsWith("EqualsToken") && !/^Equals|^Exclamation|^LessThan|^GreaterThan/.test(name));
   return new Set(["EqualsToken"].concat(names).map((name) => kinds[name]).filter((kind) => kind !== void 0));
 })();
+var JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -9159,7 +9160,12 @@ var JavaTranspiler = class extends BaseTranspiler {
       const containerStr = this.printNode(baseExpr, 0);
       const keyStrs = keys.map((k) => this.printNode(k, 0));
       let acc = containerStr;
-      for (let i = 0; i < keyStrs.length - 1; i++) {
+      let firstKey = 0;
+      if (keyStrs.length > 1 && this.javaDeclaredMapReceiver(baseExpr) && ts6.isStringLiteralLike(keys[0])) {
+        acc = `${containerStr}.get(${keyStrs[0]})`;
+        firstKey = 1;
+      }
+      for (let i = firstKey; i < keyStrs.length - 1; i++) {
         acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
       }
       let prefixes = this.getBinaryExpressionPrefixes(node, identation);
@@ -9263,6 +9269,53 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return JAVA_ASSIGNMENT_OPERATOR_KINDS.has(parent.operatorToken.kind);
   }
+  // the declaration node behind an identifier, when the checker resolves one
+  javaDeclarationOfIdentifier(expression) {
+    if (expression === void 0 || !ts6.isIdentifier(expression)) {
+      return void 0;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(expression);
+    } catch (e) {
+      return void 0;
+    }
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (declaration === void 0) {
+      return void 0;
+    }
+    const kind = declaration.kind;
+    if (kind !== ts6.SyntaxKind.VariableDeclaration && kind !== ts6.SyntaxKind.Parameter) {
+      return void 0;
+    }
+    return declaration;
+  }
+  // `x["lit"]` where the consumer declares x as a Java map: the native read returns the
+  // element or null, exactly what the helper's Map branch returns, and the declaration
+  // already carries the type, so no cast is needed.
+  javaDeclaredMapReceiver(expression) {
+    const resolver = this.javaDeclaredLocalTypeResolver;
+    if (resolver === void 0) {
+      return false;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(expression);
+    if (declaration === void 0) {
+      return false;
+    }
+    if (expression.escapedText !== declaration.name?.escapedText) {
+      return false;
+    }
+    let type;
+    try {
+      type = resolver(declaration);
+    } catch (e) {
+      return false;
+    }
+    if (typeof type !== "string") {
+      return false;
+    }
+    return JAVA_DECLARED_MAP_TYPES.test(type.trim());
+  }
   // `x[k]` reads: emit the native container accessor when the checker proves the Java
   // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
   printCheckerTypedElementAccessRead(node) {
@@ -9281,7 +9334,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     const type = this.getChecker().getTypeAtLocation(node.expression);
     if (isStringKey) {
       if (!this.isJavaMapStructureType(type)) {
-        return void 0;
+        if (!this.javaDeclaredMapReceiver(node.expression)) {
+          return void 0;
+        }
+        return `${this.printNode(node.expression, 0)}.get(${this.printNode(key, 0)})`;
       }
       const target2 = this.printNode(node.expression, 0);
       return `((java.util.Map<String, Object>)${target2}).get(${this.printNode(key, 0)})`;

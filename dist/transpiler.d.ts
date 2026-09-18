@@ -1006,6 +1006,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     isJavaListStructureType(type: any): boolean;
     tupleRequiredElementCount(type: any): number;
     isLeftSideOfAssignment(node: any): boolean;
+    javaDeclaredLocalTypeResolver: ((declaration: ts.Node) => string | undefined) | undefined;
+    javaDeclarationOfIdentifier(expression: any): any;
+    javaDeclaredMapReceiver(expression: any): boolean;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
     javaScalarFamily(node: any): string | undefined;
