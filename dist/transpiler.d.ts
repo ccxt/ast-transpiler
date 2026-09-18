@@ -1013,6 +1013,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeConcat(node: any): boolean;
     javaProvableNumericKind(node: any): string | undefined;
     javaNativeArithmeticKind(node: any): string | undefined;
+    javaSplitTernaryReceiver(node: any): boolean;
+    javaNativeSplitCall(node: any, name: any, parsedArg: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
@@ -1074,7 +1076,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printEndsWithCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
     printTrimCall(_node: any, _identation: any, name?: any): string;
     printJoinCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
-    printSplitCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
+    printSplitCall(node: any, _identation: any, name?: any, parsedArg?: any): string;
     printConcatCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
     printToFixedCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
     printToStringCall(_node: any, _identation: any, name?: any): string;
