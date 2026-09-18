@@ -2502,3 +2502,57 @@ describe('S62: falsy wrapper around a printed bool', () => {
         expect(output).not.toContain("if (isTrue(flag) ? a : b)");
     });
 });
+
+describe('csharp declared-receiver .length: getArrayLength -> Count/Length (hook gated)', () => {
+    const withReceiverType = (type, source) => {
+        const previous = transpiler.csharpTranspiler.csharpLengthReceiverType;
+        transpiler.csharpTranspiler.csharpLengthReceiverType = (node) => ((node?.kind === tsApi.SyntaxKind.Identifier) ? type : undefined);
+        try {
+            return transpiler.transpileCSharp(source).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpLengthReceiverType = previous;
+        }
+    };
+    const body = (line) =>
+        "class Exchange {\n" +
+        "    box(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const xs = this.box({}, 'k');\n" +
+        "        " + line + "\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+    test('without the hook the emission is the unchanged helper call', () => {
+        const output = transpiler.transpileCSharp(body('const n = xs.length;')).content;
+        expect(output).toContain('int n = getArrayLength(xs);');
+    });
+    test('a list-typed receiver counts its own Count', () => {
+        const output = withReceiverType('List<object>', body('const n = xs.length;'));
+        expect(output).toContain('int n = (xs?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength(xs)');
+    });
+    test('the element type does not change the member: List<string> counts too', () => {
+        const output = withReceiverType('List<string>', body('const n = xs.length;'));
+        expect(output).toContain('int n = (xs?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength(xs)');
+    });
+    test('a dictionary receiver counts its entries', () => {
+        const output = withReceiverType('Dictionary<string, object>', body('const n = xs.length;'));
+        expect(output).toContain('int n = (xs?.Count ?? 0);');
+    });
+    test('a string receiver reads its Length', () => {
+        const output = withReceiverType('string?', body('const n = xs.length;'));
+        expect(output).toContain('int n = (xs?.Length ?? 0);');
+        expect(output).not.toContain('getArrayLength(xs)');
+    });
+    test('a declared type with no Count/Length member keeps the helper', () => {
+        expect(withReceiverType('double', body('const n = xs.length;'))).toContain('int n = getArrayLength(xs);');
+        expect(withReceiverType('Int64', body('const n = xs.length;'))).toContain('int n = getArrayLength(xs);');
+        expect(withReceiverType('object', body('const n = xs.length;'))).toContain('int n = getArrayLength(xs);');
+    });
+    test('a printed cast names the receiver type without any hook', () => {
+        const output = transpiler.transpileCSharp(body('const n = (xs as any[]).length;')).content;
+        expect(output).toContain('int n = (((IList<object>)(xs))?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength(');
+    });
+});

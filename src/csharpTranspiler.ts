@@ -209,6 +209,13 @@ const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks',
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
+// C# types whose element count a `.length` read can name (see csharpCountMemberOf). Prefixes:
+// the element type does not change the member, so `List<string>` counts like `List<object>`
+const CSHARP_COUNT_TYPES = [ 'List<', 'IList<', 'Dictionary<', 'IDictionary<', 'ConcurrentDictionary<' ];
+
+// a leading cast of the printed expression: `(IList<object>)(x)` names the receiver's static type
+const CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)\)/;
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -1334,14 +1341,51 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
     // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
     csharpNativeLengthExpression(expression): string | undefined {
-        if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+        if (this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+            const receiver = this.csharpNativeReceiver(expression);
+            if (receiver !== undefined) {
+                return `${receiver.text}.Count`;
+            }
+        }
+        return this.csharpDeclaredLengthExpression(expression);
+    }
+
+    // the member that replaces getArrayLength on a declared C# type: Count counts the same
+    // elements the helper's IList / ICollection branches count, Length is its string branch.
+    // Any other declared type keeps the helper
+    csharpCountMemberOf(csharpType): string | undefined {
+        if ((csharpType === 'string') || (csharpType === 'string?')) {
+            return 'Length';
+        }
+        return CSHARP_COUNT_TYPES.some ((prefix) => csharpType.indexOf (prefix) === 0) ? 'Count' : undefined;
+    }
+
+    // `x.length` -> `(x?.Count ?? 0)` for a receiver whose PRINTED declaration carries a
+    // collection / string type. The type comes from the embedding build layer's hook
+    // (csharpLengthReceiverType, installed by ccxt build/csharp-local-types.js for the
+    // receivers its own post-print passes do not rewrite), or from a cast the printer itself
+    // printed around the receiver. `?.` + `?? 0` is exactly the helper's null -> 0 and reads
+    // the receiver once, so no write scan is needed; without the hook (and without a cast)
+    // the emission is the unchanged getArrayLength call.
+    csharpDeclaredLengthExpression(expression): string | undefined {
+        const printed = this.printNode(expression, 0).trim();
+        const cast = CSHARP_LENGTH_CAST.exec(printed);
+        const named = (cast === null) ? this.csharpLengthReceiverType(expression) : cast[1];
+        const member = (named === undefined) ? undefined : this.csharpCountMemberOf(named);
+        if (member === undefined) {
             return undefined;
         }
-        const receiver = this.csharpNativeReceiver(expression);
-        if (receiver === undefined) {
-            return undefined;
-        }
-        return `${receiver.text}.Count`;
+        // a cast takes the whole expression as its operand (`(T)x?.Count` casts the Count), so a
+        // receiver that is not a bare identifier is parenthesised before its own member read
+        const receiver = ts.isIdentifier(expression) ? printed : `(${printed})`;
+        return `(${receiver}?.${member} ?? 0)`;
+    }
+
+    // the C# type the emitted declaration gives a `.length` receiver, or undefined when this
+    // printer names none. Installed by build/csharp-local-types.js; undefined by default, so
+    // the untyped emission is byte-identical without the override
+    csharpLengthReceiverType(expression): string | undefined {
+        return undefined;
     }
     // `isEqual (x, "lit")` -> `x == "lit"` when the operand's emitted declaration is a string.
     // A string literal is never null, and isEqual's string branch is `((string)a) == ((string)b)`,

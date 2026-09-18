@@ -2783,6 +2783,8 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
+var CSHARP_COUNT_TYPES = ["List<", "IList<", "Dictionary<", "IDictionary<", "ConcurrentDictionary<"];
+var CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)\)/;
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -3752,14 +3754,46 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
   // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
   csharpNativeLengthExpression(expression) {
-    if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+    if (this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+      const receiver = this.csharpNativeReceiver(expression);
+      if (receiver !== void 0) {
+        return `${receiver.text}.Count`;
+      }
+    }
+    return this.csharpDeclaredLengthExpression(expression);
+  }
+  // the member that replaces getArrayLength on a declared C# type: Count counts the same
+  // elements the helper's IList / ICollection branches count, Length is its string branch.
+  // Any other declared type keeps the helper
+  csharpCountMemberOf(csharpType) {
+    if (csharpType === "string" || csharpType === "string?") {
+      return "Length";
+    }
+    return CSHARP_COUNT_TYPES.some((prefix) => csharpType.indexOf(prefix) === 0) ? "Count" : void 0;
+  }
+  // `x.length` -> `(x?.Count ?? 0)` for a receiver whose PRINTED declaration carries a
+  // collection / string type. The type comes from the embedding build layer's hook
+  // (csharpLengthReceiverType, installed by ccxt build/csharp-local-types.js for the
+  // receivers its own post-print passes do not rewrite), or from a cast the printer itself
+  // printed around the receiver. `?.` + `?? 0` is exactly the helper's null -> 0 and reads
+  // the receiver once, so no write scan is needed; without the hook (and without a cast)
+  // the emission is the unchanged getArrayLength call.
+  csharpDeclaredLengthExpression(expression) {
+    const printed = this.printNode(expression, 0).trim();
+    const cast = CSHARP_LENGTH_CAST.exec(printed);
+    const named = cast === null ? this.csharpLengthReceiverType(expression) : cast[1];
+    const member = named === void 0 ? void 0 : this.csharpCountMemberOf(named);
+    if (member === void 0) {
       return void 0;
     }
-    const receiver = this.csharpNativeReceiver(expression);
-    if (receiver === void 0) {
-      return void 0;
-    }
-    return `${receiver.text}.Count`;
+    const receiver = ts4.isIdentifier(expression) ? printed : `(${printed})`;
+    return `(${receiver}?.${member} ?? 0)`;
+  }
+  // the C# type the emitted declaration gives a `.length` receiver, or undefined when this
+  // printer names none. Installed by build/csharp-local-types.js; undefined by default, so
+  // the untyped emission is byte-identical without the override
+  csharpLengthReceiverType(expression) {
+    return void 0;
   }
   // `isEqual (x, "lit")` -> `x == "lit"` when the operand's emitted declaration is a string.
   // A string literal is never null, and isEqual's string branch is `((string)a) == ((string)b)`,
