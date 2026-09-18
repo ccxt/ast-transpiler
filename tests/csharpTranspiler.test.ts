@@ -2759,3 +2759,175 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         expect(output).toContain('object c = callDynamically(this, "someAnyFn", new object[] { url, method, headers, body })');
     });
 });
+
+describe('csharp helper removal: getIndexOf becomes the receiver IndexOf', () => {
+    // the printed C# type of a local the embedding build layer retypes comes back through
+    // csharpExpressionTypeResolver — these tests stub that resolver with a name map
+    const withKinds = (kinds, input) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('a non-optional string parameter scans natively, ordinally', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(symbol: string) {\n" +
+        "        const hasSlash = symbol.indexOf ('/') > -1;\n" +
+        "        return hasSlash;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((string)symbol).IndexOf("/", StringComparison.Ordinal) > -1');
+        expect(output).not.toContain('getIndexOf(');
+    });
+    test('a `string?` local without a non-null test keeps the -1 answer for null', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(flags: string) {\n" +
+        "        const hasPost = flags.indexOf ('post') > -1;\n" +
+        "        return hasPost;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ flags: 'string?' }, input);
+        expect(output).toContain('getIndexOf(flags, "post")');
+        expect(output).not.toContain('StringComparison.Ordinal');
+    });
+    test('an early-exiting `x === undefined` guard admits the read', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(type: string) {\n" +
+        "        if (type === undefined) {\n" +
+        "            throw new Error ('missing type');\n" +
+        "        }\n" +
+        "        const isFee = type.indexOf ('fee') >= 0;\n" +
+        "        return isFee;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((string)type).IndexOf("fee", StringComparison.Ordinal) >= 0');
+        expect(output).not.toContain('getIndexOf(');
+    });
+    test('a `&&` conjunct and a then-branch null test admit the read too', () => {
+        const conjunct =
+        "class Exchange {\n" +
+        "    main(method: string) {\n" +
+        "        const isHistorical = (method !== undefined) && (method.indexOf ('GetHistoricalTrades') >= 0);\n" +
+        "        return isHistorical;\n" +
+        "    }\n" +
+        "}\n";
+        const conjunctOutput = withKinds({ method: 'string?' }, conjunct);
+        expect(conjunctOutput).toContain('((string)method).IndexOf("GetHistoricalTrades", StringComparison.Ordinal) >= 0');
+        expect(conjunctOutput).not.toContain('getIndexOf(');
+        const branch =
+        "class Exchange {\n" +
+        "    main(orderType: string) {\n" +
+        "        let side = undefined;\n" +
+        "        if (orderType !== undefined) {\n" +
+        "            if (orderType.indexOf ('Bid') >= 0) {\n" +
+        "                side = 'buy';\n" +
+        "            }\n" +
+        "        }\n" +
+        "        return side;\n" +
+        "    }\n" +
+        "}\n";
+        const branchOutput = withKinds({ orderType: 'string?' }, branch);
+        expect(branchOutput).toContain('((string)orderType).IndexOf("Bid", StringComparison.Ordinal) >= 0');
+        expect(branchOutput).not.toContain('getIndexOf(');
+    });
+    test('a write between the guard and the read voids the proof', () => {
+        const guarded =
+        "class Exchange {\n" +
+        "    main(type: Str) {\n" +
+        "        if (type === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        const isFee = type.indexOf ('fee') >= 0;\n" +
+        "        return isFee;\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        const guardedOutput = withKinds({ type: 'string?' }, guarded);
+        expect(guardedOutput).toContain('((string)type).IndexOf("fee", StringComparison.Ordinal) >= 0');
+        const written =
+        "class Exchange {\n" +
+        "    main(type: Str) {\n" +
+        "        if (type === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        type = 'fee';\n" +
+        "        const isFee = type.indexOf ('fee') >= 0;\n" +
+        "        return isFee;\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        // the guard inspected the value the parameter held, not what the branch bound afterwards
+        expect(withKinds({ type: 'string?' }, written)).toContain('getIndexOf(type, "fee")');
+    });
+    test('a `Str` parameter and an `any` receiver keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(symbol: Str, value: any) {\n" +
+        "        const hasSlash = symbol.indexOf ('/') > -1;\n" +
+        "        const hasDot = value.indexOf ('.') > -1;\n" +
+        "        return [hasSlash, hasDot];\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('getIndexOf(symbol, "/")');
+        expect(output).toContain('getIndexOf(value, ".")');
+    });
+    test('an `as string` assertion and a `this.field: string` are strings', () => {
+        const input =
+        "class Exchange {\n" +
+        "    secret: string = undefined;\n" +
+        "    apiKey: string;\n" +
+        "    main(id: Str) {\n" +
+        "        const casted = (id as string).indexOf ('F0') >= 0;\n" +
+        "        const hasKey = this.apiKey.indexOf ('account') < 0;\n" +
+        "        const hasSecret = this.secret.indexOf ('PRIVATE KEY') > -1;\n" +
+        "        return [casted, hasKey, hasSecret];\n" +
+        "    }\n" +
+        "}\n" +
+        "type Str = string | undefined;\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('((string)id).IndexOf("F0", StringComparison.Ordinal) >= 0');
+        expect(output).toContain('((string)this.apiKey).IndexOf("account", StringComparison.Ordinal) < 0');
+        // `secret: string = undefined` holds undefined until the credentials are set
+        expect(output).toContain('getIndexOf(this.secret, "PRIVATE KEY")');
+    });
+    test('a `List<object>` local takes its own IndexOf', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main(keys: any) {\n" +
+        "        const at = keys.indexOf ('ticker');\n" +
+        "        return at;\n" +
+        "    }\n" +
+        "}\n";
+        const output = withKinds({ keys: 'List<object>' }, input);
+        expect(output).toContain('((List<object>)keys).IndexOf("ticker")');
+        expect(output).not.toContain('getIndexOf(');
+    });
+    test('a needle of unknown C# type takes the helper\'s own (string) cast; a numeric one keeps the helper', () => {
+        const unknown =
+        "class Exchange {\n" +
+        "    main(symbol: string, key: any) {\n" +
+        "        const at = symbol.indexOf (key);\n" +
+        "        return at;\n" +
+        "    }\n" +
+        "}\n";
+        const unknownOutput = transpiler.transpileCSharp(unknown).content;
+        expect(unknownOutput).toContain('((string)symbol).IndexOf(((string)key), StringComparison.Ordinal)');
+        const numeric =
+        "class Exchange {\n" +
+        "    main(symbol: string) {\n" +
+        "        const at = symbol.indexOf (5);\n" +
+        "        return at;\n" +
+        "    }\n" +
+        "}\n";
+        expect(transpiler.transpileCSharp(numeric).content).toContain('getIndexOf(symbol, 5)');
+    });
+});
