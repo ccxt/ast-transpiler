@@ -3563,16 +3563,32 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // helper's `null -> 0`: the receiver is read once and a plain member read would throw
   // where the helper answered 0
   csharpDeclaredLengthExpression(node) {
-    if (!ts4.isIdentifier(node)) {
+    const receiver = this.csharpLengthReceiverIdentifier(node);
+    if (receiver === void 0) {
       return void 0;
     }
-    const named = this.csharpTypedLocalType(node);
-    const csharpType = named !== void 0 ? named : this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : void 0;
+    const named = this.csharpTypedLocalType(receiver);
+    const csharpType = named !== void 0 ? named : this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(receiver) : void 0;
     const member = csharpType === void 0 ? void 0 : this.csharpCountMemberOf(csharpType);
     if (member === void 0) {
       return void 0;
     }
-    return `(${this.printNode(node, 0)}?.${member} ?? 0)`;
+    const receiverText = this.printNode(receiver, 0);
+    if (this.printNode(node, 0).trim() !== receiverText.trim()) {
+      return void 0;
+    }
+    return `(${receiverText}?.${member} ?? 0)`;
+  }
+  // the local an identifier read sits behind: the identifier itself, or the parentheses /
+  // `as T` assertion the printer may drop on the way out
+  csharpLengthReceiverIdentifier(node) {
+    if (node?.kind === ts4.SyntaxKind.ParenthesizedExpression) {
+      return this.csharpLengthReceiverIdentifier(node.expression);
+    }
+    if (ts4.isAsExpression(node)) {
+      return this.csharpLengthReceiverIdentifier(node.expression);
+    }
+    return ts4.isIdentifier(node) ? node : void 0;
   }
   // the printed key of ContainsKey must itself be a C# string: a literal, a local this
   // printer declared `string`, a call it types as string, or its own `((string)x)` cast

@@ -1890,4 +1890,34 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(withType('Dictionary<string, object>')).toContain('int n = (xs?.Count ?? 0);');
         expect(withType('string?')).toContain('int n = (xs?.Length ?? 0);');
     });
+    test('length behind an elided `as` assertion emits Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a: any, b: any, c: any): any { return a; }\n" +
+        "    main(parameters: any) {\n" +
+        "        const data = this.safeDict(parameters, 'data', {});\n" +
+        "        const n = (data as List).length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the printer drops the assertion, so the read is the declared `data` local
+        expect(output).toContain('IDictionary<string, object> data = this.safeDict(');
+        expect(output).toContain('int n = (data?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength');
+    });
+    test('an `as` assertion over an unproven local keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a: any, b: any): any { return a; }\n" +
+        "    main(parameters: any) {\n" +
+        "        const boxed = this.safeValue(parameters, 'data');\n" +
+        "        const n = (boxed as List).length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object boxed = this.safeValue(');
+        expect(output).toContain('int n = getArrayLength(boxed);');
+    });
 });

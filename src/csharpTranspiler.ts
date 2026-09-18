@@ -1139,17 +1139,38 @@ export class CSharpTranspiler extends BaseTranspiler {
     // helper's `null -> 0`: the receiver is read once and a plain member read would throw
     // where the helper answered 0
     csharpDeclaredLengthExpression(node): string | undefined {
-        if (!ts.isIdentifier(node)) {
+        // `(x as List).length` / `((x)).length`: the printer prints the wrapper as the bare
+        // local when it elides the assertion, so the read is still the identifier
+        const receiver = this.csharpLengthReceiverIdentifier(node);
+        if (receiver === undefined) {
             return undefined;
         }
-        const named = this.csharpTypedLocalType(node);
+        const named = this.csharpTypedLocalType(receiver);
         const csharpType = named !== undefined ? named
-            : (this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(node) : undefined);
+            : (this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(receiver) : undefined);
         const member = csharpType === undefined ? undefined : this.csharpCountMemberOf(csharpType);
         if (member === undefined) {
             return undefined;
         }
-        return `(${this.printNode(node, 0)}?.${member} ?? 0)`;
+        // a wrapper the printer does print (a `((string)x)` cast keeps its assertion) is a
+        // different receiver: only the printed-as-identifier shape may take the member read
+        const receiverText = this.printNode(receiver, 0);
+        if (this.printNode(node, 0).trim() !== receiverText.trim()) {
+            return undefined;
+        }
+        return `(${receiverText}?.${member} ?? 0)`;
+    }
+
+    // the local an identifier read sits behind: the identifier itself, or the parentheses /
+    // `as T` assertion the printer may drop on the way out
+    csharpLengthReceiverIdentifier(node): any | undefined {
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.csharpLengthReceiverIdentifier(node.expression);
+        }
+        if (ts.isAsExpression(node)) {
+            return this.csharpLengthReceiverIdentifier(node.expression);
+        }
+        return ts.isIdentifier(node) ? node : undefined;
     }
 
     // the printed key of ContainsKey must itself be a C# string: a literal, a local this
