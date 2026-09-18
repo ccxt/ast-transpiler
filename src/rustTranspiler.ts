@@ -269,6 +269,106 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    // ── native truthiness of a checker-proved boolean Value ─────────────────
+    // `is_true(&v)` computes `v.is_truthy()`, where `""`/`0`/`[]`/`{}`/Null are
+    // false. When the checker proves the operand is drawn from `bool`/`undefined`
+    // only (so the runtime value is `Value::Bool(..)` or `Value::Null`), the
+    // helper is exactly the native `matches!(v, Value::Bool(true))`.
+
+    /** `true` / `false` / `boolean` (a union of BooleanLiteral members too). */
+    isBooleanValueType(type: ts.Type | undefined): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            const members: ts.Type[] = (type as any).types ?? [];
+            return members.length > 0 && members.every((member) => this.isBooleanValueType(member));
+        }
+        return (type.flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) !== 0;
+    }
+
+    /** `boolean | undefined`: `undefined`/`null` both print `Value::Null` (false
+     *  for the helper and for the `matches!` alike), so they may join the union. */
+    isBooleanOrUndefinedType(type: ts.Type | undefined): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        const members: ts.Type[] = (type.flags & ts.TypeFlags.Union) ? ((type as any).types ?? []) : [type];
+        if (members.length === 0) {
+            return false;
+        }
+        const onlyBooleanOrEmpty = members.every((member) =>
+            this.isBooleanValueType(member) ||
+            (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void | ts.TypeFlags.Null)) !== 0);
+        return onlyBooleanOrEmpty && members.some((member) => this.isBooleanValueType(member));
+    }
+
+    /** Operands this unit owns: `safeBool`/`safeBool2`/`safeBoolN` calls (a
+     *  `Value` in the port) and element accesses (printed as `get_value`). */
+    isBooleanValueFamilyOperand(node): boolean {
+        const inner = this.unwrapParens(node);
+        if (inner === undefined) {
+            return false;
+        }
+        if (ts.isElementAccessExpression(inner)) {
+            return true;
+        }
+        if (ts.isCallExpression(inner)) {
+            const name = this.callExpressionName(inner);
+            return name === 'safeBool' || name === 'safeBool2' || name === 'safeBoolN';
+        }
+        return false;
+    }
+
+    /** The emitted `matches!` is a bare Rust `bool`: it is only valid where the
+     *  whole enclosing boolean expression already sits in a bool slot. A logical
+     *  expression stored in a `Value` slot gets its `Value::Bool(..)` box from the
+     *  ccxt post-passes, which key on the leading helper token the operand would
+     *  no longer provide. */
+    isBareBoolEmissionSafe(node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while (parent !== undefined) {
+            if (ts.isParenthesizedExpression(parent)) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (parent.kind === SyntaxKind.PrefixUnaryExpression &&
+                parent.operator === SyntaxKind.ExclamationToken) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (parent.kind === SyntaxKind.BinaryExpression &&
+                (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+                 parent.operatorToken.kind === SyntaxKind.BarBarToken)) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            break;
+        }
+        return this.isBooleanPosition(current);
+    }
+
+    /** Native truthiness text of the operand, or undefined to keep `is_true`. */
+    printNativeTruthiness(node): string | undefined {
+        if (!this.isBooleanValueFamilyOperand(node)) {
+            return undefined;
+        }
+        if (!this.printsValueExpression(node)) {
+            return undefined;
+        }
+        if (!this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node))) {
+            return undefined;
+        }
+        if (!this.isBareBoolEmissionSafe(node)) {
+            return undefined;
+        }
+        return `matches!(${this.printNode(node, 0)}, Value::Bool(true))`;
+    }
+
     // Kind of a literal operand whose printed Value variant is exactly known.
     literalKindOfNode(node): string {
         if (node === undefined) {
@@ -1704,6 +1804,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.kind === SyntaxKind.PrefixUnaryExpression &&
       node.operator === SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation);
+        }
+        // Checker-proved boolean Value (safe_bool / get_value): native matches!.
+        const nativeTruthiness = this.printNativeTruthiness(node);
+        if (nativeTruthiness !== undefined) {
+            return `${this.getIden(identation)}${nativeTruthiness}`;
         }
         const expression = this.printNode(node, 0);
         return `${this.getIden(identation)}is_true(&${expression})`;
