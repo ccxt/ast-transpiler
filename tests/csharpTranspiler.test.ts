@@ -1065,7 +1065,9 @@ describe('csharp typed body locals', () => {
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("string upper = ((string)market).ToUpper()");
         expect(output).toContain("List<object> parts = ((string)market).Split(");
-        expect(output).toContain("int count = getArrayLength(parts)");
+        // `parts` is declared `List<object>` here, so its own Count replaces the helper
+        expect(output).toContain("int count = (parts?.Count ?? 0);");
+        expect(output).not.toContain("getArrayLength(parts)");
         expect(output).toContain("bool same = (isEqual(upper, market))");
         expect(output).toContain("Dictionary<string, object> merged = this.extend(");
         expect(output).toContain("Int64 now = this.milliseconds()");
@@ -2214,6 +2216,121 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         // C# (its narrowing happens in a later pass), so the helper must stay
         expect(output).toContain('public virtual object main(object key)');
         expect(output).toContain('if (inOp(this.options, key))');
+    });
+    test('length of a local this printer typed as a list emits the null-conditional Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const xs = this.safeList({}, 'k');\n" +
+        "        const n = xs.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('List<object> xs = this.safeList(new Dictionary<string, object>() {}, "k");');
+        // `x?.Count ?? 0` is exactly getArrayLength on a list: null -> 0, else Count
+        expect(output).toContain('int n = (xs?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength(xs)');
+    });
+    test('length of a local this printer typed as a dictionary emits Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const d = this.safeDict({}, 'k');\n" +
+        "        const n = d.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('IDictionary<string, object> d = this.safeDict(new Dictionary<string, object>() {}, "k");');
+        expect(output).toContain('int n = (d?.Count ?? 0);');
+    });
+    test('length of a local this printer typed as a nullable string emits Length', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const s = this.safeString({}, 'k');\n" +
+        "        const n = s.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('string? s = this.safeString(new Dictionary<string, object>() {}, "k");');
+        expect(output).toContain('int n = (s?.Length ?? 0);');
+        expect(output).not.toContain('getArrayLength(s)');
+    });
+    test('length of a local the printer leaves object keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a: any, b: any): any { return a; }\n" +
+        "    main() {\n" +
+        "        const boxed = this.safeValue({}, 'k');\n" +
+        "        const n = boxed.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object boxed = this.safeValue(new Dictionary<string, object>() {}, "k");');
+        expect(output).toContain('int n = getArrayLength(boxed);');
+    });
+    test('a declared type with no Count/Length member keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main() {\n" +
+        "        const xs = this.box();\n" +
+        "        const n = xs.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const withType = (type) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'xs') ? type : undefined;
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        // the embedding build layer's proof for a local it retypes: only a collection or a
+        // string carries the member the helper measures
+        expect(withType(undefined)).toContain('int n = getArrayLength(xs);');
+        expect(withType('double')).toContain('int n = getArrayLength(xs);');
+        expect(withType('Int64')).toContain('int n = getArrayLength(xs);');
+        expect(withType('List<object>')).toContain('int n = (xs?.Count ?? 0);');
+        expect(withType('Dictionary<string, object>')).toContain('int n = (xs?.Count ?? 0);');
+        expect(withType('string?')).toContain('int n = (xs?.Length ?? 0);');
+    });
+    test('length behind an elided `as` assertion emits Count', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeDict(a: any, b: any, c: any): any { return a; }\n" +
+        "    main(parameters: any) {\n" +
+        "        const data = this.safeDict(parameters, 'data', {});\n" +
+        "        const n = (data as List).length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        // the printer drops the assertion, so the read is the declared `data` local
+        expect(output).toContain('IDictionary<string, object> data = this.safeDict(');
+        expect(output).toContain('int n = (data?.Count ?? 0);');
+        expect(output).not.toContain('getArrayLength');
+    });
+    test('an `as` assertion over an unproven local keeps getArrayLength', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeValue(a: any, b: any): any { return a; }\n" +
+        "    main(parameters: any) {\n" +
+        "        const boxed = this.safeValue(parameters, 'data');\n" +
+        "        const n = (boxed as List).length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('object boxed = this.safeValue(');
+        expect(output).toContain('int n = getArrayLength(boxed);');
     });
 });
 

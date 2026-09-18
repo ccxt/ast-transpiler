@@ -261,6 +261,12 @@ const CSHARP_BOOL_CALLEES_NATIVE: { [name: string]: boolean } = {
 // wrapper has to stay whatever the annotation says
 const CSHARP_HANDWRITTEN_CALLEES_NATIVE = [ 'isDictionary' ];
 
+// declared C# types whose own `Count` counts exactly the elements getArrayLength's IList /
+// ICollection branches count. A prefix test: the printer and the embedding build layer name
+// these with their element types (`List<Order>`, `Dictionary<string, object>`, ...), and every
+// member of the family carries `Count`
+const CSHARP_COUNT_TYPES = [ 'List<', 'IList<', 'Dictionary<', 'IDictionary<', 'ConcurrentDictionary<' ];
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -1376,6 +1382,57 @@ export class CSharpTranspiler extends BaseTranspiler {
         return declaration === undefined ? undefined : this.csharpTypedLocals.get(declaration);
     }
 
+    // the member that replaces getArrayLength on a declared C# type: Count counts the same
+    // elements the helper's IList / ICollection branches count, Length is its string branch.
+    // Any other declared type keeps the helper
+    csharpCountMemberOf(csharpType: string): string | undefined {
+        if ((csharpType === 'string') || (csharpType === 'string?')) {
+            return 'Length';
+        }
+        return CSHARP_COUNT_TYPES.some((prefix) => csharpType.indexOf(prefix) === 0) ? 'Count' : undefined;
+    }
+
+    // `getArrayLength(x)` -> `(x?.Count ?? 0)` for a local whose printed declaration already
+    // carries a C# collection / string type. The type comes from the printer's own
+    // declared-local table, then from the embedding build layer's proof for the locals it
+    // retypes itself (ccxt: build/csharp-local-types.js). The null-conditional is exactly the
+    // helper's `null -> 0`: the receiver is read once and a plain member read would throw
+    // where the helper answered 0
+    csharpDeclaredLengthExpression(node): string | undefined {
+        // `(x as List).length` / `((x)).length`: the printer prints the wrapper as the bare
+        // local when it elides the assertion, so the read is still the identifier
+        const receiver = this.csharpLengthReceiverIdentifier(node);
+        if (receiver === undefined) {
+            return undefined;
+        }
+        const named = this.csharpTypedLocalType(receiver);
+        const csharpType = named !== undefined ? named
+            : (this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(receiver) : undefined);
+        const member = csharpType === undefined ? undefined : this.csharpCountMemberOf(csharpType);
+        if (member === undefined) {
+            return undefined;
+        }
+        // a wrapper the printer does print (a `((string)x)` cast keeps its assertion) is a
+        // different receiver: only the printed-as-identifier shape may take the member read
+        const receiverText = this.printNode(receiver, 0);
+        if (this.printNode(node, 0).trim() !== receiverText.trim()) {
+            return undefined;
+        }
+        return `(${receiverText}?.${member} ?? 0)`;
+    }
+
+    // the local an identifier read sits behind: the identifier itself, or the parentheses /
+    // `as T` assertion the printer may drop on the way out
+    csharpLengthReceiverIdentifier(node): any | undefined {
+        if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.csharpLengthReceiverIdentifier(node.expression);
+        }
+        if (ts.isAsExpression(node)) {
+            return this.csharpLengthReceiverIdentifier(node.expression);
+        }
+        return ts.isIdentifier(node) ? node : undefined;
+    }
+
     // the printed key of ContainsKey must itself be a C# string: a literal, a local this
     // printer declared `string`, a call it types as string, or its own `((string)x)` cast
     csharpNativeStringKey(key): string | undefined {
@@ -1438,14 +1495,13 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
     // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
     csharpNativeLengthExpression(expression): string | undefined {
-        if (!this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
-            return undefined;
+        if (this.csharpIsArrayType(this.getChecker().getTypeAtLocation(expression))) {
+            const receiver = this.csharpNativeReceiver(expression);
+            if (receiver !== undefined) {
+                return `${receiver.text}.Count`;
+            }
         }
-        const receiver = this.csharpNativeReceiver(expression);
-        if (receiver === undefined) {
-            return undefined;
-        }
-        return `${receiver.text}.Count`;
+        return this.csharpDeclaredLengthExpression(expression);
     }
 
     // the C# type of a dictionary element read is `object`: isEqual compares the boxed
