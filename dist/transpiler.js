@@ -13915,6 +13915,7 @@ var TranspileProgramBatch = class {
   }
 };
 export {
+  RUST_DECLARED_DICT_LOCALS,
   TranspileProgramBatch,
   Transpiler,
   alignGoTrailingComments,

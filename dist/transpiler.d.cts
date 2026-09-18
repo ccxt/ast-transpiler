@@ -1136,6 +1136,19 @@ interface RustDeclaredDictLocalEntry {
     declaration: ts.VariableDeclaration;
     start: number;
 }
+/** Vocabulary of the declared-Dict locals table (see
+ *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
+declare const RUST_DECLARED_DICT_LOCALS: {
+    /** value the resolver answers for a proven Dict local */
+    DICT: RustDeclaredLocalKind;
+    /** printed `self.<callee>` -> index of its `optionalArgs` parameter.
+     *  `safe_dict*` returns `optional_args[0]` whenever the key holds a non-Dict. */
+    SAFE_CALLEES: Record<string, number>;
+    /** `&mut` receivers whose writes land inside the container, so a Dict local
+     *  stays a Dict (`add_element_to_object` / `append_to_array` no-op on a
+     *  non-container, `set_value` / `remove` write a key). */
+    KIND_PRESERVING_MUTATORS: Set<string>;
+};
 declare class RustTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     methodSignatures: Record<string, {
@@ -1505,4 +1518,4 @@ declare class TranspileProgramBatch {
     transpileCppByPath(filePath: string): ITranspiledFile;
 }
 
-export { TranspileProgramBatch, Transpiler, alignGoTrailingComments, Transpiler as default };
+export { RUST_DECLARED_DICT_LOCALS, type RustDeclaredDictLocalEntry, TranspileProgramBatch, Transpiler, alignGoTrailingComments, Transpiler as default };
