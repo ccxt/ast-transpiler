@@ -1730,6 +1730,192 @@ export class JavaTranspiler extends BaseTranspiler {
         return leftKind;
     }
 
+    // ---- widened native add (`+` only) ------------------------------------
+    // Helpers.add normalizes every Integer to Long first, boxes Long for two integral
+    // operands and Double when either operand is a Double (null in -> null out), so a
+    // native `+` over operands that are provably numeric AND non-null reproduces the
+    // same box on every path. A boxed local the printer cannot prove is NOT accepted:
+    // it may hold null, which the helper absorbs and the native operator would NPE.
+
+    // `this.milliseconds()` / `this.seconds()`: the hand-written Java declares both
+    // `public Long` over a primitive time value, so the box is never null. An unresolved
+    // call (or a venue override) prints Object/callDynamically and keeps the helper —
+    // only a signature resolving into the base time mixin or the Date.now lib chain is
+    // the hand-written Long accessor.
+    javaBaseTimeLongCall(node) {
+        if (node?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = callee.name?.escapedText;
+        if (name !== 'milliseconds' && name !== 'seconds') {
+            return false;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            declaration = undefined;
+        }
+        if (declaration === undefined) {
+            return false;
+        }
+        const fileName = declaration.getSourceFile?.()?.fileName ?? '';
+        // `milliseconds = now` where `now = Date.now` (ts/src/base/functions/time.ts) resolves
+        // to the Date.now signature inside the typescript lib chain; `seconds` is declared
+        // in that same base file.
+        return /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]time\.ts$/.test(fileName)
+            || /(^|[\\/])lib\.[^\\/]*\.d\.ts$/.test(fileName);
+    }
+
+    // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the emitted
+    // `Object i = 0` initializer to `var i = 0`, so javac types the counter int. The
+    // counter is widened explicitly by javaPrintWidenedOperand, and no `=`/compound
+    // assignment may write it (that value would be a box / a widened long).
+    javaIntForCounter(node) {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const symbol = this.getChecker().getSymbolAtLocation(node);
+        const declaration = symbol?.valueDeclaration;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
+            return false;
+        }
+        const declarationList = declaration.parent;
+        if (declarationList === undefined || !ts.isVariableDeclarationList(declarationList)
+            || declarationList.declarations.length !== 1) {
+            return false;
+        }
+        const forStatement = declarationList.parent;
+        if (forStatement === undefined || forStatement.kind !== ts.SyntaxKind.ForStatement
+            || forStatement.initializer !== declarationList) {
+            return false;
+        }
+        if (this.javaIntegerLiteralKind(declaration.initializer) !== 'int') {
+            return false;
+        }
+        return this.javaCounterHasNoBoxWrite(node, symbol);
+    }
+
+    // no `=`/compound assignment anywhere in the enclosing function writes this counter;
+    // `++`/`--` keep the primitive int, any other operator would not
+    javaCounterHasNoBoxWrite(node, symbol) {
+        let scope = node.parent;
+        while (scope !== undefined && !ts.isFunctionLike(scope) && scope.kind !== ts.SyntaxKind.SourceFile) {
+            scope = scope.parent;
+        }
+        if (scope === undefined) {
+            return false;
+        }
+        let safe = true;
+        const visit = (current) => {
+            if (!safe || current === undefined) {
+                return;
+            }
+            if (ts.isIdentifier(current) && this.getChecker().getSymbolAtLocation(current) === symbol) {
+                const parent = current.parent;
+                if (parent !== undefined && ts.isBinaryExpression(parent) && parent.left === current
+                    && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(parent.operatorToken.kind)) {
+                    safe = false;
+                    return;
+                }
+            }
+            ts.forEachChild(current, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    // `x.length` on a String/List receiver prints `((String)x).length()` /
+    // `((java.util.List<?>)x).size()` — a Java int on every path printJavaLength takes
+    javaLengthIntRead(node) {
+        if (node?.kind !== ts.SyntaxKind.PropertyAccessExpression || node.name?.escapedText !== 'length') {
+            return false;
+        }
+        return this.javaLengthKind(node.expression) !== undefined;
+    }
+
+    // the Java numeric kind of one `+` operand: the literal proofs above plus the
+    // non-null base-tier Long accessors, primitive int for-counters and String/List
+    // length reads. Undefined keeps the helper.
+    javaWidenedNumericKind(node) {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaWidenedNumericKind(node.expression);
+        }
+        const literalKind = this.javaIntegerLiteralKind(node);
+        if (literalKind !== undefined) {
+            return literalKind;
+        }
+        if (ts.isNumericLiteral(node)) {
+            // hex/octal/binary literals keep the helper; fractional/exponent literals are
+            // Java doubles and can hold NaN, which the helper's arithmetic propagates
+            if (/^0[xXbBoO]/.test(node.text)) {
+                return undefined;
+            }
+            return /[.eE]/.test(node.text) ? 'double' : undefined;
+        }
+        if (this.javaBaseTimeLongCall(node)) {
+            return 'long';
+        }
+        if (this.javaIntForCounter(node)) {
+            return 'int';
+        }
+        if (this.javaLengthIntRead(node)) {
+            return 'int';
+        }
+        if (node.kind === ts.SyntaxKind.BinaryExpression && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+            return this.javaWidenedAddKind(node);
+        }
+        // a nested `- * /` keeps the printer's own literal rule (java-18's family)
+        return this.javaNativeArithmeticKind(node);
+    }
+
+    // the kind of a nested native `+` this rule prints, or undefined when it keeps the helper
+    javaWidenedAddKind(node) {
+        const leftKind = this.javaWidenedNumericKind(node.left);
+        const rightKind = this.javaWidenedNumericKind(node.right);
+        if (leftKind === undefined || rightKind === undefined) {
+            return undefined;
+        }
+        return (leftKind === 'double' || rightKind === 'double') ? 'double' : 'long';
+    }
+
+    // the native form of a numeric `+`, or undefined to keep Helpers.add
+    printWidenedNativeAdd(left, right, leftText, rightText) {
+        const leftKind = this.javaWidenedNumericKind(left);
+        const rightKind = this.javaWidenedNumericKind(right);
+        if (leftKind === undefined || rightKind === undefined) {
+            return undefined;
+        }
+        const resultKind = (leftKind === 'double' || rightKind === 'double') ? 'double' : 'long';
+        const leftOperand = this.javaPrintWidenedOperand(leftKind, resultKind, left, leftText);
+        const rightOperand = this.javaPrintWidenedOperand(rightKind, resultKind, right, rightText);
+        return `(${leftOperand} + ${rightOperand})`;
+    }
+
+    // an int operand is widened to long explicitly: `i + 1` would box an Integer where
+    // Helpers.add hands back a Long, and an all-int sum wraps where the helper's long
+    // does not. Integer literals print long; a Double result needs no widening.
+    javaPrintWidenedOperand(kind, resultKind, node, text) {
+        if (kind === 'double') {
+            return text;
+        }
+        if (kind === 'long' || ts.isNumericLiteral(node)) {
+            return this.javaPrintOperandAsLong(node, text);
+        }
+        if (resultKind === 'long') {
+            return `((long) ${text})`;
+        }
+        return text;
+    }
+
     // integer literals print as Java `int`; the helpers normalize Integer to Long before
     // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
     // result identical
@@ -1765,6 +1951,10 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (leftFamily !== 'number' || rightFamily !== 'number') {
             return undefined;
+        }
+        if (op === ts.SyntaxKind.PlusToken) {
+            // the widened rule: literals + the non-null numeric proofs this printer owns
+            return this.printWidenedNativeAdd(left, right, leftText, rightText);
         }
         const leftKind = this.javaProvableNumericKind(left);
         const rightKind = this.javaProvableNumericKind(right);

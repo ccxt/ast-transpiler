@@ -3220,7 +3220,7 @@ describe('java helper-family inlining (+ - * / += -=)', () => {
         "        const x = a + b;\n" +
         "        const y = n + 1;\n" +
         "    }\n" +
-        "}"
+        "}\n"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain('Object x = Helpers.add(a, b);');
         expect(output).toContain('Object y = Helpers.add(n, 1);');
@@ -3306,6 +3306,143 @@ describe('java string-concat chains anchored by a declared String', () => {
     });
 });
 
+
+describe('java widened native add (numeric `+` on provably non-null operands)', () => {
+    test('primitive int for-counter widens explicitly to a native long add', () => {
+        const input =
+        "class T {\n" +
+        "    f(n: number): void {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            const x = i + 1;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (((long) i) + 1L);');
+        expect(output).not.toContain('Helpers.add(i, 1)');
+    });
+
+    test('two int counters widen both operands (an int sum would wrap and box Integer)', () => {
+        const input =
+        "class T {\n" +
+        "    f(n: number): void {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            for (let j = 0; j < n; j++) {\n" +
+        "                const x = i + j;\n" +
+        "            }\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (((long) i) + ((long) j));');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('String length read widens to a native long add', () => {
+        const input =
+        "class T {\n" +
+        "    f(s: string): void {\n" +
+        "        const x = s.length + 1;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (((long) ((String)s).length()) + 1L);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('List size read widens to a native long add', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: number[]): void {\n" +
+        "        const x = a.length + 1;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (((long) ((java.util.List<?>)a).size()) + 1L);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('a double-valued int operand needs no widening (int promotes natively)', () => {
+        const input =
+        "class T {\n" +
+        "    f(n: number): void {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            const x = i + 1.5;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (i + 1.5);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('a counter with any assignment write keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(n: number): void {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            const x = i + 1;\n" +
+        "            i += 1;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.add(i, 1);');
+        expect(output).not.toContain('((long) i)');
+    });
+
+    test('a boxed local (Object in Java) keeps the helper even with a numeric TS type', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const i = 0;\n" +
+        "        const x = i + 1;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.add(i, 1);');
+    });
+
+    test('an unresolved this.milliseconds() (printed as callDynamically) keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const x = this.milliseconds() + 10000;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.callDynamically(this, "milliseconds"');
+        expect(output).toContain('Helpers.add(');
+        expect(output).not.toContain('+ 10000L');
+    });
+
+    test('a class-local override of milliseconds keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    milliseconds(): string { return \"x\"; }\n" +
+        "    f(): void {\n" +
+        "        const x = this.milliseconds() + 1;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.add(this.milliseconds(), 1);');
+    });
+
+    test('- and * keep their own literal rule (the counters stay on the helper)', () => {
+        const input =
+        "class T {\n" +
+        "    f(n: number): void {\n" +
+        "        for (let i = 0; i < n; i++) {\n" +
+        "            const x = i - 1;\n" +
+        "            const y = i * 2;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = Helpers.subtract(i, 1);');
+        expect(output).toContain('Object y = Helpers.multiply(i, 2);');
+    });
+});
 
 describe('java optional parameter unpacking', () => {
     test('literal defaults unpack natively from optionalArgs (no Helpers.getArg)', () => {
