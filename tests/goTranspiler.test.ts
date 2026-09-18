@@ -1241,14 +1241,44 @@ describe('go inline equality', () => {
         "        if (this.enableRateLimit) { return 1; }\n" +
         "        if (!this.verbose) { return 2; }\n" +
         "        if (this.options) { return 3; }\n" +
+        "        if (this.newUpdates) { return 4; }\n" +
         "        return 0;\n" +
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("if this.EnableRateLimit {");
         expect(output).toContain("if !this.Verbose {");
+        // `NewUpdates bool` in the hand-written BaseExchange struct
+        expect(output).toContain("if this.NewUpdates {");
         // a field the printer cannot name keeps the helper
         expect(output).toContain("if EvalTruthy(this.Options) {");
+    });
+    test('hand-written bool-returning methods need no truthiness helper', () => {
+        const input =
+        "class T {\n" +
+        "    isEmpty (a: any): boolean { return true; }\n" +
+        "    isJsonEncodedObject (a: any): boolean { return true; }\n" +
+        "    isBinaryMessage (a: any): boolean { return true; }\n" +
+        "    hasOutcome (a: any): boolean { return true; }\n" +
+        "    safeBool (a: any, b: any): boolean { return true; }\n" +
+        "    f (symbols: any, msg: any) {\n" +
+        "        if (this.isEmpty (symbols)) { return 1; }\n" +
+        "        if (!this.isEmpty (symbols)) { return 2; }\n" +
+        "        if (this.isJsonEncodedObject (msg)) { return 3; }\n" +
+        "        if (this.isBinaryMessage (msg)) { return 4; }\n" +
+        "        if (this.hasOutcome (msg)) { return 5; }\n" +
+        "        if (this.safeBool (msg, 'k')) { return 6; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if this.IsEmpty(symbols) {");
+        expect(output).toContain("if !this.IsEmpty(symbols) {");
+        expect(output).toContain("if this.IsJsonEncodedObject(msg) {");
+        expect(output).toContain("if this.IsBinaryMessage(msg) {");
+        // an any-returning method keeps the helper, and so does the *bool accessor
+        expect(output).toContain("if EvalTruthy(this.HasOutcome(msg)) {");
+        expect(output).toContain("if EvalTruthy(this.SafeBool(msg, \"k\")) {");
     });
 });
 

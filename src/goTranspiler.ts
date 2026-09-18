@@ -185,7 +185,19 @@ const GO_BOOL_FIELDS = new Set([
     'this.ReduceFees',
     'this.SubstituteCommonCurrencyCodes',
     'this.IsSandboxModeEnabled',
+    // `public newUpdates: boolean` in ts/src/base/Exchange.ts; the hand-written
+    // struct field is the `NewUpdates bool` read by every WS loop
+    'this.NewUpdates',
 ]);
+
+// Hand-written BaseExchange methods (go/v4/exchange.go) whose Go signature returns a
+// plain `bool`, so `EvalTruthy(this.IsEmpty(x))` IS `this.IsEmpty(x)`. InArray,
+// Precise.String* and the retagged generated methods are already in GO_HELPER_RETURN_TYPES.
+const GO_BOOL_CALL_NAMES_NATIVE = [
+    'this.IsEmpty',
+    'this.IsJsonEncodedObject',
+    'this.IsBinaryMessage',
+];
 // A printed call the printer cannot type *and* whose Go signature returns `any`
 // can be compared with nil / a string / a bool literal without the helper: the
 // box holds a scalar or nil, never a typed pointer.
@@ -2775,7 +2787,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goTypeOfInitializer(node, printed) === 'bool') {
             return printed;
         }
-        return GO_BOOL_FIELDS.has(printed) ? printed : undefined;
+        if (GO_BOOL_FIELDS.has(printed)) {
+            return printed;
+        }
+        // a hand-written bool-returning base method already prints a Go bool
+        const callee = this.goPrintedCallee(printed);
+        return (callee !== undefined && GO_BOOL_CALL_NAMES_NATIVE.indexOf(callee) >= 0) ? printed : undefined;
     }
 
 
