@@ -1015,6 +1015,12 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeArithmeticKind(node: any): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
+    javaStringBoxText(node: any, text: any): string;
+    javaScalarParseAccepts(callee: any, text: any): boolean;
+    printNativeScalarParse(node: any, callee: any): string;
+    javaPadStartReceiverText(receiver: any, name: any): any;
+    printNativePadStart(node: any, name: any): string;
+    javaCharLiteral(character: any): any;
     getObjectLiteralFromCallExpressionArguments(node: any): any[];
     collectCapturingObjectLiterals(node: any): any[];
     getBinaryExpressionPrefixes(node: any, identation: any): string;
@@ -1062,9 +1068,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     printJsonParseCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonStringifyCall(_node: any, _identation: any, parsedArg?: any): string;
     printPromiseAllCall(_node: any, _identation: any, parsedArg?: any): string;
-    printMathFloorCall(_node: any, _identation: any, parsedArg?: any): string;
-    printMathRoundCall(_node: any, _identation: any, parsedArg?: any): string;
-    printMathCeilCall(_node: any, _identation: any, parsedArg?: any): string;
+    printMathFloorCall(node: any, _identation: any, parsedArg?: any): string;
+    printMathRoundCall(node: any, _identation: any, parsedArg?: any): string;
+    printMathCeilCall(node: any, _identation: any, parsedArg?: any): string;
     printNumberIsIntegerCall(_node: any, _identation: any, parsedArg?: any): string;
     printArrayPushCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
     printIncludesCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
@@ -1090,7 +1096,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     stringLiteralArgument(argument: any): string;
     sideEffectFreeReceiver(expression: any): any;
     printPadEndCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
-    printPadStartCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
+    printPadStartCall(node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(_node: any, _identation: any): string;
     printLengthProperty(node: any, _identation: any, _name?: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;

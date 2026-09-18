@@ -704,6 +704,15 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {
+        if (node.expression.kind === ts.SyntaxKind.Identifier) {
+            const callee = node.expression.escapedText;
+            if (callee === 'parseInt' || callee === 'parseFloat') {
+                const nativeParse = this.printNativeScalarParse(node, callee);
+                if (nativeParse !== undefined) {
+                    return nativeParse;
+                }
+            }
+        }
         if (node.expression.kind === ts.SyntaxKind.PropertyAccessExpression) {
             const expressionText = node.expression.getText().trim();
             const args = node.arguments;
@@ -711,7 +720,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 const parsedArg = this.printNode(args[0], 0);
                 switch (expressionText) {
                 case "Math.abs":
-                    return `Helpers.mathAbs(Double.parseDouble(Helpers.toString(${parsedArg})))`;
+                    return `Helpers.mathAbs(Double.parseDouble(${this.javaStringBoxText(args[0], parsedArg)}))`;
                 }
             } else if (args.length === 2) {
                 const parsedArg1 = this.printNode(args[0], 0);
@@ -728,7 +737,7 @@ export class JavaTranspiler extends BaseTranspiler {
                     return `${wrapper}${parsedArg1}, ${parsedArg2})`;
                 }
                 case "Math.pow":
-                    return `Helpers.mathPow(Double.parseDouble(Helpers.toString(${parsedArg1})), Double.parseDouble(Helpers.toString(${parsedArg2})))`;
+                    return `Helpers.mathPow(Double.parseDouble(${this.javaStringBoxText(args[0], parsedArg1)}), Double.parseDouble(${this.javaStringBoxText(args[1], parsedArg2)}))`;
                 }
             }
             const leftSide = node.expression?.expression;
@@ -2756,6 +2765,105 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Math.${name}(${leftText}, ${rightText})`;
     }
 
+    // ---- helper-family inlining: `parseInt/parseFloat/toString/padStart` -------
+    // Every one of these helpers answers a value the native Java call cannot: parseInt
+    // catches its NumberFormatException into null, parseFloat catches it into 0.0,
+    // Helpers.toString maps a null input to null (String.valueOf maps it to "null") and
+    // Helpers.padStart pads AND truncates. The native form is printed only where the
+    // helper's fallback path is unreachable for the printed operand.
+
+    // `Helpers.toString(x)` is `x == null ? null : x.toString()`, so `String.valueOf(x)`
+    // is exact for every argument that cannot be null. Only a numeric literal or a
+    // nested `+ - * /` this rule prints natively qualifies: both are Java primitives.
+    javaStringBoxText(node, text) {
+        return this.javaProvableNumericKind(node) !== undefined ? `String.valueOf(${text})` : `Helpers.toString(${text})`;
+    }
+
+    // The runtime parses a String with Long.parseLong (parseInt) / Double.parseDouble
+    // (parseFloat) inside a catch; a literal the native parser ACCEPTS cannot reach the
+    // catch, so the native call cannot change the answer (and parseInt additionally
+    // needs the value inside the long range, else the helper would answer null).
+    javaScalarParseAccepts(callee, text) {
+        if (callee === 'parseInt') {
+            if (!/^[+-]?[0-9]+$/.test(text)) {
+                return false;
+            }
+            const value = BigInt(text.replace(/^\+/, ''));
+            return value >= BigInt('-9223372036854775808') && value <= BigInt('9223372036854775807');
+        }
+        // Double.parseDouble's grammar minus the suffix forms; NaN/Infinity are parsed
+        // by both, whitespace and hex floats by neither of the two the same way.
+        return /^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$/.test(text)
+            || /^[+-]?Infinity$/.test(text)
+            || text === 'NaN';
+    }
+
+    // `parseInt(x)` / `parseFloat(x)` -> the native parse, or undefined to keep the helper
+    printNativeScalarParse(node, callee) {
+        const args = node?.arguments;
+        if (args === undefined || args.length !== 1 || !ts.isStringLiteral(args[0])) {
+            return undefined;
+        }
+        if (!this.javaScalarParseAccepts(callee, args[0].text)) {
+            return undefined;
+        }
+        const nativeName = callee === 'parseInt' ? 'Long.parseLong' : 'Double.parseDouble';
+        return `${nativeName}(${this.printNode(args[0], 0)})`;
+    }
+
+    // The printed receiver of a `padStart` this rule can inline: the printer or the
+    // ccxt local-typing pass already cast it (`((String)x)`), or the checker proves a
+    // plain TS string, in which case the accessor cast this rule adds cannot fire (the
+    // printer declares locals Object and the local-typing pass decides the final type).
+    javaPadStartReceiverText(receiver, name) {
+        if (/^\(+\(String\)/.test(name)) {
+            return name;
+        }
+        if (this.javaScalarFamily(receiver) === 'string') {
+            return `((String)${name})`;
+        }
+        return undefined;
+    }
+
+    // `x.padStart(n, 'c')` with a non-negative integer literal length and a single-char
+    // literal pad. Helpers.padStart pads with the pad char up to `n` chars and then
+    // answers the LAST `n` chars, so the native form keeps both halves: String.format
+    // builds the pad from an empty `%<k>s` (never touching a space inside the value)
+    // and the >= arm reproduces the helper's truncation (format does not truncate).
+    printNativePadStart(node, name) {
+        const args = node?.arguments;
+        if (args === undefined || args.length !== 2 || name === undefined) {
+            return undefined;
+        }
+        if (this.javaIntegerLiteralKind(args[0]) !== 'int' || !/^[0-9]+$/.test(args[0].text)) {
+            return undefined;
+        }
+        if (!ts.isStringLiteral(args[1]) || args[1].text.length === 0) {
+            return undefined;
+        }
+        const receiver = node.expression?.expression;
+        if (!this.sideEffectFreeReceiver(receiver)) {
+            return undefined;
+        }
+        const receiverText = this.javaPadStartReceiverText(receiver, name);
+        if (receiverText === undefined) {
+            return undefined;
+        }
+        const length = args[0].text;
+        const pad = `'${this.javaCharLiteral(args[1].text[0])}'`;
+        const lengthCall = `${receiverText}.length()`;
+        return `(${lengthCall} >= ${length} ? ${receiverText}.substring(${lengthCall} - ${length})`
+            + ` : String.format("%" + (${length} - ${lengthCall}) + "s", "").replace(' ', ${pad}) + ${receiverText})`;
+    }
+
+    // one char literal for the `String.format(...).replace(' ', c)` pad, escaped
+    javaCharLiteral(character) {
+        if (character === "'" || character === '\\') {
+            return `\\${character}`;
+        }
+        return character;
+    }
+
     getObjectLiteralFromCallExpressionArguments(node) {
         const res = [];
         if (!node?.arguments) {
@@ -3933,16 +4041,16 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Helpers.promiseAll(${parsedArg})`;
     }
 
-    printMathFloorCall(_node, _identation, parsedArg = undefined) {
-        return `(Math.floor(Double.parseDouble(Helpers.toString(${parsedArg}))))`;
+    printMathFloorCall(node, _identation, parsedArg = undefined) {
+        return `(Math.floor(Double.parseDouble(${this.javaStringBoxText(node?.arguments?.[0], parsedArg)})))`;
     }
 
-    printMathRoundCall(_node, _identation, parsedArg = undefined) {
-        return `Math.round(Double.parseDouble(Helpers.toString(${parsedArg})))`;
+    printMathRoundCall(node, _identation, parsedArg = undefined) {
+        return `Math.round(Double.parseDouble(${this.javaStringBoxText(node?.arguments?.[0], parsedArg)}))`;
     }
 
-    printMathCeilCall(_node, _identation, parsedArg = undefined) {
-        return `Math.ceil(Double.parseDouble(Helpers.toString(${parsedArg})))`;
+    printMathCeilCall(node, _identation, parsedArg = undefined) {
+        return `Math.ceil(Double.parseDouble(${this.javaStringBoxText(node?.arguments?.[0], parsedArg)}))`;
     }
 
     printNumberIsIntegerCall(_node, _identation, parsedArg = undefined) {
@@ -4235,7 +4343,11 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
     }
 
-    printPadStartCall(_node, _identation, name, parsedArg, parsedArg2) {
+    printPadStartCall(node, _identation, name, parsedArg, parsedArg2) {
+        const native = this.printNativePadStart(node, name);
+        if (native !== undefined) {
+            return native;
+        }
         return `Helpers.padStart((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
     }
 
