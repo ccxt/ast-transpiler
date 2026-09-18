@@ -5600,42 +5600,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return this.getChecker().getTypeAtLocation(node).flags === ts5.TypeFlags.String ? "string" : void 0;
   }
-  // a `*string` local prints a nilable Go pointer; it may only be dereferenced
-  // where the checker narrowed it to a non-nilable string (a guard that always
-  // exits, an `if (x !== undefined)` block). TypeScript `undefined` == Go nil here.
-  goNilProvenStringDeref(node) {
-    if (node?.kind !== ts5.SyntaxKind.Identifier) {
-      return false;
-    }
-    if (this.goDeclaredTypeOfIdentifier(node) !== "*string") {
-      return false;
-    }
-    let type;
-    try {
-      type = this.getChecker().getTypeAtLocation(node);
-    } catch (e) {
-      return false;
-    }
-    return (type.flags & ts5.TypeFlags.StringLike) !== 0;
-  }
-  // the printed text of a `+` operand the concat rule may use: the printer's own
-  // text for a proven string, or the deref goNativeBinaryText adds for a
-  // nil-proven `*string` leaf. undefined keeps the helper call.
-  goStringConcatOperandType(node, printedText) {
-    if (this.goNilProvenStringDeref(node)) {
-      return "string";
-    }
-    return this.goOperandStaticType(node, printedText) === "string" ? "string" : void 0;
-  }
-  // `Add(Add(a, "lit"), b)` and every other `+` chain whose leaves are all non-nil
-  // Go strings: the runtime Add only ever takes its string branch for those, so the
-  // chain prints as the Go operator (`a + "lit" + b`). Anything else keeps the call.
-  goNativeStringConcat(node, leftText, rightText) {
-    if (this.goStringConcatOperandType(node.left, leftText) === void 0 || this.goStringConcatOperandType(node.right, rightText) === void 0) {
-      return void 0;
-    }
-    return { "goType": "string", "text": this.goNativeBinaryText(node, "+", leftText, rightText) };
-  }
   // Go static type of an operand's printed form: 'string', 'int', 'int64' or
   // 'const-int' (untyped integer literal). undefined when the printer cannot name
   // it — a nilable/`any` operand keeps the helper call.
@@ -5721,12 +5685,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     leftText = leftText ?? this.printNode(node.left, 0);
     rightText = rightText ?? this.printNode(node.right, 0);
-    if (op === ts5.SyntaxKind.PlusToken) {
-      const concat = this.goNativeStringConcat(node, leftText, rightText);
-      if (concat !== void 0) {
-        return concat;
-      }
-    }
     const leftType = this.goOperandStaticType(node.left, leftText);
     const rightType = this.goOperandStaticType(node.right, rightText);
     if (leftType === void 0 || rightType === void 0) {
@@ -5752,8 +5710,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const operandText = (operand, printed) => {
       const isBinary = operand?.kind === ts5.SyntaxKind.BinaryExpression;
       const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
-      const leaf = this.goNilProvenStringDeref(operand) ? "*" + text.trim() : text;
-      return this.goNativeOperandText(operand, leaf);
+      return this.goNativeOperandText(operand, text);
     };
     const left = operandText(node.left, leftText);
     const right = operandText(node.right, rightText);
