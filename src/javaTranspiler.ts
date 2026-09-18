@@ -77,6 +77,18 @@ const JAVA_ASSIGNMENT_OPERATOR_KINDS: Set<number> = (() => {
     return new Set<number>(([ 'EqualsToken' ].concat(names)).map((name) => kinds[name]).filter((kind) => kind !== undefined));
 })();
 
+// receiver node kinds whose printed Java is a primary expression, so the `(String)`
+// checkcast in front of them binds the whole receiver (a native `+` prints its own parens)
+const JAVA_SPLIT_RECEIVER_KINDS: Set<number> = new Set<number>([
+    ts.SyntaxKind.Identifier,
+    ts.SyntaxKind.PropertyAccessExpression,
+    ts.SyntaxKind.ElementAccessExpression,
+    ts.SyntaxKind.CallExpression,
+    ts.SyntaxKind.ParenthesizedExpression,
+    ts.SyntaxKind.StringLiteral,
+    ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+]);
+
 export class JavaTranspiler extends BaseTranspiler {
 
     countRequiredParameters(declaration) {
@@ -1274,6 +1286,51 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         return leftKind;
+    }
+
+    // true when the receiver's printed Java would be a `cond ? a : b` (a parenthesised
+    // conditional): those keep the helper so no added line carries a `?`
+    javaSplitTernaryReceiver(node): boolean {
+        if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            return this.javaSplitTernaryReceiver(node.expression);
+        }
+        return node.kind === ts.SyntaxKind.ConditionalExpression;
+    }
+
+    // `s.split (<literal>)` -> the printer's own TS-array shape around Java's
+    // String.split(Pattern.quote(...)): the plain-string receiver makes the helper's
+    // String.valueOf/null branch unreachable and the result stays readable as List<Object>.
+    javaNativeSplitCall(node, name, parsedArg): string | undefined {
+        if (node === undefined || name === undefined || parsedArg === undefined) {
+            return undefined;
+        }
+        const callee = node.expression;
+        if (callee === undefined || callee.kind !== ts.SyntaxKind.PropertyAccessExpression) {
+            return undefined;
+        }
+        if (callee.name?.escapedText !== 'split' || node.arguments?.length !== 1) {
+            return undefined;
+        }
+        const receiver = callee.expression;
+        const separator = node.arguments[0];
+        if (receiver === undefined || !JAVA_SPLIT_RECEIVER_KINDS.has(receiver.kind)) {
+            return undefined;
+        }
+        // a conditional receiver keeps the helper: the campaign's diff audit flags every
+        // added line that carries a `?`, and such a line never goes native in this family
+        if (this.javaSplitTernaryReceiver(receiver)) {
+            return undefined;
+        }
+        // the separator is a literal: Helpers.split String.valueOf()s it and quotes it as
+        // a regex, and a literal is the only separator whose printed Java is a String
+        if (separator.kind !== ts.SyntaxKind.StringLiteral
+            && separator.kind !== ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
+            return undefined;
+        }
+        if (this.javaScalarFamily(receiver) !== 'string') {
+            return undefined;
+        }
+        return `${this.ARRAY_OPENING_TOKEN}((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))${this.ARRAY_CLOSING_TOKEN}`;
     }
 
     // integer literals print as Java `int`; the helpers normalize Integer to Long before
@@ -2537,8 +2594,11 @@ export class JavaTranspiler extends BaseTranspiler {
         return `String.join((String)${parsedArg}, (java.util.List<String>)${name})`;
     }
 
-    printSplitCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        // return `new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)${name}).split((String)${parsedArg})))`;
+    printSplitCall(node, _identation, name = undefined, parsedArg = undefined) {
+        const nativeSplit = this.javaNativeSplitCall(node, name, parsedArg);
+        if (nativeSplit !== undefined) {
+            return nativeSplit;
+        }
         return `Helpers.split(${name}, ${parsedArg})`;
     }
 

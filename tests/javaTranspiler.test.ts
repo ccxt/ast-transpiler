@@ -3305,3 +3305,126 @@ describe('java replaceAll native emission', () => {
         expect(output).toContain("Helpers.replaceAll((String)((String)x).toLowerCase()");
     });
 });
+
+describe('java native split (Helpers.split -> Arrays.asList(String.split(Pattern.quote)))', () => {
+    // a receiver the checker types as a plain string with a literal separator: the emitted
+    // text is Helpers.split's own body without its String.valueOf/String branch, which is
+    // unreachable for a plain string, and with the separator quoted exactly as the helper
+    // quotes it (Pattern.quote), so a regex metacharacter stays a literal separator
+    test('checker-proven string receiver with a literal separator prints the native split', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const parts = s.split(',');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)s).split(java.util.regex.Pattern.quote(\",\"))))");
+        expect(output).not.toContain("Helpers.split");
+    });
+
+    test('a regex metacharacter separator is quoted, not passed as a pattern', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const parts = s.split('?dt=');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.regex.Pattern.quote(\"?dt=\")");
+        expect(output).not.toContain("Helpers.split");
+    });
+
+    test('a string-literal receiver prints the native split', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        const parts = 'a,b'.split(',');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)\"a,b\").split(java.util.regex.Pattern.quote(\",\"))))");
+        expect(output).not.toContain("Helpers.split");
+    });
+
+    test('an element read from a string array is a plain string and prints the native split', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: string[]): void {\n" +
+        "        const s = xs[0];\n" +
+        "        const parts = s.split('/');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)s).split(java.util.regex.Pattern.quote(\"/\"))))");
+        expect(output).not.toContain("Helpers.split");
+    });
+
+    // fallbacks: every shape without the proof keeps the runtime helper
+    test('an any receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const parts = x.split(',');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(x, \",\")");
+    });
+
+    test('a nullable alias receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: Str): void {\n" +
+        "        const parts = s.split(',');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(s, \",\")");
+    });
+
+    test('a nullable-union receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string | undefined): void {\n" +
+        "        const parts = s.split(',');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(s, \",\")");
+    });
+
+    test('a non-literal separator keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string, sep: string): void {\n" +
+        "        const parts = s.split(sep);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(s, sep)");
+    });
+
+    test('a two-argument split keeps the helper (the printed call drops no limit)', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const parts = s.split(',', 2);\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(s, \",\")");
+    });
+
+    test('a conditional receiver keeps the helper (no added line carries a `?`)', () => {
+        const input =
+        "class T {\n" +
+        "    test(c: boolean, a: string, b: string): void {\n" +
+        "        const parts = (c ? a : b).split(',');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(");
+        expect(output).toContain("? a : b");
+    });
+});
