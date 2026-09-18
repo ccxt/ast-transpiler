@@ -612,6 +612,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsCheckedBoolean(node: any): boolean;
     csharpIdentifierPrintsBool(node: any): boolean;
     csharpCallPrintsBool(node: any): boolean;
+    csharpDeclaredReadType(node: any): string | undefined;
+    csharpNullableBoolCondition(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     csharpConditionParensIfNeeded(node: any, printed: string): string;
     printConditionalExpression(node: any, identation: any): string;

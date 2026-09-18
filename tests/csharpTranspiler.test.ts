@@ -1693,6 +1693,71 @@ describe('isTrue is dropped for a call whose C# signature is a non-nullable bool
     });
 });
 
+// `isTrue (x)` on a `bool?` read is `x == true`: both answer false for a null box. The
+// declaration type is the proof, so a local the printer leaves `object` keeps the helper.
+describe('a nullable bool local prints an explicit `== true` instead of isTrue', () => {
+    const boolProgram = (body: string, second = false) =>
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    f(a, b) {\n" +
+        "        const v = this.safeBool(a, 'k');\n" +
+        (second ? "        const w = this.safeBool(b, 'k');\n" : "") +
+        body +
+        "    }\n" +
+        "}";
+    test('if / ! / ternary conditions on a bool? local', () => {
+        const ifOutput = transpiler.transpileCSharp(boolProgram("        if (v) { return 1; }\n")).content;
+        expect(ifOutput).toContain("bool? v = this.safeBool(a, \"k\");");
+        expect(ifOutput).toContain("if ((v == true))");
+        expect(ifOutput).not.toContain("isTrue");
+        const notOutput = transpiler.transpileCSharp(boolProgram("        if (!v) { return 1; }\n")).content;
+        expect(notOutput).toContain("if (!(v == true))");
+        const ternaryOutput = transpiler.transpileCSharp(boolProgram("        const s = v ? 'yes' : 'no';\n        return s;\n")).content;
+        expect(ternaryOutput).toContain("((bool) (v == true)) ? \"yes\" : \"no\"");
+    });
+    test('logical conditions and a wrapped read keep their operands native', () => {
+        const output = transpiler.transpileCSharp(boolProgram("        if (v || w) { return 1; }\n        if (v && w) { return 2; }\n        if ((v)) { return 3; }\n        return 4;\n", true)).content;
+        expect(output).toContain("if ((v == true) || (w == true))");
+        expect(output).toContain("if ((v == true) && (w == true))");
+        expect(output).toContain("if ((v == true))");
+        expect(output).not.toContain("isTrue");
+    });
+    test('an object box, a call result and a demoted bool? local keep the wrapper', () => {
+        const objectOutput = transpiler.transpileCSharp(boolProgram("        const o = a['k'];\n        if (o) { return 1; }\n")).content;
+        expect(objectOutput).toContain("if (isTrue(o))");
+        const callOutput = transpiler.transpileCSharp(boolProgram("        if (this.safeBool(a, 'k')) { return 1; }\n")).content;
+        expect(callOutput).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+        const demotedOutput = transpiler.transpileCSharp(
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    f(a, p) {\n" +
+        "        let v = this.safeBool(a, 'k');\n" +
+        "        v = p;\n" +
+        "        if (v) { return 1; }\n" +
+        "    }\n" +
+        "}").content;
+        expect(demotedOutput).toContain("object v = this.safeBool(a, \"k\");");
+        expect(demotedOutput).toContain("if (isTrue(v))");
+    });
+    test('the embedding layer\'s declaration proof also drives the condition', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpExpressionTypeResolver;
+        // a local the printer itself leaves `object` but the ccxt classifier prints `bool?`
+        printer.csharpExpressionTypeResolver = (node: any) => (node?.escapedText === 'v' ? 'bool?' : undefined);
+        const output = transpiler.transpileCSharp(
+        "class T {\n" +
+        "    f(a) {\n" +
+        "        let v = a['k'];\n" +
+        "        if (v) { return 1; }\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpExpressionTypeResolver = previous;
+        expect(output).toContain("object v = getValue(a, \"k\");");
+        expect(output).toContain("if ((v == true))");
+        expect(output).not.toContain("isTrue");
+    });
+});
+
 // `a === b` / `a !== b` print the native operator instead of isEqual whenever both
 // operands are C# values of one scalar family, or one side is null/undefined and the
 // other is a type `== null` compiles for.
