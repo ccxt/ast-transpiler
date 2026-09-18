@@ -1618,6 +1618,93 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         "}");
         expect(output).toContain("isEqual(x, null)");
     });
+    test('a local the embedding build layer declares a string compares natively to a literal', () => {
+        // the embedding build layer (ccxt: build/csharp-local-types.js) prints some locals
+        // with a concrete C# type of its own; its answer comes back through
+        // csharpExpressionTypeResolver, so a read of such a local IS that declared type
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (params: object): boolean {\n" +
+        "    const x = this.safeString(params, 'k');\n" +
+        "    const isAbc = x === 'abc';\n" +
+        "    const notAbc = x !== 'abc';\n" +
+        "    const reversed = 'abc' === x;\n" +
+        "    return isAbc || notAbc || reversed;\n" +
+        "}\n";
+        for (const declared of ['string', 'string?']) {
+            const output = withDeclaredTypes({ x: declared }, input);
+            expect(output).toContain("bool isAbc = (x == \"abc\");");
+            expect(output).toContain("bool notAbc = (x != \"abc\");");
+            expect(output).toContain("bool reversed = (\"abc\" == x);");
+            expect(output).not.toContain("isEqual(x, \"abc\")");
+        }
+    });
+    test('a declared type that is not a string keeps isEqual', () => {
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (params: object): boolean {\n" +
+        "    const x = this.safeString(params, 'k');\n" +
+        "    return x === 'abc';\n" +
+        "}\n";
+        // a list/dict/box answer is not a string, and no answer at all is the printer's
+        // `object`: `==` would compare references instead of the helper's string branch
+        for (const declared of ['List<object>', 'Dictionary<string, object>', 'object', 'Int64', 'bool']) {
+            expect(withDeclaredTypes({ x: declared }, input)).toContain("isEqual(x, \"abc\")");
+        }
+        expect(withDeclaredTypes({}, input)).toContain("isEqual(x, \"abc\")");
+    });
+    test('a string local against another literal kind or another read keeps isEqual', () => {
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (params: object): boolean {\n" +
+        "    const x = this.safeString(params, 'k');\n" +
+        "    const y = this.safeString(params, 'k2');\n" +
+        "    const numeric = x === 5;\n" +
+        "    const both = x === y;\n" +
+        "    return numeric || both;\n" +
+        "}\n";
+        const output = withDeclaredTypes({ x: 'string?', y: 'string?' }, input);
+        expect(output).toContain("isEqual(x, 5)");
+        expect(output).toContain("isEqual(x, y)");
+    });
+    test('a parameter keeps isEqual: it prints `object` and the resolver declines it', () => {
+        const withDeclaredTypes = (types, input) => {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            try {
+                return transpiler.transpileCSharp(input).content;
+            } finally {
+                transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+            }
+        };
+        const input =
+        "function f (type: string): boolean {\n" +
+        "    return type === 'market';\n" +
+        "}\n";
+        const output = withDeclaredTypes({}, input);
+        expect(output).toContain("public object f(object type)");
+        expect(output).toContain("isEqual(type, \"market\")");
+    });
 });
 
 describe('csharp helper removal: isEqual on a numeric call result', () => {
