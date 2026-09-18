@@ -187,7 +187,7 @@ const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
 // a line whose code ends like this does not end its statement: the line below it belongs to the
 // same multi-line expression, and go/printer puts a formfeed before it (a new column block)
-const GO_COMMENT_BREAK_END = /(?:[({\[:]|[+\-*/%&|^<>=!])$/;
+const GO_COMMENT_BREAK_END = /(?:[({[:]|[+\-*/%&|^<>=!])$/;
 
 // (opens - closes) of ()[]{} outside strings, so `foo(` (statement continues) and `}` (statement
 // ended before this line) are not mistaken for complete single-line statements
@@ -614,7 +614,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
      * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
      * keeps the source's own separation (the printer emits members adjacent to the
      * closing brace above them). `printClass` used to join every member with a bare
-     * "\n", so a method whose leading `/** ... *​/` comment follows the previous
+     * "\n", so a method whose leading `/** ... *` + `/` comment follows the previous
      * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
      */
     joinTopLevelDecls (decls: string[]): string {
@@ -681,7 +681,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return `(${parameters}) => ${body}`;
         }
         const isAsync = this.isAsyncFunction(node);
-        let functionDef = this.printFunctionDefinition(node, identation);
+        const functionDef = this.printFunctionDefinition(node, identation);
         const funcBody = this.printFunctionBody(node, identation, isAsync);
 
         // printFunctionDefinition already carries the leading comment
@@ -2149,7 +2149,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // are type literals and do not count (isTypeName in go/printer/nodes.go)
     goCompositeLitHasTypeName(text: string, braceIndex: number): boolean {
         let start = braceIndex;
-        while (start > 0 && /[A-Za-z0-9_.\[\]]/.test(text[start - 1])) {
+        while (start > 0 && /[A-Za-z0-9_.[\]]/.test(text[start - 1])) {
             start -= 1;
         }
         const typeText = text.substring(start, braceIndex).trim();
@@ -3429,7 +3429,7 @@ ${tryBodyBlock}
         const lines = block.split("\n");
         const indents = lines
             .filter((line) => line.trim().length > 0)
-            .map((line) => (line.match(/^[	 ]*/) as RegExpMatchArray)[0].length);
+            .map((line) => (line.match(/^[\t ]*/) as RegExpMatchArray)[0].length);
         const common = indents.length ? Math.min(...indents) : 0;
         return lines.map((line) => line.slice(common)).join("\n");
     }

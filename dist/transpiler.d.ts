@@ -597,7 +597,7 @@ declare class GoTranspiler extends BaseTranspiler {
      * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
      * keeps the source's own separation (the printer emits members adjacent to the
      * closing brace above them). `printClass` used to join every member with a bare
-     * "\n", so a method whose leading `/** ... *​/` comment follows the previous
+     * "\n", so a method whose leading `/** ... *` + `/` comment follows the previous
      * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
      */
     joinTopLevelDecls(decls: string[]): string;
