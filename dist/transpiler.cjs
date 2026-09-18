@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -10802,95 +10802,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return void 0;
   }
-  // ── native truthiness of a checker-proved boolean Value ─────────────────
-  // `is_true(&v)` computes `v.is_truthy()`, where `""`/`0`/`[]`/`{}`/Null are
-  // false. When the checker proves the operand is drawn from `bool`/`undefined`
-  // only (so the runtime value is `Value::Bool(..)` or `Value::Null`), the
-  // helper is exactly the native `matches!(v, Value::Bool(true))`.
-  /** `true` / `false` / `boolean` (a union of BooleanLiteral members too). */
-  isBooleanValueType(type) {
-    if (type === void 0) {
-      return false;
-    }
-    if (type.flags & _typescript2.default.TypeFlags.Union) {
-      const members = _nullishCoalesce(type.types, () => ( []));
-      return members.length > 0 && members.every((member) => this.isBooleanValueType(member));
-    }
-    return (type.flags & (_typescript2.default.TypeFlags.Boolean | _typescript2.default.TypeFlags.BooleanLiteral)) !== 0;
-  }
-  /** `boolean | undefined`: `undefined`/`null` both print `Value::Null` (false
-   *  for the helper and for the `matches!` alike), so they may join the union. */
-  isBooleanOrUndefinedType(type) {
-    if (type === void 0) {
-      return false;
-    }
-    const members = type.flags & _typescript2.default.TypeFlags.Union ? _nullishCoalesce(type.types, () => ( [])) : [type];
-    if (members.length === 0) {
-      return false;
-    }
-    const onlyBooleanOrEmpty = members.every((member) => this.isBooleanValueType(member) || (member.flags & (_typescript2.default.TypeFlags.Undefined | _typescript2.default.TypeFlags.Void | _typescript2.default.TypeFlags.Null)) !== 0);
-    return onlyBooleanOrEmpty && members.some((member) => this.isBooleanValueType(member));
-  }
-  /** Operands this unit owns: `safeBool`/`safeBool2`/`safeBoolN` calls (a
-   *  `Value` in the port) and element accesses (printed as `get_value`). */
-  isBooleanValueFamilyOperand(node) {
-    const inner = this.unwrapParens(node);
-    if (inner === void 0) {
-      return false;
-    }
-    if (_typescript2.default.isElementAccessExpression(inner)) {
-      return true;
-    }
-    if (_typescript2.default.isCallExpression(inner)) {
-      const name = this.callExpressionName(inner);
-      return name === "safeBool" || name === "safeBool2" || name === "safeBoolN";
-    }
-    return false;
-  }
-  /** The emitted `matches!` is a bare Rust `bool`: it is only valid where the
-   *  whole enclosing boolean expression already sits in a bool slot. A logical
-   *  expression stored in a `Value` slot gets its `Value::Bool(..)` box from the
-   *  ccxt post-passes, which key on the leading helper token the operand would
-   *  no longer provide. */
-  isBareBoolEmissionSafe(node) {
-    let current = node;
-    let parent = current.parent;
-    while (parent !== void 0) {
-      if (_typescript2.default.isParenthesizedExpression(parent)) {
-        current = parent;
-        parent = parent.parent;
-        continue;
-      }
-      if (parent.kind === SyntaxKind4.PrefixUnaryExpression && parent.operator === SyntaxKind4.ExclamationToken) {
-        current = parent;
-        parent = parent.parent;
-        continue;
-      }
-      if (parent.kind === SyntaxKind4.BinaryExpression && (parent.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || parent.operatorToken.kind === SyntaxKind4.BarBarToken)) {
-        current = parent;
-        parent = parent.parent;
-        continue;
-      }
-      break;
-    }
-    return this.isBooleanPosition(current);
-  }
-  /** Native truthiness text of the operand, or undefined to keep `is_true`. */
-  printNativeTruthiness(node) {
-    if (!this.isBooleanValueFamilyOperand(node)) {
-      return void 0;
-    }
-    if (!this.printsValueExpression(node)) {
-      return void 0;
-    }
-    if (!this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node))) {
-      return void 0;
-    }
-    if (!this.isBareBoolEmissionSafe(node)) {
-      return void 0;
-    }
-    return `matches!(${this.printNode(node, 0)}, Value::Bool(true))`;
-  }
   // Kind of a literal operand whose printed Value variant is exactly known.
   literalKindOfNode(node) {
     if (node === void 0) {
@@ -12114,10 +12025,6 @@ ${idn}}`;
     }
     if (node.kind === SyntaxKind4.PrefixUnaryExpression && node.operator === SyntaxKind4.ExclamationToken) {
       return this.printPrefixUnaryExpression(node, identation);
-    }
-    const nativeTruthiness = this.printNativeTruthiness(node);
-    if (nativeTruthiness !== void 0) {
-      return `${this.getIden(identation)}${nativeTruthiness}`;
     }
     const expression = this.printNode(node, 0);
     return `${this.getIden(identation)}is_true(&${expression})`;

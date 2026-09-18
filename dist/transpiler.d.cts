@@ -1129,22 +1129,6 @@ declare class RustTranspiler extends BaseTranspiler {
     private static readonly BOOL_PRODUCING_CALLS;
     private static readonly PAYLOAD_ACCESSORS;
     primitiveKindOfType(type: any): string;
-    /** `true` / `false` / `boolean` (a union of BooleanLiteral members too). */
-    isBooleanValueType(type: ts.Type | undefined): boolean;
-    /** `boolean | undefined`: `undefined`/`null` both print `Value::Null` (false
-     *  for the helper and for the `matches!` alike), so they may join the union. */
-    isBooleanOrUndefinedType(type: ts.Type | undefined): boolean;
-    /** Operands this unit owns: `safeBool`/`safeBool2`/`safeBoolN` calls (a
-     *  `Value` in the port) and element accesses (printed as `get_value`). */
-    isBooleanValueFamilyOperand(node: any): boolean;
-    /** The emitted `matches!` is a bare Rust `bool`: it is only valid where the
-     *  whole enclosing boolean expression already sits in a bool slot. A logical
-     *  expression stored in a `Value` slot gets its `Value::Bool(..)` box from the
-     *  ccxt post-passes, which key on the leading helper token the operand would
-     *  no longer provide. */
-    isBareBoolEmissionSafe(node: any): boolean;
-    /** Native truthiness text of the operand, or undefined to keep `is_true`. */
-    printNativeTruthiness(node: any): string | undefined;
     literalKindOfNode(node: any): string;
     printsValueExpression(node: any): boolean;
     callExpressionName(node: any): string;
