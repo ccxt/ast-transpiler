@@ -2602,3 +2602,75 @@ describe('rust declared-Dict locals (rust-25)', () => {
         expect(RUST_DECLARED_DICT_LOCALS.KIND_PRESERVING_MUTATORS.has('add_element_to_object')).toBe(true);
     });
 });
+
+// `parseInt`/`parseFloat` print the runtime helpers; a checker-proven string
+// argument needs no Value-kind dispatch, so the helper's own match with native
+// `str::parse` is emitted (every helper branch kept).
+describe('rust native parseInt/parseFloat', () => {
+    const nativeInt = '(match &x { Value::Str(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), Value::Int(__parse_n) => Value::Int(*__parse_n), Value::Float(__parse_f) => Value::Int(*__parse_f as i64), _ => Value::Null })';
+    const nativeFloat = '(match &x { Value::Str(__parse_s) => __parse_s.trim().parse::<f64>().map(Value::Float).unwrap_or(Value::Null), Value::Float(__parse_f) => Value::Float(*__parse_f), Value::Int(__parse_n) => Value::Float(*__parse_n as f64), _ => Value::Null })';
+
+    test('parseInt on a string param goes native', () => {
+        const input = "class A {\n    f (x: string) {\n        const n = parseInt (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`let mut n: Value = ${nativeInt};`);
+        expect(output).not.toContain('parseInt(');
+    });
+
+    test('parseFloat on a string local goes native', () => {
+        const input = "class A {\n    f (x: string) {\n        const n = parseFloat (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`let mut n: Value = ${nativeFloat};`);
+        expect(output).not.toContain('parseFloat(');
+    });
+
+    test('a cast-to-string argument is a proven string', () => {
+        const input = "class A {\n    f (x: string | undefined) {\n        const n = parseInt (x as string);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`let mut n: Value = ${nativeInt};`);
+        expect(output).not.toContain('parseInt(');
+    });
+
+    test('an any-typed argument keeps the helper', () => {
+        const input = "class A {\n    f (x: any) {\n        const n = parseInt (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = parseInt(x);');
+    });
+
+    test('a numeric argument keeps the helper', () => {
+        const input = "class A {\n    f (x: number) {\n        const n = parseFloat (x);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = parseFloat(x);');
+    });
+
+    test('the radix form keeps the helper', () => {
+        const input = "class A {\n    f (x: string) {\n        const n = parseInt (x, 10);\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = parseInt(x, Value::Int(10));');
+    });
+
+    test('an integer string literal folds to Value::Int', () => {
+        const input = "class A {\n    f () {\n        const n = parseInt ('4');\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = Value::Int(4);');
+    });
+
+    test('a decimal string literal folds to Value::Float', () => {
+        const input = "class A {\n    f () {\n        const n = parseFloat ('1.5');\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('let mut n: Value = Value::Float(1.5);');
+    });
+
+    test('a literal rust cannot parse keeps the native match', () => {
+        const input = "class A {\n    f () {\n        const n = parseInt ('x9');\n        return n;\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain('.trim().parse::<i64>()');
+        expect(output).not.toContain('parseInt(');
+    });
+
+    test('a native parse stays native in an argument position', () => {
+        const input = "class A {\n    f (x: string) {\n        return this.g (parseInt (x), 2);\n    }\n}";
+        const output = transpiler.transpileRust(input).content;
+        expect(output).toContain(`return self.g(${nativeInt}, Value::Int(2));`);
+    });
+});
