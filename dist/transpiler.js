@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2763,48 +2763,6 @@ var CSHARP_NATIVE_FIELDS = {
 };
 var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
-var CSHARP_DECIMAL_LITERAL = /^[0-9]+(\.[0-9]+)?$/;
-function csharpDoubleLiteral(value) {
-  if (!Number.isFinite(value)) {
-    return void 0;
-  }
-  const text = String(value);
-  return text.indexOf(".") >= 0 || text.indexOf("e") >= 0 ? text : text + ".0";
-}
-function csharpLiteralNumericValue(node) {
-  if (ts4.isNumericLiteral(node)) {
-    return CSHARP_DECIMAL_LITERAL.test(node.text) ? Number(node.text) : void 0;
-  }
-  if (ts4.isPrefixUnaryExpression(node) && node.operator === ts4.SyntaxKind.MinusToken && ts4.isNumericLiteral(node.operand) && CSHARP_DECIMAL_LITERAL.test(node.operand.text)) {
-    return -Number(node.operand.text);
-  }
-  return void 0;
-}
-function csharpParseIntLiteralArgument(arg) {
-  if (ts4.isStringLiteral(arg)) {
-    if (!/^[0-9]+$/.test(arg.text)) {
-      return void 0;
-    }
-    const value = Number(arg.text);
-    return Number.isSafeInteger(value) ? `${value}L` : void 0;
-  }
-  const numeric = csharpLiteralNumericValue(arg);
-  if (numeric === void 0) {
-    return void 0;
-  }
-  const floored = Math.floor(numeric);
-  if (!Number.isSafeInteger(floored)) {
-    return void 0;
-  }
-  return floored < 0 ? `(${floored}L)` : `${floored}L`;
-}
-function csharpParseFloatLiteralArgument(arg) {
-  if (ts4.isStringLiteral(arg)) {
-    return CSHARP_DECIMAL_LITERAL.test(arg.text) ? csharpDoubleLiteral(Number(arg.text)) : void 0;
-  }
-  const numeric = csharpLiteralNumericValue(arg);
-  return numeric === void 0 ? void 0 : csharpDoubleLiteral(numeric);
-}
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, config["parser"] ?? {});
@@ -3551,97 +3509,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const rightText = this.printNode(node.right, 0).trim();
     return leftText + " " + token + " " + rightText;
   }
-  // `parseInt(...)` / `parseFloat(...)` print the runtime helper call; the folds below replace
-  // it with the exact box the helper returns, everything else falls through to the printer
-  printCallExpression(node, identation) {
-    const nativeParse = this.csharpNativeParseCall(node);
-    if (nativeParse !== void 0) {
-      return nativeParse;
-    }
-    return super.printCallExpression(node, identation);
-  }
-  csharpNativeParseCall(node) {
-    if (node?.kind !== ts4.SyntaxKind.CallExpression || !ts4.isIdentifier(node.expression)) {
-      return void 0;
-    }
-    const callee = node.expression.escapedText;
-    if (callee !== "parseInt" && callee !== "parseFloat") {
-      return void 0;
-    }
-    const args = node.arguments;
-    if (args === void 0 || args.length !== 1) {
-      return void 0;
-    }
-    if (!this.csharpCalleeIsGlobalFunction(node.expression)) {
-      return void 0;
-    }
-    const literal = callee === "parseInt" ? csharpParseIntLiteralArgument(args[0]) : csharpParseFloatLiteralArgument(args[0]);
-    if (literal !== void 0) {
-      return literal;
-    }
-    return this.csharpNativeParseCallOnDeclaredLocal(callee, args[0]);
-  }
-  // the global `parseInt` / `parseFloat` live in the TS lib chain; a declaration anywhere else
-  // means the call prints a different function than the runtime helper
-  csharpCalleeIsGlobalFunction(node) {
-    let declarations;
-    try {
-      declarations = this.getChecker().getSymbolAtLocation(node)?.declarations ?? [];
-    } catch (e) {
-      return true;
-    }
-    return declarations.every((declaration) => declaration.getSourceFile().fileName.indexOf("typescript") > -1);
-  }
-  // `parseFloat(x)` / `parseInt(x)` on a local the printer declares numeric: the helper's
-  // Convert.ToDouble(x, invariant) is exactly the conversion the box already carries, so the
-  // call is an identity for `double` and a widening for the integer kinds. An Int64 operand of
-  // parseInt (rounded through double above 2^53), a double one (NaN / overflow answer null) and
-  // every nullable or `object` local (a null box converts to 0) keep the helper.
-  csharpNativeParseCallOnDeclaredLocal(callee, arg) {
-    if (arg?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    const kind = this.csharpExpressionTypeOf(arg);
-    if (CSHARP_NUMERIC_KINDS.indexOf(kind) < 0) {
-      return void 0;
-    }
-    const text = this.printNode(arg, 0);
-    if (callee === "parseFloat") {
-      return kind === "double" ? text : `((double)${text})`;
-    }
-    return kind === "int" ? `((Int64)${text})` : void 0;
-  }
-  // `a % b` prints `mod(a, b)`: the helper reads both boxes as double, takes the double
-  // remainder and converts it back to Int64. An Int32 dividend and a nonzero integer literal
-  // divisor are exact as double, so the native Int64 remainder is the same boxed Int64. An
-  // Int64 dividend (the helper rounds it above 2^53) and a divisor that could be 0 (the helper
-  // throws an OverflowException there, the operator a DivideByZeroException) keep the helper.
-  csharpNativeModExpression(left, right, leftText) {
-    if (left?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (this.csharpExpressionTypeOf(left) !== "int") {
-      return void 0;
-    }
-    const divisor = csharpLiteralNumericValue(right);
-    if (divisor === void 0 || !Number.isSafeInteger(divisor) || divisor === 0) {
-      return void 0;
-    }
-    return `((Int64)${leftText} % ${divisor}L)`;
-  }
-  // `-x` prints `prefixUnaryNeg(ref x)`, whose typed overloads negate the local in place and
-  // return the same boxed value (`a = -a; return a;`): a local declared int / Int64 / double
-  // binds one of those, so the assignment expression is the identical emission. Every other
-  // operand keeps the helper's runtime type dispatch (and its null answer).
-  csharpNativeNegatedLocal(operand, leftSide) {
-    if (operand?.kind !== ts4.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (CSHARP_NUMERIC_KINDS.indexOf(this.csharpExpressionTypeOf(operand)) < 0) {
-      return void 0;
-    }
-    return `(${leftSide} = -${leftSide})`;
-  }
   // the printed receiver whose C# static type is a known collection: a local this
   // printer declared with a concrete type (csharpTypedLocals), or a hand-written
   // BaseExchange field. undefined keeps the runtime helper, since the printer cannot
@@ -3806,12 +3673,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const wrapper = this.binaryExpressionsWrappers[op];
       const open = wrapper[0];
       const close = wrapper[1];
-      if (op === ts4.SyntaxKind.PercentToken) {
-        const nativeMod = this.csharpNativeModExpression(left, right, leftText);
-        if (nativeMod !== void 0) {
-          return nativeMod;
-        }
-      }
       return `${open}${leftText}, ${rightText}${close}`;
     }
     return void 0;
@@ -4536,12 +4397,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const leftSide = this.printNode(operand, 0);
     if (operator === ts4.SyntaxKind.PlusToken) {
       return `prefixUnaryPlus(ref ${leftSide})`;
+    } else {
+      return `prefixUnaryNeg(ref ${leftSide})`;
     }
-    const nativeNegation = this.csharpNativeNegatedLocal(operand, leftSide);
-    if (nativeNegation !== void 0) {
-      return nativeNegation;
-    }
-    return `prefixUnaryNeg(ref ${leftSide})`;
   }
   // `isTrue(x)` is the identity function on a C# bool (`isTrue` returns a bool unchanged),
   // so the wrapper is only needed for values the printer leaves boxed as `object`. Every
