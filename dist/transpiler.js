@@ -6538,6 +6538,32 @@ var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.LessThanEqualsToken]: "<="
 };
 var GO_STRING_FIELD_NAMES = ["Id", "Name", "Version", "Url", "Hostname", "UserAgent"];
+var GO_DEFAULTED_SAFE_STRING_ARITY = {
+  "safeString": 3,
+  "safeStringLower": 3,
+  "safeStringUpper": 3,
+  "safeString2": 4,
+  "safeStringLower2": 4,
+  "safeStringUpper2": 4,
+  "safeStringN": 3,
+  "safeStringLowerN": 3,
+  "safeStringUpperN": 3
+};
+var GO_NON_NIL_DEFAULT_KINDS = [
+  ts5.SyntaxKind.StringLiteral,
+  ts5.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts5.SyntaxKind.NumericLiteral,
+  ts5.SyntaxKind.TrueKeyword,
+  ts5.SyntaxKind.FalseKeyword
+];
+var GO_WRITE_OPERATOR_KINDS = [
+  ts5.SyntaxKind.EqualsToken,
+  ts5.SyntaxKind.PlusEqualsToken,
+  ts5.SyntaxKind.MinusEqualsToken,
+  ts5.SyntaxKind.AsteriskEqualsToken,
+  ts5.SyntaxKind.SlashEqualsToken,
+  ts5.SyntaxKind.PercentEqualsToken
+];
 var GO_FIELD_CONTAINER_TYPES_NATIVE = {
   "Has": "map[string]any",
   "Api": "map[string]any",
@@ -7649,11 +7675,90 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return (type.flags & ts5.TypeFlags.StringLike) !== 0;
   }
-  // the printed text of a `+` operand the concat rule may use: the printer's own
-  // text for a proven string, or the deref goNativeBinaryText adds for a
-  // nil-proven `*string` leaf. undefined keeps the helper call.
-  goStringConcatOperandType(node, printedText) {
+  // a `*string` local every write of which is a SafeString-family call with a literal
+  // default: that Go method can only return a fresh non-nil pointer, so the local may
+  // be deref'd even where the checker offers no narrowing. One write of any other
+  // shape (or a compound/increment write) re-opens Add's nil branch.
+  goDefaultedSafeStringLocal(node) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    if (this.goDeclaredTypeOfIdentifier(node) !== "*string") {
+      return false;
+    }
+    if (!this.goDefaultedSafeStringCall(declaration.initializer)) {
+      return false;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return false;
+    }
+    const name = declaration.name.escapedText;
+    let everyWriteDefaulted = true;
+    const visit = (n) => {
+      if (!everyWriteDefaulted) {
+        return;
+      }
+      if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === name && n !== declaration.name) {
+        const parent = n.parent;
+        if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n && GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0) {
+          everyWriteDefaulted = parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && this.goDefaultedSafeStringCall(parent.right);
+          return;
+        }
+        if (parent?.kind === ts5.SyntaxKind.PrefixUnaryExpression || parent?.kind === ts5.SyntaxKind.PostfixUnaryExpression) {
+          everyWriteDefaulted = false;
+          return;
+        }
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(scope, visit);
+    return everyWriteDefaulted;
+  }
+  // a call to one of the hand-written SafeString-family methods that passes enough
+  // arguments for the default and whose default is a literal (never the absent case)
+  goDefaultedSafeStringCall(node) {
+    const call = node;
+    if (call?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const callee = call.expression;
+    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    const arity = GO_DEFAULTED_SAFE_STRING_ARITY[callee.name?.escapedText];
+    if (arity === void 0 || (call.arguments?.length ?? 0) < arity) {
+      return false;
+    }
+    const last = call.arguments[call.arguments.length - 1];
+    return GO_NON_NIL_DEFAULT_KINDS.indexOf(last?.kind) >= 0;
+  }
+  // a `*string` leaf the concat may deref: the checker narrowed it to a non-nilable
+  // string at that use, a local whose every write is a defaulted SafeString-family
+  // call, or such a call inline
+  goDerefableStringOperand(node) {
     if (this.goNilProvenStringDeref(node)) {
+      return true;
+    }
+    if (node?.kind === ts5.SyntaxKind.Identifier) {
+      return this.goDefaultedSafeStringLocal(node);
+    }
+    return this.goDefaultedSafeStringCall(node);
+  }
+  // the printed text of a `+` operand the concat rule may use: the printer's own
+  // text for a proven string, or the deref goNativeBinaryText adds for a derefable
+  // `*string` leaf. undefined keeps the helper call.
+  goStringConcatOperandType(node, printedText) {
+    if (this.goDerefableStringOperand(node)) {
       return "string";
     }
     return this.goOperandStaticType(node, printedText) === "string" ? "string" : void 0;
@@ -7785,7 +7890,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return void 0;
     }
     if (isFloatKind(leftType) && isFloatKind(rightType)) {
-      if (op === ts5.SyntaxKind.PlusToken || op === ts5.SyntaxKind.PercentToken) {
+      if (op === ts5.SyntaxKind.PercentToken) {
         return void 0;
       }
       if (leftType === "const-float" && rightType === "const-float") {
@@ -7877,7 +7982,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const operandText = (operand, printed) => {
       const isBinary = operand?.kind === ts5.SyntaxKind.BinaryExpression;
       const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
-      const leaf = this.goNilProvenStringDeref(operand) ? "*" + text.trim() : text;
+      const leaf = this.goDerefableStringOperand(operand) ? "*" + text.trim() : text;
       return this.goNativeOperandText(operand, leaf);
     };
     const left = operandText(node.left, leftText);

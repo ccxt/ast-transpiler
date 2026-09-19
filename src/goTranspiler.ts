@@ -355,6 +355,30 @@ const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
 // still prints this field as a plain Go string.
 const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version', 'Url', 'Hostname', 'UserAgent' ];
 
+// the hand-written SafeString-family methods (go/v4/exchange_safe.go) return a fresh
+// non-nil pointer whenever the call passes a non-nil default: the value branch takes
+// the address of the found string, the default branch the address of ToString(def).
+// The argument count each source method needs before that default is in reach.
+const GO_DEFAULTED_SAFE_STRING_ARITY: { [name: string]: number } = {
+    'safeString': 3, 'safeStringLower': 3, 'safeStringUpper': 3,
+    'safeString2': 4, 'safeStringLower2': 4, 'safeStringUpper2': 4,
+    'safeStringN': 3, 'safeStringLowerN': 3, 'safeStringUpperN': 3,
+};
+
+// the default shapes derefScalar leaves non-nil: a literal default is never the absent
+// case, so the method's nil return is unreachable for a call carrying one
+const GO_NON_NIL_DEFAULT_KINDS = [
+    ts.SyntaxKind.StringLiteral, ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+    ts.SyntaxKind.NumericLiteral, ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword,
+];
+
+// the operators that write their left operand: an assignment through any of them may
+// store a nil pointer where the deref proof expected the defaulted call's result
+const GO_WRITE_OPERATOR_KINDS = [
+    ts.SyntaxKind.EqualsToken, ts.SyntaxKind.PlusEqualsToken, ts.SyntaxKind.MinusEqualsToken,
+    ts.SyntaxKind.AsteriskEqualsToken, ts.SyntaxKind.SlashEqualsToken, ts.SyntaxKind.PercentEqualsToken,
+];
+
 // hand-written BaseExchange fields (go/v4/exchange.go) declared as a container: an
 // element write on one of them is native code — a map index write, or `Store` for the
 // thread-safe ones, which is exactly what AddElementToObject does for a *sync.Map.
@@ -1560,11 +1584,95 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return (type.flags & ts.TypeFlags.StringLike) !== 0;
     }
 
-    // the printed text of a `+` operand the concat rule may use: the printer's own
-    // text for a proven string, or the deref goNativeBinaryText adds for a
-    // nil-proven `*string` leaf. undefined keeps the helper call.
-    goStringConcatOperandType(node, printedText: string): string | undefined {
+    // a `*string` local every write of which is a SafeString-family call with a literal
+    // default: that Go method can only return a fresh non-nil pointer, so the local may
+    // be deref'd even where the checker offers no narrowing. One write of any other
+    // shape (or a compound/increment write) re-opens Add's nil branch.
+    goDefaultedSafeStringLocal(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        } catch (e) {
+            return false;
+        }
+        if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)) {
+            return false;
+        }
+        if (this.goDeclaredTypeOfIdentifier(node) !== '*string') {
+            return false;
+        }
+        if (!this.goDefaultedSafeStringCall(declaration.initializer)) {
+            return false;
+        }
+        const scope = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const name = declaration.name.escapedText;
+        let everyWriteDefaulted = true;
+        const visit = (n) => {
+            if (!everyWriteDefaulted) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name) && (n !== declaration.name)) {
+                const parent: any = n.parent;
+                if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === n)
+                    && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
+                    everyWriteDefaulted = (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+                        && this.goDefaultedSafeStringCall(parent.right);
+                    return;
+                }
+                if ((parent?.kind === ts.SyntaxKind.PrefixUnaryExpression) || (parent?.kind === ts.SyntaxKind.PostfixUnaryExpression)) {
+                    everyWriteDefaulted = false;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return everyWriteDefaulted;
+    }
+
+    // a call to one of the hand-written SafeString-family methods that passes enough
+    // arguments for the default and whose default is a literal (never the absent case)
+    goDefaultedSafeStringCall(node): boolean {
+        const call: any = node;
+        if (call?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee: any = call.expression;
+        if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const arity = GO_DEFAULTED_SAFE_STRING_ARITY[callee.name?.escapedText];
+        if ((arity === undefined) || ((call.arguments?.length ?? 0) < arity)) {
+            return false;
+        }
+        const last: any = call.arguments[call.arguments.length - 1];
+        return GO_NON_NIL_DEFAULT_KINDS.indexOf(last?.kind) >= 0;
+    }
+
+    // a `*string` leaf the concat may deref: the checker narrowed it to a non-nilable
+    // string at that use, a local whose every write is a defaulted SafeString-family
+    // call, or such a call inline
+    goDerefableStringOperand(node): boolean {
         if (this.goNilProvenStringDeref(node)) {
+            return true;
+        }
+        if (node?.kind === ts.SyntaxKind.Identifier) {
+            return this.goDefaultedSafeStringLocal(node);
+        }
+        return this.goDefaultedSafeStringCall(node);
+    }
+
+    // the printed text of a `+` operand the concat rule may use: the printer's own
+    // text for a proven string, or the deref goNativeBinaryText adds for a derefable
+    // `*string` leaf. undefined keeps the helper call.
+    goStringConcatOperandType(node, printedText: string): string | undefined {
+        if (this.goDerefableStringOperand(node)) {
             return 'string';
         }
         return (this.goOperandStaticType(node, printedText) === 'string') ? 'string' : undefined;
@@ -1709,13 +1817,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined; // Go has no operator that mixes an int and a float64 operand
         }
         if (isFloatKind(leftType) && isFloatKind(rightType)) {
-            // the helper's float path is plain float64 arithmetic over the two boxed
-            // values, so an operand that is a constant must be exactly representable:
-            // Go folds a constant expression exactly while the helper rounds the
-            // literal to float64 first. Add belongs to the string/int rule and Mod has
-            // no Go operator at all.
-            if ((op === ts.SyntaxKind.PlusToken) || (op === ts.SyntaxKind.PercentToken)) {
-                return undefined;
+            // the helper's float path is float64 arithmetic; its integral result boxes
+            // as int64, the same normalization Subtract/Multiply/Divide already accept.
+            // A constant operand must stay exactly representable: Go folds a constant
+            // expression exactly while the helper rounds the literal to float64 first.
+            if (op === ts.SyntaxKind.PercentToken) {
+                return undefined; // Mod is math.Mod, no Go operator matches it
             }
             if (((leftType === 'const-float') && (rightType === 'const-float'))) {
                 return undefined; // only a value the compiler folds exactly would match
@@ -1820,9 +1927,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const operandText = (operand, printed: string) => {
             const isBinary = operand?.kind === ts.SyntaxKind.BinaryExpression;
             const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
-            // a nil-proven `*string` leaf is the only operand that prints in a different
+            // a derefable `*string` leaf is the only operand that prints in a different
             // shape than the printer produced: the operator needs its pointee
-            const leaf = this.goNilProvenStringDeref(operand) ? ('*' + text.trim()) : text;
+            const leaf = this.goDerefableStringOperand(operand) ? ('*' + text.trim()) : text;
             return this.goNativeOperandText(operand, leaf);
         };
         const left = operandText(node.left, leftText);
