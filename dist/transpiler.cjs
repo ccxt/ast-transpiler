@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -2791,7 +2791,7 @@ var CSHARP_NATIVE_FIELDS = {
   "codes": "List<object>",
   "ids": "List<object>"
 };
-var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id"];
+var CSHARP_OBJECT_DICT_FIELDS = ["urls", "tickers", "bidsasks", "orderbooks", "ohlcvs", "trades", "markets", "currencies", "currencies_by_id", "exceptions"];
 var CSHARP_REFERENCE_FIELDS_NATIVE = [
   "id",
   "hostname",
@@ -2846,7 +2846,7 @@ var CSHARP_NATIVE_BOOL_FIELDS = [
   "substituteCommonCurrencyCodes",
   "verbose"
 ];
-var CSHARP_MISSING_KEY_FIELDS_NATIVE = ["has", "options", "urls"];
+var CSHARP_MISSING_KEY_FIELDS_NATIVE = ["has", "options", "urls", "markets", "exceptions"];
 var CSHARP_NATIVE_COLLECTION_TYPES = ["List<object>", "IList<object>", "Dictionary<string, object>", "IDictionary<string, object>"];
 var CSHARP_SCALAR_ELEMENT_BOOL = 1;
 var CSHARP_SCALAR_ELEMENT_STRING = 2;
@@ -3158,7 +3158,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
     const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
     if (!builtFromLiteral && !guarded) {
-      return _nullishCoalesce(_nullishCoalesce(this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression), () => ( this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey))), () => ( this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey)));
+      return _nullishCoalesce(_nullishCoalesce(_nullishCoalesce(this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression), () => ( this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey))), () => ( this.csharpProvenDictionaryRead(node, expression, argumentExpression, isStringKey))), () => ( this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey)));
     }
     const receiver = this.printNode(expression, 0);
     const printedKey = this.printNode(argumentExpression, 0);
@@ -3273,6 +3273,36 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const recorded = this.csharpDeclaredLocalTypeResolver(declaration);
     return recorded !== void 0 && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(recorded) >= 0 ? recorded : void 0;
+  }
+  // A literal-key read on a local whose DECLARATION the printer still prints `object`, but whose
+  // box the embedding build layer's value-type oracle proves is a dictionary (ccxt:
+  // build/csharp-local-types.js, the retype table the same layer already uses for the native
+  // operators). The cast is what makes the read compile whatever the declaration says, and the
+  // key test plus the null guard hand back exactly what the helper does: null for a null receiver
+  // and for an absent key. `market`/`currency` receivers and the declared ones are the sibling
+  // arms' families, so they are filtered out before this one runs.
+  csharpProvenDictionaryRead(node, expression, argumentExpression, isStringKey) {
+    if (!isStringKey || !_typescript2.default.isIdentifier(expression)) {
+      return void 0;
+    }
+    if (CSHARP_MARKET_RECEIVER_NAMES.indexOf(expression.escapedText) >= 0) {
+      return void 0;
+    }
+    if (this.csharpTypedLocalType(expression) !== void 0) {
+      return void 0;
+    }
+    const proven = this.csharpExpressionTypeOf(expression);
+    if (proven === void 0 || CSHARP_NATIVE_DICTIONARY_TYPES.indexOf(proven) < 0) {
+      return void 0;
+    }
+    const func = this.csharpEnclosingFunction(node);
+    if (func === void 0 || this.csharpReceiverIsRewritten(func, expression)) {
+      return void 0;
+    }
+    const local = this.printNode(expression, 0);
+    const receiver = `((IDictionary<string, object>)${local})`;
+    const printedKey = this.printNode(argumentExpression, 0);
+    return `(${local} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
   }
   // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the
   // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`

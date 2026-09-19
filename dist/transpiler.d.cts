@@ -512,6 +512,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
+    csharpProvenDictionaryRead(node: any, expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
     csharpLoopIndexListRead(expression: any, argumentExpression: any): string | undefined;
     csharpCounterRangeLoop(counter: any, receiver: any): ts.ForStatement;
