@@ -220,6 +220,10 @@ const GO_BOOL_CALL_NAMES_NATIVE = [
     'this.IsJsonEncodedObject',
     'this.IsBinaryMessage',
 ];
+// Pointer-returning accessors the ccxt build pass wraps with DerefScalar but that the
+// Go type table above does not name (their printed Go signature is not in it).
+const GO_DEREF_WRAPPED_CALLS = [ 'NumberToString', 'Parse8601', 'Iso8601' ];
+
 // A printed call the printer cannot type *and* whose Go signature returns `any`
 // can be compared with nil / a string / a bool literal without the helper: the
 // box holds a scalar or nil, never a typed pointer.
@@ -3165,7 +3169,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const name = this.goAstCalleeName(expr);
             if (typeof name === 'string') {
                 const goType = GO_HELPER_RETURN_TYPES[name];
-                return (typeof goType === 'string') && goType.startsWith('*');
+                if ((typeof goType === 'string') && goType.startsWith('*')) {
+                    return true;
+                }
+                // the accessors the ccxt build pass wraps with DerefScalar but the Go type
+                // table does not name (`this.NumberToString`, `this.Parse8601`, `this.Iso8601`)
+                // return a pointer too, so their write stays unproven
+                return GO_DEREF_WRAPPED_CALLS.indexOf(name.replace(/^this\./, '')) >= 0;
             }
             return false;
         }

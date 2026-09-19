@@ -2872,6 +2872,30 @@ describe('go native element assignment', () => {
         expect(output).toContain("IsEqual(since, nil)");
         expect(output).not.toContain("since == nil");
     });
+    test('a later pointer accessor outside the Go type table keeps the helper', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    numberToString (a): Int { return a; }\n" +
+        "    parse8601 (a): Int { return a; }\n" +
+        "    f (since: Int = undefined, raw: any = {}) {\n" +
+        "        since = this.numberToString (raw);\n" +
+        "        const a = since === undefined;\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "    g (until: Int = undefined, raw: any = {}) {\n" +
+        "        until = this.parse8601 (raw);\n" +
+        "        const b = until === undefined;\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // both print to a *string / *int64 the ccxt pass derefs: the box is still a pointer
+        expect(output).toContain("IsEqual(since, nil)");
+        expect(output).toContain("IsEqual(until, nil)");
+        expect(output).not.toContain("since == nil");
+        expect(output).not.toContain("until == nil");
+    });
     test('an arrow function parameter keeps the helper (no GetArg binding)', () => {
         const input =
         "type Int = number | undefined;\n" +

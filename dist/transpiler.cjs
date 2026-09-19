@@ -6335,6 +6335,7 @@ var GO_BOOL_CALL_NAMES_NATIVE = [
   "this.IsJsonEncodedObject",
   "this.IsBinaryMessage"
 ];
+var GO_DEREF_WRAPPED_CALLS = ["NumberToString", "Parse8601", "Iso8601"];
 var GO_ANY_BOX_CALLS = [
   "GetValue",
   "Ternary",
@@ -8835,7 +8836,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const name = this.goAstCalleeName(expr);
       if (typeof name === "string") {
         const goType = GO_HELPER_RETURN_TYPES[name];
-        return typeof goType === "string" && goType.startsWith("*");
+        if (typeof goType === "string" && goType.startsWith("*")) {
+          return true;
+        }
+        return GO_DEREF_WRAPPED_CALLS.indexOf(name.replace(/^this\./, "")) >= 0;
       }
       return false;
     }
