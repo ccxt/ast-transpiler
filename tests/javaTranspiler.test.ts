@@ -3301,6 +3301,109 @@ describe('checker-typed element access: Helpers.GetValue -> native Map/List acce
     });
 });
 
+describe('hand-written base map fields: Helpers.GetValue(this.<field>, k) -> native map read', () => {
+    // `this.ohlcvs / balance / orderbooks / options / markets` are fields of the hand-written
+    // BaseExchange.java whose every value is a java.util.Map (JAVA_FIELD_TYPES), so a read with
+    // any key prints the native accessor. A field that can be null keeps the helper's null
+    // answer behind a receiver guard, and a key that is not provably a String gets the same
+    // guard: the helper answers null for a null key, ConcurrentHashMap.get throws.
+    const fields =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    ohlcvs: D = {};\n" +
+        "    orderbooks: D = {};\n" +
+        "    balance: any = {};\n" +
+        "    options: D = {};\n" +
+        "    markets: D | undefined = undefined;\n" +
+        "    other: any = {};\n";
+
+    test('a never-null field reads natively with no guard', () => {
+        const input = fields +
+        "    test(symbol: string): void {\n" +
+        "        const a = this.ohlcvs[symbol];\n" +
+        "        const b = this.orderbooks[symbol];\n" +
+        "        this.something(a, b);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((java.util.Map<?, ?>)this.ohlcvs).get(symbol)");
+        expect(output).toContain("((java.util.Map<?, ?>)this.orderbooks).get(symbol)");
+        expect(output).not.toContain("Helpers.GetValue(this.ohlcvs,");
+        expect(output).not.toContain("Helpers.GetValue(this.orderbooks,");
+    });
+
+    test('a field that can be null keeps the helper answer behind a receiver guard', () => {
+        const input = fields +
+        "    test(symbol: string, k: any): void {\n" +
+        "        const a = this.balance[symbol];\n" +
+        "        const b = this.options[symbol];\n" +
+        "        const c = this.markets[k];\n" +
+        "        this.something(a, b, c);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(this.balance == null ? null : ((java.util.Map<?, ?>)this.balance).get(symbol))");
+        expect(output).toContain("(this.options == null ? null : ((java.util.Map<?, ?>)this.options).get(symbol))");
+        // `k` is not provably a String, so that read carries both guards
+        expect(output).toContain("(k == null ? null : this.markets == null ? null : ((java.util.Map<?, ?>)this.markets).get(k))");
+        expect(output).not.toContain("Helpers.GetValue(this.balance,");
+        expect(output).not.toContain("Helpers.GetValue(this.markets,");
+    });
+
+    test('a non-repeatable key keeps the helper (the guard would run it twice)', () => {
+        const input = fields +
+        "    test(): void {\n" +
+        "        const a = this.ohlcvs[this.key()];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    key(): any {\n" +
+        "        return 'k';\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(this.ohlcvs, this.key())");
+    });
+
+    test('a receiver that is not a table field keeps the helper', () => {
+        const input = fields +
+        "    test(symbol: string): void {\n" +
+        "        const a = this.other[symbol];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue(this.other, symbol)");
+    });
+
+    test('a literal key on a field the checker does not type still reads natively', () => {
+        const input = fields +
+        "    test(): void {\n" +
+        "        const a = this.balance['cash'];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(this.balance == null ? null : ((java.util.Map<?, ?>)this.balance).get(\"cash\"))");
+        expect(output).not.toContain("Helpers.GetValue(this.balance,");
+    });
+
+    test('the bottom read of a chained write goes native, the steps above it keep the helper', () => {
+        const input = fields +
+        "    test(symbol: string, timeframe: string, stored: any): void {\n" +
+        "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.addElementToObject(((java.util.Map<?, ?>)this.ohlcvs).get(symbol), timeframe, stored)");
+        expect(output).not.toContain("GetValue(this.ohlcvs,");
+    });
+});
+
 describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")', () => {
     // the checker-typed rule above needs a dict-shaped TS type. The local-typing passes
     // (build/java-local-types.js) retype declarations the checker leaves boxed, and they
