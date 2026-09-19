@@ -4211,4 +4211,42 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
         }
     });
+    // D-18: an override-family name cleared by the ts/src census prints the typed spelling on the
+    // base declaration and on every override; every other name keeps `object` (C# overrides are
+    // invariant on parameter types, so a half-retyped name cannot compile).
+    describe('override parameter types', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class Exchange {\n" +
+        "    parseOrder (order: Dict, market: Dict = undefined): Dict {\n" +
+        "        return order;\n" +
+        "    }\n" +
+        "    parseTrade (trade: Dict, market: Dict = undefined): Dict {\n" +
+        "        return trade;\n" +
+        "    }\n" +
+        "    parseTrades (trades: Dict[], market: Dict = undefined): Dict[] {\n" +
+        "        return trades;\n" +
+        "    }\n" +
+        "}";
+        test('a cleared name prints the dictionary / list spelling', () => {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('parseOrder(IDictionary<string, object> order, object market = null)');
+            expect(output).toContain('parseTrades(IList<object> trades, object market = null)');
+        });
+        test('a name outside the census table keeps object', () => {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('parseTrade(object trade, object market = null)');
+        });
+        test('a parameter whose checker shape does not answer the table spelling keeps object', () => {
+            const other =
+            "type Dict = { [key: string]: any };\n" +
+            "class Exchange {\n" +
+            "    parseOrder (order: any, market: Dict = undefined): Dict {\n" +
+            "        return order;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(other).content;
+            expect(output).toContain('parseOrder(object order, object market = null)');
+        });
+    });
 });

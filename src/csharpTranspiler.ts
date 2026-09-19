@@ -394,6 +394,35 @@ function csharpParseFloatLiteralArgument(arg) {
 // read rule leaves them to that family and covers every other declared-collection local
 const CSHARP_MARKET_RECEIVER_NAMES = [ 'market', 'currency' ];
 
+// Parameters of methods that participate in an override relation (base member + every override
+// declaration): C# overrides are invariant on parameter types, so a parameter may print a typed
+// spelling only when every declaration of the name agrees (census of ts/src; D8). Positions not
+// listed keep `object` on every declaration. The spelling is the one the generated C# locals
+// already carry, which is also what every write and call site passes.
+const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string } } = {
+    ethRpc: { 2: 'IList<object>' },
+    parseADLRank: { 0: 'IDictionary<string, object>' },
+    parseBorrowInterest: { 0: 'IDictionary<string, object>' },
+    parseConversion: { 0: 'IDictionary<string, object>' },
+    parseCurrency: { 0: 'IDictionary<string, object>' },
+    parseGreeks: { 0: 'IDictionary<string, object>' },
+    parseIsolatedBorrowRate: { 0: 'IDictionary<string, object>' },
+    parseLeverage: { 0: 'IDictionary<string, object>' },
+    parseLongShortRatio: { 0: 'IDictionary<string, object>' },
+    parseMarginMode: { 0: 'IDictionary<string, object>' },
+    parseOption: { 0: 'IDictionary<string, object>' },
+    parseOrder: { 0: 'IDictionary<string, object>' },
+    parsePredictionOpenInterest: { 0: 'IDictionary<string, object>' },
+    parsePredictionOrder: { 0: 'IDictionary<string, object>' },
+    parsePredictionPosition: { 0: 'IDictionary<string, object>' },
+    parsePredictionTicker: { 0: 'IDictionary<string, object>' },
+    parsePredictionTrade: { 0: 'IDictionary<string, object>' },
+    parseTrades: { 0: 'IList<object>' },
+    parseWsOrderTrade: { 0: 'IDictionary<string, object>' },
+    parseWsTrades: { 0: 'IList<object>' },
+    signEvmTransaction: { 0: 'IDictionary<string, object>' },
+};
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -3115,6 +3144,68 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
 
         return this.printNode(node.expression, identation);
+    }
+
+    // A parameter of a method that participates in an override relation prints the spelling its
+    // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES; D8): C# is
+    // invariant on override parameter types, so a half-retyped name is CS0115, while a name the
+    // census cleared can print the same type on the base declaration and every override. The
+    // checker re-derives the shape here, so a stale table row degrades to `object`.
+    printParameterType(node) {
+        if (node === undefined || node.kind !== ts.SyntaxKind.Parameter) {
+            return super.printParameterType(node);
+        }
+        const method = ts.findAncestor(node, (n) => ts.isMethodDeclaration(n));
+        const name = method === undefined || method.name === undefined ? undefined : method.name.getText().trim();
+        const row = name === undefined ? undefined : CSHARP_OVERRIDE_PARAM_TYPES[name as string];
+        const wanted = row === undefined ? undefined : row[method.parameters.indexOf(node)];
+        if (wanted === undefined || this.csharpOverrideParamSpelling(node) !== wanted) {
+            return super.printParameterType(node);
+        }
+        return wanted;
+    }
+
+    // checker spelling of a parameter the override table covers: a dictionary-shaped type (string
+    // index signature, never a class instance or a callable) or an array of any/dictionary cells
+    csharpOverrideParamSpelling(node): string | undefined {
+        const type = this.getChecker().getTypeAtLocation(node);
+        const rest = (type === undefined || !type.isUnion())
+            ? type
+            : type.types.filter((m) => !(m.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)))[0];
+        return this.csharpOverrideParamSpellingOfType(rest, type !== undefined && type.isUnion()
+            ? type.types.filter((m) => !(m.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null))).length
+            : 1);
+    }
+
+    csharpOverrideParamSpellingOfType(type, unionArms = 1): string | undefined {
+        if (type === undefined || unionArms !== 1) {
+            return undefined;
+        }
+        if (type.flags & (ts.TypeFlags.TypeParameter | ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.EnumLike)) {
+            return undefined;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type)) {
+            const el = (checker.getTypeArguments(type) || [])[0];
+            if (el === undefined) {
+                return undefined;
+            }
+            if (el.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
+                return 'IList<object>';
+            }
+            return this.csharpOverrideParamSpellingOfType(el) === 'IDictionary<string, object>' ? 'IList<object>' : undefined;
+        }
+        if (checker.getIndexTypeOfType(type, ts.IndexKind.String) === undefined) {
+            return undefined;
+        }
+        const declarations = type.symbol && type.symbol.declarations ? type.symbol.declarations : [];
+        if (declarations.some((d) => d.kind === ts.SyntaxKind.ClassDeclaration)) {
+            return undefined;   // a class instance is not a JSON dictionary
+        }
+        if (type.getCallSignatures && type.getCallSignatures().length > 0) {
+            return undefined;   // a callable is not a JSON dictionary
+        }
+        return 'IDictionary<string, object>';
     }
 
     printParameter(node, defaultValue = true) {

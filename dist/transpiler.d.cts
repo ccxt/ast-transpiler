@@ -625,6 +625,9 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printFunctionBody(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
+    printParameterType(node: any): any;
+    csharpOverrideParamSpelling(node: any): string | undefined;
+    csharpOverrideParamSpellingOfType(type: any, unionArms?: number): string | undefined;
     printParameter(node: any, defaultValue?: boolean): string;
     printArrayLiteralExpression(node: any): string;
     csharpBooleanReturnType(node: any): string | undefined;
