@@ -6111,7 +6111,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
       value = value.expression;
     }
     if (_optionalChain([value, 'optionalAccess', _349 => _349.kind]) === _typescript2.default.SyntaxKind.Identifier) {
-      return this.csharpDeclaredLocalType(value) === "bool?" ? `(${this.printNode(value, 0)} == true)` : void 0;
+      if (this.csharpDeclaredLocalType(value) === "bool?") {
+        return `(${this.printNode(value, 0)} == true)`;
+      }
+      if (this.csharpDeclaredLocalResolverType(value) === "bool?") {
+        return `(${this.printNode(value, 0)} == true)`;
+      }
+      return void 0;
     }
     if (_optionalChain([value, 'optionalAccess', _350 => _350.kind]) === _typescript2.default.SyntaxKind.CallExpression && this.csharpCallPrintsNullableBool(value)) {
       return `(${this.printNode(value, 0)} == true)`;

@@ -4101,7 +4101,16 @@ export class CSharpTranspiler extends BaseTranspiler {
             value = value.expression;
         }
         if (value?.kind === ts.SyntaxKind.Identifier) {
-            return (this.csharpDeclaredLocalType(value) === 'bool?') ? `(${this.printNode(value, 0)} == true)` : undefined;
+            if (this.csharpDeclaredLocalType(value) === 'bool?') {
+                return `(${this.printNode(value, 0)} == true)`;
+            }
+            // a declaration the embedding build layer retyped itself — the parameter/override
+            // signatures the typed-param units print: the recorded type IS the emitted
+            // declaration's, so a `bool?` parameter is no C# condition either
+            if (this.csharpDeclaredLocalResolverType(value) === 'bool?') {
+                return `(${this.printNode(value, 0)} == true)`;
+            }
+            return undefined;
         }
         if ((value?.kind === ts.SyntaxKind.CallExpression) && this.csharpCallPrintsNullableBool(value)) {
             return `(${this.printNode(value, 0)} == true)`;

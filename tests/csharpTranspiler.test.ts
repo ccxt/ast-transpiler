@@ -1860,6 +1860,30 @@ describe('isTrue on a bool?-returning call becomes the lifted `== true` comparis
         expect(output).toContain("if ((this.safeBool(a, \"k\") == true))");
         expect(output).not.toContain("isTrue");
     });
+    test('a parameter the build layer retyped `bool?` goes native too', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        const input =
+        "class T {\n" +
+        "    f(hedged: any) {\n" +
+        "        if (hedged) { return 1; }\n" +
+        "        const s = hedged ? 'a' : 'b';\n" +
+        "        return s;\n" +
+        "    }\n" +
+        "}";
+        try {
+            // no declaration-level proof: the parameter stays a boxed read
+            expect(transpiler.transpileCSharp(input).content).toContain("if (isTrue(hedged))");
+            // the hook the typed-parameter units register names the PRINTED `bool?`
+            printer.csharpDeclaredLocalTypeResolver = (declaration: any) => ((declaration?.name?.escapedText === 'hedged') ? 'bool?' : undefined);
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("if ((hedged == true))");
+            expect(output).toContain("((hedged == true)) ? \"a\" : \"b\"");
+            expect(output).not.toContain("isTrue");
+        } finally {
+            printer.csharpDeclaredLocalTypeResolver = previous;
+        }
+    });
     test('a call on a non-this receiver keeps the wrapper', () => {
         const output = transpiler.transpileCSharp(callProgram("        if (m.couldBe(a)) { return 1; }\n        return 2;\n")).content;
         expect(output).toContain("isTrue(m.couldBe(a))");
