@@ -3272,18 +3272,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (relevant.length === 0 || scope === undefined) {
             return false;
         }
-        let shadowed = false;
-        const visit = (n) => {
-            if (shadowed) { return; }
+        return this.hasNodeWhere(scope, (n: any) => {
             const isBinding = (n.kind === ts.SyntaxKind.Parameter) || (n.kind === ts.SyntaxKind.VariableDeclaration);
             if (isBinding && (n.name?.kind === ts.SyntaxKind.Identifier)) {
                 const printed = this.printNode(n.name, 0);
-                if (relevant.indexOf(printed) >= 0) { shadowed = true; return; }
+                if (relevant.indexOf(printed) >= 0) { return true; }
             }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
-        return shadowed;
+            return false;
+        });
     }
 
     // reject the refinement when something downstream needs the local to stay `object`:
@@ -3294,9 +3290,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (scope === undefined) {
             return false;
         }
-        let safe = true;
-        const visit = (n) => {
-            if (!safe) { return; }
+        const safe = !this.hasNodeWhere(scope, (n: any) => {
             if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === varName) && (n !== declaration.name)) {
                 const parent = n.parent;
                 if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name === n) {
@@ -3305,69 +3299,58 @@ export class CSharpTranspiler extends BaseTranspiler {
                 if ((parent?.kind === ts.SyntaxKind.PostfixUnaryExpression) || (parent?.kind === ts.SyntaxKind.PrefixUnaryExpression)) {
                     const op = parent.operator;
                     if ((op === ts.SyntaxKind.PlusPlusToken) || (op === ts.SyntaxKind.MinusMinusToken)) {
-                        safe = false; // postFixIncrement(ref x) takes a ref object
-                        return;
+                        return true;
                     }
                     // prefixUnaryNeg/Plus(ref x) has int / Int64 / double twins only: a
                     // nullable or reference local would not bind any overload
                     if (safeAccessor && (op !== ts.SyntaxKind.ExclamationToken) && (csharpType !== 'int') && (csharpType !== 'Int64') && (csharpType !== 'double')) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                 }
                 if (parent?.kind === ts.SyntaxKind.SpreadElement) {
-                    safe = false;
-                    return;
+                    return true;
                 }
                 if (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression
-                    && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
-                    && parent.parent.left === parent
-                    && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-                    safe = false; // [x, y] = f() destructures into `x = ((IList<object>)...)[0]`
-                    return;
+                && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
+                && parent.parent.left === parent
+                && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+                    return true;
                 }
                 if (parent?.kind === ts.SyntaxKind.PropertyAccessExpression && parent.expression === n) {
                     const method = parent.name?.escapedText;
                     // these print as `((IList<object>)x).Add(...)` / `x = (x as IList<object>)...`
                     if ((method === 'push') || (method === 'reverse') || (method === 'sort')) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                     // the remaining list methods print an `((IList<object>)x)` cast too; only
                     // a safe* list local can carry one
                     if (safeAccessor && !this.csharpTypeIsList(csharpType) && ((method === 'join') || (method === 'shift') || (method === 'pop'))) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                 }
                 if (safeAccessor) {
-                    // `const [a, b] = x` prints a `((IList<object>)x)[0]` read
+                // `const [a, b] = x` prints a `((IList<object>)x)[0]` read
                     if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name?.kind === ts.SyntaxKind.ArrayBindingPattern && !this.csharpTypeIsList(csharpType)) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                     // `throw new ExchangeError (x)` wraps the argument in a hard `(string)`
                     // cast, which only compiles from `object` or a string
                     if (!this.csharpTypeIsStringType(csharpType) && this.csharpIsClassThrowArgument(n)) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                     // `delete obj[x]` prints `.Remove((string)x)`, the same hard cast
                     if (!this.csharpTypeIsStringType(csharpType) && this.csharpIsDeleteKey(n)) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                 }
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
                     const op = parent.operatorToken.kind;
                     if (op === ts.SyntaxKind.EqualsToken) {
                         if (this.csharpTypeOfInitializer(parent.right) !== csharpType) {
-                            safe = false;
-                            return;
+                            return true;
                         }
                     } else if ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment)) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                 }
                 // a `string?` local as the LEFT operand of `+` prints add(<x>, ...): the
@@ -3375,13 +3358,11 @@ export class CSharpTranspiler extends BaseTranspiler {
                 // add(object, object), which turns a null left into the right operand instead
                 // of null (see the same rule in the ccxt cs/ccxt/base comments)
                 if (safeAccessor && (csharpType === 'string?') && this.csharpIsLeftPlusOperand(n)) {
-                    safe = false;
-                    return;
+                    return true;
                 }
             }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
+            return false;
+        });
         return safe;
     }
 

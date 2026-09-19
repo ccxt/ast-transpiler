@@ -1844,17 +1844,13 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (relevant.length === 0 || scope === undefined) {
             return false;
         }
-        let shadowed = false;
-        const visit = (n) => {
-            if (shadowed) { return; }
+        return this.hasNodeWhere(scope, (n: any) => {
             const isBinding = (n.kind === ts.SyntaxKind.Parameter) || (n.kind === ts.SyntaxKind.VariableDeclaration);
             if (isBinding && (n.name?.kind === ts.SyntaxKind.Identifier)) {
-                if (relevant.indexOf(n.name.escapedText as string) >= 0) { shadowed = true; return; }
+                if (relevant.indexOf(n.name.escapedText as string) >= 0) { return true; }
             }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
-        return shadowed;
+            return false;
+        });
     }
 
     // the shape `x.push(v)` that both the native emission and the declaration's safety
@@ -1901,18 +1897,15 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (scope === undefined) {
             return false;
         }
-        let safe = true;
-        const visit = (n) => {
-            if (!safe) { return; }
+        const safe = !this.hasNodeWhere(scope, (n: any) => {
             if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === varName) && (n !== declaration.name)) {
                 const parent = n.parent;
                 if (parent?.kind === ts.SyntaxKind.PropertyAccessExpression && parent.expression === n
-                    && parent.name?.escapedText === 'push') {
-                    // a []any local appends natively, so its receiver may be typed; every
-                    // other push shape keeps the helper and with it the box
+                && parent.name?.escapedText === 'push') {
+                // a []any local appends natively, so its receiver may be typed; every
+                // other push shape keeps the helper and with it the box
                     if ((goType !== '[]any') || !this.goIsNativeAppendShape(n, parent.parent)) {
-                        safe = false; // AppendToArray(&x, ...)
-                        return;
+                        return true;
                     }
                 }
                 if (parent?.kind === ts.SyntaxKind.VariableDeclaration && parent.name === n) {
@@ -1921,37 +1914,31 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 if ((parent?.kind === ts.SyntaxKind.PostfixUnaryExpression) || (parent?.kind === ts.SyntaxKind.PrefixUnaryExpression)) {
                     const op = parent.operator;
                     if ((op === ts.SyntaxKind.PlusPlusToken) || (op === ts.SyntaxKind.MinusMinusToken)) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                 }
                 if (parent?.kind === ts.SyntaxKind.SpreadElement) {
-                    safe = false; // `x...` only forwards a slice whose element type matches
-                    return;
+                    return true;
                 }
                 if (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression
-                    && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
-                    && parent.parent.left === parent
-                    && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-                    safe = false; // [x, y] = f() destructures into `x = GetValue(...)`
-                    return;
+                && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
+                && parent.parent.left === parent
+                && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+                    return true;
                 }
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
                     const op = parent.operatorToken.kind;
                     if (op === ts.SyntaxKind.EqualsToken) {
                         if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType) {
-                            safe = false;
-                            return;
+                            return true;
                         }
                     } else if ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment)) {
-                        safe = false;
-                        return;
+                        return true;
                     }
                 }
             }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
+            return false;
+        });
         return safe;
     }
 
