@@ -1347,7 +1347,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaBooleanBoxType(type: any): boolean;
     javaTypeOfNode(node: any): any;
     javaTypeOfDeclaration(decl: any): any;
-    javaPrintsBooleanValue(node: any, seen: Set<any>): boolean;
+    javaPrintsBooleanValue(node: any, seen: Set<any>, depth?: number): boolean;
+    javaCallReturnsBooleanBox(node: any, seen: Set<any>, depth: number): boolean;
     javaPrintsBooleanCall(node: any): boolean;
     isArrayIsArrayCall(node: any): boolean;
     javaBooleanBaseField(node: any): string | undefined;

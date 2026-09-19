@@ -5079,7 +5079,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // literals, `!`, the logical / comparison / `in` operators, `Array.isArray(x)` (printed
     // Helpers.isArray, declared `public static boolean`) and the hand-written `public boolean`
     // base methods. `seen` breaks the identifier cycle of `a = b; b = a;` style writes.
-    javaPrintsBooleanValue(node, seen: Set<any>): boolean {
+    javaPrintsBooleanValue(node, seen: Set<any>, depth: number = 0): boolean {
         if (node === undefined) {
             return false;
         }
@@ -5090,9 +5090,9 @@ export class JavaTranspiler extends BaseTranspiler {
         case ts.SyntaxKind.ParenthesizedExpression:
         case ts.SyntaxKind.AsExpression:
         case ts.SyntaxKind.NonNullExpression:
-            return this.javaPrintsBooleanValue(node.expression, seen);
+            return this.javaPrintsBooleanValue(node.expression, seen, depth);
         case ts.SyntaxKind.PrefixUnaryExpression:
-            return node.operator === ts.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen);
+            return node.operator === ts.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen, depth);
         case ts.SyntaxKind.BinaryExpression:
             // the comparison and logical operators all print a Java primitive boolean (the
             // helpers they lower to are declared `public static boolean`), whatever the operands
@@ -5105,6 +5105,61 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.javaBooleanBoxIdentifier(node, seen) !== undefined;
         }
         return false;
+    }
+
+    // the Java box of a `this.<name>(...)` call whose generated body returns a boolean value on
+    // every path: the TS return type is a boolean family and every `return` in the resolved
+    // declaration (nested functions excluded) prints a Java boolean or a proven Boolean-or-null
+    // box. That is the same value the hand-written base table covers for its own methods, one
+    // level deeper for the generated ones. `depth` and `seen` bound the recursion.
+    javaCallReturnsBooleanBox(node, seen: Set<any>, depth: number): boolean {
+        if (node?.kind !== ts.SyntaxKind.CallExpression || depth > 2) {
+            return false;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined || declaration.kind !== ts.SyntaxKind.MethodDeclaration
+            || declaration.body === undefined || seen.has(declaration)) {
+            return false;
+        }
+        if (this.javaBooleanValueKind(node) === undefined) {
+            return false; // the call's TS type is not a boolean family (any/undefined-able)
+        }
+        const callee = node.expression;
+        if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false; // only a method of this class; a foreign class is not under the printer
+        }
+        const name = String(callee.name.escapedText);
+        if (JAVA_THIS_BOOLEAN_METHODS.has(name) || JAVA_THIS_BOOLEAN_BOX_METHODS[name] !== undefined) {
+            return false; // the hand-written base tables are authoritative for these accessors
+        }
+        const next = new Set(seen);
+        next.add(declaration);
+        let returns = 0;
+        let ok = true;
+        const scan = (current: ts.Node) => {
+            if (!ok) {
+                return;
+            }
+            if (current !== declaration && ts.isFunctionLike(current)) {
+                return; // a nested function's returns are not the method's
+            }
+            if (ts.isReturnStatement(current)) {
+                returns++;
+                const expression = current.expression;
+                if (expression === undefined || !this.javaPrintsBooleanValue(expression, next, depth + 1)) {
+                    ok = false;
+                    return;
+                }
+            }
+            ts.forEachChild(current, scan);
+        };
+        scan(declaration.body);
+        return ok && returns > 0;
     }
 
     // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and the
@@ -5469,6 +5524,13 @@ export class JavaTranspiler extends BaseTranspiler {
         const field = this.javaBooleanBaseField(node);
         if (field !== undefined) {
             return field;
+        }
+        // a `this.<name>(...)` call whose generated body returns a boolean value on every path
+        // prints a Boolean box; the bare declarations in JAVA_THIS_BOOLEAN_METHODS are printed
+        // native by printCondition and are left to it
+        if (node.kind === ts.SyntaxKind.CallExpression && this.javaCallBooleanKind(node) === undefined
+            && this.javaCallReturnsBooleanBox(node, new Set(), 0)) {
+            return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
         }
         if (node.kind === ts.SyntaxKind.Identifier) {
             // the ccxt-side declaration chain types a local/param `boolean`/`Boolean` inside

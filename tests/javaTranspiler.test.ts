@@ -2859,6 +2859,49 @@ ${body}
     });
 });
 
+describe('java boolean-returning generated methods: isTrue -> Boolean.TRUE.equals (b14)', () => {
+    // a `this.<name>(...)` whose resolved body returns a boolean value on every path hands back
+    // a Boolean-or-null box, so the wrapper becomes the null-safe TRUE test - the same proof the
+    // hand-written base table (JAVA_THIS_BOOLEAN_METHODS) gives its own methods
+    const inputOf = (body: string, methods = '') => `
+class T {
+    isBool(): boolean { return true; }
+    isCompared(a: any): boolean { return (a === 1) || !!(a > 2); }
+    isFromLocal(a: any): boolean { return a; }
+    isFromString(a: any): string { return ''; }
+    isNullable(a: any): boolean | undefined { return undefined; }
+${methods}
+    test(a: any): void {
+${body}
+    }
+}
+`;
+    const outputOf = (body: string, methods = '') => transpiler.transpileJava(inputOf(body, methods)).content;
+
+    test('a method whose body returns booleans prints Boolean.TRUE.equals', () => {
+        const output = outputOf('if (this.isBool()) { return; }');
+        expect(output).toContain('if (Boolean.TRUE.equals(this.isBool()))');
+        expect(output).not.toContain('Helpers.isTrue(this.isBool())');
+        expect(outputOf('if (this.isCompared(a)) { return; }'))
+            .toContain('if (Boolean.TRUE.equals(this.isCompared(a)))');
+        expect(outputOf('if (!this.isBool()) { return; }')).toContain('if (!Boolean.TRUE.equals(this.isBool()))');
+    });
+
+    test('a body returning an unproven value keeps the helper', () => {
+        // a local of unproven box (a parameter here) could hold a Long/String the helper tests
+        expect(outputOf('if (this.isFromLocal(a)) { return; }'))
+            .toContain('Helpers.isTrue(this.isFromLocal(a))');
+        // a non-boolean TS return type
+        expect(outputOf('if (this.isFromString(a)) { return; }'))
+            .toContain('Helpers.isTrue(this.isFromString(a))');
+    });
+
+    test('a foreign class receiver keeps the helper', () => {
+        expect(outputOf('if (Other.isBool()) { return; }').replace(/\s+/g, ' '))
+            .toContain('Helpers.isTrue(');
+    });
+});
+
 describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
     test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
         const input =

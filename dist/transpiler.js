@@ -15613,7 +15613,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // literals, `!`, the logical / comparison / `in` operators, `Array.isArray(x)` (printed
   // Helpers.isArray, declared `public static boolean`) and the hand-written `public boolean`
   // base methods. `seen` breaks the identifier cycle of `a = b; b = a;` style writes.
-  javaPrintsBooleanValue(node, seen) {
+  javaPrintsBooleanValue(node, seen, depth = 0) {
     if (node === void 0) {
       return false;
     }
@@ -15624,9 +15624,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       case ts6.SyntaxKind.ParenthesizedExpression:
       case ts6.SyntaxKind.AsExpression:
       case ts6.SyntaxKind.NonNullExpression:
-        return this.javaPrintsBooleanValue(node.expression, seen);
+        return this.javaPrintsBooleanValue(node.expression, seen, depth);
       case ts6.SyntaxKind.PrefixUnaryExpression:
-        return node.operator === ts6.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen);
+        return node.operator === ts6.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen, depth);
       case ts6.SyntaxKind.BinaryExpression:
         return JAVA_BOOLEAN_OPERATOR_KINDS.has(node.operatorToken.kind);
       case ts6.SyntaxKind.CallExpression:
@@ -15637,6 +15637,59 @@ var JavaTranspiler = class extends BaseTranspiler {
         return this.javaBooleanBoxIdentifier(node, seen) !== void 0;
     }
     return false;
+  }
+  // the Java box of a `this.<name>(...)` call whose generated body returns a boolean value on
+  // every path: the TS return type is a boolean family and every `return` in the resolved
+  // declaration (nested functions excluded) prints a Java boolean or a proven Boolean-or-null
+  // box. That is the same value the hand-written base table covers for its own methods, one
+  // level deeper for the generated ones. `depth` and `seen` bound the recursion.
+  javaCallReturnsBooleanBox(node, seen, depth) {
+    if (node?.kind !== ts6.SyntaxKind.CallExpression || depth > 2) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || declaration.kind !== ts6.SyntaxKind.MethodDeclaration || declaration.body === void 0 || seen.has(declaration)) {
+      return false;
+    }
+    if (this.javaBooleanValueKind(node) === void 0) {
+      return false;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee) || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    const name = String(callee.name.escapedText);
+    if (JAVA_THIS_BOOLEAN_METHODS.has(name) || JAVA_THIS_BOOLEAN_BOX_METHODS[name] !== void 0) {
+      return false;
+    }
+    const next = new Set(seen);
+    next.add(declaration);
+    let returns = 0;
+    let ok = true;
+    const scan = (current) => {
+      if (!ok) {
+        return;
+      }
+      if (current !== declaration && ts6.isFunctionLike(current)) {
+        return;
+      }
+      if (ts6.isReturnStatement(current)) {
+        returns++;
+        const expression = current.expression;
+        if (expression === void 0 || !this.javaPrintsBooleanValue(expression, next, depth + 1)) {
+          ok = false;
+          return;
+        }
+      }
+      ts6.forEachChild(current, scan);
+    };
+    scan(declaration.body);
+    return ok && returns > 0;
   }
   // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and the
   // hand-written `public boolean` base methods print a primitive boolean. Everything else -
@@ -15972,6 +16025,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     const field = this.javaBooleanBaseField(node);
     if (field !== void 0) {
       return field;
+    }
+    if (node.kind === ts6.SyntaxKind.CallExpression && this.javaCallBooleanKind(node) === void 0 && this.javaCallReturnsBooleanBox(node, /* @__PURE__ */ new Set(), 0)) {
+      return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
     }
     if (node.kind === ts6.SyntaxKind.Identifier) {
       const declared = this.javaDeclaredBooleanKind(node);
