@@ -214,6 +214,10 @@ const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\
 // the read prints `x.get(i)` / `x.size()` with no cast, because the declaration is the List
 const JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
 
+// the Java primitive spellings a declaration can publish: an operand that prints as one
+// cannot take the `instanceof` test a native map read guards with
+const JAVA_PRIMITIVE_DECLARED_TYPES = new Set(['boolean', 'byte', 'char', 'short', 'int', 'long', 'float', 'double']);
+
 // the numeric declaration types the ccxt-side pass publishes; the boxed ones can hold
 // null, so a native compare guards them first
 const JAVA_DECLARED_NUMERIC_TYPES: Set<string> =
@@ -2459,6 +2463,54 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${target} == null || ${lowerBound}${indexText} >= ${target}.size() ? null : ${target}.get(${indexText}))`;
     }
 
+    // `x[k]` where a consumer declares x a java Map and the key is not a literal: the
+    // helper's Map branch is the map accessor behind its own tests — a null receiver, a
+    // null key and a key that is not a String all answer null, and a String-keyed map's
+    // accessor answers the same value for every String key. The guard prints the receiver
+    // and the key twice, so both must be side-effect-free reads, and `instanceof` needs a
+    // key that prints as a box.
+    javaDeclaredMapElementRead(node) {
+        if (node.parent?.kind === ts.SyntaxKind.ExpressionStatement) {
+            return undefined; // a bare conditional expression is not a Java statement
+        }
+        if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined
+            || this.isLeftSideOfAssignment(node)) {
+            return undefined;
+        }
+        if (!this.javaDeclaredMapReceiver(node.expression)) {
+            return undefined;
+        }
+        const key = node.argumentExpression;
+        if (!ts.isIdentifier(key) || !this.javaRepeatableOperand(key)) {
+            return undefined; // the guard prints the key twice
+        }
+        const declared = this.javaDeclaredTypeOf(key);
+        if (declared !== undefined && JAVA_PRIMITIVE_DECLARED_TYPES.has(declared.trim())) {
+            return undefined; // a java primitive cannot take the `instanceof` test
+        }
+        if (declared === undefined && this.javaOperandPrintsPrimitiveNumber(key)) {
+            return undefined;
+        }
+        let keyType;
+        try {
+            keyType = this.getChecker().getTypeAtLocation(key);
+        } catch (e) {
+            return undefined;
+        }
+        if (keyType === undefined
+            || this.getChecker().isArrayType(keyType) || this.getChecker().isTupleType(keyType)) {
+            return undefined;
+        }
+        const target = this.printNode(node.expression, 0);
+        const keyText = this.printNode(key, 0);
+        if (keyType.aliasSymbol === undefined && keyType.flags === ts.TypeFlags.String) {
+            // a plain `string` key prints a java String; the null test keeps a receiver that
+            // aliases a ConcurrentHashMap from throwing on a null the alias admits
+            return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+        }
+        return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
+    }
+
     // the identifier of a `for (var i = <int literal>; …; i++)` counter that still prints as
     // `i`: the JN capture rename prints `finalI`, a `final Object` box, which is not an int
     javaPrimitiveCounterIndex(node) {
@@ -2536,7 +2588,13 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!isStringKey && !isNumberKey && !isCounterKey) {
             // a `this.<field>` map read carries its own Java proof (JAVA_FIELD_TYPES): the
             // field declaration the printer cannot see is what makes `k` bind natively
-            return this.javaFieldMapReadIfAllowed(node);
+            const field = this.javaFieldMapReadIfAllowed(node);
+            if (field !== undefined) {
+                return field;
+            }
+            // a declared map (a local the build layer typed, or a param the printer retypes)
+            // is the other proof a non-literal key binds natively
+            return this.javaDeclaredMapElementRead(node);
         }
         if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined) {
             return undefined; // an exchange-specific override wins, the base prints it

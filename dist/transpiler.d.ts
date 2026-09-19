@@ -1262,6 +1262,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclarationOfIdentifier(expression: any): any;
     javaDeclaredMapReceiver(expression: any): boolean;
     javaDeclaredListElementRead(node: any, isCounter: any): string;
+    javaDeclaredMapElementRead(node: any): string;
     javaPrimitiveCounterIndex(node: any): boolean;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
     javaFieldMapRead(node: any): string | undefined;
