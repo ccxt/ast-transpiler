@@ -4837,3 +4837,283 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
         expect(output).toContain('func (this *ex) ParseStatus(status any) any {');
     });
 });
+
+describe('native parameter types, Dict/List (D-01)', () => {
+    const baseWithAccessors =
+        "type Dict = { [key: string]: any };\n" +
+        "type List = any[];\n" +
+        "type Strings = string[];\n" +
+        "class Base {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    extend (a, b) { return undefined; }\n" +
+        "}\n";
+
+    test('a Dict parameter proved by every call site prints map[string]any and its reads go native', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseData (data: Dict) {\n" +
+            "        const a = data['a'];\n" +
+            "        const b = data['b']['c'];\n" +
+            "        const hasC = 'c' in data;\n" +
+            "        return this.safeValue (data, 'c', [ a, b, hasC ]);\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        this.parseData ({ 'a': 1 });\n" +
+            "        this.parseData (this.extend (this.order, {}));\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseData(data map[string]any) any {');
+        expect(output).toContain('var a any = data["a"]');
+        expect(output).toContain('var b any = GetValue(data["b"], "c")');
+        expect(output).toContain('_, ok := data["c"]');
+        // the argument expressions are unchanged: the call sites already produced maps
+        expect(output).toContain('this.ParseData(this.Extend(this.Order, map[string]any{');
+    });
+
+    test('a List parameter proved by every call site prints []any and .length inlines', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseRows (rows: List) {\n" +
+            "        const n = rows.length;\n" +
+            "        rows.push (this.safeValue (rows, 0));\n" +
+            "        return n;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        this.parseRows ([ 1, 2 ]);\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseRows(rows []any) any {');
+        expect(output).toContain('var n int = len(rows)');
+        expect(output).toContain('rows = append(rows, this.SafeValue(rows, 0))');
+    });
+
+    test('a parameter a caller passes as an any box keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseData (data: Dict) {\n" +
+            "        return GetValue (data, 'a');\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        const v = this.safeValue (this.order, 'data');\n" +
+            "        return this.parseData (v);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseData(data any) any {');
+        expect(output).toContain('return GetValue(data, "a")');
+    });
+
+    test('an override keeps the base signature', () => {
+        const input = baseWithAccessors +
+            "class Outer extends Base {\n" +
+            "    parseData (data: Dict) {\n" +
+            "        return data['a'];\n" +
+            "    }\n" +
+            "}\n" +
+            "class Test extends Outer {\n" +
+            "    override parseData (data: Dict) {\n" +
+            "        return data['a'];\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseData ({ 'a': 1 });\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseData(data any) any {');
+    });
+
+    test('a body that writes the parameter another type keeps the box (D2)', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseData (data: Dict) {\n" +
+            "        data = this.safeValue (this.order, 'data');\n" +
+            "        return data['a'];\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseData ({ 'a': 1 });\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseData(data any) any {');
+    });
+
+    test('a nil compare on the parameter keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseData (data: Dict | undefined) {\n" +
+            "        if (data === undefined) {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return data['a'];\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseData ({ 'a': 1 });\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseData(data any) any {');
+        expect(output).toContain('if data == nil {');
+    });
+
+    test('a non-any element []-typed parameter keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseSymbols (symbols: Strings) {\n" +
+            "        return symbols;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseSymbols ([ 'a' ]);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseSymbols(symbols any) any {');
+    });
+
+    test('a class-typed parameter keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Book {}\n" +
+            "class Test extends Base {\n" +
+            "    parseBook (book: Book) {\n" +
+            "        return book;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseBook (new Book ());\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseBook(book any) any {');
+    });
+
+    test('a proven parameter types a caller that forwards its own proven parameter', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseInner (data: Dict) {\n" +
+            "        return data['a'];\n" +
+            "    }\n" +
+            "    parseOuter (data: Dict) {\n" +
+            "        return this.parseInner (data);\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseOuter ({ 'a': 1 });\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseInner(data map[string]any) any {');
+        expect(output).toContain('func (this *Test) ParseOuter(data map[string]any) any {');
+        expect(output).toContain('return this.ParseInner(data)');
+    });
+});
+
+describe('native parameter types, Dict/List across the ts/src tree (D-01)', () => {
+    const BASE_FIXTURE =
+        "export class Exchange {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "}\n";
+    const EX_FIXTURE =
+        "import { Exchange } from './base/Exchange';\n" +
+        "type Dict = { [key: string]: any };\n" +
+        "export class ex extends Exchange {\n" +
+        "    parseData (data: Dict) {\n" +
+        "        return data['a'];\n" +
+        "    }\n" +
+        "}\n";
+
+    const treeFor = (name: string, proCall: string) => {
+        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
+        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), EX_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+            "import { ex } from '../ex';\n" +
+            "export class expro extends ex {\n" +
+            "    use () {\n" +
+            "        return " + proCall + ";\n" +
+            "    }\n" +
+            "}\n");
+        return nodepath.join(src, 'ex.ts');
+    };
+
+    afterAll(() => {
+        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-d01-tree'), { recursive: true, force: true });
+        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-d01-tree-neg'), { recursive: true, force: true });
+    });
+
+    test('a sibling call site passing an object literal proves the parameter', () => {
+        const file = treeFor('tmp-d01-tree', "this.parseData ({ 'a': 1 })");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) ParseData(data map[string]any) any {');
+    });
+
+    test('a sibling call site passing an unproven local keeps the box', () => {
+        const file = treeFor('tmp-d01-tree-neg', "this.parseData (this.safeValue (this.order, 'data'))");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) ParseData(data any) any {');
+    });
+
+    test('a file under ts/src/base keeps the box on the relative path a driver passes', () => {
+        // the prediction base (ts/src/base/PredictionExchange.ts) extends a class, so it
+        // passes the root-class test; the scoped driver hands the transpiler a source name
+        // WITHOUT a leading `./`, which a `/ts/src/base/` substring test misses — and the
+        // base signature then disagrees with every prediction caller that passes `any`
+        const name = 'tmp-d01-base';
+        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'PredictionExchange.ts'),
+            "import { Exchange } from './Exchange';\n" +
+            "type Dict = { [key: string]: any };\n" +
+            "export default class PredictionExchange extends Exchange {\n" +
+            "    parseData (data: Dict) {\n" +
+            "        return data['a'];\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseData ({ 'a': 1 });\n" +
+            "    }\n" +
+            "}\n");
+        const cwd = process.cwd();
+        let output;
+        try {
+            process.chdir(nodepath.join(__dirname, 'files', name));
+            output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath('ts/src/base/PredictionExchange.ts').content;
+        } finally {
+            process.chdir(cwd);
+            nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+        expect(output).toContain('func (this *PredictionExchange) ParseData(data any) any {');
+        expect(output).toContain('return GetValue(data, "a")');
+    });
+
+    test('a sibling call site passing a same-named local declared elsewhere keeps the box', () => {
+        // measured prediction-tier source: the argument is a caller-local `orders`, but the
+        // file also declares `const orders = [];` inside an unrelated method — a scope-less
+        // declaration scan matched that literal and typed a parameter every real caller
+        // passes as an `any` box (farm job 1053, buildGO)
+        const name = 'tmp-d01-tree-shadow';
+        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
+        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), EX_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+            "import { ex } from '../ex';\n" +
+            "export class expro extends ex {\n" +
+            "    other () {\n" +
+            "        const data = [];\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    use (raw) {\n" +
+            "        return this.parseData (data);\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(nodepath.join(src, 'ex.ts')).content;
+        expect(output).toContain('func (this *ex) ParseData(data any) any {');
+        nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+    });
+});

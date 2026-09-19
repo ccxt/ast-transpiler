@@ -934,6 +934,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goTsSrcTreeCache: Map<string, any>;
     goNativeParameterType(param: any): string | undefined;
     goNativeParameterTypeOf(param: any): string | undefined;
+    goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
     goNativeParameterTypeCandidates(param: any): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;

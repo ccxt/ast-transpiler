@@ -596,6 +596,18 @@ const GO_TS_SRC_STRING_PRODUCERS = [
     /^this\s*\.\s*safeSymbol\s*\(/,
 ];
 
+// the TS accessors whose Go signature GO_HELPER_RETURN_TYPES already names
+// `map[string]any`, for the same textual sibling-file proof. A map argument is also
+// proven when it is an object literal (its printed Go form is exactly that map) or a
+// local assigned from one of these in that file.
+const GO_TS_SRC_MAP_PRODUCERS = [
+    /^this\s*\.\s*extend\s*\(/,
+    /^this\s*\.\s*deepExtend\s*\(/,
+    /^this\s*\.\s*keysort\s*\(/,
+    /^this\s*\.\s*indexBy\s*\(/,
+    /^this\s*\.\s*groupBy\s*\(/,
+];
+
 // the argument texts of a call whose opening parenthesis sits at `open`, or undefined
 // when the parentheses do not balance — an unproven call site must never pass the proof
 function goBalancedCallArgs (text: string, open: number): string[] | undefined {
@@ -3687,11 +3699,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    // ---- B-02: native parameter types on internal parse*/helper methods --------
+    // ---- B-02/D-01: native parameter types on internal parse*/helper methods ----
     //
     // A parameter declared with a nullable ccxt alias (`Str` = string | undefined) can
     // be printed with the native Go type the printer already uses for that value
-    // (`*string`), but only when
+    // (`*string`), and a `Dict`/`List`/`Market`-shaped object/array parameter with the
+    // Go map/slice the printer builds those values from (`map[string]any` / `[]any`),
+    // but only when
     //   * the method is internal — not async, not an override, and no member of that
     //     name exists on the class it extends: the generated base classes and the
     //     hand-written IDerivedExchange interface compile against the base signature,
@@ -3699,9 +3713,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     //     proves the ones in this file; the sibling files of the same ts/src tree
     //     (pro/ and the derived exchanges, absent from a scoped run's program) are
     //     proven textually, and an unprovable call site keeps the box,
-    //   * the body never writes the parameter another printed type (D2).
+    //   * the body never writes the parameter another printed type (D2) and never
+    //     nil-compares it, which the boxed parameter prints natively and the typed one
+    //     would not (see goParameterKeepsNilCompareNative).
     // Each qualifying parameter is also registered in goDeclaredTypeOfIdentifier, so
-    // the readers that consult it (pointer-aware equality, element access) go native.
+    // the readers that consult it (pointer-aware equality, element access, slice
+    // length) go native.
     goNativeParameterTypeCache = new Map<any, string | undefined>();
     goSameFileCallCache = new Map<any, Map<string, Array<any>>>();
     goTsSrcTreeCache = new Map<string, any>();
@@ -3740,15 +3757,62 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const index = fn.parameters.indexOf(param);
         for (const goType of this.goNativeParameterTypeCandidates(param)) {
             if (this.goParameterCallSitesPassType(fn, index, goType)
-                && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)) {
+                && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)
+                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) {
                 return goType;
             }
         }
         return undefined;
     }
 
+    // The boxed object parameter prints `x === undefined` as a native `x == nil`
+    // (goObjectBoxParameter); a parameter the printer typed as a Go map/slice would fall
+    // through to IsEqual(x, nil) instead. Both predicates answer false for every value a
+    // proven call site can pass, but the retype would turn a native test into a helper
+    // call, so such a parameter keeps its box. *string is exempt: its typed arm prints the
+    // same `x == nil` the boxed arm does.
+    goParameterKeepsNilCompareNative(body, param, goType: string): boolean {
+        if (goType === '*string') {
+            return true;
+        }
+        const name = param.name.escapedText;
+        let keeps = true;
+        const visit = (n) => {
+            if (!keeps) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === name)) {
+                let symbol;
+                try {
+                    symbol = this.getChecker().getSymbolAtLocation(n);
+                } catch (e) {
+                    symbol = undefined;
+                }
+                const binary: any = n.parent;
+                if ((symbol?.valueDeclaration === param) && (binary?.kind === ts.SyntaxKind.BinaryExpression)
+                    && ((binary.left === n) || (binary.right === n))) {
+                    const op = binary.operatorToken?.kind;
+                    if ((op === ts.SyntaxKind.EqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsEqualsToken)
+                        || (op === ts.SyntaxKind.ExclamationEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+                        const other: any = (binary.left === n) ? binary.right : binary.left;
+                        if ((other?.kind === ts.SyntaxKind.NullKeyword)
+                            || ((other?.kind === ts.SyntaxKind.Identifier) && (other.escapedText === 'undefined'))) {
+                            keeps = false;
+                            return;
+                        }
+                    }
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(body, visit);
+        return keeps;
+    }
+
     // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
-    // have no call-site proof yet (the corpus passes `any` locals) and keep the box.
+    // and the other dict-shaped object types print as the `map[string]any` the Go side
+    // builds them from, `List` (= any[]) as its `[]any`; the call-site proof decides
+    // whether the retype compiles.
     goNativeParameterTypeCandidates(param): string[] {
         let type;
         try {
@@ -3768,18 +3832,39 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (inner.flags & ts.TypeFlags.String) {
             return ['*string'];
         }
+        if (!(inner.flags & ts.TypeFlags.Object)) {
+            return [];
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(inner)) {
+            // List / any[]: the element must itself be `any`, or the Go slice would need
+            // the narrower element type (`string[]` is a []string the printer does not build)
+            const element = checker.getIndexTypeOfType(inner, ts.IndexKind.Number);
+            if ((element !== undefined) && (element.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))) {
+                return ['[]any'];
+            }
+            return [];
+        }
+        // Dict / Market / Currency / a structure interface: a plain Go dictionary, never a
+        // class instance or a function (goTypeIsNilComparableObject is the printer's own
+        // test for exactly those types, used for the boxed nil test above)
+        if (this.goTypeIsNilComparableObject(inner)) {
+            return ['map[string]any'];
+        }
         return [];
     }
 
     // true when the method overrides (or shadows) a member of the class it extends, or
     // carries an explicit `override`: those print the base signature so the generated
-    // base classes and IDerivedExchange keep compiling against it. The abstract base
-    // itself (ts/src/base/**, or any root class) is public surface and never retyped.
+    // base classes and IDerivedExchange keep compiling against it. The abstract bases
+    // themselves (`ts/src/base/**`, or any root class) are public surface and never
+    // retyped; the path test accepts both the scoped run's relative source name
+    // (`ts/src/base/PredictionExchange.ts`) and a farm checkout's absolute one.
     goMethodKeepsBaseSignature(fn): boolean {
         if ((fn.modifiers ?? []).some(m => m.kind === ts.SyntaxKind.OverrideKeyword)) {
             return true;
         }
-        if (fn.getSourceFile().fileName.includes('/ts/src/base/')) {
+        if (/(^|\/)ts\/src\/base\//.test(fn.getSourceFile().fileName)) {
             return true;
         }
         const name = fn.name.escapedText;
@@ -3902,6 +3987,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // Lazily read the ts/src tree this file belongs to: the call sites of every
     // `this.x(...)`, each file's text and its class -> base map. A scoped run's
     // program holds one exchange, so the sibling files are only provable textually.
+    // NOTE: the tree loads only for an absolute source name; the driver's relative
+    // `ts/src/x.ts` answers undefined, which *skips* the sibling half of the proof
+    // (the same-file checker half still runs). Enabling the relative form is a
+    // whole-tree change to measure on its own: it makes the sibling proof stricter
+    // and reverts documented native emissions whose sibling argument the textual
+    // string proof cannot name (measured: Nado.ParseX18).
     goTsSrcTree(file): any {
         const fileName: string = file.fileName;
         const marker = '/ts/src/';
@@ -3990,28 +4081,43 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return false;
     }
 
-    // the textual call-site proof. `*string` is the only native parameter type the
-    // corpus proves today: the argument is either one of the accessors whose Go
-    // signature is a `*string` or a local assigned from one in that same file.
+    // the textual call-site proof. `*string` is the only pointer-shaped native type
+    // with siblings the printer can name from text; a map/slice parameter is proven for
+    // the argument shapes whose printed Go form IS that type: the object/array literals
+    // and the printer's own map-returning helpers (GO_HELPER_RETURN_TYPES), plus a local
+    // assigned from one in that same file.
     goTextArgMatchesType(argText: string, goType: string, file: string, tree): boolean {
         let text = (argText ?? '').trim();
         while (text.startsWith('(') && text.endsWith(')')) {
             text = text.substring(1, text.length - 1).trim();
         }
         const isStringProducer = (candidate: string) => GO_TS_SRC_STRING_PRODUCERS.some(rx => rx.test(candidate));
+        const localDeclaredFrom = (name: string, accept: (init: string) => boolean) => {
+            const fileText = tree.fileText.get(file) ?? '';
+            const declRe = new RegExp('(?:const|let|var)\\s+' + name + '\\s*(?::[^=]*)?=\\s*([^;\\n]+)');
+            const match = declRe.exec(fileText);
+            return (match !== null) && accept(match[1].trim());
+        };
         if (goType === '*string') {
             if (isStringProducer(text)) {
                 return true;
             }
             const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
             if (identifier !== null) {
-                const fileText = tree.fileText.get(file) ?? '';
-                const declRe = new RegExp('(?:const|let|var)\\s+' + identifier[1] + '\\s*(?::[^=]*)?=\\s*([^;\\n]+)');
-                const match = declRe.exec(fileText);
-                if (match !== null) {
-                    return isStringProducer(match[1].trim());
-                }
+                return localDeclaredFrom(identifier[1], isStringProducer);
             }
+        }
+        if ((goType === 'map[string]any') || (goType === '[]any')) {
+            // Only the argument shapes whose printed Go form IS this map/slice: the
+            // matching literal and the printer's own map producers. An identifier is
+            // deliberately not proven here: this proof reads one file's text, so it
+            // cannot tell which declaration of that name the call site reads (a
+            // same-named local of another prediction-tier method matched an array
+            // literal, which typed a caller that passes an `any` box).
+            const isMap = goType === 'map[string]any';
+            const literal = isMap ? '{' : '[';
+            const producers = isMap ? GO_TS_SRC_MAP_PRODUCERS : [];
+            return text.startsWith(literal) || producers.some(rx => rx.test(text));
         }
         return false;
     }
