@@ -540,11 +540,15 @@ declare class CSharpTranspiler extends BaseTranspiler {
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     csharpEqualityOperandType(node: any): string | undefined;
     csharpReferenceFieldType(node: any): string | undefined;
+    csharpParameterDeclaration(node: any): ts.ParameterDeclaration | undefined;
     csharpParameterOperandType(node: any): string | undefined;
+    csharpDeclarationPrintsNullComparable(declaration: any): boolean;
+    csharpDeclarationHasValueScalar(declaration: any): boolean;
     csharpNumericLiteralKind(node: any): string | undefined;
     csharpDeclaredTypeOfBinding(node: any): string | undefined;
     csharpValueEqualityKind(csharpType: any): string | undefined;
     csharpIsNullComparableType(csharpType: any): boolean;
+    csharpOperandIsNullComparable(node: any): boolean;
     csharpOperandIsValueTyped(node: any): boolean;
     csharpTypeHasValueScalar(type: any): boolean;
     csharpDeclaredStringLiteralComparison(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
