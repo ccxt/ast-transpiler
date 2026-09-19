@@ -1190,6 +1190,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredTypeOf(expression: any): string | undefined;
     javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
     javaNativeParameterType(node: any): string | undefined;
+    javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
+    javaParameterIsCompoundAssigned(node: any): boolean;
+    javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;

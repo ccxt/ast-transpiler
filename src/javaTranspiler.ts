@@ -332,7 +332,9 @@ export class JavaTranspiler extends BaseTranspiler {
             if (type === undefined || this.javaNativeArgumentAlreadyTyped(a, type)) {
                 return parsedArg;
             }
-            return `(${type}) ${parsedArg}`;
+            // the checkcast carries its own parentheses: a bare `(T) cond ? a : b` binds the
+            // condition, not the whole argument
+            return `(${type}) (${parsedArg})`;
         }).join(", ");
     }
 
@@ -1811,6 +1813,13 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === undefined) {
             return undefined;
         }
+        // D2: a parameter the enclosing body assigns with a compound operator keeps the box —
+        // `url += '/path'` prints `url = Helpers.add(url, ..)`, whose result is an Object. A
+        // plain `x = ..` or a destructuring target is cast at the write site instead
+        // (javaParameterAssignmentCast).
+        if (this.javaParameterIsCompoundAssigned(node)) {
+            return undefined;
+        }
         try {
             const method = node.parent;
             const index = method.parameters.indexOf(node);
@@ -1826,6 +1835,60 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined; // an unresolvable heritage keeps the box
         }
         return type;
+    }
+
+    // the names the enclosing method body assigns with a compound operator (`x += ..`),
+    // by method node; a plain assignment is handled by javaParameterAssignmentCast
+    javaMethodAssignedNames: WeakMap<ts.Node, Set<string>> = new WeakMap();
+
+    javaParameterIsCompoundAssigned(node): boolean {
+        const method = node.parent;
+        const name = (node.name as any)?.escapedText;
+        if (method?.body === undefined || name === undefined) {
+            return false;
+        }
+        let assigned = this.javaMethodAssignedNames.get(method);
+        if (assigned === undefined) {
+            assigned = new Set<string>();
+            const collect = (n: ts.Node) => {
+                if (ts.isBinaryExpression(n) && n.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+                    && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(n.operatorToken.kind)) {
+                    const left = n.left;
+                    if (ts.isIdentifier(left) && left.escapedText !== undefined) {
+                        assigned.add(left.escapedText as string);
+                    }
+                }
+                ts.forEachChild(n, collect);
+            };
+            ts.forEachChild(method.body, collect);
+            this.javaMethodAssignedNames.set(method, assigned);
+        }
+        return assigned.has(name as string);
+    }
+
+    // a write to a parameter this printer declared natively: the right side prints from
+    // locals the printer declares `Object`, so the assignment carries the same checkcast the
+    // call sites do. The checker proved the right side's TypeScript type assignable to the
+    // parameter's, so the declared type describes the value the parameter really receives.
+    javaParameterAssignmentCast(left, right, identation): string | undefined {
+        if (!ts.isIdentifier(left)) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(left);
+        if (declaration === undefined || !ts.isParameter(declaration) || left.escapedText !== (declaration.name as any)?.escapedText) {
+            return undefined;
+        }
+        const native = this.javaNativeParameterType(declaration);
+        if (native === undefined) {
+            return undefined;
+        }
+        const leftText = this.printNode(left, 0);
+        if (this.javaNativeArgumentAlreadyTyped(right, native)) {
+            return `${leftText} = ${this.printNode(right, identation)}`;
+        }
+        // the checkcast carries its own parentheses: a bare `(T) cond ? a : b` binds the
+        // condition, not the whole right side
+        return `${leftText} = (${native}) (${this.printNode(right, identation)})`;
     }
 
     // the annotation proof alone, without the heritage check
@@ -1888,6 +1951,14 @@ export class JavaTranspiler extends BaseTranspiler {
             if (typeOfExpression) return typeOfExpression;
         }
 
+        // a write to a parameter the printer declared natively casts its right side
+        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.Identifier) {
+            const assignment = this.javaParameterAssignmentCast(left, right, identation);
+            if (assignment !== undefined) {
+                return assignment;
+            }
+        }
+
         // destructuring: [a,b] = this.method()
         if (
             op === ts.SyntaxKind.EqualsToken &&
@@ -1904,9 +1975,21 @@ export class JavaTranspiler extends BaseTranspiler {
                 `var ${syntheticName} = ${this.printNode(right, 0)};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
+                // a destructuring target the printer declares natively carries the cast the
+                // synthesized `.get(index)` result needs (a plain `Object` read)
+                let elementValue = `((java.util.List<Object>) ${syntheticName}).get(${index})`;
+                const target = arrayBindingPatternElements[index];
+                if (ts.isIdentifier(target)) {
+                    const declaration = this.javaDeclarationOfIdentifier(target);
+                    const native = declaration !== undefined && ts.isParameter(declaration)
+                        ? this.javaNativeParameterType(declaration) : undefined;
+                    if (native !== undefined) {
+                        elementValue = `(${native}) ${elementValue}`;
+                    }
+                }
                 const statement =
                     this.getIden(identation) +
-                    `${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+                    `${e} = ${elementValue}`;
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + ";\n";
                 } else {

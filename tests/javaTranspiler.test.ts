@@ -6159,6 +6159,14 @@ describe('java typed parameters (b-09)', () => {
             "    parseOpt (data: Dict = {}, status: Str = undefined): void {\n" +
             "        const id = data['id'];\n" +
             "    }\n" +
+            "    parseW (data: Dict, status: Str): void {\n" +
+            "        data = this.safeDict (data, 'nested');\n" +
+            "        status = this.safeString (data, 'status');\n" +
+            "        status = (data['x'] !== undefined) ? 'buy' : 'sell';\n" +
+            "    }\n" +
+            "    parseAppend (url: Str, status: Str): void {\n" +
+            "        url += '/path';\n" +
+            "    }\n" +
             "    parseNum (amount: Num, count: Int): void {\n" +
             "        const x = amount;\n" +
             "    }\n" +
@@ -6207,7 +6215,17 @@ describe('java typed parameters (b-09)', () => {
     });
 
     test('call sites cast the argument to the declared parameter type', () => {
-        expect(venueOutput).toContain('v.parseZ((java.util.Map<String, Object>) data, (String) raw, (java.util.Map<String, Object>) data, (java.util.Map<String, Object>) data)');
+        expect(venueOutput).toContain('v.parseZ((java.util.Map<String, Object>) (data), (String) (raw), (java.util.Map<String, Object>) (data), (java.util.Map<String, Object>) (data))');
+    });
+
+    test('a plain write to a retyped parameter casts its right side', () => {
+        expect(venueOutput).toContain('data = (java.util.Map<String, Object>) (Helpers.callDynamically(this, "safeDict", new Object[] { data, "nested" }));');
+        expect(venueOutput).toContain('status = (String) ((((!java.util.Objects.equals(((java.util.Map<String, Object>)data).get("x"), null)))) ? "buy" : "sell");');
+    });
+
+    test('a compound write to a parameter keeps the whole parameter boxed', () => {
+        expect(venueOutput).toContain('public void parseAppend(Object url, String status)');
+        expect(venueOutput).toContain('url = Helpers.add(url, "/path");');
     });
 
     test('Int/Num stay Object (an Integer/Long/Double box is not a provable Long/Double)', () => {
