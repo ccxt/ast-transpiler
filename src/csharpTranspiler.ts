@@ -902,12 +902,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (typeof this.csharpDeclaredLocalTypeResolver !== 'function') {
             return undefined;
         }
-        let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
         if (declaration === undefined) {
             return undefined;
         }
@@ -1553,11 +1552,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return undefined;
         }
-        try {
-            return this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
-            return undefined; // no transpilation context — the read keeps the helper
-        }
+        return this.checkerOrUndefined()?.getSymbolAtLocation(node);
     }
 
     csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol): boolean {
@@ -1887,12 +1882,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the declaration behind an identifier read that is a plain method parameter; a
     // destructured or rest parameter prints a different declaration shape
     csharpParameterDeclaration(node): ts.ParameterDeclaration | undefined {
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration;
         if ((declaration === undefined) || !ts.isParameter(declaration)) {
             return undefined;
@@ -1933,12 +1927,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     csharpDeclarationHasValueScalar(declaration): boolean {
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(declaration);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return true; // unknown: keep the helper
         }
+        const type = checker.getTypeAtLocation(declaration);
         return this.csharpTypeHasValueScalar(type);
     }
 
@@ -1956,12 +1949,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the C# type the declaration behind an identifier was printed with ('object' when the
     // printer named none), or undefined when the identifier is not a printed local
     csharpDeclaredTypeOfBinding(node): string | undefined {
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration;
         if (declaration === undefined) {
             return undefined;
@@ -2052,12 +2044,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (node === undefined) {
             return true;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return true;
         }
+        const type = checker.getTypeAtLocation(node);
         return this.csharpTypeHasValueScalar(type);
     }
 
@@ -2306,12 +2297,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     csharpOperandIsPlainNumber(operand): boolean {
-        let flags;
-        try {
-            flags = this.getChecker().getTypeAtLocation(operand)?.flags;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false; // in-memory program without a checker
         }
+        const flags = checker.getTypeAtLocation(operand)?.flags;
         return (flags === ts.TypeFlags.Number) || (flags === ts.TypeFlags.NumberLiteral);
     }
 
@@ -2416,12 +2406,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the global `parseInt` / `parseFloat` live in the TS lib chain; a declaration anywhere else
     // means the call prints a different function than the runtime helper
     csharpCalleeIsGlobalFunction(node): boolean {
-        let declarations;
-        try {
-            declarations = this.getChecker().getSymbolAtLocation(node)?.declarations ?? [];
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return true; // in-memory program without a checker: the name is all there is
         }
+        const declarations = checker.getSymbolAtLocation(node)?.declarations ?? [];
         return declarations.every((declaration) => declaration.getSourceFile().fileName.indexOf('typescript') > -1);
     }
 
@@ -3175,12 +3164,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // checker cannot resolve is printed as `callDynamically(this, "<name>", ...)`, whose C#
     // signature returns `object` whatever the name says
     csharpCalleeResolves(node): boolean {
-        let signature;
-        try {
-            signature = this.getChecker().getResolvedSignature(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const signature = checker.getResolvedSignature(node);
         return signature?.declaration !== undefined;
     }
 
@@ -4193,12 +4181,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the checker's view of the receiver: exactly `string` / a string literal. `any` (could box
     // anything) and `string[]` (boxes a List<string> where the helper casts its target) are not
     csharpIndexOfReceiverIsCheckedString(receiver): boolean {
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(receiver);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false; // in-memory program without a checker
         }
+        const type = checker.getTypeAtLocation(receiver);
         return this.isStringType(type?.flags);
     }
 
@@ -4222,12 +4209,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((kind === ts.SyntaxKind.AsExpression) && (receiver.type?.kind === ts.SyntaxKind.StringKeyword)) {
             return true; // the source itself pinned a string here
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(receiver);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(receiver);
         const declarations: any[] = symbol?.declarations ?? [];
         return (declarations.length > 0) && declarations.every((declaration) => this.csharpDeclarationIsNonNullString(declaration));
     }
@@ -4267,12 +4253,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!ts.isIdentifier(receiver)) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(receiver);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(receiver);
         if (symbol === undefined) {
             return false;
         }
@@ -4589,12 +4574,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (declared === 'List<object>') {
             return 'list';
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(expression);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(expression);
         return this.csharpSliceStringType(type) ? 'string' : undefined;
     }
 

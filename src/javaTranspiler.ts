@@ -398,12 +398,11 @@ export class JavaTranspiler extends BaseTranspiler {
     // the native printed type of each argument position of a call, when the resolved
     // signature declares that parameter natively
     javaNativeCallParameterTypes(node): (string | undefined)[] {
-        let declaration;
-        try {
-            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return [];
         }
+        const declaration = checker.getResolvedSignature(node)?.declaration;
         const parameters = (declaration as any)?.parameters;
         if (parameters === undefined) {
             return [];
@@ -1313,12 +1312,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (keys.length !== 1 || container === undefined || container.kind !== ts.SyntaxKind.Identifier) {
             return false; // only a direct write on the proven local, no read in between
         }
-        let symbol: any;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(container);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(container);
         const declaration: any = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
         if (!declaration || declaration.kind !== ts.SyntaxKind.VariableDeclaration || !declaration.initializer) {
             return false; // parameters and receivers without an initializer stay the helper
@@ -1450,7 +1448,7 @@ export class JavaTranspiler extends BaseTranspiler {
     returnTypePrintsAsHashMap(declaration): boolean {
         try {
             const checker: any = this.getChecker();
-            const signature: any = checker.getSignatureFromDeclaration(declaration);
+            const signature = checker.getSignatureFromDeclaration(declaration);
             const type: any = signature?.getReturnType();
             if (!type || (type.flags & ts.TypeFlags.Object) === 0) {
                 return false;
@@ -1471,7 +1469,7 @@ export class JavaTranspiler extends BaseTranspiler {
     isDictionaryType(node): boolean {
         try {
             const checker: any = this.getChecker();
-            const type: any = checker.getTypeAtLocation(node);
+            const type = checker.getTypeAtLocation(node);
             return this.isDictionaryTsType(type, checker, 0);
         } catch (e) {
             return false;
@@ -2013,12 +2011,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
             return undefined; // a hand-written java class declares this method, not the printer
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(node);
         if (type === undefined) {
             return undefined;
         }
@@ -2395,12 +2392,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (expression === undefined || !ts.isIdentifier(expression)) {
             return undefined;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(expression);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(expression);
         const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
         if (declaration === undefined) {
             return undefined;
@@ -2487,12 +2483,11 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
-        let keyType;
-        try {
-            keyType = this.getChecker().getTypeAtLocation(key);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const keyType = checker.getTypeAtLocation(key);
         if (!this.isJavaStringType(keyType) && !this.javaDeclaredStringType(key)) {
             // the guard prints the key twice, so only a repeatable operand can take it
             if (!this.javaRepeatableOperand(key)) {
@@ -2609,12 +2604,11 @@ export class JavaTranspiler extends BaseTranspiler {
     // their literals only. The nullable aliases (Str/Int/Num/Bool), unions and `any`
     // can hold undefined at runtime, which the helpers absorb.
     javaScalarFamily(node): string | undefined {
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(node);
         if (type === undefined || type.aliasSymbol !== undefined) {
             return undefined;
         }
@@ -2746,12 +2740,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaProvableNumericKind(node) === 'long') {
             return false;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return true;
         }
+        const type = checker.getTypeAtLocation(node);
         if (type === undefined) {
             return true;
         }
@@ -2792,11 +2785,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         let declaration;
-        try {
-            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             declaration = undefined;
         }
+        declaration = checker.getResolvedSignature(node)?.declaration;
         const fileName = declaration?.getSourceFile?.().fileName;
         if (typeof fileName !== 'string') {
             return undefined;
@@ -2869,12 +2862,11 @@ export class JavaTranspiler extends BaseTranspiler {
     // own `Object finalX = x;` local, so the recorded type of the declaration no longer
     // holds (`(finalTime - 8L)` on an Object local does not compile)
     javaIdentifierKeepsDeclaredName(node): boolean {
-        let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
         if (declaration === undefined || declaration.kind !== ts.SyntaxKind.VariableDeclaration) {
             return false;
         }
@@ -2884,12 +2876,11 @@ export class JavaTranspiler extends BaseTranspiler {
     // the checker type is the plain non-nullable `number` (TypeFlags.Number, no alias):
     // `Int`/`Num`/`any` and unions hold undefined at runtime, which the helpers absorb
     javaOperandIsNonNullNumber(node): boolean {
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const type = checker.getTypeAtLocation(node);
         return type !== undefined && type.aliasSymbol === undefined && type.flags === ts.TypeFlags.Number;
     }
 
@@ -2965,11 +2956,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return false;
         }
         let declaration;
-        try {
-            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             declaration = undefined;
         }
+        declaration = checker.getResolvedSignature(node)?.declaration;
         if (declaration === undefined) {
             return false;
         }
@@ -4907,11 +4898,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     javaOperandType(operand) {
-        try {
-            return (this.getChecker() as TypeChecker).getTypeAtLocation(operand);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(operand);
     }
 
     // literals and identifiers have nothing an array-literal wrapper could skip by dropping
@@ -4980,12 +4967,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaDeclaredMapReceiver(argument)) {
             return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.keySet())`;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(argument);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(argument);
         if (!this.isJavaMapStructureType(type)) {
             return undefined;
         }
@@ -5540,12 +5526,11 @@ export class JavaTranspiler extends BaseTranspiler {
     // mirrors printWrappedUnknownThisProperty: a `this.<name>(...)` call the checker cannot
     // resolve prints `Helpers.callDynamically(this, "<name>", ...)`, whose Java return is Object
     javaCalleeResolves(node): boolean {
-        let signature;
-        try {
-            signature = this.getChecker().getResolvedSignature(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const signature = checker.getResolvedSignature(node);
         return signature?.declaration !== undefined;
     }
 
@@ -5616,11 +5601,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     javaTypeOfNode(node): any {
-        try {
-            return this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(node);
     }
 
     // the DECLARED type of a declaration, not the narrowed type at a use site: TypeScript
@@ -5630,11 +5611,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (decl === undefined) {
             return undefined;
         }
-        try {
-            return this.getChecker().getTypeAtLocation(decl);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(decl);
     }
 
     // the printed Java of this expression is a primitive `boolean` (or a Boolean box): boolean
@@ -5678,12 +5655,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (node?.kind !== ts.SyntaxKind.CallExpression || depth > 2) {
             return false;
         }
-        let declaration;
-        try {
-            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const declaration = checker.getResolvedSignature(node)?.declaration;
         if (declaration === undefined || declaration.kind !== ts.SyntaxKind.MethodDeclaration
             || declaration.body === undefined || seen.has(declaration)) {
             return false;
@@ -5762,11 +5738,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(node.name)?.valueDeclaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             declaration = undefined;
         }
+        declaration = checker.getSymbolAtLocation(node.name)?.valueDeclaration;
         const type = this.javaTypeOfDeclaration(declaration) ?? this.javaTypeOfNode(node);
         return this.javaBooleanBoxType(type) ? printed : undefined;
     }
@@ -5780,12 +5756,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (node?.kind !== ts.SyntaxKind.Identifier || seen.has(node)) {
             return undefined;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const decl = symbol?.valueDeclaration;
         if (decl === undefined) {
             return undefined;
@@ -5837,11 +5812,11 @@ export class JavaTranspiler extends BaseTranspiler {
                 && ts.isIdentifier(current.initializer)) {
                 // `for (x of list)` re-fills the box from the container
                 let loop;
-                try {
-                    loop = this.getChecker().getSymbolAtLocation(current.initializer);
-                } catch (e) {
+                const checker: any = this.checkerOrUndefined();
+                if (checker === undefined) {
                     loop = undefined;
                 }
+                loop = checker.getSymbolAtLocation(current.initializer);
                 if (loop === symbol) {
                     ok = false;
                     return;
@@ -5851,11 +5826,11 @@ export class JavaTranspiler extends BaseTranspiler {
                 && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(current.operatorToken.kind)
                 && ts.isIdentifier(current.left)) {
                 let left;
-                try {
-                    left = this.getChecker().getSymbolAtLocation(current.left);
-                } catch (e) {
+                const checker: any = this.checkerOrUndefined();
+                if (checker === undefined) {
                     left = undefined;
                 }
+                left = checker.getSymbolAtLocation(current.left);
                 if (left === symbol && !this.javaPrintsBooleanValue(current.right, next)) {
                     ok = false;
                     return;
@@ -5993,11 +5968,11 @@ export class JavaTranspiler extends BaseTranspiler {
                 && ts.isIdentifier(current.initializer)) {
                 // `for (x of list)` re-fills the box from the container
                 let loop;
-                try {
-                    loop = this.getChecker().getSymbolAtLocation(current.initializer);
-                } catch (e) {
+                const checker: any = this.checkerOrUndefined();
+                if (checker === undefined) {
                     loop = undefined;
                 }
+                loop = checker.getSymbolAtLocation(current.initializer);
                 if (loop === symbol) {
                     ok = false;
                     return;
@@ -6007,11 +5982,11 @@ export class JavaTranspiler extends BaseTranspiler {
                 && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(current.operatorToken.kind)) {
                 if (ts.isIdentifier(current.left)) {
                     let left;
-                    try {
-                        left = this.getChecker().getSymbolAtLocation(current.left);
-                    } catch (e) {
+                    const checker: any = this.checkerOrUndefined();
+                    if (checker === undefined) {
                         left = undefined;
                     }
+                    left = checker.getSymbolAtLocation(current.left);
                     if (left === symbol && !this.javaPrintsBooleanBoxValue(current.right, next)) {
                         ok = false;
                         return;
@@ -6023,11 +5998,11 @@ export class JavaTranspiler extends BaseTranspiler {
                             return false;
                         }
                         let elementSymbol;
-                        try {
-                            elementSymbol = this.getChecker().getSymbolAtLocation(element);
-                        } catch (e) {
+                        const checker: any = this.checkerOrUndefined();
+                        if (checker === undefined) {
                             elementSymbol = undefined;
                         }
+                        elementSymbol = checker.getSymbolAtLocation(element);
                         return elementSymbol === symbol;
                     });
                     if (index !== -1 && !this.javaBooleanBoxTupleElement(current.right, index)) {
@@ -6049,12 +6024,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return undefined;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration;
         if (declaration === undefined || declaration.name?.escapedText !== node.escapedText) {
             return undefined;

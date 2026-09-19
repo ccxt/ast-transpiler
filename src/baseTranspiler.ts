@@ -232,6 +232,12 @@ class BaseTranspiler {
         return this.context.checker;
     }
 
+    // the checker when a transpilation context is set, undefined otherwise (an in-memory
+    // program without one keeps every helper the checker would have proven away)
+    checkerOrUndefined(): ts.TypeChecker | undefined {
+        return this.context?.checker;
+    }
+
     getProgram(): ts.Program {
         if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
         return this.context.program;

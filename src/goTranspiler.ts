@@ -1447,12 +1447,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // Go would not fit into `int` is left alone (Go infers `int64`/untyped there),
     // and every other initializer keeps the helper call.
     goInferredLocalStaticType(node): string | undefined {
-        let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
         if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
         }
@@ -1483,12 +1482,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the emitted Go parameter holds that type at every use, so the operator rule can
     // consume it (the typed-param families re-type `Str`/`Int`/`Num` params this way)
     goDeclaredParamStaticType(node): string | undefined {
-        let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
         if (declaration?.kind !== ts.SyntaxKind.Parameter) {
             return undefined;
         }
@@ -1514,12 +1512,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goDeclaredTypeOfIdentifier(node) !== '*string') {
             return false;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const type = checker.getTypeAtLocation(node);
         return (type.flags & ts.TypeFlags.StringLike) !== 0;
     }
 
@@ -2133,12 +2130,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!onThis && !onDerived) {
             return false;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(initializer);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const type = checker.getTypeAtLocation(initializer);
         if (type === undefined) {
             return false;
         }
@@ -2187,12 +2183,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // binding of the same name in another scope is not a use of the local). Without checker
     // information the name match stands.
     goIdentifierRefersToDeclaration(node, declaration): boolean {
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return true;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         if (symbol === undefined) {
             return true;
         }
@@ -3185,21 +3180,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // a *T helper result, `==` against a string is never true in Go
         if (node?.kind === ts.SyntaxKind.Identifier && this.goDeclaredTypeOfIdentifier(node) === undefined) {
             let decl;
-            try {
-                decl = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
-            } catch (e) {
+            const checker: any = this.checkerOrUndefined();
+            if (checker === undefined) {
                 decl = undefined;
             }
+            decl = checker.getSymbolAtLocation(node)?.valueDeclaration;
             if (this.goAnyLocalHoldsPointer(decl)) {
                 return undefined;
             }
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(node);
         return this.goScalarFamilyOfType(type);
     }
 
@@ -3208,12 +3202,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // scalar or nil, and both `x == nil` and `x == "lit"` are then the same
     // predicate as the helper. Numbers are excluded by the caller.
     goScalarFamilyWithNil(node): string | undefined {
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(node);
         return this.goScalarFamilyOfType(type, true);
     }
 
@@ -3226,22 +3219,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
-        if (symbol?.valueDeclaration?.kind !== ts.SyntaxKind.Parameter) {
+        if (checker.getSymbolAtLocation(node)?.valueDeclaration?.kind !== ts.SyntaxKind.Parameter) {
             return false;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
-            return false;
-        }
-        return this.goTypeIsNilComparableObject(type);
+        return this.goTypeIsNilComparableObject(checker.getTypeAtLocation(node));
     }
 
     // an object type whose Go value is a map/slice, or a union of such a type with
@@ -3293,12 +3278,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `any`. A *T / scalar local or call is not a box and keeps its own rule.
     goIsAnyBoxExpression(node, printedText: string): boolean {
         if (node?.kind === ts.SyntaxKind.Identifier) {
-            let symbol;
-            try {
-                symbol = this.getChecker().getSymbolAtLocation(node);
-            } catch (e) {
+            const checker: any = this.checkerOrUndefined();
+            if (checker === undefined) {
                 return false;
             }
+            const symbol = checker.getSymbolAtLocation(node);
             const decl = symbol?.valueDeclaration;
             const isBinding = (decl?.kind === ts.SyntaxKind.Parameter)
                 || (decl?.kind === ts.SyntaxKind.VariableDeclaration);
@@ -3431,12 +3415,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (nameNode?.kind !== ts.SyntaxKind.Identifier) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(nameNode);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(nameNode);
         const declarations = symbol?.declarations;
         if (!declarations || declarations.length === 0) {
             return false;
@@ -3531,12 +3514,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return undefined;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         return symbol?.valueDeclaration;
     }
 
@@ -3548,12 +3530,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const decl = symbol?.valueDeclaration;
         // a parameter without a default keeps the caller's value as-is in a plain `any`
         // parameter, where a *int64 handed over by another method stays a pointer
@@ -3750,12 +3731,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
     // have no call-site proof yet (the corpus passes `any` locals) and keep the box.
     goNativeParameterTypeCandidates(param): string[] {
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(param);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return [];
         }
+        const type = checker.getTypeAtLocation(param);
         if (type === undefined) {
             return [];
         }
@@ -3800,11 +3780,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             for (const expr of (clause.types ?? [])) {
                 let baseType;
-                try {
-                    baseType = this.getChecker().getTypeAtLocation(expr);
-                } catch (e) {
+                const checker: any = this.checkerOrUndefined();
+                if (checker === undefined) {
                     baseType = undefined;
                 }
+                baseType = checker.getTypeAtLocation(expr);
                 if (baseType?.getProperty?.(name) !== undefined) {
                     return true;
                 }
@@ -4035,12 +4015,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return undefined;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const decl = symbol?.valueDeclaration;
         if (decl === undefined) {
             return undefined;
@@ -4158,12 +4137,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!Number.isInteger(index) || (index < 0)) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const decl = symbol?.valueDeclaration;
         if (decl === undefined || decl.kind !== ts.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts.SyntaxKind.Identifier) {
             return false;
@@ -4923,12 +4901,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration;
         if (declaration?.kind !== ts.SyntaxKind.Parameter) {
             return false;
@@ -5123,12 +5100,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // statement prints `var x <type> = …` instead, where the printer already
     // decided the type, so only the `:=` form may be trusted here.
     goLiteralTypedLocalKind(node): string | undefined {
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration;
         if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
@@ -5375,12 +5351,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // if/loop/ternary whose branch contains the node. A local rebound anywhere in its
     // function never counts — the guard may be dead by the time the comparison runs.
     goHasEnclosingNilGuard(ident): boolean {
-        let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(ident)?.valueDeclaration;
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const declaration = checker.getSymbolAtLocation(ident)?.valueDeclaration;
         if (this.goLocalIsRebound(this.goEnclosingFunction(declaration ?? ident), ident)) {
             return false;
         }
@@ -6023,12 +5998,11 @@ ${this.getIden(identation)}${returnStatement}`;
     // from a slice initializer and no later statement rebinds it (a push only appends
     // to the same slice), so the box holds a []any at every use
     goLocalHoldsOnlyArrays(nameNode): boolean {
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(nameNode);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(nameNode);
         const declaration: any = symbol?.valueDeclaration;
         if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
             return false;
@@ -7207,12 +7181,11 @@ ${tryBodyBlock}
         if (this.goDeclaredTypeOfIdentifier(node) === 'int') {
             return true;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration: any = symbol?.valueDeclaration;
         if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
             return false;
@@ -7231,12 +7204,11 @@ ${tryBodyBlock}
     // from a `this.SafeList` accessor. Only that family carries the guarded element read: a local
     // typed from a slice literal or another []any source keeps GetValue.
     goSafeListUnboxIdentifier(node): boolean {
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration: any = symbol?.valueDeclaration;
         return (declaration?.kind === ts.SyntaxKind.VariableDeclaration)
             && (this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE);

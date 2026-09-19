@@ -736,11 +736,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     typeOfNodeIfAny(node: ts.Node): ts.Type | undefined {
         // A transpile without a program/checker (bare snippet) has no types.
-        try {
-            return this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(node);
     }
 
     // Arrays/tuples/strings: `.length` is exactly what `Value::len()` returns.
@@ -1139,12 +1135,11 @@ export class RustTranspiler extends BaseTranspiler {
     /** The single variable declaration a local identifier binds to, or
      *  undefined when the checker cannot answer / the binding is not a local. */
     rustSingleLocalDeclaration(ident: ts.Identifier): ts.VariableDeclaration | ts.ParameterDeclaration | undefined {
-        let declarations;
-        try {
-            declarations = this.getChecker().getSymbolAtLocation(ident)?.declarations ?? [];
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
         if (declarations.length !== 1) {
             return undefined;
         }
@@ -1193,12 +1188,11 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustFieldStaysDict(baseExpr, receiver.nameNode.text);
         }
         const ident = baseExpr;
-        let declarations;
-        try {
-            declarations = this.getChecker().getSymbolAtLocation(ident)?.declarations ?? [];
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
         if (declarations.length !== 1) {
             return false;
         }
@@ -1934,11 +1928,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustTypeIsString(node): boolean {
-        try {
-            return this.isStringLikeType(this.getChecker().getTypeAtLocation(node));
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false; // no checker type → keep the boxed form
         }
+        return this.isStringLikeType(checker.getTypeAtLocation(node));
     }
 
     rustEnclosingFunction(node) {
@@ -2167,12 +2161,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return false;
         }
+        const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
             return false;
@@ -2294,11 +2287,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Binding symbol of an identifier, or undefined when the checker cannot
      *  answer (ByContent probes without a class context, for instance). */
     private rustSymbolOf(node: ts.Identifier): ts.Symbol | undefined {
-        try {
-            return this.getChecker().getSymbolAtLocation(node);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getSymbolAtLocation(node);
     }
 
     /** True when this identifier is a use of the given declaration's binding.
@@ -2890,11 +2879,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     getCheckedTypeOf(node): ts.Type | undefined {
-        try {
-            return this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(node);
     }
 
     typeSymbolOf(type: ts.Type): ts.Symbol | undefined {
@@ -3547,12 +3532,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (/^\d+$/.test(text) || text === 'hashmap' || text === 'subscriptions' || text === 'futures') {
             return undefined;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(container);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(container);
         if (type !== undefined && ((type as any).objectFlags & ts.ObjectFlags.Class)) {
             return undefined;
         }
