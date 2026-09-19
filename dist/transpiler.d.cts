@@ -1197,6 +1197,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredLocalTypeResolver: ((declaration: ts.Node) => string | undefined) | undefined;
     javaDeclarationOfIdentifier(expression: any): any;
     javaDeclaredMapReceiver(expression: any): boolean;
+    javaDeclaredListElementRead(node: any, isCounter: any): string;
+    javaPrimitiveCounterIndex(node: any): boolean;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
     javaScalarFamily(node: any): string | undefined;
