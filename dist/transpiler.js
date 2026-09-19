@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6353,6 +6353,19 @@ var GO_ANY_BOX_CALLS = [
   "SafeNumber",
   "this.SafeNumber"
 ];
+var GO_PURE_STRING_ACCESSORS = [
+  "this.SafeString",
+  "this.SafeString2",
+  "this.SafeStringN",
+  "this.SafeStringLower",
+  "this.SafeStringLower2",
+  "this.SafeStringLowerN",
+  "this.SafeStringUpper",
+  "this.SafeStringUpper2",
+  "this.SafeStringUpperN",
+  "this.NumberToString",
+  "this.SafeCurrencyCode"
+];
 var GO_NIL_EQUIVALENT_POINTER_TYPES_Native = /* @__PURE__ */ new Set([
   "*sync.Map",
   "*string",
@@ -9572,11 +9585,68 @@ ${this.getIden(level)}}()`;
     }
     return node.kind === ts5.SyntaxKind.StringLiteral || node.kind === ts5.SyntaxKind.NoSubstitutionTemplateLiteral;
   }
+  // the deref arms print their operand twice, so the operand must read the same
+  // value both times: an identifier is a plain read, and a string accessor call
+  // whose arguments are all identifiers/literals re-reads those arguments (no
+  // statement can run between the two evaluations of one expression)
+  goDerefRepeatableOperand(node, printedText) {
+    if (node?.kind === ts5.SyntaxKind.Identifier) {
+      return true;
+    }
+    if (node?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    if (GO_PURE_STRING_ACCESSORS.indexOf(this.goPrintedCallee(printedText)) < 0) {
+      return false;
+    }
+    return node.arguments.every((argument) => this.goIsReadOnlyCallArgument(argument));
+  }
+  // an argument whose evaluation is a plain read: a value the printer already
+  // holds, never a call that could observe or cause a change
+  goIsReadOnlyCallArgument(node) {
+    while (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    switch (node?.kind) {
+      case ts5.SyntaxKind.Identifier:
+      case ts5.SyntaxKind.StringLiteral:
+      case ts5.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts5.SyntaxKind.NumericLiteral:
+      case ts5.SyntaxKind.TrueKeyword:
+      case ts5.SyntaxKind.FalseKeyword:
+      case ts5.SyntaxKind.NullKeyword:
+        return true;
+    }
+    return false;
+  }
+  // true when the Go value of this operand is a bare `string`: a local the printer
+  // declared `string`, or a parameter its own signature printer emits as `string`.
+  // A Go string can hold neither nil nor a pointer, so `x == "lit"` is exactly
+  // IsEqual(x, "lit") — the pointer arms above never see a value of this type.
+  goIsBareStringOperand(node) {
+    if (this.goDeclaredTypeOfIdentifier(node) === "string") {
+      return true;
+    }
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    const declaration = symbol?.valueDeclaration;
+    if (declaration?.kind !== ts5.SyntaxKind.Parameter) {
+      return false;
+    }
+    return this.printParameterType(declaration) === "string";
+  }
   printInlineEquality(left, right, leftText, rightText, isEq) {
     const lPtr = this.goPointerTypeOfExpression(left, leftText) !== void 0;
     const rPtr = this.goPointerTypeOfExpression(right, rightText) !== void 0;
-    const lRepeatable = left?.kind === ts5.SyntaxKind.Identifier;
-    const rRepeatable = right?.kind === ts5.SyntaxKind.Identifier;
+    const lRepeatable = this.goDerefRepeatableOperand(left, leftText);
+    const rRepeatable = this.goDerefRepeatableOperand(right, rightText);
     const lFam = this.goScalarFamily(left);
     const rFam = this.goScalarFamily(right);
     if (lFam === "nil" && rPtr) {
@@ -9611,10 +9681,10 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     if (!lPtr && !rPtr) {
-      if (this.goDeclaredTypeOfIdentifier(left) === "string" && this.goIsStringLiteralNode(right)) {
+      if (this.goIsBareStringOperand(left) && this.goIsStringLiteralNode(right)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
       }
-      if (this.goDeclaredTypeOfIdentifier(right) === "string" && this.goIsStringLiteralNode(left)) {
+      if (this.goIsBareStringOperand(right) && this.goIsStringLiteralNode(left)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
       }
     }
