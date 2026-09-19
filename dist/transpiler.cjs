@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -2908,6 +2908,11 @@ function csharpParseFloatLiteralArgument(arg) {
   return numeric === void 0 ? void 0 : csharpDoubleLiteral(numeric);
 }
 var CSHARP_MARKET_RECEIVER_NAMES = ["market", "currency"];
+var CSHARP_OVERRIDE_PARAM_TYPES = {
+  ethRpc: { 2: "IList<object>" },
+  parsePredictionOpenInterest: { 0: "IDictionary<string, object>" },
+  signEvmTransaction: { 0: "IDictionary<string, object>" }
+};
 var CSharpTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig3, _nullishCoalesce(config["parser"], () => ( {})));
@@ -5270,6 +5275,61 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
     }
     return this.printNode(node.expression, identation);
+  }
+  // A parameter of a method that participates in an override relation prints the spelling its
+  // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES; D8): C# is
+  // invariant on override parameter types, so a half-retyped name is CS0115, while a name the
+  // census cleared can print the same type on the base declaration and every override. The
+  // checker re-derives the shape here, so a stale table row degrades to `object`.
+  printParameterType(node) {
+    if (node === void 0 || node.kind !== _typescript2.default.SyntaxKind.Parameter) {
+      return super.printParameterType(node);
+    }
+    const method = _typescript2.default.findAncestor(node, (n) => _typescript2.default.isMethodDeclaration(n));
+    const name = method === void 0 || method.name === void 0 ? void 0 : method.name.getText().trim();
+    const row = name === void 0 ? void 0 : CSHARP_OVERRIDE_PARAM_TYPES[name];
+    const wanted = row === void 0 ? void 0 : row[method.parameters.indexOf(node)];
+    if (wanted === void 0 || this.csharpOverrideParamSpelling(node) !== wanted) {
+      return super.printParameterType(node);
+    }
+    return wanted;
+  }
+  // checker spelling of a parameter the override table covers: a dictionary-shaped type (string
+  // index signature, never a class instance or a callable) or an array of any/dictionary cells
+  csharpOverrideParamSpelling(node) {
+    const type = this.getChecker().getTypeAtLocation(node);
+    const rest = type === void 0 || !type.isUnion() ? type : type.types.filter((m) => !(m.flags & (_typescript2.default.TypeFlags.Undefined | _typescript2.default.TypeFlags.Null)))[0];
+    return this.csharpOverrideParamSpellingOfType(rest, type !== void 0 && type.isUnion() ? type.types.filter((m) => !(m.flags & (_typescript2.default.TypeFlags.Undefined | _typescript2.default.TypeFlags.Null))).length : 1);
+  }
+  csharpOverrideParamSpellingOfType(type, unionArms = 1) {
+    if (type === void 0 || unionArms !== 1) {
+      return void 0;
+    }
+    if (type.flags & (_typescript2.default.TypeFlags.TypeParameter | _typescript2.default.TypeFlags.Any | _typescript2.default.TypeFlags.Unknown | _typescript2.default.TypeFlags.EnumLike)) {
+      return void 0;
+    }
+    const checker = this.getChecker();
+    if (checker.isArrayType(type) || checker.isTupleType(type)) {
+      const el = (checker.getTypeArguments(type) || [])[0];
+      if (el === void 0) {
+        return void 0;
+      }
+      if (el.flags & (_typescript2.default.TypeFlags.Any | _typescript2.default.TypeFlags.Unknown)) {
+        return "IList<object>";
+      }
+      return this.csharpOverrideParamSpellingOfType(el) === "IDictionary<string, object>" ? "IList<object>" : void 0;
+    }
+    if (checker.getIndexTypeOfType(type, _typescript2.default.IndexKind.String) === void 0) {
+      return void 0;
+    }
+    const declarations = type.symbol && type.symbol.declarations ? type.symbol.declarations : [];
+    if (declarations.some((d) => d.kind === _typescript2.default.SyntaxKind.ClassDeclaration)) {
+      return void 0;
+    }
+    if (type.getCallSignatures && type.getCallSignatures().length > 0) {
+      return void 0;
+    }
+    return "IDictionary<string, object>";
   }
   printParameter(node, defaultValue = true) {
     const name = this.printNode(node.name, 0);

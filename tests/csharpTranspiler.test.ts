@@ -4211,4 +4211,44 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
         }
     });
+    // D-18: a name the ts/src census cleared (every declaration agrees, every call site passes a
+    // compatible argument) prints the typed spelling on the base declaration and on every override;
+    // every other name keeps `object` (C# overrides are invariant on parameter types, so a
+    // half-retyped name cannot compile).
+    describe('override parameter types', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "type List = any[];\n" +
+        "class Exchange {\n" +
+        "    parsePredictionOpenInterest (interest: Dict, market: Dict = undefined): Dict {\n" +
+        "        return interest;\n" +
+        "    }\n" +
+        "    ethRpc (chainId: string, method: string, request: List = undefined): Dict {\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "    parseOrder (order: Dict, market: Dict = undefined): Dict {\n" +
+        "        return order;\n" +
+        "    }\n" +
+        "}";
+        test('a cleared name prints the dictionary / list spelling', () => {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('parsePredictionOpenInterest(IDictionary<string, object> interest, object market = null)');
+            expect(output).toContain('ethRpc(object chainId, object method, IList<object>? request = null)');
+        });
+        test('a name outside the census table keeps object', () => {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('parseOrder(object order, object market = null)');
+        });
+        test('a parameter whose checker shape does not answer the table spelling keeps object', () => {
+            const other =
+            "type Dict = { [key: string]: any };\n" +
+            "class Exchange {\n" +
+            "    parsePredictionOpenInterest (interest: any, market: Dict = undefined): Dict {\n" +
+            "        return interest;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(other).content;
+            expect(output).toContain('parsePredictionOpenInterest(object interest, object market = null)');
+        });
+    });
 });
