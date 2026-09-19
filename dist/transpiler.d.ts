@@ -901,6 +901,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goAnyLocalHoldsNonPointer(decl: any): boolean;
     goAssignmentWritesName(left: any, name: any): boolean;
     goAnyBoxLocalDeclaration(node: any): any;
+    goGetArgBoundParameter(node: any): boolean;
+    goParameterLaterWritesPointerBox(decl: any): boolean;
+    goWritePrintsPointerBox(expr: any): boolean;
     goScalarFamilyOfType(type: any, allowNil?: boolean): string | undefined;
     goDeclaredTypeCache: Map<any, string>;
     goDeclaredTypeInProgress: Set<any>;

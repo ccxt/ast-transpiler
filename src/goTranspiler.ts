@@ -3094,6 +3094,92 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return symbol?.valueDeclaration;
     }
 
+    // true when this identifier is a parameter of the TypeScript method that the printed Go
+    // binds with `x := GetArg(optionalArgs, i, default)`: GetArg runs derefScalar and folds a
+    // typed nil pointer (and a nil []string/[]any) into the untyped default, so the box the
+    // parameter is read through holds a plain scalar or an untyped nil, never a nil *T.
+    goGetArgBoundParameter(node): boolean {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const decl = symbol?.valueDeclaration;
+        // a parameter without a default keeps the caller's value as-is in a plain `any`
+        // parameter, where a *int64 handed over by another method stays a pointer
+        if (decl?.kind !== ts.SyntaxKind.Parameter || decl.initializer === undefined) {
+            return false;
+        }
+        // only a method/function body binds its defaulted parameters with GetArg: an arrow
+        // function's printed parameters carry no default binding at all
+        const owner = decl.parent?.kind;
+        if (owner !== ts.SyntaxKind.MethodDeclaration && owner !== ts.SyntaxKind.FunctionDeclaration
+            && owner !== ts.SyntaxKind.Constructor) {
+            return false;
+        }
+        return !this.goParameterLaterWritesPointerBox(decl);
+    }
+
+    // D2 for a GetArg-bound parameter: a later `x = …` write whose printed value is a typed
+    // pointer puts a nil *T back in the box, where IsEqual(x, nil) is true but `x == nil` is not
+    goParameterLaterWritesPointerBox(decl): boolean {
+        const name = (decl?.name?.kind === ts.SyntaxKind.Identifier) ? decl.name.escapedText : undefined;
+        if (typeof name !== 'string') {
+            return true; // a binding pattern: the write scan cannot follow it
+        }
+        const scope = this.goEnclosingFunction(decl);
+        if (scope === undefined) {
+            return true;
+        }
+        let pointerWrite = false;
+        const visit = (n) => {
+            if (pointerWrite) {
+                return;
+            }
+            if (n.kind === ts.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts.SyntaxKind.EqualsToken
+                && this.goAssignmentWritesName(n.left, name) && this.goWritePrintsPointerBox(n.right)) {
+                pointerWrite = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return pointerWrite;
+    }
+
+    // true when the printed value of an assignment's right-hand side is a typed pointer: a
+    // `this.safeX(…)`/`this.Parse8601(…)` accessor (GO_HELPER_RETURN_TYPES), an identifier the
+    // printer declared `*T`, or a hand-written *sync.Map field. Read from the AST, never printed.
+    goWritePrintsPointerBox(expr): boolean {
+        while (expr?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            expr = expr.expression;
+        }
+        if (expr === undefined) {
+            return false;
+        }
+        if (expr.kind === ts.SyntaxKind.CallExpression) {
+            const name = this.goAstCalleeName(expr);
+            if (typeof name === 'string') {
+                const goType = GO_HELPER_RETURN_TYPES[name];
+                return (typeof goType === 'string') && goType.startsWith('*');
+            }
+            return false;
+        }
+        if (expr.kind === ts.SyntaxKind.Identifier) {
+            const declared = this.goDeclaredTypeOfIdentifier(expr);
+            return (typeof declared === 'string') && declared.startsWith('*');
+        }
+        if (expr.kind === ts.SyntaxKind.PropertyAccessExpression && expr.expression?.kind === ts.SyntaxKind.ThisKeyword) {
+            const fieldType = GO_NILABLE_FIELDS_Typed['this.' + expr.name?.escapedText];
+            return (typeof fieldType === 'string') && GO_NIL_EQUIVALENT_POINTER_TYPES_Native.has(fieldType);
+        }
+        return false;
+    }
+
     goScalarFamilyOfType(type, allowNil = false): string | undefined {
         if (type === undefined) {
             return undefined;
@@ -4099,6 +4185,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
         }
         if (rBox && (lFam === 'nil') && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(right))) {
+            return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+        }
+        // a parameter with a TypeScript default is bound in the emitted Go by
+        // `x := GetArg(optionalArgs, i, default)`: GetArg folds a typed nil pointer (and a
+        // nil []string/[]any) into the untyped default, so the box holds a plain scalar or
+        // an untyped nil, never a nil *T. The nullable Int/Num aliases (since/limit/price/…)
+        // are excluded from the arms above only because their family is `number`, which the
+        // exact-width comparison needs but a nil test does not: no numeric member is nil.
+        if ((lNilFam === 'number') && (rFam === 'nil') && this.goGetArgBoundParameter(left)) {
+            return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+        }
+        if ((rNilFam === 'number') && (lFam === 'nil') && this.goGetArgBoundParameter(right)) {
             return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
         }
         // a string or bool literal: only a value of that very type is equal in both

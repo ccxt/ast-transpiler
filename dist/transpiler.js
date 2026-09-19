@@ -8778,6 +8778,83 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return symbol?.valueDeclaration;
   }
+  // true when this identifier is a parameter of the TypeScript method that the printed Go
+  // binds with `x := GetArg(optionalArgs, i, default)`: GetArg runs derefScalar and folds a
+  // typed nil pointer (and a nil []string/[]any) into the untyped default, so the box the
+  // parameter is read through holds a plain scalar or an untyped nil, never a nil *T.
+  goGetArgBoundParameter(node) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    const decl = symbol?.valueDeclaration;
+    if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0) {
+      return false;
+    }
+    const owner = decl.parent?.kind;
+    if (owner !== ts5.SyntaxKind.MethodDeclaration && owner !== ts5.SyntaxKind.FunctionDeclaration && owner !== ts5.SyntaxKind.Constructor) {
+      return false;
+    }
+    return !this.goParameterLaterWritesPointerBox(decl);
+  }
+  // D2 for a GetArg-bound parameter: a later `x = …` write whose printed value is a typed
+  // pointer puts a nil *T back in the box, where IsEqual(x, nil) is true but `x == nil` is not
+  goParameterLaterWritesPointerBox(decl) {
+    const name = decl?.name?.kind === ts5.SyntaxKind.Identifier ? decl.name.escapedText : void 0;
+    if (typeof name !== "string") {
+      return true;
+    }
+    const scope = this.goEnclosingFunction(decl);
+    if (scope === void 0) {
+      return true;
+    }
+    let pointerWrite = false;
+    const visit = (n) => {
+      if (pointerWrite) {
+        return;
+      }
+      if (n.kind === ts5.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && this.goAssignmentWritesName(n.left, name) && this.goWritePrintsPointerBox(n.right)) {
+        pointerWrite = true;
+        return;
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(scope, visit);
+    return pointerWrite;
+  }
+  // true when the printed value of an assignment's right-hand side is a typed pointer: a
+  // `this.safeX(…)`/`this.Parse8601(…)` accessor (GO_HELPER_RETURN_TYPES), an identifier the
+  // printer declared `*T`, or a hand-written *sync.Map field. Read from the AST, never printed.
+  goWritePrintsPointerBox(expr) {
+    while (expr?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      expr = expr.expression;
+    }
+    if (expr === void 0) {
+      return false;
+    }
+    if (expr.kind === ts5.SyntaxKind.CallExpression) {
+      const name = this.goAstCalleeName(expr);
+      if (typeof name === "string") {
+        const goType = GO_HELPER_RETURN_TYPES[name];
+        return typeof goType === "string" && goType.startsWith("*");
+      }
+      return false;
+    }
+    if (expr.kind === ts5.SyntaxKind.Identifier) {
+      const declared = this.goDeclaredTypeOfIdentifier(expr);
+      return typeof declared === "string" && declared.startsWith("*");
+    }
+    if (expr.kind === ts5.SyntaxKind.PropertyAccessExpression && expr.expression?.kind === ts5.SyntaxKind.ThisKeyword) {
+      const fieldType = GO_NILABLE_FIELDS_Typed["this." + expr.name?.escapedText];
+      return typeof fieldType === "string" && GO_NIL_EQUIVALENT_POINTER_TYPES_Native.has(fieldType);
+    }
+    return false;
+  }
   goScalarFamilyOfType(type, allowNil = false) {
     if (type === void 0) {
       return void 0;
@@ -9640,6 +9717,12 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
     }
     if (rBox && lFam === "nil" && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(right))) {
+      return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
+    }
+    if (lNilFam === "number" && rFam === "nil" && this.goGetArgBoundParameter(left)) {
+      return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
+    }
+    if (rNilFam === "number" && lFam === "nil" && this.goGetArgBoundParameter(right)) {
       return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
     }
     const isLiteral = (node) => {
