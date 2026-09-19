@@ -228,7 +228,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (text in this.StringLiteralReplacements) {
             return this.StringLiteralReplacements[text];
         }
-        return `Value::Str(${this.quotedStringLiteral(text)}.to_string())`;
+        // `.into()` borrows the `&'static str` into the `Cow` payload — no alloc.
+        return `Value::Str(${this.quotedStringLiteral(text)}.into())`;
     }
 
     printNumericLiteral(node) {
@@ -794,7 +795,7 @@ export class RustTranspiler extends BaseTranspiler {
         return `${receiverText}.as_str().map(|__s| { let __c: Vec<char> = __s.chars().collect();` +
             ` let __l = __c.len() as i64; let __i = ${begin}; let __j = ${end};` +
             ` if __i <= __j { __c[__i as usize..__j as usize].iter().collect::<String>() } else { String::new() } })` +
-            `.map(Value::Str).unwrap_or(Value::Null)`;
+            `.map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
     }
 
     // ── native value predicates (`Array.isArray` / `typeof … === '…'`) ────────
@@ -909,7 +910,7 @@ export class RustTranspiler extends BaseTranspiler {
     // `Value::from("k")`) plus a bare `"k"` once an arg-shape unit drops the box.
     rustStringLiteralOf(printedKey: string): string | undefined {
         const boxed = printedKey.match(/^(?:Value::Str|Value::from)\((.+)\)$/);
-        const literal = (boxed ? boxed[1].replace(/\.to_string\(\)$/, '') : printedKey).trim();
+        const literal = (boxed ? boxed[1].replace(/\.(?:to_string|into)\(\)$/, '') : printedKey).trim();
         return /^"(?:[^"\\]|\\.)*"$/.test(literal) ? literal : undefined;
     }
 
@@ -927,7 +928,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
             return undefined;
         }
-        const keyLiteral = keyText.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
+        const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
         if (!keyLiteral) {
             return undefined;
         }
@@ -1346,7 +1347,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeStringConcat(leftText: string, rightText: string): string {
-        return `Value::Str(format!("{}{}", ${leftText}, ${rightText}))`;
+        return `Value::Str(format!("{}{}", ${leftText}, ${rightText}).into())`;
     }
 
     // Both operands are `Int`/`Float` at runtime; `-> Value::Null` covers the
@@ -2593,9 +2594,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind !== 'msg' || !this.rustTypeIsString(node)) {
             return printed;
         }
-        return this.peelValueStrBox(printed)
+        const payload = this.peelValueStrBox(printed)
             ?? this.peelValueStrBox(this.stripOuterParens(printed))
             ?? printed;
+        // The `Value::Str(..)` box carries the `Cow` conversion; the error
+        // ctors take an `impl ToErrorMessage` (String / &str / Value).
+        return payload.replace(/\.into\(\)$/, '');
     }
 
     // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt

@@ -31,7 +31,7 @@ describe('rust transpiling tests', () => {
 
     test('string variable declaration', () => {
         const ts = 'const s = "hello";'
-        const rust = 'let mut s: Value = Value::Str("hello".to_string());'
+        const rust = 'let mut s: Value = Value::Str("hello".into());'
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(rust);
     });
@@ -419,7 +419,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_index_of(&s, &Value::Str("a".to_string())).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
+        expect(output).toContain('get_index_of(&s, &Value::Str("a".into())).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
         expect(output).not.toContain('is_greater_than_or_equal(');
     });
 
@@ -446,7 +446,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&hex, &Value::Str("80".to_string()))');
+        expect(output).toContain('is_greater_than_or_equal(&hex, &Value::Str("80".into()))');
     });
 
     test('object keys', () => {
@@ -697,7 +697,7 @@ describe('rust transpiling tests', () => {
     test('ternary with value arms', () => {
         const ts = "const x = flag ? 'a' : 'b';"
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(if is_true(&flag) { Value::Str("a".to_string()) } else { Value::Str("b".to_string()) })');
+        expect(output).toContain('(if is_true(&flag) { Value::Str("a".into()) } else { Value::Str("b".into()) })');
     });
 
     // Checker-proven helper removal: array/string .length → native Value::len()
@@ -996,7 +996,7 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('pub count: Value,');
         expect(output).toContain('pub name: Value,');
         expect(output).toContain('count: Value::Int(0),');
-        expect(output).toContain('name: Value::Str("bar".to_string()),');
+        expect(output).toContain('name: Value::Str("bar".into()),');
     });
 
     // Class with optional method parameters
@@ -1089,7 +1089,7 @@ describe('rust transpiling tests', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut ok: bool = starts_with(&s, &Value::Str("x".to_string()));');
+        expect(output).toContain('let mut ok: bool = starts_with(&s, &Value::Str("x".into()));');
     });
 
     // Rejected shapes: any sink that takes `&Value` keeps the local boxed.
@@ -1149,7 +1149,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const side = this.safeString(o, 'side');\n        if (side === 'buy') { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut side: Option<String> = self.safeString(o, Value::Str("side".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut side: Option<String> = self.safeString(o, Value::Str("side".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (side.as_deref() == Some("buy")) {');
             expect(output).not.toContain('side: Value');
         });
@@ -1158,7 +1158,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s === null) { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (s.is_none()) {');
             expect(output).not.toContain('s == Value::Null');
         });
@@ -1167,7 +1167,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s !== undefined) { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (s.is_some()) {');
             expect(output).not.toContain('s != Value::Null');
         });
@@ -1176,7 +1176,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s === undefined) { return 0; }\n        return s === 'x';");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut s: Option<String> = self.safeString(o, Value::Str("s".into())).as_str().map(str::to_owned);');
             expect(output).toContain('if (s.is_none()) {');
             expect(output).toContain('s.as_deref() == Some("x")');
         });
@@ -1184,11 +1184,11 @@ describe('rust transpiling tests', () => {
         test('safeStringLower / safeString2 results are typed too', () => {
             const lower = transpiler.transpileRust(withHelper('safeStringLower',
                 "        const side = this.safeStringLower(o, 'side');\n        return side === 'buy';")).content;
-            expect(lower).toContain('let mut side: Option<String> = self.safeStringLower(o, Value::Str("side".to_string())).as_str().map(str::to_owned);');
+            expect(lower).toContain('let mut side: Option<String> = self.safeStringLower(o, Value::Str("side".into())).as_str().map(str::to_owned);');
             expect(lower).toContain('side.as_deref() == Some("buy")');
             const two = transpiler.transpileRust(withHelper('safeString2',
                 "        const id = this.safeString2(o, 'a', 'b');\n        return id !== undefined;")).content;
-            expect(two).toContain('let mut id: Option<String> = self.safeString2(o, Value::Str("a".to_string()), Value::Str("b".to_string())).as_str().map(str::to_owned);');
+            expect(two).toContain('let mut id: Option<String> = self.safeString2(o, Value::Str("a".into()), Value::Str("b".into())).as_str().map(str::to_owned);');
             expect(two).toContain('id.is_some()');
         });
 
@@ -1196,7 +1196,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const status = this.safeString(o, 'status');\n        return status === 'ok' && o.status === 1;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut status: Option<String> = self.safeString(o, Value::Str("status".to_string())).as_str().map(str::to_owned);');
+            expect(output).toContain('let mut status: Option<String> = self.safeString(o, Value::Str("status".into())).as_str().map(str::to_owned);');
             expect(output).toContain('status.as_deref() == Some("ok")');
         });
 
@@ -1206,7 +1206,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        m.insert('k', s);");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).not.toContain('Option<String>');
         });
 
@@ -1214,7 +1214,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        if (s) { return 1; }\n        return 2;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).toContain('if is_true(&s) {');
         });
 
@@ -1222,7 +1222,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        let s = this.safeString(o, 's');\n        s = this.safeString(o, 't');\n        return s === 'x';");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).not.toContain('Option<String>');
         });
 
@@ -1230,7 +1230,7 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        const f = (s) => s === 'x';\n        return f(s);");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             expect(output).not.toContain('Option<String>');
         });
 
@@ -1238,16 +1238,16 @@ describe('rust transpiling tests', () => {
             const ts = withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        return 1;");
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
         });
 
         test('string concat and other payload compares keep Value', () => {
             const concat = transpiler.transpileRust(withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        return s + 'x';")).content;
-            expect(concat).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(concat).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
             const againstLocal = transpiler.transpileRust(withHelper('safeString',
                 "        const s = this.safeString(o, 's');\n        return s === o.other;")).content;
-            expect(againstLocal).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(againstLocal).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
         });
 
         test('a non-string helper result keeps Value', () => {
@@ -1255,7 +1255,7 @@ describe('rust transpiling tests', () => {
                 "        const s = this.safeString(o, 's');\n        return s === 'x';")
                 .replace('safeString(o: any, k: any): string', 'safeString(o: any, k: any): any');
             const output = transpiler.transpileRust(ts).content;
-            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".to_string()));');
+            expect(output).toContain('let mut s: Value = self.safeString(o, Value::Str("s".into()));');
         });
     });
 
@@ -1302,7 +1302,7 @@ describe('rust transpiling tests', () => {
 
         test('boolean string literal stays on the helper without a string proof', () => {
             const output = transpiler.transpileRust(typed("        return anything === '1';")).content;
-            expect(output).toContain('is_equal(&anything, &Value::Str("1".to_string()))');
+            expect(output).toContain('is_equal(&anything, &Value::Str("1".into()))');
         });
 
         test('a bool-valued comparison operand stays on the helper', () => {
@@ -1432,7 +1432,7 @@ describe('rust checker-typed native container access', () => {
             "    return book['url'];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_value(&book, &Value::Str("url".to_string()))');
+        expect(output).toContain('get_value(&book, &Value::Str("url".into()))');
     });
 
     test('lib-declared receiver keeps the get_value helper', () => {
@@ -1469,7 +1469,7 @@ describe('rust checker-typed native container access', () => {
             "    d['a'].push(v);\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('append_to_array(&mut get_value(&d, &Value::Str("a".to_string())), v)');
+        expect(output).toContain('append_to_array(&mut get_value(&d, &Value::Str("a".into())), v)');
     });
 
     test('same-place write then read keeps the helper', () => {
@@ -1509,7 +1509,7 @@ describe('rust checker-typed native container access', () => {
         'const b: string = "y";\n' +
         'const c = a + b;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b));');
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b).into());');
         expect(output).not.toContain('add(');
     });
 
@@ -1570,7 +1570,7 @@ describe('rust checker-typed native container access', () => {
         'const b: string = "y";\n' +
         'const c = a + b;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b));');
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, b).into());');
         expect(output).not.toContain('add(');
     });
 
@@ -1581,7 +1581,7 @@ describe('rust checker-typed native container access', () => {
         '    return x + s;\n' +
         '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('return Value::Str(format!("{}{}", x, s));');
+        expect(output).toContain('return Value::Str(format!("{}{}", x, s).into());');
         expect(output).not.toContain('add(');
     });
 
@@ -1592,7 +1592,7 @@ describe('rust checker-typed native container access', () => {
         'const a = g();\n' +
         'const c = a + "y";';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Str(format!("{}{}", a, Value::Str("y".to_string())))');
+        expect(output).toContain('Value::Str(format!("{}{}", a, Value::Str("y".into())).into())');
         expect(output).not.toContain('add(');
     });
 
@@ -1603,7 +1603,7 @@ describe('rust checker-typed native container access', () => {
         'let s = g();\n' +
         's += "b";';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".to_string())));');
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".into())).into());');
         expect(output).not.toContain('add(');
     });
 
@@ -1665,7 +1665,7 @@ describe('rust checker-typed native container access', () => {
     test('string += string emits native concat', () => {
         const ts = 'let s: string = "a";\ns += "b";';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".to_string())));');
+        expect(output).toContain('s = Value::Str(format!("{}{}", s, Value::Str("b".into())).into());');
         expect(output).not.toContain('add(');
     });
 
@@ -1676,7 +1676,7 @@ describe('rust checker-typed native container access', () => {
         '    run(): string { return this.id + "x"; }\n' +
         '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('Value::Str(format!("{}{}", self.id, Value::Str("x".to_string())))');
+        expect(output).toContain('Value::Str(format!("{}{}", self.id, Value::Str("x".into())).into())');
     });
 
     // Dictionary reads with a string-literal key skip the `Value::Str`
@@ -1697,14 +1697,14 @@ describe('rust checker-typed native container access', () => {
 
     test('live client keys keep get_value', () => {
         const ts = "const subs = client['subscriptions'];"
-        const rust = 'let mut subs: Value = get_value(&client, &Value::Str("subscriptions".to_string()));'
+        const rust = 'let mut subs: Value = get_value(&client, &Value::Str("subscriptions".into()));'
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(rust);
     });
 
     test('numeric-string keys keep get_value', () => {
         const ts = "const v = cache['0'];"
-        const rust = 'let mut v: Value = get_value(&cache, &Value::Str("0".to_string()));'
+        const rust = 'let mut v: Value = get_value(&cache, &Value::Str("0".into()));'
         const output = transpiler.transpileRust(ts).content;
         expect(output).toBe(rust);
     });
@@ -1734,20 +1734,20 @@ describe('rust error constructor message arguments', () => {
     test('a string concat message drops its Value::Str box', () => {
         const ts = "function f(id: string) {\n    throw new NotSupported(id + ' handleDelta not supported yet');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" handleDelta not supported yet".to_string())))');
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" handleDelta not supported yet".into())))');
         expect(output).not.toContain('not_supported(Value::Str(');
     });
 
     test('a parenthesised concat message drops its Value::Str box', () => {
         const ts = "function f(id: string) {\n    throw new NotSupported((id + ' msg'));\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".to_string())))');
+        expect(output).toContain('crate::exchange_errors::not_supported(format!("{}{}", id, Value::Str(" msg".into())))');
     });
 
     test('a concat message of a post-pass error class also drops its box', () => {
         const ts = "function f(id: string) {\n    throw new BadRequest (id + ' msg');\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('BadRequest::new(format!("{}{}", id, Value::Str(" msg".to_string())))');
+        expect(output).toContain('BadRequest::new(format!("{}{}", id, Value::Str(" msg".into())))');
         expect(output).not.toContain('BadRequest::new(Value::Str(');
     });
 
@@ -1761,6 +1761,39 @@ describe('rust error constructor message arguments', () => {
         const ts = "function f(id: string) {\n    const p = new Precise (id + ' msg');\n    return p;\n}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('Precise::new(Value::Str(format!(');
+    });
+});
+
+// B-31 — the runtime `Value::Str` payload is a `Cow<'static, str>`: a string
+// literal borrows its `&'static str` (`Value::Str("lit".into())`, zero
+// allocation) instead of allocating a `String`, so `.clone()` on a literal
+// box is a pointer copy.
+describe('rust borrowed string literals (Cow payload)', () => {
+    test('a literal in a Value position borrows instead of allocating', () => {
+        const ts = "function f(): Value {\n    let s: Value = 'lit';\n    return s;\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str("lit".into())');
+        expect(output).not.toContain('Value::Str("lit".to_string())');
+    });
+
+    test('a class string field borrows', () => {
+        const ts = 'class A {\n    id: string = "a";\n}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('id: Value::Str("a".into()),');
+    });
+
+    test('a native string slice maps the borrowed payload', () => {
+        const ts = "function f(s: string): string {\n    return s.slice(1, 3);\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Str(__s.into())');
+        expect(output).not.toContain('.map(Value::Str)');
+    });
+
+    test('an error-ctor concat message drops the Cow conversion', () => {
+        const ts = "function f(id: string) {\n    throw new NotSupported(id + ' msg');\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('not_supported(format!("{}{}", id, Value::Str(" msg".into())))');
+        expect(output).not.toContain('Value::Str(" msg".into())).into())');
     });
 });
 
@@ -1885,13 +1918,13 @@ describe('rust truthiness sinks take the bare bool', () => {
     test('a boxed `in` condition loses the box', () => {
         const ts = 'class A { f(x) { if ("k" in x) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if is_true(&(in_op(&x, &Value::Str("k".to_string())))) {');
+        expect(output).toContain('if is_true(&(in_op(&x, &Value::Str("k".into())))) {');
     });
 
     test('assert() takes the bare bool as well', () => {
         const ts = 'class A { f(x) { assert (Array.isArray (x), "msg"); } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('assert((matches!(&x, Value::Arr(_))), Value::Str("msg".to_string()));');
+        expect(output).toContain('assert((matches!(&x, Value::Arr(_))), Value::Str("msg".into()));');
     });
 
     // negatives — every other sink takes a `Value` and keeps its box.
@@ -2001,21 +2034,21 @@ describe('rust is_true over a proven boolean Value', () => {
     test('safeBool in a condition emits the native matches!', () => {
         const ts = boolClass("        if (this.safeBool(this.options, 'foo', false)) { return 1; }");
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("foo".to_string()), &[Value::Bool(false)]), Value::Bool(true))');
+        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("foo".into()), &[Value::Bool(false)]), Value::Bool(true))');
         expect(output).not.toContain('is_true(&self.safeBool');
     });
 
     test('negated safeBool keeps the negation around the matches!', () => {
         const ts = boolClass("        if (!this.safeBool(this.options, 'foo')) { return 1; }");
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if !matches!(self.safeBool(self.options, Value::Str("foo".to_string()), &[]), Value::Bool(true))');
+        expect(output).toContain('if !matches!(self.safeBool(self.options, Value::Str("foo".into()), &[]), Value::Bool(true))');
         expect(output).not.toContain('is_true(&self.safeBool');
     });
 
     test('safeBool2 and a ternary condition emit the native matches!', () => {
         const ts = boolClass("        return this.safeBool2(this.options, 'a', 'b', false) ? 1 : 2;");
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('(if matches!(self.safeBool2(self.options, Value::Str("a".to_string()), Value::Str("b".to_string()), &[Value::Bool(false)]), Value::Bool(true))');
+        expect(output).toContain('(if matches!(self.safeBool2(self.options, Value::Str("a".into()), Value::Str("b".into()), &[Value::Bool(false)]), Value::Bool(true))');
         expect(output).not.toContain('is_true(&self.safeBool2');
     });
 
@@ -2029,14 +2062,14 @@ describe('rust is_true over a proven boolean Value', () => {
     test('a logical stored in a Value local keeps the helper', () => {
         const ts = boolClass("        const x = this.safeBool(this.options, 'a') || this.safeBool(this.options, 'b');\n        return x;");
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_true(&self.safeBool(self.options, Value::Str("a".to_string()), &[])) || is_true(&self.safeBool');
+        expect(output).toContain('is_true(&self.safeBool(self.options, Value::Str("a".into()), &[])) || is_true(&self.safeBool');
         expect(output).not.toContain('matches!(self.safeBool');
     });
 
     test('a logical inside a condition emits the native matches! operand', () => {
         const ts = boolClass("        if (this.safeBool(this.options, 'a') && this.safeBool(this.options, 'b')) { return 1; }");
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("a".to_string()), &[]), Value::Bool(true)) && matches!(self.safeBool');
+        expect(output).toContain('if matches!(self.safeBool(self.options, Value::Str("a".into()), &[]), Value::Bool(true)) && matches!(self.safeBool');
     });
 
     test('a boolean-typed element access emits the native matches!', () => {
@@ -2180,12 +2213,12 @@ describe('rust native string search and slicing', () => {
 
     test('an unproven receiver keeps the helper', () => {
         const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: any')).content;
-        expect(output).toContain('get_index_of(&a, &Value::Str("/".to_string()))');
+        expect(output).toContain('get_index_of(&a, &Value::Str("/".into()))');
     });
 
     test('an array receiver keeps the helper (the helper scans it)', () => {
         const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: string[]')).content;
-        expect(output).toContain('get_index_of(&a, &Value::Str("/".to_string()))');
+        expect(output).toContain('get_index_of(&a, &Value::Str("/".into()))');
     });
 
     test('a non-literal needle keeps the helper', () => {
@@ -2407,7 +2440,7 @@ describe('rust declared-Dict locals (rust-25)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(snippet).content;
-        expect(output).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".to_string()), Value::Map({');
+        expect(output).toContain('let mut data: Value = self.safeDict(response, Value::Str("data".into()), Value::Map({');
         expect(output).not.toContain('HashMap<String, Value> = self.safeDict');
     });
 
