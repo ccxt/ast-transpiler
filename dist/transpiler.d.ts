@@ -1425,6 +1425,7 @@ declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_NATIVE_INSERT_RECEIVERS;
     private static readonly RUST_BOOK_META_KEYS;
     private static readonly RUST_TAGGED_HANDLE_FIELDS;
+    private static readonly RUST_PLAIN_DICT_FIELDS;
     private static readonly RUST_BOOL_VALUE_HELPERS;
     private static readonly PAYLOAD_ACCESSORS;
     primitiveKindOfType(type: any): string;
@@ -1475,6 +1476,29 @@ declare class RustTranspiler extends BaseTranspiler {
         isField: boolean;
         nameNode: any;
     } | undefined;
+    /** Element-write receiver proof for a local: the batch-A names (unchanged)
+     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
+     *  build on every path (rust-12's proof, read off the checker). */
+    rustInsertIdentifierReceiver(ident: any): boolean;
+    /** True when every value the local can hold comes from an object literal:
+     *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
+     *  `__cache_backref`) only on handles its own store builds, so the helper's
+     *  write-through branches are provably dead and `insert` is the whole
+     *  helper. A `[ x, params ] = this.handle…(…)` tuple re-assigns the
+     *  hand-written handler's own dict arguments. */
+    rustInsertReceiverBuildsPlainDict(declaration: ts.VariableDeclaration): boolean;
+    /** An object literal with no runtime tag key — the transpiler built it, so
+     *  it is a fresh plain `Value::Map` on every path. */
+    rustPlainDictLiteral(node: ts.Node | undefined): boolean;
+    /** `this.handle…(…)` — the hand-written `handle*AndParams` / `handleUntil…`
+     *  family; each returns its own request/params dict arguments. */
+    rustHandlerTupleCall(node: ts.Node | undefined): boolean;
+    /** A `null`/`undefined` write leaves the receiver a non-dict, which the
+     *  emitted `if let Value::Dict` no-ops exactly like the helper. */
+    private rustTypeIsUndefinedish;
+    /** The single variable declaration a local identifier binds to, or
+     *  undefined when the checker cannot answer / the binding is not a local. */
+    rustSingleLocalDeclaration(ident: ts.Identifier): ts.VariableDeclaration | ts.ParameterDeclaration | undefined;
     rustWriteDictShape(type: any): boolean;
     rustReceiverStaysDict(baseExpr: any, receiver: any): boolean;
     rustFieldStaysDict(baseExpr: any, fieldName: string): boolean;

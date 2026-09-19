@@ -1850,10 +1850,84 @@ describe('rust native dict inserts', () => {
         expect(output).toContain('add_element_to_object(&mut result');
     });
 
-    test('the request receiver keeps the helper', () => {
+    test('a fresh-map request local inserts natively', () => {
         const ts = 'const request: { [key: string]: any } = {};\nrequest["k"] = 1;';
         const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('request', 'k', 'Value::Int(1)'));
+    });
+
+    test('a fresh-map local inserts natively whatever its name', () => {
+        const ts = 'const headers: { [key: string]: any } = { "a": 1 };\nheaders["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('headers', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut headers');
+    });
+
+    test('a handler-tuple reassigned local stays a plain dict', () => {
+        const ts = 'class A {\n' +
+            '    f(params) {\n' +
+            '        let request: { [key: string]: any } = { "a": 1 };\n' +
+            '        [ request, params ] = this.handleUntilOption("endTime", request, params);\n' +
+            '        request["k"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('request', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut request');
+    });
+
+    test('a tuple reassigned from a non-handler call keeps the helper', () => {
+        const ts = 'class A {\n' +
+            '    f(params) {\n' +
+            '        const rows: any[] = [];\n' +
+            '        let request: { [key: string]: any } = { "a": 1 };\n' +
+            '        [ request, params ] = rows[0];\n' +
+            '        request["k"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut request');
+    });
+
+    test('an object literal carrying a runtime tag key keeps the helper', () => {
+        const ts = 'const request: { [key: string]: any } = { "__book_id": 1 };\nrequest["k"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut request');
+    });
+
+    test('a local reassigned from a call keeps the helper', () => {
+        const ts = 'class A {\n' +
+            '    f() {\n' +
+            '        let request: { [key: string]: any } = { "a": 1 };\n' +
+            '        request = this.extend(request, { "b": 2 });\n' +
+            '        request["k"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut request');
+    });
+
+    test('a hand-written base dict field inserts natively', () => {
+        const ts = 'class A {\n' +
+            '    balance: any = {};\n' +
+            '    f() {\n' +
+            '        this.balance["swap"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('self.balance', 'swap', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut self.balance');
+    });
+
+    test('a tagged handle field keeps the helper', () => {
+        const ts = 'class A {\n' +
+            '    subscriptions: any = {};\n' +
+            '    f() {\n' +
+            '        this.subscriptions["k"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut self.subscriptions');
     });
 });
 

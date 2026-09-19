@@ -310,6 +310,25 @@ export class RustTranspiler extends BaseTranspiler {
         'orderbook',
     ]);
 
+    // Fields the hand-written base keeps as a plain dict: `rust/ccxt-base/src/
+    // exchange.rs` initialises each to `Value::Map(HashMap::new())` and never
+    // tags it, so an element write is the whole helper even though the TS
+    // declaration is `any` (no checker shape to read).
+    private static readonly RUST_PLAIN_DICT_FIELDS = new Set([
+        'balance',
+        'orderbooks',
+        'trades',
+        'tickers',
+        'bidsasks',
+        'ohlcvs',
+        'clients',
+        'transactions',
+        'headers',
+        'currencies',
+        'has',
+        'tokenBucket',
+    ]);
+
     // Free helpers whose call prints a bare `bool` — an argument position that
     // expects a `Value` has to box them (ccxt's wrapBoolValueArgs set).
     private static readonly RUST_BOOL_VALUE_HELPERS = [
@@ -953,10 +972,12 @@ export class RustTranspiler extends BaseTranspiler {
         return insert(value);
     }
 
-    // Receivers this unit may write natively: the named locals plus `self.<field>`
-    // (both print as a `Value` place that `&mut` can borrow). `request` is rust-12's.
+    // Receivers this unit may write natively: any local whose every path builds
+    // a plain `Value::Map` (name-independent — rust-13's four names are the
+    // batch-A subset of this proof), plus `self.<field>` on a field the
+    // hand-written base holds as a plain dict. `request` is rust-12's family.
     rustNativeInsertReceiver(expr): { text: string, isField: boolean, nameNode: any } | undefined {
-        if (ts.isIdentifier(expr) && RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(expr.text)) {
+        if (ts.isIdentifier(expr) && this.rustInsertIdentifierReceiver(expr)) {
             return { text: expr.text, isField: false, nameNode: expr };
         }
         if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind.ThisKeyword
@@ -964,6 +985,127 @@ export class RustTranspiler extends BaseTranspiler {
             return { text: `self.${expr.name.text}`, isField: true, nameNode: expr.name };
         }
         return undefined;
+    }
+
+    /** Element-write receiver proof for a local: the batch-A names (unchanged)
+     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
+     *  build on every path (rust-12's proof, read off the checker). */
+    rustInsertIdentifierReceiver(ident): boolean {
+        if (RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(ident.text)) {
+            return true;
+        }
+        const declaration = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
+            return false;
+        }
+        return this.rustInsertReceiverBuildsPlainDict(declaration);
+    }
+
+    /** True when every value the local can hold comes from an object literal:
+     *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
+     *  `__cache_backref`) only on handles its own store builds, so the helper's
+     *  write-through branches are provably dead and `insert` is the whole
+     *  helper. A `[ x, params ] = this.handle…(…)` tuple re-assigns the
+     *  hand-written handler's own dict arguments. */
+    rustInsertReceiverBuildsPlainDict(declaration: ts.VariableDeclaration): boolean {
+        const name = String((declaration.name as ts.Identifier).escapedText);
+        if (!this.rustPlainDictLiteral(declaration.initializer)) {
+            return false;
+        }
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
+        let plain = true;
+        const visit = (n) => {
+            if (!plain || !ts.isBinaryExpression(n) || n.operatorToken.kind !== SyntaxKind.EqualsToken) {
+                ts.forEachChild(n, visit);
+                return;
+            }
+            const left: any = n.left;
+            if (ts.isIdentifier(left) && String(left.escapedText) === name
+                && (declarationSymbol === undefined || this.rustSymbolOf(left) === declarationSymbol)) {
+                if (!this.rustPlainDictLiteral(n.right) && !this.rustTypeIsUndefinedish(n.right)) {
+                    plain = false;
+                }
+            } else if (ts.isArrayLiteralExpression(left)
+                && left.elements.some((e) => ts.isIdentifier(e) && String(e.escapedText) === name)) {
+                if (!this.rustHandlerTupleCall(n.right)) {
+                    plain = false;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return plain;
+    }
+
+    /** An object literal with no runtime tag key — the transpiler built it, so
+     *  it is a fresh plain `Value::Map` on every path. */
+    rustPlainDictLiteral(node: ts.Node | undefined): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        if (ts.isParenthesizedExpression(node)) {
+            return this.rustPlainDictLiteral(node.expression);
+        }
+        if (!ts.isObjectLiteralExpression(node)) {
+            return false;
+        }
+        return node.properties.every((property: any) => {
+            const key = property.name;
+            if (key === undefined) {
+                return false;
+            }
+            const text = ts.isStringLiteral(key) ? key.text
+                : (ts.isIdentifier(key) ? String(key.escapedText) : undefined);
+            return text === undefined || !text.startsWith('__');
+        });
+    }
+
+    /** `this.handle…(…)` — the hand-written `handle*AndParams` / `handleUntil…`
+     *  family; each returns its own request/params dict arguments. */
+    rustHandlerTupleCall(node: ts.Node | undefined): boolean {
+        if (node === undefined || !ts.isCallExpression(node)) {
+            return false;
+        }
+        const callee: any = node.expression;
+        return ts.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
+            && callee.name?.kind === SyntaxKind.Identifier && /^handle[A-Z]/.test(callee.name.text);
+    }
+
+    /** A `null`/`undefined` write leaves the receiver a non-dict, which the
+     *  emitted `if let Value::Dict` no-ops exactly like the helper. */
+    private rustTypeIsUndefinedish(node: ts.Node): boolean {
+        if (node.kind === SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === 'undefined')) {
+            return true;
+        }
+        const type = this.typeOfNodeIfAny(node);
+        if (type === undefined) {
+            return false;
+        }
+        const mask = ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void;
+        return (type.flags & mask) !== 0;
+    }
+
+    /** The single variable declaration a local identifier binds to, or
+     *  undefined when the checker cannot answer / the binding is not a local. */
+    rustSingleLocalDeclaration(ident: ts.Identifier): ts.VariableDeclaration | ts.ParameterDeclaration | undefined {
+        let declarations;
+        try {
+            declarations = this.getChecker().getSymbolAtLocation(ident)?.declarations ?? [];
+        } catch (e) {
+            return undefined;
+        }
+        if (declarations.length !== 1) {
+            return undefined;
+        }
+        const declaration: any = declarations[0];
+        if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
+            return undefined;
+        }
+        return declaration;
     }
 
     // Dict-shape proof for a write receiver: an object type with no class, array
@@ -1049,15 +1191,18 @@ export class RustTranspiler extends BaseTranspiler {
         return safe;
     }
 
-    // `this.<field>` receivers: the field's checker type is object-shaped and no
-    // `this.<field> = …` write in the enclosing method assigns another shape.
-    // Handle fields (cache / client / subscriptions / order book) are excluded —
-    // their Values carry the runtime tags the helper routes through a store.
+    // `this.<field>` receivers: the field is a plain dict — its checker type is
+    // object-shaped, or the hand-written base holds it as one (the TS
+    // declaration is `any`, `balance`-style) — and no `this.<field> = …` write
+    // in the enclosing method assigns another shape. Handle fields (cache /
+    // client / subscriptions / order book) are excluded — their Values carry
+    // the runtime tags the helper routes through a store.
     rustFieldStaysDict(baseExpr, fieldName: string): boolean {
         if (RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(fieldName)) {
             return false;
         }
-        if (!this.rustWriteDictShape(this.typeOfNodeIfAny(baseExpr))) {
+        if (!this.rustWriteDictShape(this.typeOfNodeIfAny(baseExpr))
+            && !RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(fieldName)) {
             return false;
         }
         const scope = this.rustEnclosingFunction(baseExpr);
