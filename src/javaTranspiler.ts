@@ -5641,7 +5641,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // literals, `!`, the logical / comparison / `in` operators, `Array.isArray(x)` (printed
     // Helpers.isArray, declared `public static boolean`) and the hand-written `public boolean`
     // base methods. `seen` breaks the identifier cycle of `a = b; b = a;` style writes.
-    javaPrintsBooleanValue(node, seen: Set<any>, depth: number = 0): boolean {
+    javaPrintsBooleanValue(node, seen: Set<any>, depth = 0): boolean {
         if (node === undefined) {
             return false;
         }
