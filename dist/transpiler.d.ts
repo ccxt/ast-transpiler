@@ -700,6 +700,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpBoolCall_Native(node: any): boolean;
     csharpCallPrintsBool(node: any): boolean;
     csharpNullableBoolCondition(node: any): string | undefined;
+    csharpCallPrintsNullableBool(node: any): boolean;
     printCondition(node: any, identation: any): any;
     csharpConditionParensIfNeeded(node: any, printed: string): string;
     printConditionalExpression(node: any, identation: any): string;

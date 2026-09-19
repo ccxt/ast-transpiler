@@ -1598,7 +1598,7 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("if (isTrue(v))");
         expect(output).toContain("if (isTrue(p))");
-        expect(output).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+        expect(output).toContain("if ((this.safeBool(a, \"k\") == true))");
     });
     test('logical conditions keep their operator binding when the wrapper goes', () => {
         const input =
@@ -1626,7 +1626,7 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain("((bool) (isEqual(a, b))) ? 1 : 2");
+        expect(output).toContain("((isEqual(a, b))) ? 1 : 2");
         expect(output).toContain("if (((string)a).StartsWith(((string)\"x\")))");
     });
     test('a bool local reassigned with another bool keeps the type and the bare condition', () => {
@@ -1787,7 +1787,7 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
         const notOutput = transpiler.transpileCSharp(boolProgram("        if (!v) { return 1; }\n")).content;
         expect(notOutput).toContain("if (!(v == true))");
         const ternaryOutput = transpiler.transpileCSharp(boolProgram("        const s = v ? 'yes' : 'no';\n        return s;\n")).content;
-        expect(ternaryOutput).toContain("((bool) (v == true)) ? \"yes\" : \"no\"");
+        expect(ternaryOutput).toContain("((v == true)) ? \"yes\" : \"no\"");
     });
     test('logical conditions and a wrapped read keep their operands native', () => {
         const output = transpiler.transpileCSharp(boolProgram("        if (v || w) { return 1; }\n        if (v && w) { return 2; }\n        if ((v)) { return 3; }\n        return 4;\n", true)).content;
@@ -1800,7 +1800,7 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
         const objectOutput = transpiler.transpileCSharp(boolProgram("        const o = a['k'];\n        if (o) { return 1; }\n")).content;
         expect(objectOutput).toContain("if (isTrue(o))");
         const callOutput = transpiler.transpileCSharp(boolProgram("        if (this.safeBool(a, 'k')) { return 1; }\n")).content;
-        expect(callOutput).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+        expect(callOutput).toContain("if ((this.safeBool(a, \"k\") == true))");
         const demotedOutput = transpiler.transpileCSharp(
         "class T {\n" +
         "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
@@ -1829,6 +1829,40 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
         expect(output).toContain("object v = getValue(a, \"k\");");
         expect(output).toContain("if ((v == true))");
         expect(output).not.toContain("isTrue");
+    });
+});
+
+// D-24: `isTrue(<call>)` where the call's PRINTED C# signature is `bool?` — the hand-written
+// `bool? safeBool(...)` base family and a `this.<name>(...)` whose TS declaration the generator
+// prints itself — answers exactly what the lifted `== true` answers for that box (null -> false,
+// the box's own bool otherwise), so the wrapper goes. A receiver the printer cannot name, or a
+// callee whose declaration does not carry the `bool?` spelling, keeps the helper.
+describe('isTrue on a bool?-returning call becomes the lifted `== true` comparison', () => {
+    const callProgram = (body: string) =>
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    couldBe(a: any): boolean | undefined { return undefined; }\n" +
+        "    f(a) {\n" +
+        body +
+        "    }\n" +
+        "}";
+    test('a this.<name>(...) declared `boolean | undefined` goes native in if / ! / ternary', () => {
+        const ifOutput = transpiler.transpileCSharp(callProgram("        if (this.couldBe(a)) { return 1; }\n")).content;
+        expect(ifOutput).toContain("if ((this.couldBe(a) == true))");
+        expect(ifOutput).not.toContain("isTrue");
+        const notOutput = transpiler.transpileCSharp(callProgram("        if (!this.couldBe(a)) { return 1; }\n")).content;
+        expect(notOutput).toContain("if (!(this.couldBe(a) == true))");
+        const ternaryOutput = transpiler.transpileCSharp(callProgram("        const s = this.couldBe(a) ? 'yes' : 'no';\n        return s;\n")).content;
+        expect(ternaryOutput).toContain("((this.couldBe(a) == true)) ? \"yes\" : \"no\"");
+    });
+    test('the hand-written safeBool family is proven by the printed return table', () => {
+        const output = transpiler.transpileCSharp(callProgram("        if (this.safeBool(a, 'k')) { return 1; }\n        return 2;\n")).content;
+        expect(output).toContain("if ((this.safeBool(a, \"k\") == true))");
+        expect(output).not.toContain("isTrue");
+    });
+    test('a call on a non-this receiver keeps the wrapper', () => {
+        const output = transpiler.transpileCSharp(callProgram("        if (m.couldBe(a)) { return 1; }\n        return 2;\n")).content;
+        expect(output).toContain("isTrue(m.couldBe(a))");
     });
 });
 
@@ -2796,7 +2830,7 @@ describe('csharp helper removal: own bool-returning calls type their locals', ()
         "}";
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain('bool usesPrivKey = this.usesPrivateKey();');
-        expect(output).toContain('((bool) usesPrivKey) ? privateKey : secret');
+        expect(output).toContain('(usesPrivKey) ? privateKey : secret');
         expect(output).not.toContain('isTrue');
     });
 });
@@ -3821,7 +3855,7 @@ class T {
     test('a resolver-declared bool local prints bare under ! and in a ternary condition', () => {
         const output = withKind('bool', input);
         expect(output).toContain('if (!rational)');
-        expect(output).toContain('((bool) rational) ? "a" : "b"');
+        expect(output).toContain('(rational) ? "a" : "b"');
         expect(output).not.toContain('isTrue');
     });
     test('without that declaration the local keeps the wrapper', () => {
@@ -3854,7 +3888,7 @@ class Exchange {
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain('if (this.newUpdates)');
         expect(output).toContain('if (!this.verbose)');
-        expect(output).toContain('((bool) this.newUpdates) ? "a" : "b"');
+        expect(output).toContain('(this.newUpdates) ? "a" : "b"');
         expect(output).not.toContain('isTrue');
     });
     test('a nullable or unlisted member keeps the wrapper', () => {
@@ -3885,7 +3919,7 @@ class Exchange {
 }`).content;
         expect(output).toContain('if (e is CustomError)');
         expect(output).toContain('if (!(x is CustomError))');
-        expect(output).toContain('((bool) (e is CustomError)) ? "a" : "b"');
+        expect(output).toContain('((e is CustomError)) ? "a" : "b"');
         expect(output).not.toContain('isTrue');
     });
     test('a negated test without source parentheses adds its own', () => {

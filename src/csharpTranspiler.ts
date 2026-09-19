@@ -4090,21 +4090,52 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpIsCheckedBoolean(node) && ((this.csharpCallReturnType(node) === 'bool') || this.csharpBoolCall_Native(node));
     }
 
-    // the declared type of an identifier read: the embedding build layer's proof first (it
-    // retypes locals this printer leaves `object`), then this printer's own table. Both name
-    // only a type the local already carries at runtime, and `var`/`object` mean "no type".
-    // `isTrue (x)` boxes x and answers false for a null box, which is exactly what the lifted
-    // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only reads
-    // whose declaration is emitted `bool?` qualify; every other shape keeps the helper.
+    // `isTrue(x)` boxes x and answers false for a null box, which is exactly what the lifted
+    // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only values
+    // whose PRINTED declaration is that `bool?` qualify: a local the embedding build layer
+    // retyped (its resolver names the emitted type) and a call whose printed return type is
+    // `bool?`. Every other shape keeps the helper.
     csharpNullableBoolCondition(node): string | undefined {
         let value = node;
         while (value?.kind === ts.SyntaxKind.ParenthesizedExpression) {
             value = value.expression;
         }
-        if (value?.kind !== ts.SyntaxKind.Identifier || this.csharpDeclaredLocalType(value) !== 'bool?') {
-            return undefined;
+        if (value?.kind === ts.SyntaxKind.Identifier) {
+            return (this.csharpDeclaredLocalType(value) === 'bool?') ? `(${this.printNode(value, 0)} == true)` : undefined;
         }
-        return `(${this.printNode(value, 0)} == true)`;
+        if ((value?.kind === ts.SyntaxKind.CallExpression) && this.csharpCallPrintsNullableBool(value)) {
+            return `(${this.printNode(value, 0)} == true)`;
+        }
+        return undefined;
+    }
+
+    // a call whose printed C# signature is `bool?`: the `bool? safeBool(...)` family of the
+    // hand-written base (CSHARP_THIS_RETURN_TYPES, which names that signature), and a
+    // `this.<name>(...)` whose TS declaration the generator itself prints — definition and call
+    // site are spelled by the same csharpBooleanReturnType, so they cannot disagree. A bodiless
+    // overload stub states only that overload's type (safeBool's `boolean` stub above a
+    // `boolean | undefined` implementation would claim a `bool` the C# `bool?` does not have),
+    // so the declaration must carry the body; unresolvable callees print `callDynamically`
+    // (object) and stay out.
+    csharpCallPrintsNullableBool(node): boolean {
+        if (this.csharpCallReturnType(node) === 'bool?') {
+            return true;
+        }
+        const callee = this.csharpCalleeName_Native(node);
+        if (callee === undefined || callee.indexOf('this.') !== 0) {
+            return false;
+        }
+        if (CSHARP_HANDWRITTEN_CALLEES_NATIVE.indexOf(callee.substring('this.'.length)) > -1) {
+            return false;
+        }
+        if (!this.csharpCalleeResolves(node)) {
+            return false;
+        }
+        const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        if (declaration?.kind !== ts.SyntaxKind.MethodDeclaration || declaration.body === undefined) {
+            return false;
+        }
+        return this.csharpBooleanReturnType(declaration) === 'bool?';
     }
 
     // same emission as the base implementation except for the bare-bool branch: the node is
@@ -4159,6 +4190,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         const whenTrue = this.printNode(node.whenTrue, 0);
         const whenFalse = this.printNode(node.whenFalse, 0);
 
+        // the `(bool)` prefix is the unboxing cast a boxed condition needs; when printCondition
+        // already printed a C# bool (its own predicate dropped the isTrue wrapper, or a `bool?`
+        // read became the lifted `== true` comparison), the cast is the identity conversion
+        if (this.csharpConditionPrintsBool(node.condition) || this.csharpNullableBoolCondition(node.condition) !== undefined) {
+            return `(${condition})` + " ? " + whenTrue + " : " + whenFalse;
+        }
         return `((bool) ${condition})` + " ? " + whenTrue + " : " + whenFalse;
     }
 
