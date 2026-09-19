@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -3780,13 +3780,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpOperandIsValueTyped(node) ? void 0 : "object";
   }
-  // `object` for a parameter operand a null comparison compiles on, else undefined. A
-  // generated parameter prints `object <name>`; the ccxt build layer narrows only string
-  // positions to `string` (a reference type) and numeric positions to `Int64?` / `double?` /
-  // `double`, so a parameter whose checker type holds no number/boolean member is a reference
-  // or a nullable value and `name == null` is its isEqual null branch. `createOrder`'s
-  // `double amount` and every other number/boolean parameter keep the helper.
-  csharpParameterOperandType(node) {
+  // the declaration behind an identifier read that is a plain method parameter; a
+  // destructured or rest parameter prints a different declaration shape
+  csharpParameterDeclaration(node) {
     let symbol;
     try {
       symbol = this.getChecker().getSymbolAtLocation(node);
@@ -3800,7 +3796,43 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (!_typescript2.default.isIdentifier(declaration.name) || declaration.name.escapedText !== node.escapedText || declaration.dotDotDotToken !== void 0) {
       return void 0;
     }
+    return declaration;
+  }
+  // `object` for a parameter operand a null comparison compiles on, else undefined. An
+  // optional parameter prints `object` / `string` / `Int64?` / `double?` / `bool?`; every
+  // other parameter keeps the helper unless its checker type holds no number/boolean member,
+  // which makes it a reference box.
+  csharpParameterOperandType(node) {
+    const declaration = this.csharpParameterDeclaration(node);
+    if (declaration === void 0) {
+      return void 0;
+    }
+    if (this.csharpDeclarationPrintsNullComparable(declaration)) {
+      return "object";
+    }
     return this.csharpOperandIsValueTyped(node) ? void 0 : "object";
+  }
+  // Whether the C# type this parameter is printed with is a reference or a nullable value,
+  // so `x == null` compiles and is isEqual's null branch. The ccxt wrapper rule
+  // (optionalScalarCsharpType) gives a number/boolean parameter a nullable scalar only when
+  // it is optional with no initializer or `= undefined`; a required one (`amount: number`)
+  // and one with a real default (`double recvWindow = 5000`) print a non-nullable scalar.
+  csharpDeclarationPrintsNullComparable(declaration) {
+    const initializer = declaration.initializer;
+    const optional = declaration.questionToken !== void 0 || initializer !== void 0;
+    if (optional && (initializer === void 0 || initializer.kind === _typescript2.default.SyntaxKind.Identifier && initializer.escapedText === "undefined")) {
+      return true;
+    }
+    return !this.csharpDeclarationHasValueScalar(declaration);
+  }
+  csharpDeclarationHasValueScalar(declaration) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(declaration);
+    } catch (e) {
+      return true;
+    }
+    return this.csharpTypeHasValueScalar(type);
   }
   // A numeric literal prints as an untyped C# constant that adapts to the operand on the
   // other side. isEqual's integer branches round-trip through Convert.ToInt64, which an
@@ -3874,6 +3906,16 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return true;
     }
     return this.csharpValueEqualityKind(csharpType) === void 0;
+  }
+  // `x == null` compiles and matches isEqual's null branch when x's printed type is a
+  // reference box or a nullable value type: the operand table's declared types, an optional
+  // parameter, or a box the checker proves holds no number/boolean scalar.
+  csharpOperandIsNullComparable(node) {
+    const declaration = this.csharpParameterDeclaration(node);
+    if (declaration !== void 0 && this.csharpDeclarationPrintsNullComparable(declaration)) {
+      return true;
+    }
+    return !this.csharpOperandIsValueTyped(node);
   }
   // TypeScript numbers and booleans are C# value types in this port (double / bool /
   // Int64 / int), and the ccxt build script retypes some `object` declarations to exactly
@@ -4000,13 +4042,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     if (leftType === "null") {
-      if (!this.csharpIsNullComparableType(rightType) || this.csharpOperandIsValueTyped(right)) {
+      if (!this.csharpIsNullComparableType(rightType) || !this.csharpOperandIsNullComparable(right)) {
         return void 0;
       }
       return this.csharpNullComparison(rightText, isEquality);
     }
     if (rightType === "null") {
-      if (!this.csharpIsNullComparableType(leftType) || this.csharpOperandIsValueTyped(left)) {
+      if (!this.csharpIsNullComparableType(leftType) || !this.csharpOperandIsNullComparable(left)) {
         return void 0;
       }
       return this.csharpNullComparison(leftText, isEquality);

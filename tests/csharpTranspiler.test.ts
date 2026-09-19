@@ -1956,6 +1956,140 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
     });
 });
 
+// A parameter whose TS declaration admits undefined prints as a reference box (`object` /
+// `string`) or a nullable value type (`Int64?` / `double?`), never as a non-nullable scalar:
+// the ccxt narrowing tables narrow a required number position to `double` / `Int64` only
+// (createOrder's `double amount`). So its null comparison is isEqual's null branch.
+describe('csharp helper removal: isEqual(<param>, null) for an undefined-admitting parameter', () => {
+    const outputOf = (input: string) => transpiler.transpileCSharp(input).content;
+    test('a defaulted numeric parameter prints the native null comparison', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    async fetchTrades (symbol: string, since: number = undefined, limit: number = undefined): Promise<void> {\n" +
+        "        if (limit !== undefined) { return; }\n" +
+        "        if (since === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("if ((limit != null))");
+        expect(output).toContain("if ((since == null))");
+        expect(output).not.toContain("isEqual(");
+    });
+    test('an optional (`?:`) parameter prints natively, a required union does not', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (limit?: number, since: number | undefined): void {\n" +
+        "        if (limit === undefined) { return; }\n" +
+        "        if (since !== undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("if ((limit == null))");
+        // `since` has no default, so the wrapper declares the non-nullable `double since`
+        expect(output).toContain("isEqual(since, null)");
+    });
+    test('a required alias-typed parameter (`Num` is `number | undefined`) keeps isEqual', () => {
+        const output = outputOf(
+        "type Num = number | undefined;\n" +
+        "class Exchange {\n" +
+        "    async createOrder (symbol: string, amount: Num): Promise<void> {\n" +
+        "        if (amount === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(amount, null)");
+        expect(output).not.toContain("(amount == null)");
+    });
+    test('the null literal may sit on either side and undefined prints as null', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (since: number = undefined): void {\n" +
+        "        if (null === since) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("if ((since == null))");
+        expect(output).not.toContain("isEqual(");
+    });
+    test('a required numeric parameter keeps isEqual — its C# type is a non-nullable scalar', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    async createOrder (symbol: string, amount: number, price: number = undefined): Promise<void> {\n" +
+        "        if (amount === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(amount, null)");
+        expect(output).not.toContain("(amount == null)");
+    });
+    test('a numeric parameter with a non-undefined default keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (recvWindow: number = 5000): void {\n" +
+        "        if (recvWindow === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(recvWindow, null)");
+    });
+    test('a required boolean parameter keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (flag: boolean): void {\n" +
+        "        if (flag === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(flag, null)");
+    });
+    test('a destructured or rest parameter keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (...args: number[]): void {\n" +
+        "        if (args === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "    parse2 ({ limit }: { limit: number }): void {\n" +
+        "        if (limit === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(args, null)");
+        expect(output).toContain("isEqual(limit, null)");
+    });
+    test('two undefined-admitting parameters compare by the helper, not by reference', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (a: number = undefined, b: number = undefined): void {\n" +
+        "        if (a === b) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(a, b)");
+    });
+    test('an optional string parameter compared to a literal still keeps isEqual', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (type: string = undefined): void {\n" +
+        "        if (type === 'market') { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(type, \"market\")");
+    });
+    test('a local still keeps isEqual — only a parameter is proven', () => {
+        const output = outputOf(
+        "class Exchange {\n" +
+        "    parse (): void {\n" +
+        "        const limit = 5;\n" +
+        "        if (limit === undefined) { return; }\n" +
+        "        return;\n" +
+        "    }\n" +
+        "}\n");
+        expect(output).toContain("isEqual(limit, null)");
+    });
+});
+
 describe('csharp helper removal: isEqual on a numeric call result', () => {
     const outputOf = (input: string) => transpiler.transpileCSharp(input).content;
     test('a string indexOf against a negative literal prints the native operator', () => {
