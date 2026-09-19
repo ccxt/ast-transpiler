@@ -394,32 +394,16 @@ function csharpParseFloatLiteralArgument(arg) {
 // read rule leaves them to that family and covers every other declared-collection local
 const CSHARP_MARKET_RECEIVER_NAMES = [ 'market', 'currency' ];
 
-// Parameters of methods that participate in an override relation (base member + every override
-// declaration): C# overrides are invariant on parameter types, so a parameter may print a typed
-// spelling only when every declaration of the name agrees (census of ts/src; D8). Positions not
-// listed keep `object` on every declaration. The spelling is the one the generated C# locals
+// Parameters of a method whose override chain the ts/src census cleared: every declaration (base
+// member + every override) maps to the same spelling AND every call site in the generated tree
+// passes a compatible argument, so the whole-language build stays green. The three surviving
+// names are the ones the whole-language build proved clean; the 18 dropped names all fail on
+// `object`-typed call-site arguments (`getValue(response, "data")` shape), which needs the
+// cast-insertion pass, not a signature change. The spelling is the one the generated C# locals
 // already carry, which is also what every write and call site passes.
 const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string } } = {
     ethRpc: { 2: 'IList<object>' },
-    parseADLRank: { 0: 'IDictionary<string, object>' },
-    parseBorrowInterest: { 0: 'IDictionary<string, object>' },
-    parseConversion: { 0: 'IDictionary<string, object>' },
-    parseCurrency: { 0: 'IDictionary<string, object>' },
-    parseGreeks: { 0: 'IDictionary<string, object>' },
-    parseIsolatedBorrowRate: { 0: 'IDictionary<string, object>' },
-    parseLeverage: { 0: 'IDictionary<string, object>' },
-    parseLongShortRatio: { 0: 'IDictionary<string, object>' },
-    parseMarginMode: { 0: 'IDictionary<string, object>' },
-    parseOption: { 0: 'IDictionary<string, object>' },
-    parseOrder: { 0: 'IDictionary<string, object>' },
     parsePredictionOpenInterest: { 0: 'IDictionary<string, object>' },
-    parsePredictionOrder: { 0: 'IDictionary<string, object>' },
-    parsePredictionPosition: { 0: 'IDictionary<string, object>' },
-    parsePredictionTicker: { 0: 'IDictionary<string, object>' },
-    parsePredictionTrade: { 0: 'IDictionary<string, object>' },
-    parseTrades: { 0: 'IList<object>' },
-    parseWsOrderTrade: { 0: 'IDictionary<string, object>' },
-    parseWsTrades: { 0: 'IList<object>' },
     signEvmTransaction: { 0: 'IDictionary<string, object>' },
 };
 

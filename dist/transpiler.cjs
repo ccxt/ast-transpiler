@@ -2910,25 +2910,7 @@ function csharpParseFloatLiteralArgument(arg) {
 var CSHARP_MARKET_RECEIVER_NAMES = ["market", "currency"];
 var CSHARP_OVERRIDE_PARAM_TYPES = {
   ethRpc: { 2: "IList<object>" },
-  parseADLRank: { 0: "IDictionary<string, object>" },
-  parseBorrowInterest: { 0: "IDictionary<string, object>" },
-  parseConversion: { 0: "IDictionary<string, object>" },
-  parseCurrency: { 0: "IDictionary<string, object>" },
-  parseGreeks: { 0: "IDictionary<string, object>" },
-  parseIsolatedBorrowRate: { 0: "IDictionary<string, object>" },
-  parseLeverage: { 0: "IDictionary<string, object>" },
-  parseLongShortRatio: { 0: "IDictionary<string, object>" },
-  parseMarginMode: { 0: "IDictionary<string, object>" },
-  parseOption: { 0: "IDictionary<string, object>" },
-  parseOrder: { 0: "IDictionary<string, object>" },
   parsePredictionOpenInterest: { 0: "IDictionary<string, object>" },
-  parsePredictionOrder: { 0: "IDictionary<string, object>" },
-  parsePredictionPosition: { 0: "IDictionary<string, object>" },
-  parsePredictionTicker: { 0: "IDictionary<string, object>" },
-  parsePredictionTrade: { 0: "IDictionary<string, object>" },
-  parseTrades: { 0: "IList<object>" },
-  parseWsOrderTrade: { 0: "IDictionary<string, object>" },
-  parseWsTrades: { 0: "IList<object>" },
   signEvmTransaction: { 0: "IDictionary<string, object>" }
 };
 var CSharpTranspiler = class extends BaseTranspiler {
