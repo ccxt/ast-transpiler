@@ -16280,6 +16280,34 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return this.isBooleanPosition(current);
   }
+  // B-26 extends the proof with the printer's own bool-typed sinks: a
+  // `let x: bool = …` the printer narrows (getRustBoolLocalInitializer) and a
+  // logical it boxes in `Value::Bool(…)` (printCustomBinaryExpressionIfAny)
+  // both demand a `bool` expression, so their operands may print bare too.
+  rustConditionBoolSlot(node) {
+    if (this.isBareBoolEmissionSafe(node)) {
+      return true;
+    }
+    let current = node;
+    let parent = current.parent;
+    while (parent !== void 0) {
+      if (ts7.isParenthesizedExpression(parent) || parent.kind === SyntaxKind4.PrefixUnaryExpression && parent.operator === SyntaxKind4.ExclamationToken || parent.kind === SyntaxKind4.BinaryExpression && (parent.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || parent.operatorToken.kind === SyntaxKind4.BarBarToken)) {
+        current = parent;
+        parent = parent.parent;
+        continue;
+      }
+      break;
+    }
+    const inner = this.unwrapParens(current);
+    if (inner !== void 0 && inner.kind === SyntaxKind4.BinaryExpression && (inner.operatorToken.kind === SyntaxKind4.AmpersandAmpersandToken || inner.operatorToken.kind === SyntaxKind4.BarBarToken) && (this.hasNativeComparisonOperand(inner.left) || this.hasNativeComparisonOperand(inner.right))) {
+      return true;
+    }
+    const declaration = current.parent;
+    if (declaration === void 0 || !ts7.isVariableDeclaration(declaration) || declaration.initializer !== current || declaration.name?.kind !== SyntaxKind4.Identifier) {
+      return false;
+    }
+    return this.rustNodeIsBoolExpression(declaration.initializer) && this.rustTypeIsBoolean(declaration.initializer) && this.rustLocalUsesAcceptBool(declaration, String(declaration.name.escapedText));
+  }
   /** Native truthiness text of the operand, or undefined to keep `is_true`. */
   printNativeTruthiness(node) {
     if (!this.isBooleanValueFamilyOperand(node)) {
@@ -18673,8 +18701,63 @@ ${idn}}`;
     if (nativeTruthiness !== void 0) {
       return `${this.getIden(identation)}${nativeTruthiness}`;
     }
+    const nativeCondition = this.printNativeParenthesizedCondition(node);
+    if (nativeCondition !== void 0 && this.rustConditionBoolSlot(node)) {
+      return `${this.getIden(identation)}${nativeCondition}`;
+    }
     const expression = this.printNode(node, 0);
+    const peeled = this.peelValueBoolBox(this.stripOuterParens(expression));
+    if (peeled !== void 0 && this.rustConditionBoolSlot(node) && !this.printedBoolHelperCall(this.stripOuterParens(peeled))) {
+      return `${this.getIden(identation)}(${peeled})`;
+    }
     return `${this.getIden(identation)}is_true(&${this.printTruthyArgument(expression)})`;
+  }
+  // ── B-26: `is_true(&(…)` on an operand that is already a Rust `bool` ─────
+  // The condition printer's last resort wraps an operand none of the branches
+  // above claimed. When the printer's own emission of that operand is already
+  // a native Rust `bool` — the payload compares (`x != Value::Null`,
+  // `x.as_str() == Some("lit")`, `x.as_bool() == Some(true)`, `as_f64()`
+  // compares), `matches!` predicates, `&&`/`||` of those — the wrapper is the
+  // identity (`IsTruthy for bool`) and only costs a call.
+  //
+  // Native text carries no helper token for the ccxt post-passes, so it is
+  // only emitted where the whole enclosing boolean expression already sits in
+  // a real bool slot (`isBareBoolEmissionSafe`): if/while/ternary conditions,
+  // a `!` operand, or an operand of a logical expression in such a slot.
+  /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
+  printNativeParenthesizedCondition(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0 || inner === node || inner.kind !== SyntaxKind4.BinaryExpression) {
+      return void 0;
+    }
+    const op = inner.operatorToken.kind;
+    if (op === SyntaxKind4.AmpersandAmpersandToken || op === SyntaxKind4.BarBarToken) {
+      if (!this.hasNativeComparisonOperand(inner.left) && !this.hasNativeComparisonOperand(inner.right)) {
+        return void 0;
+      }
+      return `(${this.printLogicalInBooleanContext(inner)})`;
+    }
+    if (!_RustTranspiler.COMPARISON_OPS.has(op)) {
+      return void 0;
+    }
+    if (inner.left.kind === SyntaxKind4.TypeOfExpression) {
+      const native2 = this.nativeValuePredicateText(
+        inner.right.text,
+        inner.left.expression,
+        this.printNode(inner.left.expression, 0)
+      );
+      if (native2 === void 0) {
+        return void 0;
+      }
+      const isDiff = op === SyntaxKind4.ExclamationEqualsEqualsToken || op === SyntaxKind4.ExclamationEqualsToken;
+      return `(${isDiff ? "!" : ""}${native2})`;
+    }
+    if (op === SyntaxKind4.EqualsEqualsToken || op === SyntaxKind4.EqualsEqualsEqualsToken || op === SyntaxKind4.ExclamationEqualsToken || op === SyntaxKind4.ExclamationEqualsEqualsToken) {
+      const native2 = this.nativeEqualityText(inner);
+      return native2 === void 0 ? void 0 : `(${native2})`;
+    }
+    const native = this.printNativeOrderedComparison(inner, op, inner.left, inner.right);
+    return native === void 0 ? void 0 : `(${native})`;
   }
   // The argument of a `is_true(&…)` sink, with the printer's `Value::Bool(…)`
   // box peeled when it spans the whole argument: `IsTruthy for Value` unboxes
