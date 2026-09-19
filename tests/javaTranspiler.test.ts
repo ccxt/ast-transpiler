@@ -3475,7 +3475,7 @@ describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")
         });
     });
 
-    test('non-literal keys and non-identifier receivers keep the helper', () => {
+    test('a non-literal key on a declared map reads native, a field receiver keeps the helper', () => {
         const keys =
         "class T {\\n" +
         "    test(x: any, k: string): void {\\n" +
@@ -3494,7 +3494,7 @@ describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")
         "    something(...args: any[]): void {}\\n" +
         "}"
         withResolver(() => MAP_TYPE, () => {
-            expect(transpiler.transpileJava(keys).content).toContain('Helpers.GetValue(x, k)');
+            expect(transpiler.transpileJava(keys).content).toContain('(x == null || k == null ? null : x.get(k))');
             expect(transpiler.transpileJava(field).content).toContain('Helpers.GetValue(this.foo, "k")');
         });
     });
@@ -3684,6 +3684,231 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
             expect(output).toContain('Helpers.GetValue(x, i);');
             expect(output).not.toContain('x.get(i)');
         });
+    });
+});
+
+describe('declared-map element reads: Helpers.GetValue(m, k) -> guarded m.get(k)', () => {
+    // a `Map<String, Object>` declaration (the B-11/B-15 local table, or a param the printer
+    // retypes per B-09/D-10) with a key the printer cannot fold into a literal prints the
+    // native map accessor. GetValue's Map branch answers null for a null receiver, a null
+    // key and a key that is not a String, so the emission carries the same tests; every
+    // unproven receiver or key keeps the helper.
+    const MAP_TYPE = 'Map<String, Object>';
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('a declared Map with a plain string key reads native behind the null guards', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string): void {\n" +
+        "        const a = x[key];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(x == null || key == null ? null : x.get(key))');
+            expect(output).not.toContain('Helpers.GetValue(x, key)');
+        });
+    });
+
+    test('a key the checker does not prove a string carries the not-a-String test', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, k: any): void {\n" +
+        "        const a = x[k];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(x == null || !(k instanceof String) ? null : x.get(k))');
+            expect(output).not.toContain('Helpers.GetValue(x, k)');
+        });
+    });
+
+    test('no consumer installed: the read keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string): void {\n" +
+        "        const a = x[key];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(x, key)');
+        expect(output).not.toContain('x.get(key)');
+    });
+
+    test('a declared type that is not a Map keeps the helper', () => {
+        for (const type of [ 'Object', 'String', 'java.util.List<Object>', 'List<String>' ]) {
+            withResolver(() => type, () => {
+                const input =
+                "class T {\n" +
+                "    test(x: any, key: string): void {\n" +
+                "        const a = x[key];\n" +
+                "        this.something(a);\n" +
+                "    }\n" +
+                "    something(...args: any[]): void {}\n" +
+                "}";
+                const output = transpiler.transpileJava(input).content;
+                expect(output).toContain('Helpers.GetValue(x, key)');
+                expect(output).not.toContain('x.get(key)');
+            });
+        }
+    });
+
+    test('a counter index on a declared Map keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const a = x[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, i)');
+            expect(output).not.toContain('x.get(i)');
+        });
+    });
+
+    test('a numeric literal key on a declared Map keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x[0];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, 0)');
+            expect(output).not.toContain('x.get(0)');
+        });
+    });
+
+    test('a key that is not a repeatable operand keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x[this.key()];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    key(): string { return 'k'; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, this.key())');
+            expect(output).not.toContain('x.get(this.key())');
+        });
+    });
+
+    test('a write target keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string, v: any): void {\n" +
+        "        x[key] = v;\n" +
+        "    }\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.addElementToObject(x, key, v)');
+            expect(output).not.toContain('x.get(key)');
+        });
+    });
+
+    test('a capture-renamed receiver keeps the helper (finalX is a boxed Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string): void {\n" +
+        "        x = this.prepare(x);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < 1; i++) {\n" +
+        "            result.push({ 'id': x[key] });\n" +
+        "        }\n" +
+        "        this.something(result);\n" +
+        "    }\n" +
+        "    prepare(x: any): any { return x; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('final Object finalX = x;');
+            expect(output).toContain('Helpers.GetValue(finalX, key)');
+            expect(output).not.toContain('.get(key)');
+        });
+    });
+});
+
+describe('declared-map element reads (d-11): a retyped Dict parameter consumes the read', () => {
+    // the headline shape of D-11: the receiver is a parameter B-09/D-10 print as a Java Map,
+    // so the read binds natively exactly as it does for a typed local.
+    const TMP = path.join(__dirname, 'files', 'tmp-d11-map-params');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict } from './base/types';\n" +
+            "class Venue {\n" +
+            "    parseAccounts (data: Dict, code: string): void {\n" +
+            "        const id = data[code];\n" +
+            "    }\n" +
+            "    parseAny (data: Dict, code: any): void {\n" +
+            "        const id = data[code];\n" +
+            "    }\n" +
+            "    parseKey (data: Dict, code: string): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('the Dict parameter prints the native Java type', () => {
+        expect(venueOutput).toContain('public void parseAccounts(java.util.Map<String, Object> data, Object code)');
+        expect(venueOutput).toContain('public void parseAny(java.util.Map<String, Object> data, Object code)');
+    });
+
+    test('a non-literal key on the retyped parameter reads native', () => {
+        expect(venueOutput).toContain('(data == null || code == null ? null : data.get(code))');
+        expect(venueOutput).not.toContain('Helpers.GetValue(data, code)');
+    });
+
+    test('a key the checker does not prove a string carries the not-a-String test', () => {
+        expect(venueOutput).toContain('(data == null || !(code instanceof String) ? null : data.get(code))');
+    });
+
+    test('the literal-key read on the same parameter still prints the B-09 shape', () => {
+        expect(venueOutput).toContain('((java.util.Map<String, Object>)data).get("id")');
     });
 });
 

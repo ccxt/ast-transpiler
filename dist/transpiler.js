@@ -12984,6 +12984,7 @@ var JAVA_THIS_BOOLEAN_BOX_METHODS = {
 };
 var JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
 var JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
+var JAVA_PRIMITIVE_DECLARED_TYPES = /* @__PURE__ */ new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double"]);
 var JAVA_DECLARED_NUMERIC_TYPES = /* @__PURE__ */ new Set(["Integer", "Long", "Double", "int", "long", "double"]);
 var JAVA_BOXED_NUMERIC_TYPES = /* @__PURE__ */ new Set(["Integer", "Long", "Double"]);
 var JAVA_SPLIT_RECEIVER_KINDS = /* @__PURE__ */ new Set([
@@ -15100,6 +15101,49 @@ var JavaTranspiler = class extends BaseTranspiler {
     const lowerBound = isCounter ? `${indexText} < 0 || ` : "";
     return `(${target} == null || ${lowerBound}${indexText} >= ${target}.size() ? null : ${target}.get(${indexText}))`;
   }
+  // `x[k]` where a consumer declares x a java Map and the key is not a literal: the
+  // helper's Map branch is the map accessor behind its own tests — a null receiver, a
+  // null key and a key that is not a String all answer null, and a String-keyed map's
+  // accessor answers the same value for every String key. The guard prints the receiver
+  // and the key twice, so both must be side-effect-free reads, and `instanceof` needs a
+  // key that prints as a box.
+  javaDeclaredMapElementRead(node) {
+    if (node.parent?.kind === ts6.SyntaxKind.ExpressionStatement) {
+      return void 0;
+    }
+    if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0 || this.isLeftSideOfAssignment(node)) {
+      return void 0;
+    }
+    if (!this.javaDeclaredMapReceiver(node.expression)) {
+      return void 0;
+    }
+    const key = node.argumentExpression;
+    if (!ts6.isIdentifier(key) || !this.javaRepeatableOperand(key)) {
+      return void 0;
+    }
+    const declared = this.javaDeclaredTypeOf(key);
+    if (declared !== void 0 && JAVA_PRIMITIVE_DECLARED_TYPES.has(declared.trim())) {
+      return void 0;
+    }
+    if (declared === void 0 && this.javaOperandPrintsPrimitiveNumber(key)) {
+      return void 0;
+    }
+    let keyType;
+    try {
+      keyType = this.getChecker().getTypeAtLocation(key);
+    } catch (e) {
+      return void 0;
+    }
+    if (keyType === void 0 || this.getChecker().isArrayType(keyType) || this.getChecker().isTupleType(keyType)) {
+      return void 0;
+    }
+    const target = this.printNode(node.expression, 0);
+    const keyText = this.printNode(key, 0);
+    if (keyType.aliasSymbol === void 0 && keyType.flags === ts6.TypeFlags.String) {
+      return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+    }
+    return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
+  }
   // the identifier of a `for (var i = <int literal>; …; i++)` counter that still prints as
   // `i`: the JN capture rename prints `finalI`, a `final Object` box, which is not an int
   javaPrimitiveCounterIndex(node) {
@@ -15169,7 +15213,11 @@ var JavaTranspiler = class extends BaseTranspiler {
     const isNumberKey = ts6.isNumericLiteral(key);
     const isCounterKey = !isStringKey && !isNumberKey && this.javaPrimitiveCounterIndex(key);
     if (!isStringKey && !isNumberKey && !isCounterKey) {
-      return this.javaFieldMapReadIfAllowed(node);
+      const field = this.javaFieldMapReadIfAllowed(node);
+      if (field !== void 0) {
+        return field;
+      }
+      return this.javaDeclaredMapElementRead(node);
     }
     if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0) {
       return void 0;
