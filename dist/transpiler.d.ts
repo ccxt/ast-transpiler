@@ -902,6 +902,26 @@ declare class GoTranspiler extends BaseTranspiler {
     goAssignmentWritesName(left: any, name: any): boolean;
     goAnyBoxLocalDeclaration(node: any): any;
     goScalarFamilyOfType(type: any, allowNil?: boolean): string | undefined;
+    goNativeParameterTypeCache: Map<any, string>;
+    goSameFileCallCache: Map<any, Map<string, any[]>>;
+    goTsSrcTreeCache: Map<string, any>;
+    goNativeParameterType(param: any): string | undefined;
+    goNativeParameterTypeOf(param: any): string | undefined;
+    goNativeParameterTypeCandidates(param: any): string[];
+    goMethodKeepsBaseSignature(fn: any): boolean;
+    goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
+    goEnclosingClassName(fn: any): string | undefined;
+    goPrintedArgType(arg: any): string | undefined;
+    goSameFileCallsOf(fn: any, name: string): Array<any>;
+    goTsSrcTree(file: any): any;
+    goTsSrcTreeBuild(root: string): {
+        callIndex: Map<string, any[]>;
+        fileText: Map<string, string>;
+        classBases: Map<string, string>;
+        relativeOf: Map<string, string>;
+    };
+    goTsSrcFileDerivesFrom(tree: any, file: string, className: string | undefined): boolean;
+    goTextArgMatchesType(argText: string, goType: string, file: string, tree: any): boolean;
     goDeclaredTypeCache: Map<any, string>;
     goDeclaredTypeInProgress: Set<any>;
     goDeclaredTypeOfIdentifier(node: any): string | undefined;

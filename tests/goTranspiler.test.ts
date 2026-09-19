@@ -3,6 +3,8 @@ import { Transpiler, alignGoTrailingComments } from '../src/transpiler';
 
 import { SyntaxKind } from 'typescript';
 import { readFileSync } from 'fs';
+import * as nodefs from 'fs';
+import * as nodepath from 'path';
 
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
@@ -4323,5 +4325,183 @@ describe('go native string operations (strings.*)', () => {
         const output = transpiler.transpileGo("function f () { return 1; }\n").content;
         expect(output).not.toContain('import "strings"');
         expect(nativeCalls(output).length).toBe(0);
+    });
+});
+
+describe('native parameter types (B-02)', () => {
+    // every snippet needs a base class: a root class is the generated tree's abstract
+    // base and is public surface, so its methods are never retyped
+    const baseWithAccessors =
+        "class Base {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "}\n";
+
+    test('an internal parse method prints its proved Str parameter as *string', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseStatus (status: string | undefined) {\n" +
+            "        if (status !== undefined) {\n" +
+            "            return this.safeString (this.statuses, status, status);\n" +
+            "        }\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseStatus (this.safeString (this.order, 'status'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseStatus(status *string) any {');
+        // the declared parameter is the pointer the readers already deref
+        expect(output).toContain('if status != nil {');
+        expect(output).toContain('return this.ParseStatus(this.SafeString(this.Order, "status"))');
+    });
+
+    test('a call site argument the printer cannot type keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseStatus (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        const v = this.safeValue (this.order, 'status');\n" +
+            "        return this.parseStatus (v);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseStatus(status any) any {');
+    });
+
+    test('an override keeps the base signature', () => {
+        const input = baseWithAccessors +
+            "class Outer extends Base {\n" +
+            "    parseStatus (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "}\n" +
+            "class Test extends Outer {\n" +
+            "    override parseStatus (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseStatus (this.safeString (this.order, 'status'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseStatus(status any) any {');
+    });
+
+    test('a method the parent class already declares keeps the base signature', () => {
+        const input = baseWithAccessors +
+            "class Outer extends Base {\n" +
+            "    parseStatus (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "}\n" +
+            "class Test extends Outer {\n" +
+            "    parseStatus (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseStatus (this.safeString (this.order, 'status'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseStatus(status any) any {');
+    });
+
+    test('a body that writes the parameter another printed type keeps the box (D2)', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    parseStatus (status: string | undefined) {\n" +
+            "        status = this.safeValue (this.order, 'status');\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseStatus (this.safeString (this.order, 'status'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseStatus(status any) any {');
+    });
+
+    test('an async method is public surface and keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    async parseStatus (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.parseStatus (this.safeString (this.order, 'status'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) ParseStatus(status any) <-chan any {');
+    });
+
+    test('a method outside the parse* family keeps the box', () => {
+        const input = baseWithAccessors +
+            "class Test extends Base {\n" +
+            "    statusOf (status: string | undefined) {\n" +
+            "        return status;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.statusOf (this.safeString (this.order, 'status'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) StatusOf(status any) any {');
+    });
+});
+
+describe('native parameter types across the ts/src tree (B-02)', () => {
+    // a scoped run's program holds one file, so the sibling files of the same ts/src
+    // tree (pro/ and the derived exchanges) are only provable textually: the fixture
+    // writes a real tree so both halves of the proof are exercised
+    const BASE_FIXTURE =
+        "export class Exchange {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "}\n";
+    const EX_FIXTURE =
+        "import { Exchange } from './base/Exchange';\n" +
+        "type Str = string | undefined;\n" +
+        "export class ex extends Exchange {\n" +
+        "    parseStatus (status: Str) {\n" +
+        "        return status;\n" +
+        "    }\n" +
+        "}\n";
+
+    const treeFor = (name: string, proCall: string) => {
+        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
+        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), EX_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+            "import { ex } from '../ex';\n" +
+            "export class expro extends ex {\n" +
+            "    use () {\n" +
+            "        return " + proCall + ";\n" +
+            "    }\n" +
+            "}\n");
+        return nodepath.join(src, 'ex.ts');
+    };
+
+    afterAll(() => {
+        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-b02-tree'), { recursive: true, force: true });
+        nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-b02-tree-neg'), { recursive: true, force: true });
+    });
+
+    test('a proven sibling call site types the parameter', () => {
+        const file = treeFor('tmp-b02-tree', "this.parseStatus (this.safeString (this.order, 'status'))");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) ParseStatus(status *string) any {');
+    });
+
+    test('a sibling call site whose argument is not provable keeps the box', () => {
+        const file = treeFor('tmp-b02-tree-neg', "this.parseStatus (this.safeValue (this.order, 'status'))");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) ParseStatus(status any) any {');
     });
 });
