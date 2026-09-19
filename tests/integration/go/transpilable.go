@@ -5,6 +5,8 @@ import (
     "fmt"
 )
 
+import "strings"
+
 type Second struct {
 	MyClassProperty string `default:"classProp"`
 	MyBoolProp      bool   `default:"false"`
@@ -41,10 +43,10 @@ func (this *Test) FunctionWithOptionals(a any, optionalArgs ...any) {
 	d := GetArg(optionalArgs, 1, 1)
 	_ = d
 	fmt.Println(a)
-	if !IsEqual(c, nil) {
+	if c != nil {
 		fmt.Println(c)
 	}
-	if !IsEqual(d, nil) {
+	if d != nil {
 		fmt.Println(d)
 	}
 }
@@ -114,7 +116,7 @@ func (this *Test) Test() {
 	fmt.Println(GetArrayLength(both)) // should print 4
 	fmt.Println(GetValue(both, 2))    // should print "c"
 	var baseString string = "aabba"
-	var replacedAllString any = Replace(baseString, "a", "")
+	var replacedAllString string = strings.ReplaceAll(baseString, "a", "")
 	fmt.Println(replacedAllString) // should print "bb"
 	this.FunctionWithOptionals("hello")
 	this.FunctionWithOptionals("hello", 5)
@@ -187,18 +189,18 @@ func (this *Test) TestStringMethods() {
 	if str == "hello world" {
 		fmt.Println("str is hello world") // should print "str is hello world"
 	}
-	fmt.Println(ToUpper(str))
-	var startsWithHello bool = StartsWith(str, "hello")
+	fmt.Println(strings.ToUpper(str))
+	var startsWithHello bool = strings.HasPrefix(str, "hello")
 	fmt.Println(this.BoolToString(startsWithHello)) // should print true
-	var endsWithWorld bool = EndsWith(str, "world")
+	var endsWithWorld bool = strings.HasSuffix(str, "world")
 	fmt.Println(this.BoolToString(endsWithWorld)) // should print true
-	var stringParts []string = Split(str, " ")
+	var stringParts []string = strings.Split(str, " ")
 	fmt.Println(len(stringParts))         // should print 2
 	fmt.Println(GetValue(stringParts, 0)) // should print "hello"
 	fmt.Println(GetValue(stringParts, 1)) // should print "world"
-	var indexOfResult int = GetIndexOf(str, "o")
+	var indexOfResult int = strings.Index(str, "o")
 	fmt.Println(indexOfResult) // should print 4
-	var strReplaced any = Replace(str, "l", "x")
+	var strReplaced string = strings.ReplaceAll(str, "l", "x")
 	fmt.Println(strReplaced) // should print "hexxo worxd"
 	// concatenation test
 	var a string = "a"

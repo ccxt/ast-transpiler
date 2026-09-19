@@ -27,11 +27,11 @@ class Test
         Object c = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;
         Object d = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : 1;
         System.out.println(a);
-        if (Helpers.isTrue(!Helpers.isEqual(c, null)))
+        if (!java.util.Objects.equals(c, null))
         {
             System.out.println(c);
         }
-        if (Helpers.isTrue(!Helpers.isEqual(d, null)))
+        if (!java.util.Objects.equals(d, null))
         {
             System.out.println(d);
         }
@@ -66,7 +66,7 @@ class Test
         System.out.println(stringVar); // should print "hello"
         System.out.println(s3); // should print "ab"
         Object x = false;
-        if (Helpers.isTrue(x))
+        if (Boolean.TRUE.equals(x))
         {
             System.out.println("x is true");
         } else
@@ -76,27 +76,27 @@ class Test
         var instance = new Second();
         System.out.println(instance.stringifyNumber(4)); // should print 4
         System.out.println(instance.myClassProperty); // should print "classProp"
-        if (Helpers.isTrue(Helpers.isEqual(instance.myBoolProp, false)))
+        if (java.util.Objects.equals(instance.myBoolProp, false))
         {
             System.out.println("myBoolProp is false"); // should print "myBoolProp is false"
         }
         Object arr = new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 2, 3, 4));
-        System.out.println(Helpers.getArrayLength(arr)); // should print 4
-        Object first = Helpers.GetValue(arr, 0);
+        System.out.println(((java.util.List<?>)arr).size()); // should print 4
+        Object first = (arr == null || 0 >= ((java.util.List<?>)arr).size() ? null : ((java.util.List<?>)arr).get(0));
         System.out.println(first); // should print 1
         Object dict = new java.util.HashMap<String, Object>() {{
             put( "a", "b" );
         }};
         System.out.println(Helpers.GetValue(dict, "a")); // should print "b"
         Object i = 0;
-        for (var w = 0; Helpers.isLessThan(w, 10); w++)
+        for (var w = 0; w < 10; w++)
         {
             i = Helpers.add(i, 1);
         }
         System.out.println(String.valueOf(i)); // should print 10
         Object list2 = new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 2, 3, 4, 5));
         java.util.Collections.reverse((java.util.List<Object>)list2);
-        System.out.println(Helpers.GetValue(list2, 0)); // should print 5
+        System.out.println((list2 == null || 0 >= ((java.util.List<?>)list2).size() ? null : ((java.util.List<?>)list2).get(0))); // should print 5
         //should delete key from dict
         Object dict2 = new java.util.HashMap<String, Object>() {{
             put( "a", 1 );
@@ -104,13 +104,13 @@ class Test
         }};
         ((java.util.Map<String,Object>)dict2).remove((String)"a");
         Object dictKeys = Helpers.objectKeys(dict2);
-        System.out.println(Helpers.getArrayLength(dictKeys)); // should print 1
-        System.out.println(Helpers.GetValue(dictKeys, 0)); // should print "b"
+        System.out.println(((java.util.List<?>)dictKeys).size()); // should print 1
+        System.out.println((dictKeys == null || 0 >= ((java.util.List<?>)dictKeys).size() ? null : ((java.util.List<?>)dictKeys).get(0))); // should print "b"
         Object firstConcat = new java.util.ArrayList<Object>(java.util.Arrays.asList("a", "b"));
         Object secondConcat = new java.util.ArrayList<Object>(java.util.Arrays.asList("c", "d"));
         Object both = Helpers.concat(firstConcat, secondConcat);
-        System.out.println(Helpers.getArrayLength(both)); // should print 4
-        System.out.println(Helpers.GetValue(both, 2)); // should print "c"
+        System.out.println(((java.util.List<?>)both).size()); // should print 4
+        System.out.println((both == null || 2 >= ((java.util.List<?>)both).size() ? null : ((java.util.List<?>)both).get(2))); // should print "c"
         Object baseString = "aabba";
         Object replacedAllString = Helpers.replaceAll((String)baseString, (String)"a", (String)"");
         System.out.println(replacedAllString); // should print "bb"
@@ -121,7 +121,7 @@ class Test
         Helpers.addElementToObject(list3, 0, "first");
         System.out.println(Helpers.GetValue(list3, 0)); // should print "first"
         Object dict3 = new java.util.HashMap<String, Object>() {{}};
-        Helpers.addElementToObject(dict3, "key", "value");
+        ((java.util.Map<String, Object>)dict3).put("key", "value");
         System.out.println(Helpers.GetValue(dict3, "key")); // should print "value"
         this.testJavaScope();
         var first1second1Variable = this.handleOptionAndParamsTest();
@@ -160,11 +160,11 @@ class Test
     {
         Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;
         Object parameters = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : new java.util.HashMap<String, Object>() {{}};
-        if (Helpers.isTrue(Helpers.isArray(a)))
+        if ((a instanceof java.util.List))
         {
             System.out.println(Helpers.getArrayLength(a));
         }
-        if (Helpers.isTrue(Helpers.inOp(parameters, "a")))
+        if (((java.util.Map<?, ?>)parameters).containsKey("a"))
         {
             System.out.println(Helpers.GetValue(parameters, "a"));
         }
@@ -174,7 +174,7 @@ class Test
     {
         Object str = "hello world";
         // isEqual test
-        if (Helpers.isTrue(Helpers.isEqual(str, "hello world")))
+        if (java.util.Objects.equals(str, "hello world"))
         {
             System.out.println("str is hello world"); // should print "str is hello world"
         }
@@ -183,13 +183,13 @@ class Test
         System.out.println(this.boolToString(startsWithHello)); // should print true
         Object endsWithWorld = ((String)str).endsWith(((String)"world"));
         System.out.println(this.boolToString(endsWithWorld)); // should print true
-        Object stringParts = Helpers.split(str, " ");
-        System.out.println(Helpers.getArrayLength(stringParts)); // should print 2
+        Object stringParts = new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)str).split(java.util.regex.Pattern.quote(" "))));
+        System.out.println(((java.util.List<?>)stringParts).size()); // should print 2
         System.out.println(Helpers.GetValue(stringParts, 0)); // should print "hello"
         System.out.println(Helpers.GetValue(stringParts, 1)); // should print "world"
-        Object indexOfResult = Helpers.getIndexOf(str, "o");
+        Object indexOfResult = ((String)str).indexOf("o");
         System.out.println(indexOfResult); // should print 4
-        Object strReplaced = Helpers.replaceAll((String)str, (String)"l", (String)"x");
+        Object strReplaced = (str == null ? null : ((String)str).replace("l", "x"));
         System.out.println(strReplaced); // should print "hexxo worxd"
         // concatenation test
         Object a = "a";

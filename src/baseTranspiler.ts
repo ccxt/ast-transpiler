@@ -232,6 +232,33 @@ class BaseTranspiler {
         return this.context.checker;
     }
 
+    // the checker when a transpilation context is set, undefined otherwise (an in-memory
+    // program without one keeps every helper the checker would have proven away)
+    // true when some node under `scope` (excluding `scope` itself) satisfies `predicate`;
+    // the walk stops at the first hit and does not descend below it
+    hasNodeWhere(scope: ts.Node | undefined, predicate: (n: any) => boolean): boolean {
+        if (scope === undefined) {
+            return false;
+        }
+        let found = false;
+        const visit = (n: any) => {
+            if (found) {
+                return;
+            }
+            if (predicate(n)) {
+                found = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return found;
+    }
+
+    checkerOrUndefined(): ts.TypeChecker | undefined {
+        return this.context?.checker;
+    }
+
     getProgram(): ts.Program {
         if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
         return this.context.program;

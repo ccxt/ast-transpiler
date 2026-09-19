@@ -7,8 +7,8 @@ pub enum Value {
     Float(f64),
     Str(String),
     Bool(bool),
-    List(Vec<Value>),
-    Dict(HashMap<String, Value>),
+    Arr(Vec<Value>),
+    Dict(std::sync::Arc<HashMap<String, Value>>),
     Null,
 }
 
@@ -21,7 +21,7 @@ impl Value {
     /// scalars are length 0 rather than an error.
     pub fn len(&self) -> usize {
         match self {
-            Value::List(l) => l.len(),
+            Value::Arr(l) => l.len(),
             Value::Dict(m) => m.len(),
             Value::Str(s) => s.chars().count(),
             _ => 0,
@@ -36,7 +36,7 @@ impl Value {
     /// shape. An associated fn, not a variant — patterns use `Dict`.
     #[allow(non_snake_case)]
     pub fn Map(m: HashMap<String, Value>) -> Value {
-        Value::Dict(m)
+        Value::Dict(std::sync::Arc::new(m))
     }
 
     pub fn as_bool(&self) -> Option<bool> {
@@ -70,7 +70,7 @@ impl Value {
 
     pub fn as_array(&self) -> Option<&Vec<Value>> {
         match self {
-            Value::List(l) => Some(l),
+            Value::Arr(l) => Some(l),
             _ => None,
         }
     }
@@ -80,6 +80,12 @@ impl Value {
             Value::Dict(m) => Some(m),
             _ => None,
         }
+    }
+}
+
+impl From<Vec<Value>> for Value {
+    fn from(l: Vec<Value>) -> Value {
+        Value::Arr(l)
     }
 }
 
@@ -96,7 +102,7 @@ impl fmt::Display for Value {
             }
             Value::Str(s) => write!(f, "{}", s),
             Value::Bool(b) => write!(f, "{}", b),
-            Value::List(l) => {
+            Value::Arr(l) => {
                 let items: Vec<String> = l.iter().map(|v| format!("{}", v)).collect();
                 write!(f, "[{}]", items.join(", "))
             }
@@ -128,7 +134,7 @@ impl IsTruthy for Value {
             Value::Int(n) => *n != 0,
             Value::Float(n) => *n != 0.0,
             Value::Str(s) => !s.is_empty(),
-            Value::List(l) => !l.is_empty(),
+            Value::Arr(l) => !l.is_empty(),
             Value::Dict(m) => !m.is_empty(),
         }
     }
@@ -248,7 +254,7 @@ pub fn negate(a: &Value) -> Value {
 
 pub fn get_value(container: &Value, key: &Value) -> Value {
     match (container, key) {
-        (Value::List(l), Value::Int(i)) => {
+        (Value::Arr(l), Value::Int(i)) => {
             let idx = *i as usize;
             l.get(idx).cloned().unwrap_or(Value::Null)
         }
@@ -263,7 +269,7 @@ pub fn get_value(container: &Value, key: &Value) -> Value {
 
 pub fn add_element_to_object(container: &mut Value, key: &Value, val: Value) {
     match (container, key) {
-        (Value::List(l), Value::Int(i)) => {
+        (Value::Arr(l), Value::Int(i)) => {
             let idx = *i as usize;
             if idx < l.len() {
                 l[idx] = val;
@@ -275,7 +281,7 @@ pub fn add_element_to_object(container: &mut Value, key: &Value, val: Value) {
             }
         }
         (Value::Dict(m), Value::Str(k)) => {
-            m.insert(k.clone(), val);
+            std::sync::Arc::make_mut(m).insert(k.clone(), val);
         }
         _ => {}
     }
@@ -283,7 +289,7 @@ pub fn add_element_to_object(container: &mut Value, key: &Value, val: Value) {
 
 pub fn get_array_length(v: &Value) -> Value {
     match v {
-        Value::List(l) => Value::Int(l.len() as i64),
+        Value::Arr(l) => Value::Int(l.len() as i64),
         Value::Str(s) => Value::Int(s.len() as i64),
         Value::Dict(m) => Value::Int(m.len() as i64),
         _ => Value::Int(0),
@@ -295,25 +301,25 @@ pub fn object_keys(v: &Value) -> Value {
         Value::Dict(m) => {
             let mut keys: Vec<String> = m.keys().cloned().collect();
             keys.sort(); // deterministic order
-            Value::List(keys.into_iter().map(Value::Str).collect())
+            Value::Arr(keys.into_iter().map(Value::Str).collect())
         }
-        _ => Value::List(vec![]),
+        _ => Value::Arr(vec![]),
     }
 }
 
 pub fn object_values(v: &Value) -> Value {
     match v {
         Value::Dict(m) => {
-            let mut pairs: Vec<(String, Value)> = m.clone().into_iter().collect();
+            let mut pairs: Vec<(String, Value)> = (**m).clone().into_iter().collect();
             pairs.sort_by_key(|(k, _)| k.clone());
-            Value::List(pairs.into_iter().map(|(_, v)| v).collect())
+            Value::Arr(pairs.into_iter().map(|(_, v)| v).collect())
         }
-        _ => Value::List(vec![]),
+        _ => Value::Arr(vec![]),
     }
 }
 
 pub fn is_array(v: &Value) -> bool {
-    matches!(v, Value::List(_))
+    matches!(v, Value::Arr(_))
 }
 
 pub fn is_string(v: &Value) -> bool {
@@ -343,7 +349,7 @@ pub fn is_integer(v: &Value) -> bool {
 pub fn in_op(container: &Value, key: &Value) -> bool {
     match (container, key) {
         (Value::Dict(m), Value::Str(k)) => m.contains_key(k),
-        (Value::List(l), _) => l.iter().any(|v| is_equal(v, key)),
+        (Value::Arr(l), _) => l.iter().any(|v| is_equal(v, key)),
         _ => false,
     }
 }
@@ -368,9 +374,9 @@ pub fn to_lower(v: &Value) -> Value {
 
 pub fn reverse(v: Value) -> Value {
     match v {
-        Value::List(mut l) => {
+        Value::Arr(mut l) => {
             l.reverse();
-            Value::List(l)
+            Value::Arr(l)
         }
         Value::Str(s) => Value::Str(s.chars().rev().collect()),
         _ => v,
@@ -380,9 +386,9 @@ pub fn reverse(v: Value) -> Value {
 pub fn remove(v: &mut Value, key: &Value) {
     match (v, key) {
         (Value::Dict(m), Value::Str(k)) => {
-            m.remove(k);
+            std::sync::Arc::make_mut(m).remove(k);
         }
-        (Value::List(l), Value::Int(i)) => {
+        (Value::Arr(l), Value::Int(i)) => {
             let idx = *i as usize;
             if idx < l.len() {
                 l.remove(idx);
@@ -394,9 +400,9 @@ pub fn remove(v: &mut Value, key: &Value) {
 
 pub fn concat(a: Value, b: Value) -> Value {
     match (a, b) {
-        (Value::List(mut la), Value::List(lb)) => {
+        (Value::Arr(mut la), Value::Arr(lb)) => {
             la.extend(lb);
-            Value::List(la)
+            Value::Arr(la)
         }
         (Value::Str(sa), Value::Str(sb)) => Value::Str(format!("{}{}", sa, sb)),
         _ => Value::Null,
@@ -405,7 +411,7 @@ pub fn concat(a: Value, b: Value) -> Value {
 
 pub fn contains(v: &Value, target: &Value) -> bool {
     match (v, target) {
-        (Value::List(l), _) => l.iter().any(|x| is_equal(x, target)),
+        (Value::Arr(l), _) => l.iter().any(|x| is_equal(x, target)),
         (Value::Str(s), Value::Str(sub)) => s.contains(sub.as_str()),
         _ => false,
     }
@@ -413,7 +419,7 @@ pub fn contains(v: &Value, target: &Value) -> bool {
 
 pub fn get_index_of(v: &Value, target: &Value) -> Value {
     match (v, target) {
-        (Value::List(l), _) => {
+        (Value::Arr(l), _) => {
             match l.iter().position(|x| is_equal(x, target)) {
                 Some(i) => Value::Int(i as i64),
                 None => Value::Int(-1),
@@ -453,9 +459,9 @@ pub fn trim(v: &Value) -> Value {
 pub fn split(v: &Value, sep: &Value) -> Value {
     match (v, sep) {
         (Value::Str(s), Value::Str(sep_str)) => {
-            Value::List(s.split(sep_str.as_str()).map(|p| Value::Str(p.to_string())).collect())
+            Value::Arr(s.split(sep_str.as_str()).map(|p| Value::Str(p.to_string())).collect())
         }
-        _ => Value::List(vec![]),
+        _ => Value::Arr(vec![]),
     }
 }
 
@@ -465,7 +471,7 @@ pub fn join(v: &Value, sep: &Value) -> Value {
         _ => format!("{}", sep),
     };
     match v {
-        Value::List(l) => {
+        Value::Arr(l) => {
             let parts: Vec<String> = l.iter().map(|x| format!("{}", x)).collect();
             Value::Str(parts.join(&sep_str))
         }
@@ -510,7 +516,7 @@ pub fn slice(v: &Value, start: &Value, end: &Value) -> Value {
             };
             Value::Str(s[start_idx..end_idx].to_string())
         }
-        Value::List(l) => {
+        Value::Arr(l) => {
             let len = l.len();
             let start_idx = match start {
                 Value::Int(i) => {
@@ -525,23 +531,23 @@ pub fn slice(v: &Value, start: &Value, end: &Value) -> Value {
                 }
                 _ => len,
             };
-            Value::List(l[start_idx..end_idx].to_vec())
+            Value::Arr(l[start_idx..end_idx].to_vec())
         }
         _ => v.clone(),
     }
 }
 
 pub fn append_to_array(v: &mut Value, elem: Value) {
-    if let Value::List(l) = v {
+    if let Value::Arr(l) = v {
         l.push(elem);
     }
 }
 
 pub fn shift(v: Value) -> Value {
     match v {
-        Value::List(mut l) if !l.is_empty() => {
+        Value::Arr(mut l) if !l.is_empty() => {
             l.remove(0);
-            Value::List(l)
+            Value::Arr(l)
         }
         _ => v,
     }
@@ -549,9 +555,9 @@ pub fn shift(v: Value) -> Value {
 
 pub fn pop(v: Value) -> Value {
     match v {
-        Value::List(mut l) if !l.is_empty() => {
+        Value::Arr(mut l) if !l.is_empty() => {
             l.pop();
-            Value::List(l)
+            Value::Arr(l)
         }
         _ => v,
     }

@@ -7,7 +7,7 @@ const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
     'OBJECT_OPENING': '{',
     'OBJECT_CLOSING': '}',
-    'ARRAY_OPENING_TOKEN': 'Value::List(vec![',
+    'ARRAY_OPENING_TOKEN': 'Value::from(vec![',
     'ARRAY_CLOSING_TOKEN': '])',
     'PROPERTY_ASSIGNMENT_TOKEN': ':',
     'VAR_TOKEN': 'let mut',
@@ -67,6 +67,57 @@ const parserConfig = {
     'TRUE_KEYWORD': 'Value::Bool(true)',
     'FALSE_KEYWORD': 'Value::Bool(false)',
 };
+
+/** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
+ *  value provably holds a `Value::Dict` at every use. */
+export type RustDeclaredLocalKind = 'dict';
+
+/** One `let x: Value = <dict-proven initialiser>` declaration. `kind` is only
+ *  answered by the resolver when `alwaysDict && stable`. */
+export interface RustDeclaredDictLocalEntry {
+    kind: RustDeclaredLocalKind;
+    name: string;
+    /** printed callee of the initialiser: a `safe_dict*` name, or `value_map`. */
+    source: string;
+    /** the `safe_dict*` `optionalArgs` default is itself Dict-proven, so the
+     *  helper returns a Dict on every path (it returns that default when the
+     *  key does not hold one). */
+    alwaysDict: boolean;
+    /** no later write in the enclosing function can change the kind (D2). */
+    stable: boolean;
+    /** use census: element-access receiver / kind-preserving mutator / anything else. */
+    uses: { elementAccess: number, mutHelper: number, other: number };
+    declaration: ts.VariableDeclaration;
+    start: number;
+}
+
+/** Vocabulary of the declared-Dict locals table (see
+ *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
+export const RUST_DECLARED_DICT_LOCALS = {
+    /** value the resolver answers for a proven Dict local */
+    DICT: 'dict' as RustDeclaredLocalKind,
+    /** printed `self.<callee>` -> index of its `optionalArgs` parameter.
+     *  `safe_dict*` returns `optional_args[0]` whenever the key holds a non-Dict. */
+    SAFE_CALLEES: {
+        safe_dict_k: 2,
+        safe_dict: 2,
+        safe_dict_n: 2,
+        safe_dict2: 3,
+    } as Record<string, number>,
+    /** `&mut` receivers whose writes land inside the container, so a Dict local
+     *  stays a Dict (`add_element_to_object` / `append_to_array` no-op on a
+     *  non-container, `set_value` / `remove` write a key). */
+    KIND_PRESERVING_MUTATORS: new Set([
+        'add_element_to_object', 'append_to_array', 'set_value', 'remove',
+        'get_value_mut',
+    ]),
+};
+
+/** `x = ..` / `x += ..` — every token that writes a place. */
+function rustIsAssignmentOperator(kind: ts.SyntaxKind): boolean {
+    return kind === ts.SyntaxKind.EqualsToken ||
+        (kind >= ts.SyntaxKind.PlusEqualsToken && kind <= ts.SyntaxKind.CaretEqualsToken);
+}
 
 export class RustTranspiler extends BaseTranspiler {
 
@@ -177,7 +228,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (text in this.StringLiteralReplacements) {
             return this.StringLiteralReplacements[text];
         }
-        return `Value::Str(${this.quotedStringLiteral(text)}.to_string())`;
+        // `.into()` borrows the `&'static str` into the `Cow` payload — no alloc.
+        return `Value::Str(${this.quotedStringLiteral(text)}.into())`;
     }
 
     printNumericLiteral(node) {
@@ -229,6 +281,70 @@ export class RustTranspiler extends BaseTranspiler {
         'test',
     ]);
 
+    // Receiver locals whose element writes may go native (rust-13). `request`
+    // is rust-12's family; every other receiver keeps the helper.
+    private static readonly RUST_NATIVE_INSERT_RECEIVERS = new Set([
+        'result',
+        'account',
+        'params',
+        'fee',
+    ]);
+
+    // Scalar book fields the shared order-book store keeps instead of the Dict
+    // (value.rs `is_book_meta_key` plus the `cache` replacement write).
+    private static readonly RUST_BOOK_META_KEYS = new Set([
+        'timestamp',
+        'datetime',
+        'nonce',
+        'symbol',
+        'checksum',
+        'cache',
+    ]);
+
+    // `this.<field>` receivers whose Value may be a tagged live handle (order
+    // book / cache / ws client / subscriptions snapshot) — these keep the helper
+    // so its store write-through stays reachable.
+    private static readonly RUST_TAGGED_HANDLE_FIELDS = new Set([
+        'cache',
+        'client',
+        'subscriptions',
+        'orderbook',
+    ]);
+
+    // Fields the hand-written base keeps as a plain dict: `rust/ccxt-base/src/exchange.rs`
+    // initialises each to `Value::Map(HashMap::new())` and never tags it, so an element write
+    // is the whole helper even though the TS declaration is `any` (no checker shape to read).
+    private static readonly RUST_PLAIN_DICT_FIELDS = new Set([
+        'balance',
+        'orderbooks',
+        'trades',
+        'tickers',
+        'bidsasks',
+        'ohlcvs',
+        'clients',
+        'transactions',
+        'headers',
+        'currencies',
+        'has',
+        'tokenBucket',
+    ]);
+
+    // Free helpers whose call prints a bare `bool` — an argument position that
+    // expects a `Value` has to box them (ccxt's wrapBoolValueArgs set).
+    private static readonly RUST_BOOL_VALUE_HELPERS = [
+        'is_equal',
+        'is_true',
+        'is_greater_than',
+        'is_less_than',
+        'is_greater_than_or_equal',
+        'is_less_than_or_equal',
+        'is_array',
+        'is_object',
+        'in_op',
+        'is_number',
+        'is_string',
+    ];
+
     // Payload accessor used to compare each primitive kind natively.
     private static readonly PAYLOAD_ACCESSORS = {
         'string': 'as_str',
@@ -267,6 +383,144 @@ export class RustTranspiler extends BaseTranspiler {
             return kind;
         }
         return undefined;
+    }
+
+    // Native truthiness of a checker-proved boolean Value: `is_true(&v)` is `v.is_truthy()`
+    // (`""`/`0`/`[]`/`{}`/Null are false). When the operand is proven `bool`/`undefined` only,
+    // the runtime value is `Value::Bool(..)` or `Value::Null`, so `matches!(v, Value::Bool(true))`.
+
+    /** `true` / `false` / `boolean` (a union of BooleanLiteral members too). */
+    isBooleanValueType(type: ts.Type | undefined): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            const members: ts.Type[] = (type as any).types ?? [];
+            return members.length > 0 && members.every((member) => this.isBooleanValueType(member));
+        }
+        return (type.flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) !== 0;
+    }
+
+    /** `boolean | undefined`: `undefined`/`null` both print `Value::Null` (false
+     *  for the helper and for the `matches!` alike), so they may join the union. */
+    isBooleanOrUndefinedType(type: ts.Type | undefined): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        const members: ts.Type[] = (type.flags & ts.TypeFlags.Union) ? ((type as any).types ?? []) : [type];
+        if (members.length === 0) {
+            return false;
+        }
+        const onlyBooleanOrEmpty = members.every((member) =>
+            this.isBooleanValueType(member) ||
+            (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void | ts.TypeFlags.Null)) !== 0);
+        return onlyBooleanOrEmpty && members.some((member) => this.isBooleanValueType(member));
+    }
+
+    /** Operands this unit owns: `safeBool`/`safeBool2`/`safeBoolN` calls (a
+     *  `Value` in the port) and element accesses (printed as `get_value`). */
+    isBooleanValueFamilyOperand(node): boolean {
+        const inner = this.unwrapParens(node);
+        if (inner === undefined) {
+            return false;
+        }
+        if (ts.isElementAccessExpression(inner)) {
+            return true;
+        }
+        if (ts.isCallExpression(inner)) {
+            const name = this.callExpressionName(inner);
+            return name === 'safeBool' || name === 'safeBool2' || name === 'safeBoolN';
+        }
+        return false;
+    }
+
+    /** The emitted `matches!` is a bare Rust `bool`: it is only valid where the
+     *  whole enclosing boolean expression already sits in a bool slot. A logical
+     *  expression stored in a `Value` slot gets its `Value::Bool(..)` box from the
+     *  ccxt post-passes, which key on the leading helper token the operand would
+     *  no longer provide. */
+    isBareBoolEmissionSafe(node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while (parent !== undefined) {
+            if (ts.isParenthesizedExpression(parent)) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (parent.kind === SyntaxKind.PrefixUnaryExpression &&
+                parent.operator === SyntaxKind.ExclamationToken) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            if (parent.kind === SyntaxKind.BinaryExpression &&
+                (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+                 parent.operatorToken.kind === SyntaxKind.BarBarToken)) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            break;
+        }
+        return this.isBooleanPosition(current);
+    }
+
+    // B-26 extends the proof with the printer's own bool-typed sinks: a narrowed `let x: bool = …`
+    // (getRustBoolLocalInitializer) and a logical boxed in `Value::Bool(…)`
+    // (printCustomBinaryExpressionIfAny) both demand a `bool`, so their operands may print bare.
+    rustConditionBoolSlot(node): boolean {
+        if (this.isBareBoolEmissionSafe(node)) {
+            return true;
+        }
+        let current: any = node;
+        let parent: any = current.parent;
+        while (parent !== undefined) {
+            if (ts.isParenthesizedExpression(parent) ||
+                (parent.kind === SyntaxKind.PrefixUnaryExpression && parent.operator === SyntaxKind.ExclamationToken) ||
+                (parent.kind === SyntaxKind.BinaryExpression &&
+                 (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+                  parent.operatorToken.kind === SyntaxKind.BarBarToken))) {
+                current = parent;
+                parent = parent.parent;
+                continue;
+            }
+            break;
+        }
+        // A logical the printer boxes (`Value::Bool(<logical>)`) for a Value slot.
+        const inner = this.unwrapParens(current);
+        if (inner !== undefined && inner.kind === SyntaxKind.BinaryExpression &&
+            (inner.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+             inner.operatorToken.kind === SyntaxKind.BarBarToken) &&
+            (this.hasNativeComparisonOperand(inner.left) || this.hasNativeComparisonOperand(inner.right))) {
+            return true;
+        }
+        // The initializer of a local this printer declares `bool`.
+        const declaration: any = current.parent;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) ||
+            declaration.initializer !== current || declaration.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        return this.rustNodeIsBoolExpression(declaration.initializer) &&
+            this.rustTypeIsBoolean(declaration.initializer) &&
+            this.rustLocalUsesAcceptBool(declaration, String(declaration.name.escapedText));
+    }
+
+    /** Native truthiness text of the operand, or undefined to keep `is_true`. */
+    printNativeTruthiness(node): string | undefined {
+        if (!this.isBooleanValueFamilyOperand(node)) {
+            return undefined;
+        }
+        if (!this.printsValueExpression(node)) {
+            return undefined;
+        }
+        if (!this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node))) {
+            return undefined;
+        }
+        if (!this.isBareBoolEmissionSafe(node)) {
+            return undefined;
+        }
+        return `matches!(${this.printNode(node, 0)}, Value::Bool(true))`;
     }
 
     // Kind of a literal operand whose printed Value variant is exactly known.
@@ -326,14 +580,18 @@ export class RustTranspiler extends BaseTranspiler {
         return '';
     }
 
-    // A string literal whose text parses as a number — is_equal() coerces those
-    // against numeric/bool operands, a plain string compare does not.
-    stringLiteralCoercesToNumber(node): boolean {
-        const text = node.text;
+    // Does a string (literal text or literal-type value) parse as a number?
+    // is_equal() coerces those against numeric/bool operands, a plain string
+    // compare does not.
+    textCoercesToNumber(text: string): boolean {
         if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text)) {
             return true;
         }
         return /^[+-]?(inf|infinity|nan)$/i.test(text);
+    }
+
+    stringLiteralCoercesToNumber(node): boolean {
+        return this.textCoercesToNumber(node.text);
     }
 
     // f64 literal text for a numeric literal; undefined when it is not a Rust
@@ -352,6 +610,52 @@ export class RustTranspiler extends BaseTranspiler {
         return `${text}.0`;
     }
 
+    // The printer's own proof that a plain read prints as a Rust `Value`: `this.<field>` (every
+    // declared field is `Value`) or an identifier bound to a local/param (a local is narrowed to
+    // `bool` only when every use is a condition sink — never an is_equal argument).
+    rustReadPrintsValue(node): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        if (node.kind === SyntaxKind.PropertyAccessExpression && node.expression.kind === SyntaxKind.ThisKeyword) {
+            return true;
+        }
+        if (node.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const symbol: any = this.getChecker().getSymbolAtLocation(node);
+        const declarations: any[] = symbol?.declarations ?? [];
+        if (declarations.length === 0) {
+            return false;
+        }
+        return declarations.every((declaration) => ts.isParameter(declaration)
+            || (ts.isVariableDeclaration(declaration)
+                && declaration.initializer?.kind !== SyntaxKind.NewExpression));
+    }
+
+    // Can the checked type only hold a Bool, Null/undefined or a non-numeric
+    // string? Then `x.as_bool() == Some(b)` answers exactly what is_equal(x, b)
+    // does: its f64 fallback (Str parse / Bool→0|1) can never fire.
+    rustBooleanComparableType(type): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            const members: any[] = (type as any).types ?? [];
+            return members.length > 0 && members.every((member) => this.rustBooleanComparableType(member));
+        }
+        if (type.flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
+            return true;
+        }
+        if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) {
+            return true;
+        }
+        if (type.flags & ts.TypeFlags.StringLiteral) {
+            return !this.textCoercesToNumber(String((type as any).value ?? ''));
+        }
+        return false;
+    }
+
     // Native `==`/`!=` on the unwrapped payload when the checker proves the
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
@@ -365,13 +669,18 @@ export class RustTranspiler extends BaseTranspiler {
             const literal = leftLiteral !== undefined ? left : right;
             const literalKind = leftLiteral ?? rightLiteral;
             const other = leftLiteral !== undefined ? right : left;
-            if (!this.printsValueExpression(other)) {
+            if (!this.printsValueExpression(other) && (literalKind !== 'null' || !this.rustReadPrintsValue(other))) {
                 return undefined;
             }
-            const otherKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(other));
+            const otherType = this.getChecker().getTypeAtLocation(other);
+            const otherKind = this.primitiveKindOfType(otherType);
+            const typedStringLocal = this.rustStringLocalIdentifierIsTyped(other);
             if (literalKind === 'null') {
                 // Exact for every runtime value: is_equal(x, null) is true only
                 // when x is Null, and the derived PartialEq says the same.
+                if (typedStringLocal) {
+                    return `${this.printNode(other, 0)}.${operator === '==' ? 'is_none' : 'is_some'}()`;
+                }
                 return `${this.printNode(other, 0)} ${operator} Value::Null`;
             }
             if (literalKind === 'string') {
@@ -381,7 +690,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (this.stringLiteralCoercesToNumber(literal) && otherKind !== 'string') {
                     return undefined;
                 }
-                return `${this.printNode(other, 0)}.as_str() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
+                const accessor = typedStringLocal ? 'as_deref' : 'as_str';
+                return `${this.printNode(other, 0)}.${accessor}() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
             }
             if (literalKind === 'number') {
                 if (otherKind !== 'number') {
@@ -394,7 +704,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return `${this.printNode(other, 0)}.as_f64() ${operator} Some(${text})`;
             }
             if (literalKind === 'boolean') {
-                if (otherKind !== 'boolean') {
+                if (otherKind !== 'boolean' && !this.rustBooleanComparableType(otherType)) {
                     return undefined;
                 }
                 const value = literal.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
@@ -421,11 +731,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     typeOfNodeIfAny(node: ts.Node): ts.Type | undefined {
         // A transpile without a program/checker (bare snippet) has no types.
-        try {
-            return this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(node);
     }
 
     // Arrays/tuples/strings: `.length` is exactly what `Value::len()` returns.
@@ -439,7 +745,10 @@ export class RustTranspiler extends BaseTranspiler {
             const parts: ts.Type[] = (type as any).types ?? [];
             return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
         }
-        return this.getChecker().isArrayType(type)
+        // A `null`/`undefined` member boxes as `Value::Null`, whose `len()` is
+        // the same number the helper's fallthrough returns for it.
+        return (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0
+            || this.getChecker().isArrayType(type)
             || this.getChecker().isTupleType(type)
             || this.isStringType(type.flags);
     }
@@ -452,21 +761,182 @@ export class RustTranspiler extends BaseTranspiler {
         return `get_array_length(&${receiver})`;
     }
 
+    // Native string search / slicing: `x.indexOf(y)` and `x.slice(a, b)` on a checker-proven
+    // string receiver print native `str` code. The receiver is a `Value`, so the payload is reached
+    // via `as_str()`; a `Value::Null` receiver takes the helper's `-1` / `Value::Null` branch.
+
+    /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
+    rustSliceLiteralBound(node): number | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        if (ts.isNumericLiteral(node)) {
+            const value = Number(node.text);
+            return Number.isSafeInteger(value) ? value : undefined;
+        }
+        if (ts.isPrefixUnaryExpression(node) && node.operator === SyntaxKind.MinusToken &&
+            ts.isNumericLiteral(node.operand)) {
+            const value = Number(node.operand.text);
+            return Number.isSafeInteger(value) ? -value : undefined;
+        }
+        return undefined;
+    }
+
+    // `slice` clamps like JS: a non-negative bound is capped at the length, a
+    // negative one counts from the end and is floored at 0.
+    rustSliceClampedIndex(value: number): string {
+        return value < 0 ? `(__l - ${-value}).max(0)` : `__l.min(${value})`;
+    }
+
+    // `x.indexOf("lit")` on a proven string receiver: `str::find` is exactly
+    // the helper's `Value::Str` arm (byte index, `-1` when absent).
+    printNativeStringIndexOf(node, receiverText: string): string | undefined {
+        if (node === undefined || !ts.isCallExpression(node) ||
+            !ts.isPropertyAccessExpression(node.expression) || node.arguments?.length !== 1) {
+            return undefined;
+        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') {
+            return undefined;
+        }
+        const needle = node.arguments[0];
+        if (!ts.isStringLiteral(needle) && !ts.isNoSubstitutionTemplateLiteral(needle)) {
+            return undefined;
+        }
+        if (typeof receiverText !== 'string' || receiverText.includes('\n')) {
+            return undefined;
+        }
+        const literal = this.escapeRustStringLiteral(needle.text);
+        return `Value::Int(${receiverText}.as_str().and_then(|__s| __s.find("${literal}")).map(|__i| __i as i64).unwrap_or(-1))`;
+    }
+
+    // `x.slice(a)` / `x.slice(a, b)` with literal bounds on a proven string
+    // receiver: the helper's char-vector clamps are inlined, so the emission
+    // returns the same string (and `Value::Null` for a null receiver).
+    printNativeStringSlice(node, receiverText: string): string | undefined {
+        if (node === undefined || !ts.isCallExpression(node) ||
+            !ts.isPropertyAccessExpression(node.expression)) {
+            return undefined;
+        }
+        const args = node.arguments ?? [];
+        if (args.length === 0 || args.length > 2) {
+            return undefined;
+        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') {
+            return undefined;
+        }
+        if (typeof receiverText !== 'string' || receiverText.includes('\n')) {
+            return undefined;
+        }
+        const start = this.rustSliceLiteralBound(args[0]);
+        if (start === undefined) {
+            return undefined;
+        }
+        let end = '__l';
+        if (args[1] !== undefined && args[1].kind !== SyntaxKind.NullKeyword && args[1].kind !== SyntaxKind.UndefinedKeyword) {
+            const bound = this.rustSliceLiteralBound(args[1]);
+            if (bound === undefined) {
+                return undefined;
+            }
+            end = this.rustSliceClampedIndex(bound);
+        }
+        const begin = this.rustSliceClampedIndex(start);
+        return `${receiverText}.as_str().map(|__s| { let __c: Vec<char> = __s.chars().collect();` +
+            ` let __l = __c.len() as i64; let __i = ${begin}; let __j = ${end};` +
+            ` if __i <= __j { __c[__i as usize..__j as usize].iter().collect::<String>() } else { String::new() } })` +
+            `.map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
+    }
+
+    // Native value predicates (`Array.isArray` / `typeof … === '…'`): each runtime predicate is a
+    // single `matches!` over the `Value` variants, so on a declared `Value` place the call is
+    // replaced by that same match — no helper call, operand still read exactly once.
+
+    // `matches!` pattern of the runtime predicate, keyed by the `typeof` word.
+    private static readonly RUST_TYPE_PREDICATE_PATTERNS: { [key: string]: string } = {
+        'array': 'Value::Arr(_)',
+        'string': 'Value::Str(_)',
+        'number': 'Value::Int(_) | Value::Float(_)',
+        'boolean': 'Value::Bool(_)',
+        'object': 'Value::Dict(_)',
+    };
+
+    // An identifier bound by a local/param declaration: the printer declares
+    // every one of them as `Value`. Imports, classes and function names print
+    // as Rust items rather than as values, so they keep the helper.
+    isDeclaredValueIdentifier(node): boolean {
+        const symbol = (this.getChecker() as any).getSymbolAtLocation(node);
+        const declarations = symbol?.declarations ?? [];
+        if (declarations.length === 0) {
+            return false;
+        }
+        return declarations.every((declaration) => ts.isVariableDeclaration(declaration)
+            || ts.isParameter(declaration)
+            || ts.isBindingElement(declaration));
+    }
+
+    // A declared `Value` place: a local/param identifier, or a field/element
+    // access rooted at `this` or at such an identifier. Those are the operands
+    // whose printed text the helper already borrows as a `Value`.
+    isDeclaredValuePlace(node): boolean {
+        const inner = this.unwrapParens(node);
+        if (inner === undefined) {
+            return false;
+        }
+        if (ts.isIdentifier(inner)) {
+            return this.isDeclaredValueIdentifier(inner);
+        }
+        if (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner)) {
+            const root = this.unwrapParens(this.valuePlaceRoot(inner));
+            return root !== undefined &&
+                (root.kind === SyntaxKind.ThisKeyword || this.isDeclaredValueIdentifier(root));
+        }
+        return false;
+    }
+
+    valuePlaceRoot(node): any {
+        let current: any = node;
+        while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    nativeValuePredicateText(kind: string, operandNode, printedOperand: string): string | undefined {
+        const pattern = RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS[kind];
+        if (pattern === undefined || operandNode === undefined || printedOperand === undefined ||
+            !this.isDeclaredValuePlace(operandNode)) {
+            return undefined;
+        }
+        return `matches!(${this.ensureRef(printedOperand)}, ${pattern})`;
+    }
+
     // Object-typed values are Dicts at runtime, so `key in obj` is a plain
     // key lookup. Arrays keep the helper: `in_op` searches them element-wise.
+    // A `Dict`/`Dictionary<T>` receiver is a Reference to its index-signature
+    // interface, so the class/lib guards — not the Reference flag — decide it.
     isDictShapedType(type: ts.Type | undefined): boolean {
-        if (type === undefined || !(type.flags & ts.TypeFlags.Object)) {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            // `Market | undefined` style aliases: a nullish member carries no
+            // value, so only the value-carrying members have to be dict-shaped.
+            // `in_op` and the native insert both answer false / no-op on Null.
+            const parts: ts.Type[] = (type as any).types ?? [];
+            const valueParts = parts.filter((part) => !this.rustTypeIsNullish(part));
+            return parts.length > valueParts.length && valueParts.length > 0
+                && valueParts.every((part) => this.isDictShapedType(part));
+        }
+        if (!(type.flags & ts.TypeFlags.Object)) {
             return false;
         }
         const checker = this.getChecker();
         if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
             return false;
         }
-        const objectFlags = (type as ts.ObjectType).objectFlags;
-        if (objectFlags & (ts.ObjectFlags.Class | ts.ObjectFlags.Reference)) {
+        if (type.getCallSignatures().length !== 0) {
             return false;
         }
-        return type.getCallSignatures().length === 0;
+        return !this.isClassInstanceType(type) && !this.isLibDeclaredType(type);
     }
 
     // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
@@ -479,12 +949,326 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const printedKey = this.printStringLiteral(key);
-        const keyLiteral = printedKey.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
-        if (!keyLiteral) {
+        const keyLiteral = this.rustStringLiteralOf(printedKey);
+        if (keyLiteral === undefined) {
             return undefined;
         }
         const objExpr = this.printNode(obj, 0);
-        return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral[1]})))`;
+        return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral})))`;
+    }
+
+    // The Rust string literal behind a printed TS string literal — the boxed
+    // shapes the printer emits today (`Value::Str("k".to_string())`,
+    // `Value::from("k")`) plus a bare `"k"` once an arg-shape unit drops the box.
+    rustStringLiteralOf(printedKey: string): string | undefined {
+        const boxed = printedKey.match(/^(?:Value::Str|Value::from)\((.+)\)$/);
+        const literal = (boxed ? boxed[1].replace(/\.(?:to_string|into)\(\)$/, '') : printedKey).trim();
+        return /^"(?:[^"\\]|\\.)*"$/.test(literal) ? literal : undefined;
+    }
+
+    // `X["k"] = v` on a checker-proven plain Dict receiver: mutate the Dict
+    // natively. The helper's tag hooks (book meta, ws subscriptions, cache
+    // hashmap) only fire on tagged dicts, which a plain object type never is.
+    printNativeDictInsert(baseExpr, keyNode, keyText, valueText): string | undefined {
+        const receiver = this.rustNativeInsertReceiver(baseExpr);
+        if (receiver === undefined) {
+            return undefined;
+        }
+        if (!ts.isStringLiteral(keyNode) || RustTranspiler.RUST_BOOK_META_KEYS.has(keyNode.text)) {
+            return undefined;
+        }
+        if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
+            return undefined;
+        }
+        const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
+        if (!keyLiteral) {
+            return undefined;
+        }
+        const name = receiver.text;
+        let value = valueText;
+        if (this.rustPrintedBoolArg(value)) {
+            value = `Value::Bool(${value})`;
+        }
+        const insert = (val: string) =>
+            `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyLiteral[1]}.to_string(), ${val}); }`;
+        // Any mention of the receiver in the value operand reads it while the
+        // write holds the `&mut` — ccxt's splitAddElementBorrowConflicts pass
+        // hoists on the same signal, so mirror it with a temp binding.
+        const readsReceiver = receiver.isField ? /\bself\b/.test(value) : new RegExp(`\\b${name}\\b`).test(value);
+        if (readsReceiver) {
+            return `{ let __be_tmp = ${value}; ${insert('__be_tmp')} }`;
+        }
+        const trimmed = value.trim();
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== 'self'
+            && trimmed !== 'true' && trimmed !== 'false') {
+            return insert(`${trimmed}.clone()`);
+        }
+        return insert(value);
+    }
+
+    // Receivers this unit may write natively: any local whose every path builds a plain
+    // `Value::Map` (name-independent — rust-13's four names are the batch-A subset), plus
+    // `self.<field>` on a field the hand-written base holds as a plain dict. `request` is rust-12's.
+    rustNativeInsertReceiver(expr): { text: string, isField: boolean, nameNode: any } | undefined {
+        if (ts.isIdentifier(expr) && this.rustInsertIdentifierReceiver(expr)) {
+            return { text: expr.text, isField: false, nameNode: expr };
+        }
+        if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind.ThisKeyword
+            && expr.name?.kind === SyntaxKind.Identifier) {
+            return { text: `self.${expr.name.text}`, isField: true, nameNode: expr.name };
+        }
+        return undefined;
+    }
+
+    /** Element-write receiver proof for a local: the batch-A names (unchanged)
+     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
+     *  build on every path (rust-12's proof, read off the checker). */
+    rustInsertIdentifierReceiver(ident): boolean {
+        if (RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(ident.text)) {
+            return true;
+        }
+        const declaration = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
+            return false;
+        }
+        return this.rustInsertReceiverBuildsPlainDict(declaration);
+    }
+
+    /** True when every value the local can hold comes from an object literal:
+     *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
+     *  `__cache_backref`) only on handles its own store builds, so the helper's
+     *  write-through branches are provably dead and `insert` is the whole
+     *  helper. A `[ x, params ] = this.handle…(…)` tuple re-assigns the
+     *  hand-written handler's own dict arguments. */
+    rustInsertReceiverBuildsPlainDict(declaration: ts.VariableDeclaration): boolean {
+        const name = String((declaration.name as ts.Identifier).escapedText);
+        if (!this.rustPlainDictLiteral(declaration.initializer)) {
+            return false;
+        }
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
+        let plain = true;
+        const visit = (n) => {
+            if (!plain || !ts.isBinaryExpression(n) || n.operatorToken.kind !== SyntaxKind.EqualsToken) {
+                ts.forEachChild(n, visit);
+                return;
+            }
+            const left: any = n.left;
+            if (ts.isIdentifier(left) && String(left.escapedText) === name
+                && (declarationSymbol === undefined || this.rustSymbolOf(left) === declarationSymbol)) {
+                if (!this.rustPlainDictLiteral(n.right) && !this.rustTypeIsUndefinedish(n.right)) {
+                    plain = false;
+                }
+            } else if (ts.isArrayLiteralExpression(left)
+                && left.elements.some((e) => ts.isIdentifier(e) && String(e.escapedText) === name)) {
+                if (!this.rustHandlerTupleCall(n.right)) {
+                    plain = false;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return plain;
+    }
+
+    /** An object literal with no runtime tag key — the transpiler built it, so
+     *  it is a fresh plain `Value::Map` on every path. */
+    rustPlainDictLiteral(node: ts.Node | undefined): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        if (ts.isParenthesizedExpression(node)) {
+            return this.rustPlainDictLiteral(node.expression);
+        }
+        if (!ts.isObjectLiteralExpression(node)) {
+            return false;
+        }
+        return node.properties.every((property: any) => {
+            const key = property.name;
+            if (key === undefined) {
+                return false;
+            }
+            const text = ts.isStringLiteral(key) ? key.text
+                : (ts.isIdentifier(key) ? String(key.escapedText) : undefined);
+            return text === undefined || !text.startsWith('__');
+        });
+    }
+
+    /** `this.handle…(…)` — the hand-written `handle*AndParams` / `handleUntil…`
+     *  family; each returns its own request/params dict arguments. */
+    rustHandlerTupleCall(node: ts.Node | undefined): boolean {
+        if (node === undefined || !ts.isCallExpression(node)) {
+            return false;
+        }
+        const callee: any = node.expression;
+        return ts.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
+            && callee.name?.kind === SyntaxKind.Identifier && /^handle[A-Z]/.test(callee.name.text);
+    }
+
+    /** A `null`/`undefined` write leaves the receiver a non-dict, which the
+     *  emitted `if let Value::Dict` no-ops exactly like the helper. */
+    private rustTypeIsUndefinedish(node: ts.Node): boolean {
+        if (node.kind === SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === 'undefined')) {
+            return true;
+        }
+        const type = this.typeOfNodeIfAny(node);
+        if (type === undefined) {
+            return false;
+        }
+        const mask = ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void;
+        return (type.flags & mask) !== 0;
+    }
+
+    /** The single variable declaration a local identifier binds to, or
+     *  undefined when the checker cannot answer / the binding is not a local. */
+    rustSingleLocalDeclaration(ident: ts.Identifier): ts.VariableDeclaration | ts.ParameterDeclaration | undefined {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
+        if (declarations.length !== 1) {
+            return undefined;
+        }
+        const declaration: any = declarations[0];
+        if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
+            return undefined;
+        }
+        return declaration;
+    }
+
+    // Dict-shape proof for a write receiver: an object type with no class, array or callable shape
+    // — `Dictionary<T>` instantiations count (they resolve to their interface target). A union keeps
+    // the proof when every member is a Dict or `undefined` (both untaggable at runtime).
+    rustWriteDictShape(type): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        if (type.flags & ts.TypeFlags.Union) {
+            const parts: any[] = (type as any).types ?? [];
+            return parts.length > 0 && parts.every((part) => this.rustWriteDictShape(part));
+        }
+        if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) {
+            return true;
+        }
+        if (!(type.flags & ts.TypeFlags.Object)) {
+            return false;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
+            return false;
+        }
+        const target: any = (type as any).target ?? type;
+        if (target.objectFlags & ts.ObjectFlags.Class) {
+            return false;
+        }
+        return type.getCallSignatures().length === 0 && type.getConstructSignatures().length === 0;
+    }
+
+    // The receiver is a plain Dict on every path: its declared/initializer type is object-shaped
+    // (never a class or array handle), its initializer is not an element read (the get_value COW
+    // write-back pass keys on the `&mut <name>` text), and no write in scope assigns another shape.
+    rustReceiverStaysDict(baseExpr, receiver): boolean {
+        if (receiver.isField) {
+            return this.rustFieldStaysDict(baseExpr, receiver.nameNode.text);
+        }
+        const ident = baseExpr;
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
+        if (declarations.length !== 1) {
+            return false;
+        }
+        const declaration: any = declarations[0];
+        if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
+            return false;
+        }
+        const name = ident.text;
+        const initializer = declaration.initializer;
+        if (initializer === undefined || ts.isElementAccessExpression(initializer)
+            || declaration.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        let safe = this.rustWriteDictShape(this.typeOfNodeIfAny(ident))
+            && this.rustWriteDictShape(this.typeOfNodeIfAny(initializer));
+        const visit = (n) => {
+            if (!safe) {
+                return;
+            }
+            if (n !== declaration && this.rustBindsName(n, name)) {
+                safe = false; // a second binding of the name in scope — stay boxed
+                return;
+            }
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
+                && ts.isIdentifier(n.left) && n.left.text === name
+                && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
+                safe = false;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    // `this.<field>` receivers: the field is a plain dict (object-shaped checker type, or held as one
+    // by the hand-written base when the TS declaration is `any`) and no `this.<field> = …` in the
+    // method assigns another shape. Handle fields (cache/client/subscriptions/order book) are excluded.
+    rustFieldStaysDict(baseExpr, fieldName: string): boolean {
+        if (RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(fieldName)) {
+            return false;
+        }
+        if (!this.rustWriteDictShape(this.typeOfNodeIfAny(baseExpr))
+            && !RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(fieldName)) {
+            return false;
+        }
+        const scope = this.rustEnclosingFunction(baseExpr);
+        if (scope === undefined) {
+            return false;
+        }
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) {
+                return;
+            }
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
+                && ts.isPropertyAccessExpression(n.left) && n.left.expression.kind === SyntaxKind.ThisKeyword
+                && n.left.name?.text === fieldName
+                && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
+                safe = false;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe;
+    }
+
+    // Conservative "argument position expects a Value" bool test — the same set
+    // ccxt's wrapBoolValueArgs pass uses on the helper call's value operand.
+    rustPrintedBoolArg(raw: string): boolean {
+        let s = raw.trim();
+        while (s.startsWith('(') && s.endsWith(')')) {
+            let depth = 0;
+            let balanced = true;
+            for (let k = 0; k < s.length; k++) {
+                if (s[k] === '(') depth++;
+                else if (s[k] === ')') { depth--; if (depth === 0 && k < s.length - 1) { balanced = false; break; } }
+            }
+            if (!balanced || depth !== 0) break;
+            s = s.slice(1, -1).trim();
+        }
+        if (s.startsWith('!')) s = s.slice(1).trim();
+        return RustTranspiler.RUST_BOOL_VALUE_HELPERS.some(fn => s.startsWith(fn + '('));
     }
 
     // `negate(&Value::Int(n))` is `Value::Int(-n)` (same for Float) — fold the
@@ -563,9 +1347,66 @@ export class RustTranspiler extends BaseTranspiler {
         return this.isBooleanPosition(node) ? comparison : `Value::Bool(${comparison})`;
     }
 
+    // How numeric an ordered-comparison operand is: 'definite' (numeric
+    // literal / `.length` / `indexOf` — Int/Float at runtime, never Null),
+    // 'number' (checker-typed — Int, Float or Null, never a string), undefined.
+    rustNumericOperandKind(node): string | undefined {
+        const inner = this.orderedComparisonOperand(node);
+        if (inner.kind === SyntaxKind.NumericLiteral) {
+            return 'definite';
+        }
+        // `.length` prints through printArrayLength: `Value::Int(len)` or
+        // `get_array_length`, both always `Value::Int`.
+        if (ts.isPropertyAccessExpression(inner) && inner.name.escapedText === 'length') {
+            return 'definite';
+        }
+        // `.indexOf(x)` prints through printIndexOfCall: `get_index_of`, which
+        // returns `Value::Int` on every path.
+        if (inner.kind === SyntaxKind.CallExpression && this.callExpressionName(inner) === 'indexOf') {
+            return 'definite';
+        }
+        return this.isNumberTyped(node) ? 'number' : undefined;
+    }
+
+    // Parens and `x as T` print as the operand itself (printAsExpression drops
+    // the assertion), so the operand's own shape drives the emission.
+    orderedComparisonOperand(node) {
+        let inner = node;
+        while (inner !== undefined && (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner))) {
+            inner = inner.expression;
+        }
+        return inner;
+    }
+
+    // Native text for an `is_less_than`-family call, undefined unless the
+    // operands prove the helper's answer: one number pins `<`/`>`; `>=`/`<=`
+    // OR `is_equal` in (TRUE for two Nulls) and need a 'definite' operand.
+    printNativeOrderedComparison(node, op, left, right): string | undefined {
+        const operator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+        if (operator === undefined) {
+            return undefined;
+        }
+        if (!this.printsValueExpression(this.orderedComparisonOperand(left)) ||
+            !this.printsValueExpression(this.orderedComparisonOperand(right))) {
+            return undefined;
+        }
+        const leftKind = this.rustNumericOperandKind(left);
+        const rightKind = this.rustNumericOperandKind(right);
+        const ordered = op === SyntaxKind.LessThanToken || op === SyntaxKind.GreaterThanToken;
+        const proven = leftKind === 'definite' || rightKind === 'definite' ||
+            (ordered
+                ? (leftKind !== undefined || rightKind !== undefined)
+                : (leftKind === 'number' && rightKind === 'number'));
+        if (!proven) {
+            return undefined;
+        }
+        return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
+    }
+
     // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
     // When the checker proves both operands are numbers (`Int`/`Float` at
-    // runtime) or, for `+`, both are strings, the helper call is replaced by
+    // runtime) or that one is always a string and the other a string or the
+    // null the helper stringifies the same way, the helper call is replaced by
     // the arithmetic itself: a 4-arm `Value` match reproducing the helper's
     // Int/Float dispatch, `as_f64()` division, or a `format!` string concat.
     // Anything the checker cannot prove keeps the runtime helper.
@@ -596,6 +1437,39 @@ export class RustTranspiler extends BaseTranspiler {
         return false;
     }
 
+    // Types whose runtime value the `add` helper stringifies exactly as `format!` does: a string,
+    // or `undefined`/`null` boxed as `Value::Null` (`stringify_simple(Value::Null)` and `Display`
+    // both give "null"). `any` is absent — the Precise-dict branch has no `Display` equivalent.
+    private static readonly RUST_CONCAT_SAFE_FLAGS = new Set<number>([
+        ts.TypeFlags.String,
+        ts.TypeFlags.StringLiteral,
+        ts.TypeFlags.Undefined,
+        ts.TypeFlags.Null,
+    ]);
+
+    isStringOrNullishType(type: any): boolean {
+        if (!type) {
+            return false;
+        }
+        if (RustTranspiler.RUST_CONCAT_SAFE_FLAGS.has(type.flags)) {
+            return true;
+        }
+        if (type.flags === ts.TypeFlags.Union && Array.isArray(type.types)) {
+            return type.types.length > 0 && type.types.every((member: any) => this.isStringOrNullishType(member));
+        }
+        return false;
+    }
+
+    // `Str` (`string | undefined`) operands concatenate natively only against an operand proven
+    // ALWAYS a string: the helper then takes its string branch, which `format!` reproduces.
+    // Without that anchor (`Str + Str`) the both-null case yields `Value::Null`, not "nullnull".
+    isNativeStringConcatPair(leftType: any, rightType: any): boolean {
+        if (!this.isStringOrNullishType(leftType) || !this.isStringOrNullishType(rightType)) {
+            return false;
+        }
+        return this.isStringLikeType(leftType) || this.isStringLikeType(rightType);
+    }
+
     // `(+|-)` with the left operand of `+=`/`-=`: assignment plus the same
     // native emission as the plain binary form.
     printNativeAssignmentArithmetic(op, left, right, leftText, rightText): string | undefined {
@@ -607,7 +1481,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
-        if (op === SyntaxKind.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+        if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
             return `${leftText} = ${this.printNativeStringConcat(leftText, rightText)}`;
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -629,7 +1503,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
-        if (op === SyntaxKind.PlusToken && this.isStringLikeType(leftType) && this.isStringLikeType(rightType)) {
+        if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
             return this.printNativeStringConcat(leftText, rightText);
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -639,7 +1513,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeStringConcat(leftText: string, rightText: string): string {
-        return `Value::Str(format!("{}{}", ${leftText}, ${rightText}))`;
+        return `Value::Str(format!("{}{}", ${leftText}, ${rightText}).into())`;
     }
 
     // Both operands are `Int`/`Float` at runtime; `-> Value::Null` covers the
@@ -671,7 +1545,7 @@ export class RustTranspiler extends BaseTranspiler {
             const elements = left.elements;
             const rhs = this.printNode(right, 0);
             const tmpName = '__destr_tmp';
-            const nativeList = this.isProvenListExpression(right);
+            const nativeList = this.rustNativeListSource(right);
             const assignments = elements.map((e, idx) => {
                 const target = this.printNode(e, 0);
                 if (nativeList) {
@@ -704,6 +1578,12 @@ export class RustTranspiler extends BaseTranspiler {
             }
             const lastKey = keyStrs[keyStrs.length - 1];
             const rhs = this.printNode(right, 0);
+            if (keyStrs.length === 1) {
+                const nativeInsert = this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs);
+                if (nativeInsert !== undefined) {
+                    return nativeInsert;
+                }
+            }
             return `add_element_to_object(${acc}, &${lastKey}, ${rhs})`;
         }
 
@@ -714,6 +1594,13 @@ export class RustTranspiler extends BaseTranspiler {
             const target = this.printNode(expression, 0);
             const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
             const not = isDiff ? '!' : '';
+            const native = this.nativeValuePredicateText(rightText, expression, target);
+            if (native !== undefined) {
+                const negated = isDiff ? `!${native}` : native;
+                // Conditions/logical operands expect a bool; every other
+                // position stores the result in a `Value`, so box it as before.
+                return this.isBooleanPosition(node) ? negated : `Value::Bool(${negated})`;
+            }
             switch (rightText) {
             case 'string': return `${not}is_string(&${target})`;
             case 'number': return `${not}is_number(&${target})`;
@@ -776,8 +1663,11 @@ export class RustTranspiler extends BaseTranspiler {
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
         if (op in this.binaryExpressionsWrappers) {
             const nativeOperator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
-            if (nativeOperator !== undefined && this.isNumberTyped(left) && this.isNumberTyped(right)) {
-                return this.printNativeNumericComparison(node, nativeOperator, this.printNode(left, 0), this.printNode(right, 0));
+            if (nativeOperator !== undefined) {
+                const native = this.printNativeOrderedComparison(node, op, left, right);
+                if (native !== undefined) {
+                    return native;
+                }
             }
             const [fnName, close] = this.binaryExpressionsWrappers[op];
             const leftText = this.printNode(left, 0);
@@ -826,7 +1716,7 @@ export class RustTranspiler extends BaseTranspiler {
             const parsedElements = elements.map(e => this.printNode(e.name, 0));
             const syntheticName = parsedElements.join('') + 'Variable';
             let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
-            const nativeList = this.isProvenListExpression(declaration.initializer);
+            const nativeList = this.rustNativeListSource(declaration.initializer);
             parsedElements.forEach((e, idx) => {
                 const access = nativeList
                     ? this.printNativeListIndex(syntheticName, idx)
@@ -854,6 +1744,10 @@ export class RustTranspiler extends BaseTranspiler {
             return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
         }
 
+        if (this.rustSafeStringLocalIsTyped(declaration)) {
+            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}.as_str().map(str::to_owned)`;
+        }
+
         return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
     }
 
@@ -876,9 +1770,35 @@ export class RustTranspiler extends BaseTranspiler {
         'is_instance', 'starts_with', 'ends_with', 'in_op', 'contains',
     ]);
 
-    // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
-    peelValueBoolBox(printedValue: string): string | undefined {
-        const prefix = 'Value::Bool(';
+    // Hand-written Rust fns outside `runtime.rs` with a `-> bool` signature, keyed by the TS callee
+    // name (verified in `rust/tests/src/tests_support.rs`). A call is already a Rust bool, so the
+    // condition printer's `is_true(&…)` wrapper is the identity (`IsTruthy for bool`) and is dropped.
+    private static readonly RUST_BOOL_RESULT_CALLEES = new Set([
+        'tickerExceptionNeedsOhlcv',
+    ]);
+
+    // Call to a hand-written `-> bool` fn: the checker must agree the TS call
+    // is boolean-typed and the callee must be in the verified table above.
+    rustCallPrintsBool(node): boolean {
+        if (node?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee: any = node.expression;
+        let name: string | undefined;
+        if (callee?.kind === SyntaxKind.Identifier) {
+            name = callee.escapedText;
+        } else if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
+            name = callee.name?.escapedText;
+        }
+        if (name === undefined || !(RustTranspiler as any).RUST_BOOL_RESULT_CALLEES.has(name)) {
+            return false;
+        }
+        return this.rustTypeIsBoolean(node);
+    }
+
+    // `<box><expr>)` spanning the whole printed value → `<expr>`. The payload is
+    // only reachable this way: the printer prints the value, not its parts.
+    peelValueBox(printedValue: string, prefix: string): string | undefined {
         if (!printedValue.startsWith(prefix) || !printedValue.endsWith(')')) {
             return undefined;
         }
@@ -902,6 +1822,16 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
         return undefined;
+    }
+
+    // `Value::Bool(<expr>)` spanning the whole expression → `<expr>`.
+    peelValueBoolBox(printedValue: string): string | undefined {
+        return this.peelValueBox(printedValue, 'Value::Bool(');
+    }
+
+    // `Value::Str(<expr>)` spanning the whole expression → `<expr>` (a String).
+    peelValueStrBox(printedValue: string): string | undefined {
+        return this.peelValueBox(printedValue, 'Value::Str(');
     }
 
     // `((expr))` → `expr` — a redundant layer kept from the TS source; the
@@ -974,6 +1904,14 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return false; // no checker type → keep the boxed form
         }
+    }
+
+    rustTypeIsString(node): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false; // no checker type → keep the boxed form
+        }
+        return this.isStringLikeType(checker.getTypeAtLocation(node));
     }
 
     rustEnclosingFunction(node) {
@@ -1065,6 +2003,146 @@ export class RustTranspiler extends BaseTranspiler {
         return safe;
     }
 
+    // Typed string locals: `let x: Value = self.safeString(..)` is declared `Option<String>` when
+    // the checker proves a string and every use is a native sink (`x.is_none()`, `x.as_deref() ==
+    // Some("lit")`). The helper's Value is unwrapped with `.as_str()`; any other sink keeps the box.
+
+    private static readonly RUST_STRING_LOCAL_HELPERS = new Set([
+        'safeString', 'safeString2', 'safeStringN',
+        'safeStringLower', 'safeStringLower2', 'safeStringLowerN',
+        'safeStringUpper', 'safeStringUpper2', 'safeStringUpperN',
+    ]);
+
+    private rustStringLocalDecisions = new Map<any, boolean>();
+
+    // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer.
+    rustSafeStringLocalInitializer(declaration): boolean {
+        const initializer = declaration.initializer;
+        if (declaration.name?.kind !== SyntaxKind.Identifier
+            || initializer?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = initializer.expression;
+        if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
+            return callee.expression?.kind === SyntaxKind.ThisKeyword
+                && (RustTranspiler as any).RUST_STRING_LOCAL_HELPERS.has(callee.name.escapedText);
+        }
+        if (callee?.kind === SyntaxKind.Identifier) {
+            return (RustTranspiler as any).RUST_STRING_LOCAL_HELPERS.has(callee.escapedText);
+        }
+        return false;
+    }
+
+    // The two uses that compile against an `Option<String>` local and print
+    // natively: `x ==/!= null|undefined` and `x ==/!= "lit"`.
+    rustStringLocalUseIsNative(node): boolean {
+        const parent = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        if (parent.kind !== SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const op = parent.operatorToken.kind;
+        if (op !== SyntaxKind.EqualsEqualsToken && op !== SyntaxKind.EqualsEqualsEqualsToken
+            && op !== SyntaxKind.ExclamationEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) {
+            return false;
+        }
+        const other = parent.left === node ? parent.right : (parent.right === node ? parent.left : undefined);
+        if (other === undefined) {
+            return false;
+        }
+        const otherLiteral = this.literalKindOfNode(other);
+        if (otherLiteral === 'null') {
+            return true;
+        }
+        // The string-literal compare prints as `<x>.as_deref() == Some("lit")`;
+        // the printer's own rejections (replacement tokens) must match.
+        return otherLiteral === 'string' && !(other.text in this.StringLiteralReplacements);
+    }
+
+    // Every use compiles against `Option<String>`, and at least one native sink
+    // consumes it (otherwise the retype buys nothing).
+    rustSafeStringLocalIsTyped(declaration): boolean {
+        const cached = this.rustStringLocalDecisions.get(declaration);
+        if (cached !== undefined) {
+            return cached;
+        }
+        this.rustStringLocalDecisions.set(declaration, false); // re-entrancy guard
+        const decision = this.rustSafeStringLocalIsTypedUncached(declaration);
+        this.rustStringLocalDecisions.set(declaration, decision);
+        return decision;
+    }
+
+    rustSafeStringLocalIsTypedUncached(declaration): boolean {
+        if (!this.rustSafeStringLocalInitializer(declaration)) {
+            return false;
+        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) !== 'string') {
+            return false;
+        }
+        const name = declaration.name.escapedText;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        let nativeUses = 0;
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) {
+                return;
+            }
+            if (n !== declaration && this.rustBindsName(n, name)) {
+                safe = false; // a second binding of the name in scope
+                return;
+            }
+            if (n.kind === SyntaxKind.Identifier && n.escapedText === name && n !== declaration.name
+                && !this.rustIdentifierIsPropertyName(n)) {
+                if (!this.rustStringLocalUseIsNative(n)) {
+                    safe = false;
+                    return;
+                }
+                nativeUses++;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return safe && nativeUses > 0;
+    }
+
+    // `x.foo` / `{ foo: 1 }` — a property name is not a use of the local.
+    rustIdentifierIsPropertyName(node): boolean {
+        const parent = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        switch (parent.kind) {
+        case SyntaxKind.PropertyAccessExpression:
+        case SyntaxKind.PropertyAssignment:
+        case SyntaxKind.PropertySignature:
+        case SyntaxKind.ShorthandPropertyAssignment:
+            return parent.name === node;
+        }
+        return false;
+    }
+
+    // Is this identifier occurrence bound to a typed string local?
+    rustStringLocalIdentifierIsTyped(node): boolean {
+        if (node?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        const symbol = checker.getSymbolAtLocation(node);
+        const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        return this.rustSafeStringLocalIsTyped(declaration);
+    }
+
     // `let x = <bool expr>` → the printed bool expression, or undefined.
     getRustBoolLocalInitializer(declaration, printedValue: string): string | undefined {
         const initializer = declaration.initializer;
@@ -1083,6 +2161,297 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         return peeled !== undefined ? peeled : inner;
+    }
+
+    // Declared-Dict locals: the checker types `safe_dict*` results `object | undefined`, so this
+    // table proves a Dict printer-side (a `safe_dict*` call with a Dict-proven default, or a
+    // `Value::Map(..)` literal, no later kind-changing write — D2) while the declaration stays `Value`.
+
+    private declaredDictLocalsCache: { src: ts.SourceFile, table: Map<string, RustDeclaredDictLocalEntry[]> } | undefined;
+
+    /** All `let x: Value = <dict-proven initialiser>` declarations of the current
+     *  source file, keyed by local name in declaration order. */
+    rustDeclaredDictLocals(): Map<string, RustDeclaredDictLocalEntry[]> {
+        const src = this.getSrc();
+        if (this.declaredDictLocalsCache === undefined || this.declaredDictLocalsCache.src !== src) {
+            let table: Map<string, RustDeclaredDictLocalEntry[]>;
+            try {
+                table = this.collectRustDeclaredDictLocals(src);
+            } catch (e) {
+                table = new Map(); // no proof -> consumers keep the helper
+            }
+            this.declaredDictLocalsCache = { src, table };
+        }
+        return this.declaredDictLocalsCache.table;
+    }
+
+    /** Printer hook for the helper-removal units: the proven kind of a declared
+     *  local, or undefined when the local is not proven Dict at every use.
+     *  Accepts the receiver node of the helper call (identifier, `x['k']` chain,
+     *  `this.x` chain) or the declaration itself. */
+    rustDeclaredLocalTypeResolver(node: ts.Node): RustDeclaredLocalKind | undefined {
+        const entry = this.rustDeclaredLocalEntry(node);
+        return entry === undefined ? undefined : entry.kind;
+    }
+
+    /** The table entry a use site resolves to (the declaration whose binding the
+     *  use refers to, proven), or undefined. */
+    rustDeclaredLocalEntry(node: ts.Node): RustDeclaredDictLocalEntry | undefined {
+        if (node === undefined) return undefined;
+        const name = ts.isVariableDeclaration(node) ? (node.name as ts.Identifier).text : this.rootPlaceText(node);
+        if (name === undefined) return undefined;
+        const entries = this.rustDeclaredDictLocals().get(name);
+        if (entries === undefined) return undefined;
+        const start = node.getStart();
+        const identifier = this.rustDeclaredLocalIdentifier(node);
+        const symbol = identifier === undefined ? undefined : this.rustSymbolOf(identifier);
+        let best: RustDeclaredDictLocalEntry | undefined;
+        for (const entry of entries) {
+            if (entry.start > start || !entry.alwaysDict || !entry.stable) continue;
+            const scope = this.rustEnclosingFunction(entry.declaration);
+            if (scope !== undefined && !this.isNodeInsideNode(node, scope)) continue;
+            if (identifier !== undefined) {
+                const entrySymbol = this.rustSymbolOf((entry.declaration.name as ts.Identifier));
+                if (symbol !== undefined && entrySymbol !== undefined && symbol !== entrySymbol) continue;
+            }
+            if (best === undefined || entry.start > best.start) best = entry;
+        }
+        return best;
+    }
+
+    /** The identifier at the head of a place (`x`, `x['k']`, `this.x` is not a
+     *  local) — the node the resolver matches against the table. */
+    private rustDeclaredLocalIdentifier(node: ts.Node): ts.Identifier | undefined {
+        let current: any = node;
+        while (current !== undefined) {
+            if (ts.isIdentifier(current)) return current;
+            if (ts.isElementAccessExpression(current) || ts.isPropertyAccessExpression(current)) {
+                if (current.expression.kind === SyntaxKind.ThisKeyword) return undefined;
+                current = current.expression;
+                continue;
+            }
+            if (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
+                current = current.expression;
+                continue;
+            }
+            return undefined;
+        }
+        return undefined;
+    }
+
+    /** Binding symbol of an identifier, or undefined when the checker cannot
+     *  answer (ByContent probes without a class context, for instance). */
+    private rustSymbolOf(node: ts.Identifier): ts.Symbol | undefined {
+        return this.checkerOrUndefined()?.getSymbolAtLocation(node);
+    }
+
+    /** True when this identifier is a use of the given declaration's binding.
+     *  Without a checker answer the callers stay conservative (reject). */
+    private rustIdentifierRefersToDeclaration(node: ts.Identifier, declaration: ts.VariableDeclaration): boolean {
+        const symbol = this.rustSymbolOf(node);
+        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
+        if (symbol === undefined || declarationSymbol === undefined) return false;
+        return symbol === declarationSymbol;
+    }
+
+    /** Census of the current source file's table, for reports and tests. */
+    rustDeclaredDictLocalCensus(): { declarators: number, dict: number, alwaysDict: number, kindUnstable: number, retypeEligible: number } {
+        let declarators = 0, dict = 0, alwaysDict = 0, kindUnstable = 0, retypeEligible = 0;
+        for (const entries of this.rustDeclaredDictLocals().values()) {
+            for (const entry of entries) {
+                declarators++;
+                if (entry.alwaysDict) alwaysDict++;
+                if (entry.alwaysDict && entry.stable) dict++;
+                if (entry.alwaysDict && !entry.stable) kindUnstable++;
+                // every later use is an element access or a kind-preserving
+                // mutator -> the only uses a native declaration has to serve.
+                if (entry.alwaysDict && entry.stable && entry.uses.other === 0) retypeEligible++;
+            }
+        }
+        return { declarators, dict, alwaysDict, kindUnstable, retypeEligible };
+    }
+
+    private collectRustDeclaredDictLocals(src: ts.SourceFile): Map<string, RustDeclaredDictLocalEntry[]> {
+        const candidates: { declaration: ts.VariableDeclaration, name: string, source: string, defaultNode: ts.Node | undefined }[] = [];
+        const collect = (node) => {
+            if (ts.isVariableDeclaration(node) && node.initializer !== undefined && node.name.kind === SyntaxKind.Identifier) {
+                const info = this.rustDictInitializerInfo(node.initializer);
+                if (info !== undefined) {
+                    candidates.push({ declaration: node, name: String(node.name.escapedText), source: info.source, defaultNode: info.defaultNode });
+                }
+            }
+            ts.forEachChild(node, collect);
+        };
+        ts.forEachChild(src, collect);
+        candidates.sort((a, b) => a.declaration.getStart() - b.declaration.getStart());
+        const table = new Map<string, RustDeclaredDictLocalEntry[]>();
+        for (const candidate of candidates) {
+            const declaration = candidate.declaration;
+            const start = declaration.getStart();
+            const alwaysDict = this.rustDictProvenExpression(candidate.defaultNode, table, start);
+            const scan = this.rustDictLocalWriteScan(declaration, candidate.name, table);
+            const entries = table.get(candidate.name) ?? [];
+            entries.push({
+                kind: RUST_DECLARED_DICT_LOCALS.DICT,
+                name: candidate.name,
+                source: candidate.source,
+                alwaysDict,
+                stable: scan.stable,
+                uses: scan.uses,
+                declaration,
+                start,
+            });
+            table.set(candidate.name, entries);
+        }
+        return table;
+    }
+
+    /** The Dict-proven initialiser shape of a declaration, or undefined. */
+    private rustDictInitializerInfo(node: ts.Node): { source: string, defaultNode: ts.Node | undefined } | undefined {
+        if (ts.isObjectLiteralExpression(node)) {
+            return { source: 'value_map', defaultNode: node };
+        }
+        if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
+            return this.rustDictInitializerInfo(node.expression);
+        }
+        if (!ts.isCallExpression(node)) return undefined;
+        const callee = this.rustSafeDictCallee(node);
+        if (callee === undefined) return undefined;
+        return { source: callee, defaultNode: node.arguments[RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES[callee]] };
+    }
+
+    /** Printed `safe_dict*` callee name of `self.<name>(..)`, or undefined. */
+    private rustSafeDictCallee(node: ts.CallExpression): string | undefined {
+        const expression = node.expression;
+        if (!ts.isPropertyAccessExpression(expression) || expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const printed = this.toSnakeCaseName(expression.name.text);
+        return RUST_DECLARED_DICT_LOCALS.SAFE_CALLEES[printed] === undefined ? undefined : printed;
+    }
+
+    /** True when the expression can only be a Dict at run time: an object
+     *  literal, a `safe_dict*` call with a Dict-proven default, an element of a
+     *  one-element literal default, or an already-proven local. */
+    private rustDictProvenExpression(node: ts.Node | undefined, table: Map<string, RustDeclaredDictLocalEntry[]>, useStart: number): boolean {
+        if (node === undefined) return false;
+        if (ts.isObjectLiteralExpression(node)) return true;
+        if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
+            return this.rustDictProvenExpression(node.expression, table, useStart);
+        }
+        if (ts.isArrayLiteralExpression(node)) {
+            return node.elements.length === 1 && this.rustDictProvenExpression(node.elements[0], table, useStart);
+        }
+        if (ts.isIdentifier(node)) {
+            const entries = table.get(node.text) ?? [];
+            return entries.some((entry) => {
+                if (!entry.alwaysDict || entry.start > useStart) return false;
+                const scope = this.rustEnclosingFunction(entry.declaration);
+                return scope === undefined || this.isNodeInsideNode(node, scope);
+            });
+        }
+        const info = this.rustDictInitializerInfo(node);
+        return info !== undefined && this.rustDictProvenExpression(info.defaultNode, table, useStart);
+    }
+
+    /** D2 scan over the enclosing function: an assignment of a non-Dict-proven
+     *  value would let the kind change. Every other write path the printer emits
+     *  for a local is kind-preserving (`x['k'] = v` -> `add_element_to_object`,
+     *  `x.push(v)` -> `append_to_array`, `delete x[k]` -> `remove`, nested
+     *  `x['a']['b'] = v` -> `get_value_mut`/`set_value`). A *different* binding of
+     *  the same name (sibling block, parameter) is not this local and does not
+     *  count; when the checker cannot separate the two bindings the scan stays
+     *  conservative and rejects. */
+    private rustDictLocalWriteScan(declaration: ts.VariableDeclaration, name: string, table: Map<string, RustDeclaredDictLocalEntry[]>): { stable: boolean, uses: { elementAccess: number, mutHelper: number, other: number } } {
+        const uses = { elementAccess: 0, mutHelper: 0, other: 0 };
+        let stable = true;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) return { stable, uses };
+        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
+        const visit = (node) => {
+            if (!stable) return;
+            if (node !== declaration && this.rustBindsName(node, name)) {
+                const otherSymbol = this.rustSymbolOf((node as any).name);
+                if (declarationSymbol === undefined || otherSymbol === undefined || otherSymbol === declarationSymbol) {
+                    stable = false; // same binding, or the checker cannot tell them apart
+                    return;
+                }
+            }
+            if (node.kind === SyntaxKind.Identifier && node.escapedText === name && node !== declaration.name &&
+                this.rustIdentifierRefersToDeclaration(node, declaration)) {
+                this.rustDictLocalClassifyUse(node, uses);
+            }
+            if (ts.isBinaryExpression(node) && rustIsAssignmentOperator(node.operatorToken.kind) &&
+                this.rustAssignmentWritesWholeLocal(node.left, declaration) &&
+                !this.rustDictProvenExpression(node.right, table, declaration.getStart())) {
+                stable = false; // the local itself is reassigned a non-Dict value
+                return;
+            }
+            // `for (x of list)` / `for (x in obj)` rebind an existing local.
+            if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+                this.rustAssignmentWritesWholeLocal(node.initializer, declaration)) {
+                stable = false;
+                return;
+            }
+            ts.forEachChild(node, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return { stable, uses };
+    }
+
+    /** True when this assignment target writes the local ITSELF (`x = ..`,
+     *  `[x, y] = ..`, `({x} = ..)`), as opposed to a write *into* it
+     *  (`x['k'] = ..`, kind-preserving). */
+    private rustAssignmentWritesWholeLocal(left: ts.Node, declaration: ts.VariableDeclaration): boolean {
+        if (ts.isIdentifier(left)) {
+            return this.rustIdentifierRefersToDeclaration(left, declaration);
+        }
+        if (ts.isParenthesizedExpression(left)) {
+            return this.rustAssignmentWritesWholeLocal(left.expression, declaration);
+        }
+        if (ts.isArrayLiteralExpression(left)) {
+            return left.elements.some((element) => this.rustAssignmentWritesWholeLocal(element, declaration));
+        }
+        if (ts.isObjectLiteralExpression(left)) {
+            return left.properties.some((property) => {
+                if (!ts.isShorthandPropertyAssignment(property)) return false;
+                return this.rustAssignmentWritesWholeLocal(property.name, declaration);
+            });
+        }
+        return false;
+    }
+
+    /** One use of a dict-proven local: an element-access chain (`x['k']`, also
+     *  the `x['k'] = v` write), a kind-preserving mutator (`x.push(v)`,
+     *  `delete x[k]`), or something that would need the local to still be a
+     *  `Value`. */
+    private rustDictLocalClassifyUse(node: ts.Node, uses: { elementAccess: number, mutHelper: number, other: number }): void {
+        let current: any = node;
+        const parent: any = current.parent;
+        if (parent !== undefined && (ts.isElementAccessExpression(parent) || ts.isPropertyAccessExpression(parent)) && parent.expression === current) {
+            current = parent;
+            while (current.parent !== undefined &&
+                (ts.isElementAccessExpression(current.parent) || ts.isPropertyAccessExpression(current.parent)) &&
+                current.parent.expression === current) {
+                current = current.parent;
+            }
+            if (ts.isElementAccessExpression(current)) {
+                uses.elementAccess++;
+                return;
+            }
+            uses.other++; // `x.field` on a dict value
+            return;
+        }
+        if (parent !== undefined && ts.isCallExpression(parent) && ts.isPropertyAccessExpression(parent.expression) &&
+            parent.expression.expression === current && parent.expression.name.text === 'push') {
+            uses.mutHelper++;
+            return;
+        }
+        if (parent !== undefined && ts.isDeleteExpression(parent)) {
+            uses.mutHelper++;
+            return;
+        }
+        uses.other++;
     }
 
 
@@ -1270,6 +2639,24 @@ export class RustTranspiler extends BaseTranspiler {
         const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
         if (outOfOrder) return outOfOrder;
 
+        // `parseInt`/`parseFloat` on a checker-proven string: native `str::parse`
+        // instead of the runtime helper the ccxt post-pass would emit.
+        const nativeParse = this.printNativeParseCall(node);
+        if (nativeParse !== undefined) return nativeParse;
+
+        // `this.json(v)`: `Exchange::json` is exactly the free `json_stringify`, which takes the value
+        // by reference, so the call sites' `.clone()` is dropped. `self.<field>` args keep the method:
+        // the post-pass hoisting `self.<method>(…)` out of `&mut self` args ignores a `&self.<field>`.
+        if (expression.kind === SyntaxKind.PropertyAccessExpression &&
+            expression.expression.kind === SyntaxKind.ThisKeyword &&
+            expression.name.escapedText === 'json' && node.arguments.length === 1) {
+            const argText = this.printNode(node.arguments[0], 0).trim();
+            if (!argText.includes('self.')) {
+                const withoutClone = argText.replace(/\.clone\(\)$/, '');
+                return `json_stringify(${this.ensureRef(withoutClone)})`;
+            }
+        }
+
         return super.printCallExpression(node, identation);
     }
 
@@ -1277,13 +2664,91 @@ export class RustTranspiler extends BaseTranspiler {
         return 'self';
     }
 
+    // Native string args to the runtime error constructors, audited against
+    // rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl ToErrorMessage` (`&str`/`String`/`Value`
+    // yield the same string) and `create_error`'s class name is `&str` (bare literal only).
+    private static readonly RUST_ERROR_CONSTRUCTOR_ARGS: Record<string, ('msg' | 'str')[]> = {
+        exchange_error: ['msg'],
+        authentication_error: ['msg'],
+        permission_denied: ['msg'],
+        account_not_enabled: ['msg'],
+        account_suspended: ['msg'],
+        arguments_required: ['msg'],
+        bad_request: ['msg'],
+        bad_symbol: ['msg'],
+        operation_rejected: ['msg'],
+        no_change: ['msg'],
+        margin_mode_already_set: ['msg'],
+        market_closed: ['msg'],
+        manual_interaction_needed: ['msg'],
+        restricted_location: ['msg'],
+        insufficient_funds: ['msg'],
+        invalid_address: ['msg'],
+        address_pending: ['msg'],
+        invalid_order: ['msg'],
+        order_not_found: ['msg'],
+        order_not_cached: ['msg'],
+        order_immediately_fillable: ['msg'],
+        order_not_fillable: ['msg'],
+        duplicate_order_id: ['msg'],
+        contract_unavailable: ['msg'],
+        not_supported: ['msg'],
+        invalid_proxy_settings: ['msg'],
+        exchange_closed_by_user: ['msg'],
+        operation_failed: ['msg'],
+        network_error: ['msg'],
+        d_do_s_protection: ['msg'],
+        rate_limit_exceeded: ['msg'],
+        exchange_not_available: ['msg'],
+        on_maintenance: ['msg'],
+        invalid_nonce: ['msg'],
+        checksum_error: ['msg'],
+        request_timeout: ['msg'],
+        bad_response: ['msg'],
+        null_response: ['msg'],
+        cancel_pending: ['msg'],
+        unsubscribe_error: ['msg'],
+        create_error: ['str', 'msg'],
+    };
+
+    // A string literal prints as the bare `"lit"` (`&str` — no String
+    // allocation); a checker-proven string drops the redundant `Value::Str` box.
+    printErrorConstructorArg(name: string, index: number, node, identation: number): string {
+        const kind = (RustTranspiler as any).RUST_ERROR_CONSTRUCTOR_ARGS[name]?.[index];
+        if (kind === undefined) {
+            return this.printNode(node, identation);
+        }
+        if (ts.isStringLiteral(node) && !(node.text in this.StringLiteralReplacements)) {
+            return this.quotedStringLiteral(node.text);
+        }
+        const printed = this.printNode(node, identation).trim();
+        if (kind !== 'msg' || !this.rustTypeIsString(node)) {
+            return printed;
+        }
+        const payload = this.peelValueStrBox(printed)
+            ?? this.peelValueStrBox(this.stripOuterParens(printed))
+            ?? printed;
+        // The `Value::Str(..)` box carries the `Cow` conversion; the error
+        // ctors take an `impl ToErrorMessage` (String / &str / Value).
+        return payload.replace(/\.into\(\)$/, '');
+    }
+
+    // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
+    // post-pass applies to `X::new(..)` calls.
+    rustErrorConstructorName(className: string): string {
+        return className
+            .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+            .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+            .toLowerCase();
+    }
+
     printNewExpression(node, identation) {
         let expression = node.expression?.escapedText;
         expression = expression ? expression : this.printNode(node.expression);
-        const args = node.arguments.map(a => this.printNode(a, identation)).join(', ');
         // Plain `new Error(msg)` becomes just the message Value so it can be
         // formatted by `panic!("{:?}", ...)` in printThrowStatement.
         if (expression === 'Error') {
+            const args = node.arguments.map(a => this.printNode(a, identation)).join(', ');
             return args || 'Value::Null';
         }
         // CCXT exception classes end in "Error", "Required", "Found", etc. and
@@ -1291,12 +2756,16 @@ export class RustTranspiler extends BaseTranspiler {
         // error constructors (snake_case fn calls).
         const errorClassPattern = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Found|Failed|Rejected|Available|Exceeded|Limit|Pending|Funds|Address|Order|Cached|Fillable|Closed|Maintenance|Nonce|Timeout|Response|Settings|User|Supported|Implemented|Denied|Enabled|Suspended|Symbol|Change|Unavailable|Proxy|Set|Needed))$/;
         if (typeof expression === 'string' && errorClassPattern.test(expression)) {
-            const snake = expression
-                .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-                .replace(/([a-z\d])([A-Z])/g, '$1_$2')
-                .toLowerCase();
+            const snake = this.rustErrorConstructorName(expression);
+            const args = node.arguments.map((a, index) => this.printErrorConstructorArg(snake, index, a, identation)).join(', ');
             return `crate::exchange_errors::${snake}(${args})`;
         }
+        // Classes the ccxt post-pass routes to the same constructors — their
+        // message argument is audited too; every other `X::new(..)` prints as
+        // before.
+        const args = typeof expression === 'string'
+            ? node.arguments.map((a, index) => this.printErrorConstructorArg(this.rustErrorConstructorName(expression), index, a, identation)).join(', ')
+            : node.arguments.map(a => this.printNode(a, identation)).join(', ');
         return `${expression}::new(${args})`;
     }
 
@@ -1322,7 +2791,7 @@ export class RustTranspiler extends BaseTranspiler {
         // Typed field on a checker-proven map local (`x.field`) reads natively;
         // the ccxt post-pass otherwise rewrites it to `get_value(&x, "field")`.
         if (ts.isIdentifier(node.name) && this.isShallowValueReceiver(node.expression) &&
-            this.isNativeAccessPositionSafe(node)) {
+            this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node)) {
             const native = this.printNativeMapAccess(leftExpr, node.expression, String(rightSide));
             if (native) return native;
         }
@@ -1344,6 +2813,13 @@ export class RustTranspiler extends BaseTranspiler {
         'send_evm_transaction',
     ]);
 
+    /** Global parse helpers that go native (`str::parse`) on a proven string arg,
+     *  keyed to the rust integer/float type their runtime helper parses into. */
+    static readonly RUST_PARSE_HELPERS: Record<string, string> = {
+        parseInt: 'i64',
+        parseFloat: 'f64',
+    };
+
     toSnakeCaseName(name: string): string {
         return name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2').replace(/([a-z\d])([A-Z])/g, '$1_$2').toLowerCase();
     }
@@ -1354,11 +2830,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     getCheckedTypeOf(node): ts.Type | undefined {
-        try {
-            return this.getChecker().getTypeAtLocation(node);
-        } catch (e) {
-            return undefined;
-        }
+        return this.checkerOrUndefined()?.getTypeAtLocation(node);
     }
 
     typeSymbolOf(type: ts.Type): ts.Symbol | undefined {
@@ -1407,6 +2879,16 @@ export class RustTranspiler extends BaseTranspiler {
     /** True only for object types the rust port represents as `Value::Dict`
      *  (plain interfaces / index-signature / literal types — never classes). */
     isProvenMapType(type: ts.Type): boolean {
+        if (type === undefined) return false;
+        if (type.flags & ts.TypeFlags.Union) {
+            // `Market` / `Currency` / `Order | undefined` style aliases: the runtime value is the dict (or
+            // Null), so a map receiver is proven once every value-carrying member is a proven map. An
+            // all-dict union without a nullish member stays on the strict path (a class may hide behind it).
+            const parts: ts.Type[] = (type as any).types ?? [];
+            const nullish = parts.filter((p) => this.rustTypeIsNullish(p));
+            const valueParts = parts.filter((p) => !this.rustTypeIsNullish(p));
+            return nullish.length > 0 && valueParts.length > 0 && valueParts.every((p) => this.isProvenMapType(p));
+        }
         if (!(type.flags & ts.TypeFlags.Object)) return false;
         if (this.isProvenListType(type)) return false;
         if (this.hasCallableShape(type)) return false;
@@ -1417,6 +2899,14 @@ export class RustTranspiler extends BaseTranspiler {
         return hasStringIndex || this.typeSymbolOf(type) !== undefined;
     }
 
+    /** `undefined` / `null` / `void` / `never` — a union member that carries no
+     *  runtime value; `Value::Null` is the only box these ever get. */
+    rustTypeIsNullish(type: ts.Type): boolean {
+        return type !== undefined && (type.flags &
+            (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void |
+                ts.TypeFlags.Never)) !== 0;
+    }
+
     isProvenMapExpression(node: ts.Node): boolean {
         const type = this.getCheckedTypeOf(node);
         return type !== undefined && this.isProvenMapType(type);
@@ -1425,6 +2915,91 @@ export class RustTranspiler extends BaseTranspiler {
     isProvenListExpression(node: ts.Node): boolean {
         const type = this.getCheckedTypeOf(node);
         return type !== undefined && this.isProvenListType(type);
+    }
+
+    /** RHS of a generator destructure that provably holds a `Value::Arr`: the
+     *  checker-proven list, or a call whose callee returns an array literal on
+     *  every path. */
+    rustNativeListSource(node: ts.Node): boolean {
+        return this.isProvenListExpression(node) || this.rustCallReturnsProvenList(node);
+    }
+
+    /** `x.split(sep)` → the runtime `split`, which yields an array on every
+     *  path (a non-string receiver gives the empty array, never a dict). */
+    rustCallPrintsRuntimeSplit(node: ts.Node): boolean {
+        if (!ts.isCallExpression(node) || node.arguments.length === 0) return false;
+        const expression: any = node.expression;
+        if (!ts.isPropertyAccessExpression(expression)) return false;
+        if (expression.expression.kind === SyntaxKind.ThisKeyword) return false;
+        return String(expression.name.escapedText) === 'split';
+    }
+
+    /** True when the call's value is always a runtime array: the `handle*AndParams`
+     *  family and its exchange overrides declare `any`, so the checker cannot
+     *  prove the `[T, Dict]` tuple the body always builds — walk the resolved
+     *  callee instead. */
+    rustCallReturnsProvenList(node: ts.Node): boolean {
+        if (!ts.isCallExpression(node)) return false;
+        return this.rustProvenListCall(node, new Set());
+    }
+
+    private rustProvenListCall(node: ts.Node, stack: Set<ts.Node>): boolean {
+        if (this.rustCallPrintsRuntimeSplit(node)) return true;
+        const declaration = this.rustCalleeDeclaration(node);
+        if (declaration === undefined) return false;
+        return this.rustFunctionReturnsArrayLiteral(declaration, stack);
+    }
+
+    /** Implementation of a `x.y(..)` call, when the checker resolves one. */
+    private rustCalleeDeclaration(node: ts.Node): ts.Node | undefined {
+        if (!ts.isCallExpression(node)) return undefined;
+        if (!ts.isPropertyAccessExpression((node as any).expression)) return undefined;
+        try {
+            const signature: any = (this.getChecker() as any).getResolvedSignature(node);
+            return signature?.declaration ?? undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /** Every `return` in the function's own body builds an array literal, or
+     *  delegates to a call that does. `throw` and fall-through (the printer's
+     *  `Value::Null`) read the same through both forms. */
+    private rustFunctionReturnsArrayLiteral(declaration: ts.Node, stack: Set<ts.Node>): boolean {
+        if (stack.has(declaration)) return false;
+        const body: any = (declaration as any).body;
+        if (body === undefined || !ts.isBlock(body)) return false;
+        stack.add(declaration);
+        try {
+            let returns = 0;
+            let all = true;
+            const visit = (node: ts.Node) => {
+                if (!all) return;
+                if (node !== body && ts.isFunctionLike(node)) return; // nested closure
+                if (ts.isReturnStatement(node)) {
+                    returns++;
+                    const expression: any = node.expression;
+                    if (expression === undefined || !ts.isArrayLiteralExpression(expression)) {
+                        if (expression !== undefined && ts.isCallExpression(expression) &&
+                            this.rustProvenListCall(expression, stack)) {
+                            return;
+                        }
+                        if (expression !== undefined && ts.isParenthesizedExpression(expression) &&
+                            ts.isArrayLiteralExpression(expression.expression)) {
+                            return;
+                        }
+                        all = false;
+                        return;
+                    }
+                    return;
+                }
+                ts.forEachChild(node, visit);
+            };
+            ts.forEachChild(body, visit);
+            return all && returns > 0;
+        } finally {
+            stack.delete(declaration);
+        }
     }
 
     /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
@@ -1443,13 +3018,332 @@ export class RustTranspiler extends BaseTranspiler {
             if (!this.isProvenListExpression(receiverNode)) return undefined;
             return this.printNativeListIndex(receiverText, index);
         }
-        return undefined;
+        const dictRead = this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode);
+        if (dictRead !== undefined) return dictRead;
+        // A non-literal index (the `for (let i = 0; …)` counter) into a
+        // checker-proven list reads natively too.
+        return this.printNativeDynamicListIndex(receiverText, receiverNode, keyNode);
+    }
+
+    /** `get_value(&X, &i)` for a checker-proven list `X` and a dynamic integer
+     *  index local `i`: the runtime's own array branch, spelled natively.
+     *  `get_value` reaches its array arm for an `Arr` receiver and its default
+     *  (`Value::Null`) otherwise, so the emitted match reproduces both — an
+     *  `Int` index by value (a negative or out-of-range index misses), a
+     *  numeric string by parse, anything else a miss. */
+    printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
+        if (!this.isProvenListExpression(receiverNode)) return undefined;
+        if (!this.isRustValueIndexKey(keyNode)) return undefined;
+        // The ccxt `writeBackIndexedMutations` pass matches the `let x = get_value(&C, &K)` text to
+        // write a mutated `x` back into `C[K]`; native text is invisible to it, so a bind the next
+        // statement mutates keeps the helper.
+        if (this.isWriteBackBindRead(keyNode.parent)) return undefined;
+        const keyText = this.printNode(keyNode, 0).trim();
+        // A text that already carries the post-pass `&` is not a place.
+        if (!keyText || keyText.startsWith('&')) return undefined;
+        return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** True when this read initialises a local that the very next statement in
+     *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
+     *  `x.push(v)` -> `append_to_array(&mut x…)`). */
+    isWriteBackBindRead(read: ts.Node): boolean {
+        const declaration: any = read === undefined ? undefined : read.parent;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.initializer !== read) return false;
+        if (!ts.isIdentifier(declaration.name)) return false;
+        const name = String(declaration.name.escapedText);
+        let statement: any = declaration;
+        while (statement !== undefined && !ts.isStatement(statement)) statement = statement.parent;
+        const siblings: any[] = statement?.parent?.statements ?? [];
+        const at = siblings.indexOf(statement);
+        if (at < 0 || at + 1 >= siblings.length) return false;
+        return this.rustStatementMutatesLocal(siblings[at + 1], name);
+    }
+
+    /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
+     *  `x.push(v)`). */
+    rustStatementMutatesLocal(node: ts.Node, name: string): boolean {
+        let mutated = false;
+        const visit = (n: ts.Node) => {
+            if (mutated) return;
+            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) &&
+                this.rootPlaceText(n.left) === name) {
+                mutated = true;
+                return;
+            }
+            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
+                n.expression.name.text === 'push' && this.rootPlaceText(n.expression.expression) === name) {
+                mutated = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(node, visit);
+        return mutated;
+    }
+
+    /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric
+     *  literal>` declaration of the same function (the C-style loop counter).
+     *  Any other shape keeps the helper — the printed local could be a native
+     *  `i64`/`f64`, which the `Value` match would not compile against. */
+    isRustValueIndexKey(node: ts.Node): boolean {
+        let current: any = node;
+        while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current)) {
+            current = current.expression;
+        }
+        if (!ts.isIdentifier(current)) return false;
+        const type = this.getCheckedTypeOf(current);
+        if (type === undefined || !(type.flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral))) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(current);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        let initializer: any = declaration.initializer;
+        while (ts.isParenthesizedExpression(initializer) || ts.isAsExpression(initializer) || ts.isNonNullExpression(initializer)) {
+            initializer = initializer.expression;
+        }
+        return ts.isNumericLiteral(initializer);
+    }
+
+    // Typed-parameter dict reads: a checker-proven plain dict param (`Dict`, `Dictionary<T>`,
+    // `Market`-style alias) holds the dict or `Value::Null`, so `get_value`'s marker routes cannot
+    // fire and the read is `m.get(k)`. The key must be a proven `Str` box so `.as_str()` reproduces it.
+
+    /** The parameter declaration behind a receiver when its *annotation* proves
+     *  a plain dict; undefined otherwise (no proof → keep the helper). */
+    rustProvenDictParameter(node: ts.Node): ts.ParameterDeclaration | undefined {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isParameter(declaration)) return undefined;
+        if (declaration.type === undefined) return undefined;
+        const type = this.getCheckedTypeOf(declaration.type);
+        if (type === undefined || !this.isProvenMapType(type)) return undefined;
+        // D2: a later write can change the kind.
+        return this.rustLocalIsReassigned(declaration, String((declaration.name as any).escapedText)) ? undefined : declaration;
+    }
+
+    /** `Str` (`string | undefined`) — the key box is `Value::Str` or Null. */
+    rustKeyIsProvenString(node: ts.Node): boolean {
+        const type = this.getCheckedTypeOf(node);
+        if (type === undefined) return false;
+        const parts: ts.Type[] = (type.flags & ts.TypeFlags.Union) ? ((type as any).types ?? []) : [type];
+        let strings = 0;
+        for (const part of parts) {
+            if (part.flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) {
+                strings++;
+                continue;
+            }
+            if (this.rustTypeIsNullish(part)) continue;
+            return false;
+        }
+        return strings > 0;
+    }
+
+    /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
+    printNativeDynamicMapAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
+        if (this.rustProvenDictParameter(receiverNode) === undefined) return undefined;
+        if (!this.rustKeyIsProvenString(keyNode)) return undefined;
+        const keyText = this.printNode(keyNode, 0).trim();
+        // A plain place keeps the borrow local; a call/temporary text does not.
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
+        if (this.rustNodeIsKeyUnsafePlace(keyText)) return undefined;
+        return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** Keys `get_value` serves from the book store / cache bucket / live
+     *  snapshot instead of the dict itself — a dynamic read cannot prove the
+     *  key away, so a place named after one stays boxed. */
+    rustNodeIsKeyUnsafePlace(keyText: string): boolean {
+        return RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText);
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined {
-        if (!this.isProvenMapExpression(receiverNode)) return undefined;
+        if (!this.isProvenMapExpression(receiverNode)) {
+            // Declared-Dict locals read natively too (see the classifier below).
+            if (!this.rustIsDeclaredDictLocal(receiverNode)) return undefined;
+            if (RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText)) return undefined;
+            if (keyText === '' || /^\d+$/.test(keyText)) return undefined;
+        }
         const key = this.escapeRustStringLiteral(keyText);
         return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
+    }
+
+    // Declared-Dict locals: the checker types many dict-holding locals `any`, losing the proof
+    // above, but the declaration still proves a plain dict (object literal, `getArg(.., {})` bag,
+    // `this.safeDict`, `extend` onto those, or an element of a map-typed container) at every read.
+
+    /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
+     *  live `__live_id` snapshot instead of from the dict itself: those routes
+     *  are invisible to a plain map read, so they keep the helper. */
+    static readonly RUST_DICT_LOCAL_UNSAFE_KEYS = new Set([
+        'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache',
+        'hashmap', 'subscriptions', 'futures',
+    ]);
+
+    rustDeclarationOfIdentifier(node: ts.Node): ts.Declaration | undefined {
+        if (!ts.isIdentifier(node)) return undefined;
+        try {
+            const symbol: any = this.getChecker().getSymbolAtLocation(node);
+            return symbol?.valueDeclaration;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /** Initializer shapes that construct or return a plain dict. */
+    rustDictProducingInitializer(node: ts.Node | undefined, seen: Set<ts.Node>): boolean {
+        if (node === undefined || node === null || seen.has(node)) return false;
+        seen.add(node);
+        if (ts.isObjectLiteralExpression(node)) return true;
+        if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+            ts.isNonNullExpression(node) || ts.isTypeAssertionExpression(node)) {
+            return this.rustDictProducingInitializer((node as any).expression, seen);
+        }
+        if (ts.isIdentifier(node)) {
+            const declaration: any = this.rustDeclarationOfIdentifier(node);
+            if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return false;
+            return this.rustDictProducingInitializer(declaration.initializer, seen);
+        }
+        if (ts.isElementAccessExpression(node)) {
+            // `this.markets[symbol]`: the container's declared element type is
+            // what the rust port stores there.
+            const containerType = this.getCheckedTypeOf((node as any).expression);
+            if (containerType === undefined) return false;
+            const elementType = this.getChecker().getIndexTypeOfType(containerType, ts.IndexKind.String);
+            return elementType !== undefined && this.isProvenMapType(elementType);
+        }
+        if (!ts.isCallExpression(node)) return false;
+        const callee: any = (node as any).expression;
+        if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = String(callee.name.escapedText);
+        // Readers whose rust counterpart returns the stored dict itself.
+        if (name === 'safeDict' || name === 'safeMarketStructure' || name === 'market' ||
+            name === 'currency' || name === 'safeMarket' || name === 'safeCurrency') {
+            return true;
+        }
+        // `this.client(url)` returns the WS client handle Dict the runtime keeps
+        // (`Map{url, subscriptions, futures}`), never a class instance.
+        if (name === 'client') {
+            return true;
+        }
+        // `extend`/`deepExtend` merge onto their first argument.
+        if (name === 'extend' || name === 'deepExtend') {
+            return this.rustDictProducingInitializer((node as any).arguments[0], seen);
+        }
+        return false;
+    }
+
+    /** D2: the proof holds only while nothing re-assigns the local. */
+    rustLocalIsReassigned(declaration: ts.Declaration, name: string): boolean {
+        let scope: ts.Node | undefined = declaration;
+        while (scope !== undefined && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) {
+            scope = scope.parent;
+        }
+        if (scope === undefined) return true;
+        let reassigned = false;
+        const visit = (node: ts.Node) => {
+            if (reassigned) return;
+            if (ts.isBinaryExpression(node)) {
+                const operator = node.operatorToken.kind;
+                if (operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment &&
+                    ts.isIdentifier(node.left) && node.left.text === name) {
+                    reassigned = true;
+                    return;
+                }
+            }
+            ts.forEachChild(node, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return reassigned;
+    }
+
+    /** True when the receiver is a local declared as (or provably holding) a
+     *  plain dict — `get_value(_k)` and this read agree on every key the
+     *  runtime does not route elsewhere. */
+    rustIsDeclaredDictLocal(node: ts.Node): boolean {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined) return false;
+        const name = declaration.name?.text;
+        if (typeof name !== 'string') return false;
+        if (ts.isParameter(declaration)) {
+            // A `Client`-typed parameter is the WS handle passed to `handle_message`/`handle*`
+            // (`ws_client::client_value`): a `Value::Dict{url, subscriptions, futures}` in the port, not
+            // the TS class. Its fields are plain map reads.
+            if (!this.rustParameterIsClientHandle(declaration)) {
+                const fallback = declaration.initializer;
+                if (fallback === undefined || !this.rustDictProducingInitializer(fallback, new Set())) return false;
+            }
+        } else if (ts.isVariableDeclaration(declaration)) {
+            const initializer = declaration.initializer;
+            if (initializer === undefined) return false;
+            if (!this.rustDictProducingInitializer(initializer, new Set())) return false;
+        } else {
+            return false;
+        }
+        return !this.rustLocalIsReassigned(declaration, name);
+    }
+
+    /** A parameter declared as the ws `Client` class (or a union with it). The
+     *  class is the default export of `ts/src/base/ws/Client.ts`, so its type
+     *  symbol is named `default`; the declaration itself carries the name. */
+    rustParameterIsClientHandle(declaration: ts.ParameterDeclaration): boolean {
+        const named = (type: ts.Type | undefined): boolean => {
+            if (type === undefined) return false;
+            const symbol: any = this.typeSymbolOf(type);
+            const declarations: any[] = symbol?.declarations ?? [];
+            return declarations.some((d) => {
+                if (!ts.isClassDeclaration(d) || d.name === undefined || d.name.text !== 'Client') return false;
+                const file = String(d.getSourceFile().fileName).replace(/\\/g, '/');
+                return file.endsWith('/ws/Client.ts') || file.endsWith('/ws/Client.d.ts');
+            });
+        };
+        const type = this.getCheckedTypeOf(declaration.name);
+        if (named(type)) return true;
+        return ((type as any)?.types ?? []).some((member: ts.Type) => named(member));
+    }
+
+    /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
+     *  `str::parse` would; undefined when the fold is not obviously exact. */
+    foldParsedStringLiteral(name: string, text: string): string | undefined {
+        const t = text.trim();
+        if (name === 'parseInt') {
+            if (!/^[+-]?[0-9]+$/.test(t)) return undefined;
+            const value = BigInt(t.replace(/^\+/, '') || '0');
+            if (value < -9223372036854775808n || value > 9223372036854775807n) return undefined;
+            return `Value::Int(${value.toString()})`;
+        }
+        if (!/^[+-]?[0-9]+(?:\.[0-9]+)?$/.test(t)) return undefined;
+        const value = Number(t);
+        // `String(value)` must re-read as a rust float literal holding the same f64;
+        // `-0` prints as `0`, which would drop the sign the runtime keeps.
+        if (!Number.isFinite(value) || Object.is(value, -0)) return undefined;
+        if (!/^-?[0-9]+(?:\.[0-9]+)?$/.test(String(value))) return undefined;
+        return `Value::Float(${String(value)})`;
+    }
+
+    /** `parseInt(x)` / `parseFloat(x)` with a single checker-proven string argument
+     *  become the runtime helper's own match with native `str::parse`; every other
+     *  argument shape keeps the helper call the ccxt post-pass rewrites. */
+    printNativeParseCall(node: ts.CallExpression): string | undefined {
+        const callee = node.expression;
+        if (!ts.isIdentifier(callee)) return undefined;
+        const name = String(callee.escapedText);
+        const helper = RustTranspiler.RUST_PARSE_HELPERS[name];
+        if (helper === undefined) return undefined;
+        if (node.arguments.length !== 1) return undefined; // radix / unknown arity
+        const arg = node.arguments[0];
+        const type = this.getCheckedTypeOf(arg);
+        if (type === undefined || !this.isStringType(type.flags)) return undefined;
+        if (ts.isStringLiteralLike(arg)) {
+            const folded = this.foldParsedStringLiteral(name, arg.text);
+            if (folded !== undefined) return folded;
+        }
+        const argText = this.printNode(arg, 0).trim();
+        // The post-pass adds the `&`; a text that already carries one is not a place.
+        if (!argText || argText.startsWith('&')) return undefined;
+        if (helper === 'i64') {
+            return `(match &${argText} { Value::Str(__parse_s) => __parse_s.trim().parse::<i64>().map(Value::Int).unwrap_or(Value::Null), Value::Int(__parse_n) => Value::Int(*__parse_n), Value::Float(__parse_f) => Value::Int(*__parse_f as i64), _ => Value::Null })`;
+        }
+        return `(match &${argText} { Value::Str(__parse_s) => __parse_s.trim().parse::<f64>().map(Value::Float).unwrap_or(Value::Null), Value::Float(__parse_f) => Value::Float(*__parse_f), Value::Int(__parse_n) => Value::Float(*__parse_n as f64), _ => Value::Null })`;
     }
 
     isNodeInsideNode(node: ts.Node, container: ts.Node): boolean {
@@ -1516,6 +3410,27 @@ export class RustTranspiler extends BaseTranspiler {
         return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword;
     }
 
+    /** True when this read is the receiver of an element-access chain that is
+     *  written (`x['a'] = v`, `x['a']['b'] = v`, `delete x['a']['b']`), or a
+     *  property write itself (`x.k = v`, `delete x.k`). The ccxt write passes
+     *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
+     *  native read would write into a discarded clone. */
+    isNativeWriteTargetBase(node: ts.Node): boolean {
+        const parent: any = node.parent;
+        if (parent === undefined) return false;
+        if (ts.isBinaryExpression(parent) && parent.left === node && rustIsAssignmentOperator(parent.operatorToken.kind)) return true;
+        if (ts.isDeleteExpression(parent)) return true;
+        if (!ts.isElementAccessExpression(parent) || parent.expression !== node) return false;
+        let current: any = parent;
+        while (current.parent !== undefined && ts.isElementAccessExpression(current.parent) && current.parent.expression === current) {
+            current = current.parent;
+        }
+        const top: any = current.parent;
+        if (top === undefined) return false;
+        if (ts.isDeleteExpression(top)) return true;
+        return ts.isBinaryExpression(top) && top.left === current && rustIsAssignmentOperator(top.operatorToken.kind);
+    }
+
     transformPropertyAcessExpressionIfNeeded(node) {
         const rightSide = node.name.escapedText;
         // Printed here (as before) so the receiver's loop-flag numbering in the
@@ -1552,12 +3467,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (/^\d+$/.test(text) || text === 'hashmap' || text === 'subscriptions' || text === 'futures') {
             return undefined;
         }
-        let type;
-        try {
-            type = this.getChecker().getTypeAtLocation(container);
-        } catch (e) {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
             return undefined;
         }
+        const type = checker.getTypeAtLocation(container);
         if (type !== undefined && ((type as any).objectFlags & ts.ObjectFlags.Class)) {
             return undefined;
         }
@@ -1608,7 +3522,7 @@ export class RustTranspiler extends BaseTranspiler {
 
         // One checker proof per chain: the emitted text replaces `get_value` only
         // when it is legal at the position the whole chain occupies.
-        const nativeAllowed = this.isNativeAccessPositionSafe(node);
+        const nativeAllowed = this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node);
 
         let acc = this.printNode(baseExpr, 0);
         keys.forEach((key, index) => {
@@ -1705,8 +3619,108 @@ export class RustTranspiler extends BaseTranspiler {
       node.operator === SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation);
         }
+        // A call to a hand-written `-> bool` fn is already a Rust bool.
+        if (this.rustCallPrintsBool(node)) {
+            return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+        }
+        // Checker-proved boolean Value (safe_bool / get_value): native matches!.
+        const nativeTruthiness = this.printNativeTruthiness(node);
+        if (nativeTruthiness !== undefined) {
+            return `${this.getIden(identation)}${nativeTruthiness}`;
+        }
+        // B-26: an operand whose printer emission is already a Rust `bool`.
+        const nativeCondition = this.printNativeParenthesizedCondition(node);
+        if (nativeCondition !== undefined && this.rustConditionBoolSlot(node)) {
+            return `${this.getIden(identation)}${nativeCondition}`;
+        }
         const expression = this.printNode(node, 0);
-        return `${this.getIden(identation)}is_true(&${expression})`;
+        const peeled = this.peelValueBoolBox(this.stripOuterParens(expression));
+        if (peeled !== undefined && this.rustConditionBoolSlot(node) &&
+            !this.printedBoolHelperCall(this.stripOuterParens(peeled))) {
+            return `${this.getIden(identation)}(${peeled})`;
+        }
+        return `${this.getIden(identation)}is_true(&${this.printTruthyArgument(expression)})`;
+    }
+
+    // B-26: `is_true(&(…)` on an operand the printer already emits as a native Rust `bool` (payload
+    // compares, `matches!` predicates, `&&`/`||` of those) is the identity (`IsTruthy for bool`);
+    // native text has no helper token, so it is emitted only in a bool slot (`isBareBoolEmissionSafe`).
+
+    /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
+    printNativeParenthesizedCondition(node): string | undefined {
+        const inner = this.unwrapParens(node);
+        if (inner === undefined || inner === node || inner.kind !== SyntaxKind.BinaryExpression) {
+            return undefined;
+        }
+        const op = inner.operatorToken.kind;
+        if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) {
+            // Every operand of a logical already prints a bool; keep the wrapper
+            // when they are all helper-led (the post-passes key on that token).
+            if (!this.hasNativeComparisonOperand(inner.left) && !this.hasNativeComparisonOperand(inner.right)) {
+                return undefined;
+            }
+            return `(${this.printLogicalInBooleanContext(inner)})`;
+        }
+        if (!(RustTranspiler as any).COMPARISON_OPS.has(op)) {
+            return undefined;
+        }
+        // `typeof x === 'string'` prints the same native predicate as `x in obj`.
+        if (inner.left.kind === SyntaxKind.TypeOfExpression) {
+            const native = this.nativeValuePredicateText(inner.right.text, inner.left.expression,
+                this.printNode(inner.left.expression, 0));
+            if (native === undefined) {
+                return undefined;
+            }
+            const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
+            return `(${isDiff ? '!' : ''}${native})`;
+        }
+        if (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken ||
+            op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken) {
+            const native = this.nativeEqualityText(inner);
+            return native === undefined ? undefined : `(${native})`;
+        }
+        const native = this.printNativeOrderedComparison(inner, op, inner.left, inner.right);
+        return native === undefined ? undefined : `(${native})`;
+    }
+
+    // The argument of an `is_true(&…)` sink with the printer's `Value::Bool(…)` box peeled when it
+    // spans the whole argument: `IsTruthy for Value` unboxes `Value::Bool(b)` to `b`, so the bool
+    // prints bare. `is_true` is the one sink taking a native `bool`; the marker stays for post-passes.
+    printTruthyArgument(expression: string): string {
+        const inner = this.peelValueBoolBox(this.stripOuterParens(expression));
+        // parens kept: `is_true(&a == b)` would re-associate the argument.
+        return inner === undefined ? expression : `(${inner})`;
+    }
+
+    // `assert(<cond>, <msgs>)` — the test harness' `assert<T: Truthy>` takes a
+    // native `bool` (`impl Truthy for bool`), so a whole-argument
+    // `Value::Bool(…)` box prints bare there too. The message list is untouched.
+    printAssertCall(node, identation, parsedArgs) {
+        const [first, rest] = this.splitFirstArgument(parsedArgs);
+        const inner = this.peelValueBoolBox(this.stripOuterParens(first));
+        return inner === undefined ? `assert(${parsedArgs})` : `assert((${inner})${rest})`;
+    }
+
+    // Splits an already-printed argument list after its first top-level `,`.
+    splitFirstArgument(parsedArgs: string): [string, string] {
+        let depth = 0;
+        for (let i = 0; i < parsedArgs.length; i++) {
+            const char = parsedArgs[i];
+            if (char === '"') {
+                i++;
+                while (i < parsedArgs.length && parsedArgs[i] !== '"') {
+                    if (parsedArgs[i] === '\\') i++;
+                    i++;
+                }
+                continue;
+            }
+            if (char === '(' || char === '[' || char === '{') depth++;
+            else if (char === ')' || char === ']' || char === '}') depth--;
+            else if (char === ',' && depth === 0) {
+                return [parsedArgs.slice(0, i), parsedArgs.slice(i)];
+            }
+        }
+        return [parsedArgs, ''];
     }
 
     // Bool-position text for a comparison: the native payload compare (already
@@ -1871,7 +3885,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printArrayLiteralExpression(node, identation) {
         const elements = node.elements.map(e => this.printNode(e, 0)).join(', ');
-        return `Value::List(vec![${elements}])`;
+        return `Value::from(vec![${elements}])`;
     }
 
     printDeleteExpression(node, identation) {
@@ -1953,6 +3967,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Built-in method call overrides
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
+        const native = this.nativeValuePredicateText('array', node?.arguments?.[0], parsedArg);
+        if (native !== undefined) {
+            return `Value::Bool(${native})`;
+        }
         return `Value::Bool(is_array(&${parsedArg}))`;
     }
 
@@ -2011,6 +4029,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
+        const native = this.printNativeStringIndexOf(node, name);
+        if (native !== undefined) {
+            return native;
+        }
         return `get_index_of(&${name}, &${parsedArg})`;
     }
 
@@ -2067,6 +4089,10 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        const native = this.printNativeStringSlice(node, name);
+        if (native !== undefined) {
+            return native;
+        }
         const arg2 = parsedArg2 ?? 'Value::Null';
         return `slice(&${name}, &${parsedArg}, &${arg2})`;
     }
