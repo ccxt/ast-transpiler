@@ -232,6 +232,33 @@ class BaseTranspiler {
         return this.context.checker;
     }
 
+    // the checker when a transpilation context is set, undefined otherwise (an in-memory
+    // program without one keeps every helper the checker would have proven away)
+    // true when some node under `scope` (excluding `scope` itself) satisfies `predicate`;
+    // the walk stops at the first hit and does not descend below it
+    hasNodeWhere(scope: ts.Node | undefined, predicate: (n: any) => boolean): boolean {
+        if (scope === undefined) {
+            return false;
+        }
+        let found = false;
+        const visit = (n: any) => {
+            if (found) {
+                return;
+            }
+            if (predicate(n)) {
+                found = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return found;
+    }
+
+    checkerOrUndefined(): ts.TypeChecker | undefined {
+        return this.context?.checker;
+    }
+
     getProgram(): ts.Program {
         if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
         return this.context.program;
@@ -1528,6 +1555,15 @@ class BaseTranspiler {
         return undefined; // stub to override
     }
 
+    // index WRITE (`x["k"] = v`) whose receiver the C# classifier already declared as a
+    // concrete dictionary: the `((IDictionary<string,object>)x)` interface cast the C#
+    // branch below emits only exists because the TS type says nothing about the printed
+    // declaration, so a printer that knows the declared type can drop it. undefined/false
+    // keeps the upstream cast (the untyped emission). See csharpTranspiler.ts.
+    csharpDictionaryIndexWriteNeedsNoCast(node): boolean | undefined {
+        return undefined; // stub to override
+    }
+
     printElementAccessExpression(node, identation) {
         // example x['test']
         const {expression, argumentExpression} = node;
@@ -1578,6 +1614,12 @@ class BaseTranspiler {
                 // to do refactor and move this to the derived classes
                 if (this.id === "C#") {
                     const cast = ts.isStringLiteralLike(argumentExpression) ? "" : '(string)';
+                    // a receiver the C# classifier declared as a concrete dictionary needs no
+                    // interface cast (see csharpDictionaryIndexWriteNeedsNoCast); the key keeps
+                    // its own spelling, so only the receiver's cast is dropped
+                    if (this.csharpDictionaryIndexWriteNeedsNoCast(node)) {
+                        return `${expressionAsString}[${cast}${argumentAsString}]`;
+                    }
                     return `((IDictionary<string,object>)${expressionAsString})[${cast}${argumentAsString}]`;
                 } else if (this.id === "Java") {
                     return `((java.util.HashMap<String, Object>)${expressionAsString}).get(${argumentAsString})`;

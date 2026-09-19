@@ -26,11 +26,11 @@ partial class Test
     {
         d ??= 1;
         Console.WriteLine(a);
-        if (isTrue(!isEqual(c, null)))
+        if ((c != null))
         {
             Console.WriteLine(c);
         }
-        if (isTrue(!isEqual(d, null)))
+        if (!isEqual(d, null))
         {
             Console.WriteLine(d);
         }
@@ -47,8 +47,8 @@ partial class Test
             { "a", this.getValue(5) },
             { "b", this.getValue(this.getValue(this.getValue(2))) },
         };
-        Console.WriteLine(getValue(newObject, "a")); // should print 5
-        Console.WriteLine(getValue(newObject, "b")); // should print 2
+        Console.WriteLine(((IDictionary<string,object>)newObject)["a"]); // should print 5
+        Console.WriteLine(((IDictionary<string,object>)newObject)["b"]); // should print 2
     }
 
     public virtual void test()
@@ -65,7 +65,7 @@ partial class Test
         Console.WriteLine(stringVar); // should print "hello"
         Console.WriteLine(s3); // should print "ab"
         bool x = false;
-        if (isTrue(x))
+        if (x)
         {
             Console.WriteLine("x is true");
         } else
@@ -75,18 +75,18 @@ partial class Test
         var instance = new Second();
         Console.WriteLine(instance.stringifyNumber(4)); // should print 4
         Console.WriteLine(instance.myClassProperty); // should print "classProp"
-        if (isTrue(isEqual(instance.myBoolProp, false)))
+        if (isEqual(instance.myBoolProp, false))
         {
             Console.WriteLine("myBoolProp is false"); // should print "myBoolProp is false"
         }
         object arr = new List<object>() {1, 2, 3, 4};
         Console.WriteLine(getArrayLength(arr)); // should print 4
-        object first = getValue(arr, 0);
+        object first = ((List<object>)arr)[0];
         Console.WriteLine(first); // should print 1
         object dict = new Dictionary<string, object>() {
             { "a", "b" },
         };
-        Console.WriteLine(getValue(dict, "a")); // should print "b"
+        Console.WriteLine(((IDictionary<string,object>)dict)["a"]); // should print "b"
         object i = 0;
         for (object w = 0; isLessThan(w, 10); postFixIncrement(ref w))
         {
@@ -95,7 +95,7 @@ partial class Test
         Console.WriteLine(((object)i).ToString()); // should print 10
         object list2 = new List<object>() {1, 2, 3, 4, 5};
         list2 = (list2 as IList<object>).Reverse().ToList();
-        Console.WriteLine(getValue(list2, 0)); // should print 5
+        Console.WriteLine(((List<object>)list2)[0]); // should print 5
         //should delete key from dict
         object dict2 = new Dictionary<string, object>() {
             { "a", 1 },
@@ -103,22 +103,22 @@ partial class Test
         };
         ((IDictionary<string,object>)dict2).Remove((string)"a");
         List<object> dictKeys = new List<object>(((IDictionary<string,object>)dict2).Keys);
-        Console.WriteLine(getArrayLength(dictKeys)); // should print 1
-        Console.WriteLine(getValue(dictKeys, 0)); // should print "b"
+        Console.WriteLine(dictKeys.Count); // should print 1
+        Console.WriteLine((dictKeys != null && 0 < dictKeys.Count ? dictKeys[0] : null)); // should print "b"
         object firstConcat = new List<object>() {"a", "b"};
         object secondConcat = new List<object>() {"c", "d"};
         object both = concat(firstConcat, secondConcat);
         Console.WriteLine(getArrayLength(both)); // should print 4
         Console.WriteLine(getValue(both, 2)); // should print "c"
         string baseString = "aabba";
-        string replacedAllString = ((string)baseString).Replace((string)"a", (string)"");
+        string replacedAllString = baseString.Replace((string)"a", (string)"");
         Console.WriteLine(replacedAllString); // should print "bb"
         this.functionWithOptionals("hello");
         this.functionWithOptionals("hello", 5);
         this.functionWithOptionals("hello", 5, 1);
         object list3 = new List<object>() {"empty"};
         ((List<object>)list3)[Convert.ToInt32(0)] = "first";
-        Console.WriteLine(getValue(list3, 0)); // should print "first"
+        Console.WriteLine(((List<object>)list3)[0]); // should print "first"
         object dict3 = new Dictionary<string, object>() {};
         ((IDictionary<string,object>)dict3)["key"] = "value";
         Console.WriteLine(getValue(dict3, "key")); // should print "value"
@@ -158,13 +158,13 @@ partial class Test
     public virtual void funcWithParams(object a = null, object parameters = null)
     {
         parameters ??= new Dictionary<string, object>();
-        if (isTrue(((a is IList<object>) || (a.GetType().IsGenericType && a.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))))
+        if (((a is IList<object>) || (a.GetType().IsGenericType && a.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>)))))
         {
             Console.WriteLine(getArrayLength(a));
         }
-        if (isTrue(inOp(parameters, "a")))
+        if (((IDictionary<string, object>)parameters).ContainsKey("a"))
         {
-            Console.WriteLine(getValue(parameters, "a"));
+            Console.WriteLine(((IDictionary<string,object>)parameters)["a"]);
         }
     }
 
@@ -172,22 +172,22 @@ partial class Test
     {
         string str = "hello world";
         // isEqual test
-        if (isTrue(isEqual(str, "hello world")))
+        if ((str == "hello world"))
         {
             Console.WriteLine("str is hello world"); // should print "str is hello world"
         }
-        Console.WriteLine(((string)str).ToUpper());
+        Console.WriteLine(str.ToUpper());
         bool startsWithHello = ((string)str).StartsWith(((string)"hello"));
         Console.WriteLine(this.boolToString(startsWithHello)); // should print true
         bool endsWithWorld = ((string)str).EndsWith(((string)"world"));
         Console.WriteLine(this.boolToString(endsWithWorld)); // should print true
-        List<object> stringParts = ((string)str).Split(new [] {((string)" ")}, StringSplitOptions.None).ToList<object>();
-        Console.WriteLine(getArrayLength(stringParts)); // should print 2
-        Console.WriteLine(getValue(stringParts, 0)); // should print "hello"
-        Console.WriteLine(getValue(stringParts, 1)); // should print "world"
-        int indexOfResult = getIndexOf(str, "o");
+        List<object> stringParts = str.Split(new [] {((string)" ")}, StringSplitOptions.None).ToList<object>();
+        Console.WriteLine(stringParts.Count); // should print 2
+        Console.WriteLine((stringParts != null && 0 < stringParts.Count ? stringParts[0] : null)); // should print "hello"
+        Console.WriteLine((stringParts != null && 1 < stringParts.Count ? stringParts[1] : null)); // should print "world"
+        int indexOfResult = ((string)str).IndexOf("o", StringComparison.Ordinal);
         Console.WriteLine(indexOfResult); // should print 4
-        string strReplaced = ((string)str).Replace((string)"l", (string)"x");
+        string strReplaced = str.Replace((string)"l", (string)"x");
         Console.WriteLine(strReplaced); // should print "hexxo worxd"
         // concatenation test
         string a = "a";
