@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -17786,6 +17786,20 @@ var parserConfig6 = {
   "TRUE_KEYWORD": "Value::Bool(true)",
   "FALSE_KEYWORD": "Value::Bool(false)"
 };
+var RUST_PARAM_SHADOWS = {
+  MAP: "map",
+  LIST: "list",
+  /** `this.<safe*>` reads inlined natively against a shadowed dict param. */
+  SAFE_READS: /* @__PURE__ */ new Set([
+    "safeValue",
+    "safeString",
+    "safeInteger",
+    "safeNumber",
+    "safeBool",
+    "safeDict",
+    "safeList"
+  ])
+};
 var RUST_DECLARED_DICT_LOCALS = {
   /** value the resolver answers for a proven Dict local */
   DICT: "dict",
@@ -19055,6 +19069,13 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       }
     }
     if (op === SyntaxKind4.InKeyword) {
+      const shadow = this.rustParamShadowOf(right);
+      if (shadow !== void 0) {
+        const native2 = this.printShadowInOperator(shadow, left);
+        if (native2 !== void 0) {
+          return native2;
+        }
+      }
       const native = this.printNativeInOperator(left, right);
       if (native !== void 0) {
         return native;
@@ -19905,8 +19926,9 @@ ${classMethods}
     }
     const blockOpen = this.getBlockOpen(identation);
     const blockClose = this.getBlockClose(identation);
+    const shadows = this.rustParamShadowLines(node, identation + 2);
     const statements = node.body.statements.map((s) => this.printNode(s, identation + 2)).join("\n");
-    const body = blockOpen + optionalInits + statements + blockClose;
+    const body = blockOpen + optionalInits + shadows + statements + blockClose;
     return this.printNodeCommentsIfAny(node, identation, methodDef + body);
   }
   printFunctionDefinition(node, identation) {
@@ -19948,6 +19970,9 @@ ${classMethods}
   }
   printCallExpression(node, identation) {
     const expression = node.expression;
+    const shadowSafeRead = this.printShadowSafeReadCall(node);
+    if (shadowSafeRead !== void 0)
+      return shadowSafeRead;
     if (expression.kind === SyntaxKind4.PropertyAccessExpression) {
       const exprText = expression.getText().trim();
       if (exprText === "console.log") {
@@ -20228,6 +20253,12 @@ ${classMethods}
   }
   /** Native read for one chain level, or undefined to keep `get_value`. */
   printNativeContainerAccess(receiverText, receiverNode, keyNode) {
+    const shadow = this.rustParamShadowOf(receiverNode);
+    if (shadow !== void 0) {
+      const native = this.printShadowContainerRead(shadow, keyNode);
+      if (native !== void 0)
+        return native;
+    }
     if (ts7.isStringLiteralLike(keyNode)) {
       return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text);
     }
@@ -20384,6 +20415,347 @@ ${classMethods}
    *  key away, so a place named after one stays boxed. */
   rustNodeIsKeyUnsafePlace(keyText) {
     return _RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText);
+  }
+  rustParamShadowEmittedSet() {
+    const src = this.getSrc();
+    if (this.paramShadowEmitted === void 0 || this.paramShadowEmitted.src !== src) {
+      this.paramShadowEmitted = { src, fns: /* @__PURE__ */ new Set() };
+    }
+    return this.paramShadowEmitted.fns;
+  }
+  rustParamShadowTables() {
+    const src = this.getSrc();
+    if (this.paramShadowCache === void 0 || this.paramShadowCache.src !== src) {
+      this.paramShadowCache = { src, tables: /* @__PURE__ */ new Map() };
+    }
+    return this.paramShadowCache.tables;
+  }
+  /** Emitted shadow lines for a function, or '' when no parameter qualifies.
+   *  The caller must use this before printing the body statements (it both
+   *  registers the function as shadowed and computes the lines). */
+  rustParamShadowLines(fn, identation) {
+    const table = this.rustParamShadowTable(fn);
+    if (table.size === 0)
+      return "";
+    const idn = this.getIden(identation);
+    const lines = [];
+    for (const shadow of table.values()) {
+      const empty = `__${shadow.name}_empty`;
+      if (this.rustFunctionDeclaresName(fn, empty))
+        continue;
+      const map = shadow.kind === RUST_PARAM_SHADOWS.MAP;
+      const accessor = map ? "as_map" : "as_array";
+      lines.push(`${idn}let ${empty} = ${map ? "indexmap::IndexMap::new()" : "Vec::new()"};`);
+      lines.push(`${idn}let ${shadow.name} = ${shadow.name}.${accessor}().unwrap_or(&${empty});`);
+    }
+    if (lines.length === 0)
+      return "";
+    this.rustParamShadowEmittedSet().add(fn);
+    return lines.join("\n") + "\n";
+  }
+  rustParamShadowTable(fn) {
+    const tables = this.rustParamShadowTables();
+    let table = tables.get(fn);
+    if (table === void 0) {
+      try {
+        table = this.collectRustParamShadows(fn);
+      } catch (e) {
+        table = /* @__PURE__ */ new Map();
+      }
+      tables.set(fn, table);
+    }
+    return table;
+  }
+  /** The shadow a read receiver resolves to, or undefined (no proof → helper). */
+  rustParamShadowOf(node) {
+    if (node === void 0)
+      return void 0;
+    let current = node;
+    while (current !== void 0 && (ts7.isParenthesizedExpression(current) || ts7.isAsExpression(current) || ts7.isNonNullExpression(current))) {
+      current = current.expression;
+    }
+    if (current === void 0 || !ts7.isIdentifier(current))
+      return void 0;
+    const name = String(current.escapedText);
+    const declaration = this.rustDeclarationOfIdentifier(current);
+    if (declaration === void 0 || !ts7.isParameter(declaration))
+      return void 0;
+    const emitted = this.rustParamShadowEmittedSet();
+    let scope = current.parent;
+    while (scope !== void 0) {
+      if (ts7.isFunctionLike(scope)) {
+        const entry = emitted.has(scope) ? this.rustParamShadowTable(scope).get(name) : void 0;
+        if (entry !== void 0 && entry.declaration === declaration)
+          return entry;
+      }
+      scope = scope.parent;
+    }
+    return void 0;
+  }
+  /** True when the enclosing function already binds this name somewhere. */
+  rustFunctionDeclaresName(fn, name) {
+    let found = false;
+    const visit = (node) => {
+      if (found)
+        return;
+      if (node !== fn && ts7.isFunctionLike(node))
+        return;
+      if (ts7.isVariableDeclaration(node) && ts7.isIdentifier(node.name) && node.name.text === name) {
+        found = true;
+        return;
+      }
+      if (ts7.isParameter(node) && ts7.isIdentifier(node.name) && node.name.text === name) {
+        found = true;
+        return;
+      }
+      ts7.forEachChild(node, visit);
+    };
+    ts7.forEachChild(fn, visit);
+    return found;
+  }
+  collectRustParamShadows(fn) {
+    const table = /* @__PURE__ */ new Map();
+    const parameters = fn.parameters ?? [];
+    const body = fn.body;
+    if (body === void 0)
+      return table;
+    for (const param of parameters) {
+      if (!ts7.isParameter(param) || !ts7.isIdentifier(param.name))
+        continue;
+      const name = String(param.name.escapedText);
+      if (name === "optional_args")
+        continue;
+      if (param.type === void 0)
+        continue;
+      const type = this.getCheckedTypeOf(param.type);
+      if (type === void 0)
+        continue;
+      let kind;
+      if (this.isProvenMapType(type)) {
+        kind = RUST_PARAM_SHADOWS.MAP;
+      } else if (this.isProvenShadowListType(type)) {
+        kind = RUST_PARAM_SHADOWS.LIST;
+      }
+      if (kind === void 0)
+        continue;
+      if (this.rustParameterIsClientHandle(param))
+        continue;
+      if (this.rustParamShadowUseCensus(fn, param, kind) === void 0)
+        continue;
+      table.set(name, { kind, name, declaration: param });
+    }
+    return table;
+  }
+  /** A checker-proven array parameter type (`Vec<Value>` on the rust side);
+   *  tuples are excluded (their printed shape is not a plain `Vec`). */
+  isProvenShadowListType(type) {
+    if (type === void 0)
+      return false;
+    if (!(type.flags & ts7.TypeFlags.Object))
+      return false;
+    const objectFlags = (type.objectFlags ?? 0) | (type.target?.objectFlags ?? 0);
+    if (objectFlags & ts7.ObjectFlags.Tuple)
+      return false;
+    if (this.hasCallableShape(type))
+      return false;
+    if (this.isClassInstanceType(type))
+      return false;
+    const name = this.typeSymbolOf(type)?.getName?.();
+    if (name === "Array" || name === "ReadonlyArray")
+      return true;
+    const targetName = this.typeSymbolOf(type.target)?.getName?.();
+    return targetName === "Array" || targetName === "ReadonlyArray";
+  }
+  /** Every reference to the parameter must be a printable read, and at least
+   *  one must exist; anything else (a write, a `Value` pass-through, a Null
+   *  comparison, a marker key) answers undefined and the parameter keeps its
+   *  box. */
+  rustParamShadowUseCensus(fn, param, kind) {
+    const name = String(param.name.escapedText);
+    const paramSymbol = this.rustSymbolOf(param.name);
+    if (paramSymbol === void 0)
+      return void 0;
+    let reads = 0;
+    let ok = true;
+    const visit = (node) => {
+      if (!ok)
+        return;
+      if (ts7.isIdentifier(node) && node.text === name && node !== param.name) {
+        if (this.rustSymbolOf(node) !== paramSymbol || !this.rustParamUseIsRead(node, kind)) {
+          ok = false;
+          return;
+        }
+        reads++;
+      }
+      ts7.forEachChild(node, visit);
+    };
+    ts7.forEachChild(fn.body, visit);
+    return ok && reads > 0 ? { reads } : void 0;
+  }
+  /** One reference of a shadow candidate: true only for a read the shadow can
+   *  print exactly (same proofs the emitted forms re-check). */
+  rustParamUseIsRead(id, kind) {
+    const parent = id.parent;
+    if (parent === void 0)
+      return false;
+    if (ts7.isElementAccessExpression(parent) && parent.expression === id) {
+      if (this.isNativeWriteTargetBase(id))
+        return false;
+      if (!this.isNativeAccessPositionSafe(id))
+        return false;
+      if (this.isWriteBackBindRead(parent))
+        return false;
+      return this.rustShadowKeyIsReadable(parent.argumentExpression, kind);
+    }
+    if (ts7.isPropertyAccessExpression(parent) && parent.expression === id) {
+      return kind === RUST_PARAM_SHADOWS.LIST && String(parent.name.escapedText) === "length";
+    }
+    if (ts7.isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind4.InKeyword && parent.right === id) {
+      if (kind !== RUST_PARAM_SHADOWS.MAP)
+        return false;
+      return this.rustShadowKeyIsReadable(parent.left, RUST_PARAM_SHADOWS.MAP);
+    }
+    if (ts7.isCallExpression(parent) && kind === RUST_PARAM_SHADOWS.MAP) {
+      if (this.rustShadowSafeCallee(parent) === void 0)
+        return false;
+      const args = parent.arguments;
+      if (args[0] !== id || args.length < 2 || args.length > 3)
+        return false;
+      return this.rustShadowKeyIsLiteral(args[1]);
+    }
+    return false;
+  }
+  /** A key a shadow read can print: dicts take a bare string literal or a
+   *  proven-string place, lists a literal non-negative index; the `safe_*`
+   *  inline takes the literal key form only. Marker-route key names and keys
+   *  whose text needs escaping are excluded. */
+  rustShadowKeyIsReadable(key, kind) {
+    if (key === void 0)
+      return false;
+    if (kind === RUST_PARAM_SHADOWS.MAP) {
+      if (ts7.isStringLiteralLike(key))
+        return this.rustShadowKeyIsLiteral(key);
+      if (ts7.isIdentifier(key)) {
+        return this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText));
+      }
+      return false;
+    }
+    if (ts7.isNumericLiteral(key)) {
+      const index = Number(key.text);
+      return Number.isInteger(index) && index >= 0;
+    }
+    return false;
+  }
+  rustShadowKeyIsLiteral(key) {
+    if (key === void 0 || !ts7.isStringLiteralLike(key))
+      return false;
+    const text = String(key.text);
+    return this.rustShadowKeyLiteral(text) && !this.rustNodeIsKeyUnsafePlace(text);
+  }
+  /** Keys whose text is safe to inline into a rust string literal. */
+  rustShadowKeyLiteral(text) {
+    return /^[A-Za-z0-9_.\/\-]*$/.test(text) && text.length > 0;
+  }
+  /** `this.safeString`-style callee of a call, or undefined. */
+  rustShadowSafeCallee(node) {
+    const callee = node.expression;
+    if (callee === void 0 || !ts7.isPropertyAccessExpression(callee))
+      return void 0;
+    if (callee.expression.kind !== SyntaxKind4.ThisKeyword)
+      return void 0;
+    const name = String(callee.name.escapedText);
+    return RUST_PARAM_SHADOWS.SAFE_READS.has(name) ? name : void 0;
+  }
+  /** `x['k']` / `x[i]` / `'k' in x` on a shadowed parameter: the native read,
+   *  or undefined to keep the helper (the census guarantees it never happens
+   *  for an emitted shadow). */
+  printShadowContainerRead(shadow, keyNode) {
+    const key = keyNode;
+    if (shadow.kind === RUST_PARAM_SHADOWS.MAP) {
+      if (ts7.isStringLiteralLike(key)) {
+        const text = String(key.text);
+        if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text))
+          return void 0;
+        return `${shadow.name}.get("${text}").cloned().unwrap_or(Value::Null)`;
+      }
+      if (ts7.isIdentifier(key) && this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) {
+        const keyText = this.printNode(key, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
+          return void 0;
+        return `${keyText}.as_str().and_then(|__k| ${shadow.name}.get(__k)).cloned().unwrap_or(Value::Null)`;
+      }
+      return void 0;
+    }
+    if (ts7.isNumericLiteral(key)) {
+      const index = Number(key.text);
+      if (!Number.isInteger(index) || index < 0)
+        return void 0;
+      return `${shadow.name}.get(${index}).cloned().unwrap_or(Value::Null)`;
+    }
+    return void 0;
+  }
+  /** `'k' in x` on a shadowed dict parameter. */
+  printShadowInOperator(shadow, keyNode) {
+    const key = keyNode;
+    if (shadow.kind !== RUST_PARAM_SHADOWS.MAP)
+      return void 0;
+    if (ts7.isStringLiteralLike(key)) {
+      const text = String(key.text);
+      if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text))
+        return void 0;
+      return `Value::Bool(${shadow.name}.contains_key("${text}"))`;
+    }
+    if (ts7.isIdentifier(key) && this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) {
+      const keyText = this.printNode(key, 0).trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
+        return void 0;
+      return `Value::Bool(${keyText}.as_str().map(|__k| ${shadow.name}.contains_key(__k)).unwrap_or(false))`;
+    }
+    return void 0;
+  }
+  /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
+  printShadowLength(shadow) {
+    if (shadow.kind !== RUST_PARAM_SHADOWS.LIST)
+      return void 0;
+    return `Value::Int(${shadow.name}.len() as i64)`;
+  }
+  /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
+   *  runtime helper's exact semantics over `.get(..)`. */
+  printShadowSafeReadCall(node) {
+    const callee = this.rustShadowSafeCallee(node);
+    if (callee === void 0)
+      return void 0;
+    const args = node.arguments ?? [];
+    if (args.length < 2 || args.length > 3)
+      return void 0;
+    const shadow = this.rustParamShadowOf(args[0]);
+    if (shadow === void 0 || shadow.kind !== RUST_PARAM_SHADOWS.MAP)
+      return void 0;
+    const key = args[1];
+    if (!ts7.isStringLiteralLike(key))
+      return void 0;
+    const text = String(key.text);
+    if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text))
+      return void 0;
+    const fallback = args.length === 3 ? this.printNode(args[2], 0).trim() : "Value::Null";
+    const get = `${shadow.name}.get("${text}")`;
+    switch (callee) {
+      case "safeValue":
+        return `match ${get} { Some(__v) if !matches!(__v, Value::Null) && !matches!(__v, Value::Str(__s) if __s.is_empty()) => __v.clone(), _ => ${fallback} }`;
+      case "safeString":
+        return `match ${get} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s.clone()), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${fallback} }`;
+      case "safeInteger":
+        return `match ${get} { Some(Value::Int(__n)) => Value::Int(*__n), Some(Value::Float(__f)) => Value::Int(*__f as i64), Some(Value::Str(__s)) => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => ${fallback} } }, _ => ${fallback} }`;
+      case "safeNumber":
+        return `match ${get} { Some(Value::Float(__f)) => Value::Float(*__f), Some(Value::Int(__n)) => Value::Float(*__n as f64), Some(Value::Str(__s)) => match __s.parse::<f64>() { Ok(__n) => Value::Float(__n), Err(_) => ${fallback} }, _ => ${fallback} }`;
+      case "safeBool":
+        return `match ${get} { Some(Value::Bool(__b)) => Value::Bool(*__b), _ => ${fallback} }`;
+      case "safeDict":
+        return `match ${get} { Some(__v) if matches!(__v, Value::Dict(_)) => __v.clone(), _ => ${fallback} }`;
+      case "safeList":
+        return `match ${get} { Some(__v) if matches!(__v, Value::Arr(_)) => __v.clone(), _ => ${fallback} }`;
+    }
+    return void 0;
   }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
     if (!this.isProvenMapExpression(receiverNode)) {
@@ -20663,6 +21035,12 @@ ${classMethods}
     const rightSide = node.name.escapedText;
     const leftExpr = this.printNode(node.expression, 0);
     if (rightSide === "length") {
+      const shadow = this.rustParamShadowOf(node.expression);
+      if (shadow !== void 0) {
+        const native = this.printShadowLength(shadow);
+        if (native !== void 0)
+          return native;
+      }
       return this.printArrayLength(node, 0, leftExpr);
     }
     return void 0;

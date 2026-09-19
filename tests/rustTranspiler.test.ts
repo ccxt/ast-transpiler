@@ -2237,7 +2237,7 @@ describe('rust is_true over a proven boolean Value', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if matches!(options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null), Value::Bool(true))');
+        expect(output).toContain('if matches!(options.get("foo").cloned().unwrap_or(Value::Null), Value::Bool(true))');
         expect(output).not.toContain('is_true(&options');
     });
 
@@ -3314,5 +3314,140 @@ describe('rust destructure over an array-returning callee', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
+    });
+});
+
+describe('rust parameter shadows (D-25)', () => {
+    const DICT_DECL =
+        "interface Dictionary<T> { [key: string]: T; }\n" +
+        "type Dict = Dictionary<any>;\n";
+
+    test('a Dict parameter read but never written is shadowed at fn entry', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        return data['id'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let __data_empty = indexmap::IndexMap::new();');
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('return data.get("id").cloned().unwrap_or(Value::Null);');
+        expect(output).not.toContain('get_value(&data');
+    });
+
+    test('a dynamic string key reads through the shadow', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict, code: string): any {\n" +
+            "        return data[code];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('code.as_str().and_then(|__k| data.get(__k)).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('a `this.safeString` read inlines the coercion over the shadow', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const id = this.safeString (data, 'id');\n" +
+            "        return id;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('match data.get("id") { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s.clone()), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => Value::Null }');
+        expect(output).not.toContain('self.safeString(data');
+    });
+
+    test('a `this.safeBool` read keeps its default argument', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const ok = this.safeBool (data, 'ok', false);\n" +
+            "        return ok;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('match data.get("ok") { Some(Value::Bool(__b)) => Value::Bool(*__b), _ => Value::Bool(false) }');
+    });
+
+    test('the `in` operator reads the shadow', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        return 'id' in data;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Bool(data.contains_key("id"))');
+    });
+
+    test('a List parameter reads length and literal indices natively', () => {
+        const ts =
+            "class C {\n" +
+            "    f (rows: Array<any>): any {\n" +
+            "        const n = rows.length;\n" +
+            "        return rows[0];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let __rows_empty = Vec::new();');
+        expect(output).toContain('let rows = rows.as_array().unwrap_or(&__rows_empty);');
+        expect(output).toContain('let mut n: Value = Value::Int(rows.len() as i64);');
+        expect(output).toContain('return rows.get(0).cloned().unwrap_or(Value::Null);');
+    });
+
+    test('returning the parameter keeps the box (D2/census)', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const id = data['id'];\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+        expect(output).toContain('data.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('a written key keeps the box', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        data['id'] = 1;\n" +
+            "        return data['id'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+        expect(output).toContain('add_element_to_object(&mut data');
+    });
+
+    test('passing the parameter to another method keeps the box', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const id = data['id'];\n" +
+            "        return this.other (data);\n" +
+            "    }\n" +
+            "    other (d: Dict): any { return d; }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+    });
+
+    test('a marker-route key name keeps the box', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        return data['subscriptions'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+        expect(output).toContain('data.as_map().and_then(|__m| __m.get("subscriptions"))');
     });
 });
