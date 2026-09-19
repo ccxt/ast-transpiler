@@ -2836,8 +2836,10 @@ describe('go native element assignment', () => {
         // a local can box a *sync.Map an accessor returned, a nil *sync.Map is not `== nil`
         expect(output).toContain("var a bool = IsEqual(localDict, nil)");
         expect(output).not.toContain("localDict == nil");
-        // numbers and `any` keep the helper
-        expect(output).toContain("var b bool = IsEqual(since, nil)");
+        // a defaulted `Int` parameter is bound by GetArg, which folds a typed nil pointer
+        // into the untyped default, so the box is nil-comparable
+        expect(output).toContain("var b bool = (since == nil)");
+        // `any` and a parameter without a default keep the helper
         expect(output).toContain("var c bool = IsEqual(raw, nil)");
     });
     test('two object boxes do not compare with a native operator', () => {
@@ -2863,6 +2865,97 @@ describe('go native element assignment', () => {
         // a class instance may be an identity-bearing pointer in Go
         expect(output).toContain("var a bool = IsEqual(cache, nil)");
         expect(output).toContain("var b bool = IsEqual(other, nil)");
+    });
+    test('a defaulted scalar parameter compares against nil natively', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "type Num = number | undefined;\n" +
+        "type Str = string | undefined;\n" +
+        "type Bool = boolean | undefined;\n" +
+        "class T {\n" +
+        "    f (since: Int = undefined, price: Num = undefined, symbol: Str = undefined, flag: Bool = undefined, params = {}) {\n" +
+        "        const a = since === undefined;\n" +
+        "        const b = price !== undefined;\n" +
+        "        const c = symbol === undefined;\n" +
+        "        const d = flag !== undefined;\n" +
+        "        return [ a, b, c, d ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // GetArg folds a typed nil pointer into the untyped default, so the box a defaulted
+        // parameter is read through is nil-comparable
+        expect(output).toContain("since := GetArg(optionalArgs, 0, nil)");
+        expect(output).toContain("var a bool = (since == nil)");
+        expect(output).toContain("var b bool = (price != nil)");
+        expect(output).toContain("var c bool = (symbol == nil)");
+        expect(output).toContain("var d bool = (flag != nil)");
+    });
+    test('a parameter without a default keeps the helper', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    f (since: Int) {\n" +
+        "        const b = since === undefined;\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // no GetArg binding: another method may hand over this.SafeInteger(…), whose nil
+        // *int64 is not `== nil`
+        expect(output).toContain("IsEqual(since, nil)");
+        expect(output).not.toContain("since == nil");
+    });
+    test('a later pointer write keeps the helper', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    safeInteger (a, b, c): Int { return a; }\n" +
+        "    f (since: Int = undefined, params: any = {}) {\n" +
+        "        since = this.safeInteger (params, 'since');\n" +
+        "        const a = since === undefined;\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the reassignment re-boxes a *int64 (the scan is what keeps the box pointer-free)
+        expect(output).toContain("IsEqual(since, nil)");
+        expect(output).not.toContain("since == nil");
+    });
+    test('a later pointer accessor outside the Go type table keeps the helper', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    numberToString (a): Int { return a; }\n" +
+        "    parse8601 (a): Int { return a; }\n" +
+        "    f (since: Int = undefined, raw: any = {}) {\n" +
+        "        since = this.numberToString (raw);\n" +
+        "        const a = since === undefined;\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "    g (until: Int = undefined, raw: any = {}) {\n" +
+        "        until = this.parse8601 (raw);\n" +
+        "        const b = until === undefined;\n" +
+        "        return b;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // both print to a *string / *int64 the ccxt pass derefs: the box is still a pointer
+        expect(output).toContain("IsEqual(since, nil)");
+        expect(output).toContain("IsEqual(until, nil)");
+        expect(output).not.toContain("since == nil");
+        expect(output).not.toContain("until == nil");
+    });
+    test('an arrow function parameter keeps the helper (no GetArg binding)', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    f (params: any = {}) {\n" +
+        "        const g = (since: Int = undefined) => since === undefined;\n" +
+        "        return g;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("IsEqual(since, nil)");
     });
 });
 
