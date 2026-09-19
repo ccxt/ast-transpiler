@@ -2933,19 +2933,4 @@ describe('rust native container reads (B-28)', () => {
         expect(output).not.toContain('let mut entry: Value = get_value(&data, &i);');
     });
 
-    test('a safe_list local keeps the helper for the ccxt Vec retype pass', () => {
-        const ts =
-            'class T {\n' +
-            '    m(message) {\n' +
-            "        const data = this.safeList(message, 'data', []);\n" +
-            '        for (let i = 0; i < data.length; i++) {\n' +
-            '            const row = data[i];\n' +
-            '            return row;\n' +
-            '        }\n' +
-            '    }\n' +
-            '}';
-        const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut row: Value = get_value(&data, &i);');
-        expect(output).not.toContain(DYNAMIC);
-    });
 });

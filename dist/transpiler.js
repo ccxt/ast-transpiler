@@ -18226,26 +18226,12 @@ ${classMethods}
       return void 0;
     if (!this.isRustValueIndexKey(keyNode))
       return void 0;
-    if (this.rustReceiverIsSafeListLocal(receiverNode))
-      return void 0;
     if (this.isWriteBackBindRead(keyNode.parent))
       return void 0;
     const keyText = this.printNode(keyNode, 0).trim();
     if (!keyText || keyText.startsWith("&"))
       return void 0;
     return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
-  }
-  /** True when the receiver local is declared from `this.safeList(…)` — the
-   *  ccxt-side `typeSafeListLocals` retype family. */
-  rustReceiverIsSafeListLocal(node) {
-    const declaration = this.rustDeclarationOfIdentifier(node);
-    if (declaration === void 0 || !ts7.isVariableDeclaration(declaration))
-      return false;
-    const initializer = declaration.initializer;
-    if (initializer === void 0 || !ts7.isCallExpression(initializer))
-      return false;
-    const callee = initializer.expression;
-    return ts7.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind4.ThisKeyword && String(callee.name.escapedText) === "safeList";
   }
   /** True when this read initialises a local that the very next statement in
    *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,

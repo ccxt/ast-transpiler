@@ -2798,10 +2798,6 @@ export class RustTranspiler extends BaseTranspiler {
     printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
         if (!this.isProvenListExpression(receiverNode)) return undefined;
         if (!this.isRustValueIndexKey(keyNode)) return undefined;
-        // A `safe_list` local belongs to the ccxt pass that retypes it to
-        // `Vec<Value>` and rewrites its reads natively; the printer leaves the
-        // helper text that pass matches (a native read would block the retype).
-        if (this.rustReceiverIsSafeListLocal(receiverNode)) return undefined;
         // The ccxt `writeBackIndexedMutations` pass matches the
         // `let x = get_value(&C, &K)` text to write a mutated `x` back into
         // `C[K]`; the native text is invisible to it, so a bind the next
@@ -2811,18 +2807,6 @@ export class RustTranspiler extends BaseTranspiler {
         // A text that already carries the post-pass `&` is not a place.
         if (!keyText || keyText.startsWith('&')) return undefined;
         return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
-    }
-
-    /** True when the receiver local is declared from `this.safeList(…)` — the
-     *  ccxt-side `typeSafeListLocals` retype family. */
-    rustReceiverIsSafeListLocal(node: ts.Node): boolean {
-        const declaration: any = this.rustDeclarationOfIdentifier(node);
-        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return false;
-        const initializer: any = declaration.initializer;
-        if (initializer === undefined || !ts.isCallExpression(initializer)) return false;
-        const callee: any = initializer.expression;
-        return ts.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword &&
-            String(callee.name.escapedText) === 'safeList';
     }
 
     /** True when this read initialises a local that the very next statement in
