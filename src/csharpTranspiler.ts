@@ -252,7 +252,7 @@ const CSHARP_NATIVE_FIELDS: { [name: string]: string } = {
 // hand-written BaseExchange fields declared `object` that always box a dictionary
 // (dict / CustomConcurrentDictionary<string, object>): the member needs the same
 // `(IDictionary<string, object>)` cast the transpiled helper body itself applies
-const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks', 'ohlcvs', 'trades', 'markets', 'currencies', 'currencies_by_id' ];
+const CSHARP_OBJECT_DICT_FIELDS = [ 'urls', 'tickers', 'bidsasks', 'orderbooks', 'ohlcvs', 'trades', 'markets', 'currencies', 'currencies_by_id', 'exceptions' ];
 
 // hand-written BaseExchange / PredictionExchange fields whose C# declaration is a reference
 // type (cs/ccxt/base/Exchange.Options.cs, Exchange.WsBridge.cs, PredictionExchange.cs): the
@@ -277,9 +277,10 @@ const CSHARP_NATIVE_BOOL_FIELDS = [
 ];
 
 // hand-written BaseExchange fields whose reads print natively although the key may be absent:
-// `has`/`options` are concrete dictionaries in cs/ccxt/base/Exchange.Options.cs, `urls` an
-// object that always boxes one. The native read tests the key, so a missing key still reads null
-const CSHARP_MISSING_KEY_FIELDS_NATIVE = [ 'has', 'options', 'urls' ];
+// `has`/`options` are concrete dictionaries in cs/ccxt/base/Exchange.Options.cs; `urls`,
+// `markets` and `exceptions` are `object` boxes that always hold one. The native read tests the
+// key, so a missing key still reads null
+const CSHARP_MISSING_KEY_FIELDS_NATIVE = [ 'has', 'options', 'urls', 'markets', 'exceptions' ];
 
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
@@ -718,6 +719,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression)
                 ?? this.csharpDeclaredLocalResolverRowRead(expression, argumentExpression)
                 ?? this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey)
+                ?? this.csharpProvenDictionaryRead(node, expression, argumentExpression, isStringKey)
                 ?? this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey);
         }
         const receiver = this.printNode(expression, 0);
@@ -815,9 +817,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const field = this.printNode(expression, 0);
         const printedKey = this.printNode(argumentExpression, 0);
-        // `urls` is declared `object`: the same cast the transpiled helper body applies
-        const receiver = CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0 ? `((IDictionary<string, object>)${field})` : field;
-        return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        // `urls`/`markets`/`exceptions` are declared `object`: the same cast the transpiled helper
+        // body applies, and the same null receiver branch it has (initializeProperties may leave
+        // the box null when the venue's describe() carries no such row) -- `has`/`options` are
+        // concrete dictionaries, initialized and never null, so they need no test
+        if (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) {
+            const receiver = `((IDictionary<string, object>)${field})`;
+            return `(${field} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        }
+        return `(${field}.ContainsKey(${printedKey}) ? ${field}[${printedKey}] : null)`;
     }
 
     // A literal-key read on a local whose C# declaration is already a collection: the static type
@@ -877,6 +885,37 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const recorded = this.csharpDeclaredLocalTypeResolver(declaration);
         return (recorded !== undefined && CSHARP_NATIVE_COLLECTION_TYPES.indexOf(recorded) >= 0) ? recorded : undefined;
+    }
+
+    // A literal-key read on a local whose DECLARATION the printer still prints `object`, but whose
+    // box the embedding build layer's value-type oracle proves is a dictionary (ccxt:
+    // build/csharp-local-types.js, the retype table the same layer already uses for the native
+    // operators). The cast is what makes the read compile whatever the declaration says, and the
+    // key test plus the null guard hand back exactly what the helper does: null for a null receiver
+    // and for an absent key. `market`/`currency` receivers and the declared ones are the sibling
+    // arms' families, so they are filtered out before this one runs.
+    csharpProvenDictionaryRead(node, expression, argumentExpression, isStringKey): string | undefined {
+        if (!isStringKey || !ts.isIdentifier(expression)) {
+            return undefined;
+        }
+        if (CSHARP_MARKET_RECEIVER_NAMES.indexOf(expression.escapedText as string) >= 0) {
+            return undefined;
+        }
+        if (this.csharpTypedLocalType(expression) !== undefined) {
+            return undefined; // the declaration this printer wrote names its own type (see above)
+        }
+        const proven = this.csharpExpressionTypeOf(expression);
+        if (proven === undefined || CSHARP_NATIVE_DICTIONARY_TYPES.indexOf(proven) < 0) {
+            return undefined; // only a proven dictionary box has the members the read binds
+        }
+        const func = this.csharpEnclosingFunction(node);
+        if (func === undefined || this.csharpReceiverIsRewritten(func, expression)) {
+            return undefined; // a reassigned receiver may hold another box at this read
+        }
+        const local = this.printNode(expression, 0);
+        const receiver = `((IDictionary<string, object>)${local})`;
+        const printedKey = this.printNode(argumentExpression, 0);
+        return `(${local} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
     }
 
     // the read sits in a branch that a `key in recv` guard admitted: same then-branch as the

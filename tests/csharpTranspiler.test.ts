@@ -2830,7 +2830,9 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    const isPrimary = entry['default'] === 'primary';\n" +
         "    return isPrimary;\n" +
         "}");
-        expect(output).toContain('bool isPrimary = ((getValue(entry, "default") as string) == "primary");');
+        // the read goes native first (B-20: the resolver proves the receiver's box), then the
+        // comparison drops isEqual
+        expect(output).toContain('bool isPrimary = (((entry != null && ((IDictionary<string, object>)entry).ContainsKey("default") ? ((IDictionary<string, object>)entry)["default"] : null) as string) == "primary");');
         expect(output).not.toContain('isEqual(getValue(entry, "default"), "primary")');
     });
     test('the hand-written has field keeps the emulated string member comparable', () => {
@@ -2902,9 +2904,9 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
         "    return [one, primary];\n" +
         "}");
         // isEqual converts a boxed number and a numeric string on its double/decimal
-        // branches, which the string cast cannot reproduce
-        expect(output).toContain('isEqual(getValue(code, "value"), "1")');
-        expect(output).toContain('bool primary = ((getValue(code, "value") as string) == "primary");');
+        // branches, which the string cast cannot reproduce — the read itself goes native first
+        expect(output).toContain('isEqual((code != null && ((IDictionary<string, object>)code).ContainsKey("value") ? ((IDictionary<string, object>)code)["value"] : null), "1")');
+        expect(output).toContain('bool primary = (((code != null && ((IDictionary<string, object>)code).ContainsKey("value") ? ((IDictionary<string, object>)code)["value"] : null) as string) == "primary");');
     });
 });
 
@@ -3929,7 +3931,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         const output = transpiler.transpileCSharp(input).content;
         // `urls` is declared `object`: the same (IDictionary<string, object>) cast the helper
         // body applies to its box, on both the key test and the indexer
-        expect(output).toContain('(((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
+        expect(output).toContain('(this.urls != null && ((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
         expect(output).not.toContain('getValue(this.urls,');
     });
     test('a non-literal key and a numeric key keep the helper on these fields', () => {
@@ -3951,14 +3953,14 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
     test('other hand-written fields of the same class keep the helper', () => {
         const input =
         "class Exchange {\n" +
-        "    markets: { [key: string]: any } = {};\n" +
+        "    ohlcvs: { [key: string]: any } = {};\n" +
         "    main() {\n" +
-        "        return this.markets['BTC/USDT'];\n" +
+        "        return this.ohlcvs['BTC/USDT'];\n" +
         "    }\n" +
-        "}";
+        "}\n";
         const output = transpiler.transpileCSharp(input).content;
-        // `markets`/`tickers`/... are other units: this rule names has/options/urls only
-        expect(output).toContain('getValue(this.markets, "BTC/USDT")');
+        // `ohlcvs`/`tickers`/... are other units: the missing-key rule names its own table only
+        expect(output).toContain('getValue(this.ohlcvs, "BTC/USDT")');
     });
     test('a guard-proven read of urls still prints the bare indexer', () => {
         const input =
@@ -3985,7 +3987,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         const output = transpiler.transpileCSharp(input).content;
         // the inner 'api' read is a field read; the outer key is an identifier, so the helper
         // still picks the endpoint the way the runtime helper does
-        expect(output).toContain('getValue((((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
+        expect(output).toContain('getValue((this.urls != null && ((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
     });
 });
 
@@ -4098,5 +4100,114 @@ describe('cs-10: literal-key reads on declared collection locals go native', () 
         }
         const fallback = transpiler.transpileCSharp(input).content;
         expect(fallback).toContain('object y = getValue(untyped, "k");');
+    });
+});
+
+describe('B-20: always-dictionary fields and oracle-proven dictionaries read natively', () => {
+    test('a literal-key read of the exceptions field carries the helper\'s dictionary cast', () => {
+        const input =
+        "class Exchange {\n" +
+        "    exceptions: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        return this.exceptions['exact'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        // `exceptions` is declared `object` (Exchange.Options.cs `= new dict()`): the same cast the
+        // transpiled helper body applies to its box, on both the key test and the indexer
+        expect(output).toContain('(this.exceptions != null && ((IDictionary<string, object>)this.exceptions).ContainsKey("exact") ? ((IDictionary<string, object>)this.exceptions)["exact"] : null)');
+        expect(output).not.toContain('getValue(this.exceptions,');
+    });
+    test('a literal-key read of the markets field goes native too', () => {
+        const input =
+        "class Exchange {\n" +
+        "    markets: { [key: string]: any } = {};\n" +
+        "    main() {\n" +
+        "        return this.markets['BTC/USDT'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('(this.markets != null && ((IDictionary<string, object>)this.markets).ContainsKey("BTC/USDT") ? ((IDictionary<string, object>)this.markets)["BTC/USDT"] : null)');
+        expect(output).not.toContain('getValue(this.markets,');
+    });
+    test('a non-literal key on these fields keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    exceptions: { [key: string]: any } = {};\n" +
+        "    main(key) {\n" +
+        "        return this.exceptions[key];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('getValue(this.exceptions, key)');
+    });
+    test('a local the embedding layer proves a dictionary reads natively behind the cast', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parseWsBidAsk(a) { return a; }\n" +
+        "    main(row) {\n" +
+        "        const ticker = this.parseWsBidAsk(row);\n" +
+        "        const symbol = ticker['symbol'];\n" +
+        "        return symbol;\n" +
+        "    }\n" +
+        "}\n";
+        // the printed declaration stays `object`; the value-type oracle names the box the source
+        // proves, so the read compiles behind the cast and keeps the helper's null answers
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'ticker') ? 'Dictionary<string, object>' : undefined;
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('object ticker = this.parseWsBidAsk(row);');
+            expect(output).toContain('object symbol = (ticker != null && ((IDictionary<string, object>)ticker).ContainsKey("symbol") ? ((IDictionary<string, object>)ticker)["symbol"] : null);');
+            expect(output).not.toContain('getValue(ticker,');
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+        const fallback = transpiler.transpileCSharp(input).content;
+        expect(fallback).toContain('getValue(ticker, "symbol")');
+    });
+    test('a proven list box and the market/currency receivers keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parseWsBidAsk(a) { return a; }\n" +
+        "    main(row) {\n" +
+        "        const rows = this.parseWsBidAsk(row);\n" +
+        "        const ticker = this.parseWsBidAsk(row);\n" +
+        "        const currency = this.parseWsBidAsk(row);\n" +
+        "        const a = rows['x'];\n" +
+        "        const b = currency['code'];\n" +
+        "        const c = ticker[0];\n" +
+        "        return [a, b, c];\n" +
+        "    }\n" +
+        "}\n";
+        const kinds: any = { rows: 'List<object>', ticker: 'Dictionary<string, object>', currency: 'Dictionary<string, object>' };
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            // a list box has no dictionary key read; `currency` belongs to the market-row family
+            expect(output).toContain('object a = getValue(rows, "x");');
+            expect(output).toContain('object b = getValue(currency, "code");');
+            // a numeric key is not a dictionary key
+            expect(output).toContain('object c = getValue(ticker, 0);');
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    });
+    test('a proven receiver reassigned in the function keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    parseWsBidAsk(a) { return a; }\n" +
+        "    main(row, other) {\n" +
+        "        let ticker = this.parseWsBidAsk(row);\n" +
+        "        ticker = other;\n" +
+        "        return ticker['symbol'];\n" +
+        "    }\n" +
+        "}\n";
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'ticker') ? 'Dictionary<string, object>' : undefined;
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('getValue(ticker, "symbol")');
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
     });
 });
