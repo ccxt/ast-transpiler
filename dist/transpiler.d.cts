@@ -509,6 +509,8 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeElementAccess(node: any): string | undefined;
     csharpNativeDeclaredDictionaryRead(expression: any, argumentExpression: any): string | undefined;
     csharpDeclaredDictionaryType(node: any): string | undefined;
+    csharpDeclaredLocalResolverType(node: any): string | undefined;
+    csharpDeclaredLocalResolverRowRead(expression: any, argumentExpression: any): string | undefined;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
