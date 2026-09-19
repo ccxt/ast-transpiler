@@ -3316,3 +3316,151 @@ describe('rust destructure over an array-returning callee', () => {
         expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
     });
 });
+
+describe('rust pro-tier handler message shadow (D-27)', () => {
+    // `Client` is a class in the pro tier (base/ws/Client.ts); the shadow is
+    // scoped to the `handle_x (client: Client, message: Dict)` shape.
+    const DECLS =
+        "interface Dictionary<T> { [key: string]: T; }\n" +
+        "type Dict = Dictionary<any>;\n" +
+        "class Client { resolve (v: any): void {} }\n";
+    const SHADOW = 'let __pro_message: &indexmap::IndexMap<String, Value> = &__pro_message_arc;';
+
+    test('a safeString read on the handler message param prints as a native .get match', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(SHADOW);
+        expect(output).toContain('(match __pro_message.get("channel").cloned() { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s),');
+        expect(output).not.toContain('self.safeString(message, Value::Str("channel"');
+    });
+
+    test('value/dict/list/bool reads print the helper value kinds natively', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const v = this.safeValue (message, 'any');\n" +
+            "        const d = this.safeDict (message, 'payload');\n" +
+            "        const l = this.safeList (message, 'data', []);\n" +
+            "        const b = this.safeBool (message, 'ok', false);\n" +
+            "        client.resolve (v); client.resolve (d); client.resolve (l); client.resolve (b);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(match __pro_message.get("any").cloned() { Some(Value::Str(__s)) if __s.is_empty() => Value::Null, Some(__v) => __v, None => Value::Null })');
+        expect(output).toContain('(match __pro_message.get("payload").cloned() { Some(__v) if matches!(__v, Value::Dict(_)) => __v, _ => Value::Null })');
+        expect(output).toContain('(match __pro_message.get("data").cloned() { Some(__v) if matches!(__v, Value::Arr(_)) => __v, _ => Value::from(vec![]) })');
+        expect(output).toContain('(match __pro_message.get("ok").cloned() { Some(__v) if matches!(__v, Value::Bool(_)) => __v, _ => Value::Bool(false) })');
+    });
+
+    test('the integer and float coercions mirror the runtime helper', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const n = this.safeInteger (message, 'count');\n" +
+            "        const f = this.safeNumber (message, 'px');\n" +
+            "        client.resolve (n); client.resolve (f);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>()');
+        expect(output).toContain('Some(Value::Float(__f)) => Value::Float(__f), Some(Value::Int(__n)) => Value::Float(__n as f64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<f64>()');
+    });
+
+    test('a book-store key keeps the helper (marker routes cannot be proven away)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const symbol = this.safeString (message, 'symbol');\n" +
+            "        client.resolve (symbol);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.safeString(message, Value::Str("symbol"');
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('a non-handler method with a Dict param keeps the helper (scope is the pro tier)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    parseWsTicker (message: Dict): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        console.log (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.safeString(message, Value::Str("channel"');
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('a written message param keeps the helper (D2)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTrade (client: Client, message: Dict): void {\n" +
+            "        message['k'] = 1;\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.safeString(message, Value::Str("channel"');
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('a merge onto the message param keeps the helper (D2)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTrade (client: Client, message: Dict): void {\n" +
+            "        const merged = this.deepExtend (message, { 'a': 1 });\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (merged); client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('other uses of the param print unchanged next to the shadow', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    parseWsTrade (m: Dict, market: any): void { console.log (m, market); }\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        this.parseWsTrade (message, undefined);\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(SHADOW);
+        expect(output).toContain('self.parseWsTrade(message, Value::Null);');
+    });
+
+    test('an unproven (any) message param keeps everything boxed', () => {
+        const ts =
+            "class Client { resolve (v: any): void {} }\n" +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: any): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('no nativizable read emits no shadow (no dead binding)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleSmall (client: Client, message: Dict): void {\n" +
+            "        client.resolve (message);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__pro_message');
+    });
+});

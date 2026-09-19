@@ -1493,6 +1493,9 @@ declare class RustTranspiler extends BaseTranspiler {
         requiredCount: number;
     }>;
     forLoopCounter: number;
+    /** The handler `message` parameter a shadow is being printed for (set only
+     *  while its method body is printed). */
+    rustProHandlerShadowParam: ts.ParameterDeclaration | undefined;
     constructor(config?: {});
     initConfig(): void;
     capitalize(str: string): string;
@@ -1786,6 +1789,39 @@ declare class RustTranspiler extends BaseTranspiler {
      *  snapshot instead of the dict itself — a dynamic read cannot prove the
      *  key away, so a place named after one stays boxed. */
     rustNodeIsKeyUnsafePlace(keyText: string): boolean;
+    /** The borrowed view bound by the shadow. */
+    private static readonly PRO_HANDLER_SHADOW_NAME;
+    /** TS helper name -> emitted match kind. */
+    private static readonly PRO_HANDLER_SHADOW_SAFE_READS;
+    /** The `message: Dict` parameter of a WS handler method (2nd param of a
+     *  `handle*` method), undefined when unproven or written (D2). */
+    rustProHandlerMessageParam(node: ts.Node): ts.ParameterDeclaration | undefined;
+    /** D2: a write rooted at the parameter (reassignment, element/property
+     *  write, a merge/splice onto it) can reshape the dict after the shadow is
+     *  taken — the shadow is skipped and every read keeps the helper. */
+    rustProHandlerParamIsWritten(param: ts.ParameterDeclaration, name: string): boolean;
+    /** Shadow plan for a handler: the parameter plus the two binding lines,
+     *  present only when some body read actually turns native (no dead shed). */
+    rustProHandlerShadowPlan(node: ts.Node, identation: number): {
+        param: ts.ParameterDeclaration;
+        lines: string;
+    } | undefined;
+    /** The `safe_*` call on the shadowed parameter prints as a native
+     *  `.get("k")` match, or undefined when the call is not one. In `probe`
+     *  mode the shape is checked without printing (the pre-scan must not print
+     *  a node twice). */
+    printProHandlerShadowRead(node: ts.Node, probe?: boolean): string | undefined;
+    /** A miss-arm default the match can hold: absent (`Value::Null`) or a
+     *  literal; a computed default keeps the helper (its Value is not
+     *  re-printable inside an arm without re-evaluating it twice). */
+    rustProHandlerShadowDefaultShape(node: ts.Node): boolean;
+    rustProHandlerShadowDefault(node: ts.Node): string | undefined;
+    /** Exact native form of the runtime `_k` helper: same value kinds, same
+     *  empty-string-is-missing rule, same default (verified against
+     *  `exchange_stubs.rs`). `.cloned()` keeps the emitted line clone-free for
+     *  the ccxt clone-pruning passes; the parenthesised `match` keeps the
+     *  driver's `};` trailing-block replacement off the statement's `;`. */
+    rustProHandlerShadowReadText(kind: string, key: string, dflt: string): string;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes

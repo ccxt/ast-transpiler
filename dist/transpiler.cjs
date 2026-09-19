@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -19899,8 +19899,15 @@ ${classMethods}
     }
     const blockOpen = this.getBlockOpen(identation);
     const blockClose = this.getBlockClose(identation);
+    const shadowPlan = this.rustProHandlerShadowPlan(node, identation);
+    const savedShadowParam = this.rustProHandlerShadowParam;
+    if (shadowPlan !== void 0) {
+      this.rustProHandlerShadowParam = shadowPlan.param;
+    }
     const statements = node.body.statements.map((s) => this.printNode(s, identation + 2)).join("\n");
-    const body = blockOpen + optionalInits + statements + blockClose;
+    this.rustProHandlerShadowParam = savedShadowParam;
+    const shadow = shadowPlan === void 0 ? "" : shadowPlan.lines;
+    const body = blockOpen + optionalInits + shadow + statements + blockClose;
     return this.printNodeCommentsIfAny(node, identation, methodDef + body);
   }
   printFunctionDefinition(node, identation) {
@@ -19942,6 +19949,9 @@ ${classMethods}
   }
   printCallExpression(node, identation) {
     const expression = node.expression;
+    const shadowRead = this.printProHandlerShadowRead(node);
+    if (shadowRead !== void 0)
+      return shadowRead;
     if (expression.kind === SyntaxKind4.PropertyAccessExpression) {
       const exprText = expression.getText().trim();
       if (exprText === "console.log") {
@@ -20379,6 +20389,179 @@ ${classMethods}
   rustNodeIsKeyUnsafePlace(keyText) {
     return _RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText);
   }
+  /** The `message: Dict` parameter of a WS handler method (2nd param of a
+   *  `handle*` method), undefined when unproven or written (D2). */
+  rustProHandlerMessageParam(node) {
+    if (node === void 0 || !_typescript2.default.isMethodDeclaration(node) || node.body === void 0)
+      return void 0;
+    const params = _nullishCoalesce(node.parameters, () => ( []));
+    if (params.length < 2)
+      return void 0;
+    const methodName = node.name;
+    if (methodName === void 0 || !/^handle[A-Z]/.test(String(_nullishCoalesce(methodName.escapedText, () => ( "")))))
+      return void 0;
+    const param = params[1];
+    if (param === void 0 || !_typescript2.default.isIdentifier(param.name) || param.type === void 0)
+      return void 0;
+    if (param.initializer !== void 0 || param.questionToken !== void 0)
+      return void 0;
+    const clientParam = params[0];
+    if (clientParam === void 0 || clientParam.type === void 0)
+      return void 0;
+    const clientType = this.getCheckedTypeOf(clientParam.type);
+    if (clientType === void 0 || !this.isClassInstanceType(clientType))
+      return void 0;
+    const type = this.getCheckedTypeOf(param.type);
+    if (type === void 0 || !this.isProvenMapType(type))
+      return void 0;
+    const name = String(param.name.escapedText);
+    return this.rustProHandlerParamIsWritten(param, name) ? void 0 : param;
+  }
+  /** D2: a write rooted at the parameter (reassignment, element/property
+   *  write, a merge/splice onto it) can reshape the dict after the shadow is
+   *  taken — the shadow is skipped and every read keeps the helper. */
+  rustProHandlerParamIsWritten(param, name) {
+    if (this.rustLocalIsReassigned(param, name))
+      return true;
+    const scope = this.rustEnclosingFunction(param);
+    if (scope === void 0)
+      return true;
+    const merging = ["deepExtend", "extend", "addElementToObject", "remove"];
+    let written = false;
+    const visit = (n) => {
+      if (written)
+        return;
+      if (_typescript2.default.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && this.rootPlaceText(n.left) === name) {
+        written = true;
+        return;
+      }
+      if (_typescript2.default.isCallExpression(n) && n.arguments.length > 0 && _typescript2.default.isIdentifier(n.arguments[0]) && n.arguments[0].escapedText === name) {
+        const callee = n.expression;
+        const calleeName = _typescript2.default.isPropertyAccessExpression(callee) ? String(_nullishCoalesce(_optionalChain([callee, 'access', _1329 => _1329.name, 'optionalAccess', _1330 => _1330.escapedText]), () => ( ""))) : _typescript2.default.isIdentifier(callee) ? String(_nullishCoalesce(callee.escapedText, () => ( ""))) : "";
+        if (merging.includes(calleeName)) {
+          written = true;
+          return;
+        }
+      }
+      if (_typescript2.default.isCallExpression(n) && _typescript2.default.isPropertyAccessExpression(n.expression) && _optionalChain([n, 'access', _1331 => _1331.expression, 'access', _1332 => _1332.name, 'optionalAccess', _1333 => _1333.text]) === "push" && this.rootPlaceText(n.expression.expression) === name) {
+        written = true;
+        return;
+      }
+      _typescript2.default.forEachChild(n, visit);
+    };
+    _typescript2.default.forEachChild(scope, visit);
+    return written;
+  }
+  /** Shadow plan for a handler: the parameter plus the two binding lines,
+   *  present only when some body read actually turns native (no dead shed). */
+  rustProHandlerShadowPlan(node, identation) {
+    const param = this.rustProHandlerMessageParam(node);
+    if (param === void 0)
+      return void 0;
+    const saved = this.rustProHandlerShadowParam;
+    this.rustProHandlerShadowParam = param;
+    let hasRead = false;
+    const scope = this.rustEnclosingFunction(param);
+    const visit = (n) => {
+      if (hasRead)
+        return;
+      if (_typescript2.default.isCallExpression(n) && this.printProHandlerShadowRead(n, true) !== void 0) {
+        hasRead = true;
+        return;
+      }
+      _typescript2.default.forEachChild(n, visit);
+    };
+    _typescript2.default.forEachChild(scope, visit);
+    this.rustProHandlerShadowParam = saved;
+    if (!hasRead)
+      return void 0;
+    const name = String(param.name.escapedText);
+    const view = _RustTranspiler.PRO_HANDLER_SHADOW_NAME;
+    const arc = `${view}_arc`;
+    const map = "indexmap::IndexMap<String, Value>";
+    const ind = this.getIden(identation + 2);
+    const lines = `${ind}let ${arc}: std::sync::Arc<${map}> = (match &${name} { Value::Dict(__d) => __d.clone(), _ => std::sync::Arc::new(indexmap::IndexMap::new()) });
+${ind}let ${view}: &${map} = &${arc};
+`;
+    return { param, lines };
+  }
+  /** The `safe_*` call on the shadowed parameter prints as a native
+   *  `.get("k")` match, or undefined when the call is not one. In `probe`
+   *  mode the shape is checked without printing (the pre-scan must not print
+   *  a node twice). */
+  printProHandlerShadowRead(node, probe = false) {
+    const param = this.rustProHandlerShadowParam;
+    if (param === void 0 || node === void 0 || !_typescript2.default.isCallExpression(node))
+      return void 0;
+    const callee = node.expression;
+    if (callee === void 0 || !_typescript2.default.isPropertyAccessExpression(callee))
+      return void 0;
+    if (callee.expression.kind !== SyntaxKind4.ThisKeyword)
+      return void 0;
+    const kind = _RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS[String(_nullishCoalesce(_optionalChain([callee, 'access', _1334 => _1334.name, 'optionalAccess', _1335 => _1335.escapedText]), () => ( "")))];
+    if (kind === void 0)
+      return void 0;
+    const args = _nullishCoalesce(node.arguments, () => ( []));
+    if (args.length < 2 || args.length > 3)
+      return void 0;
+    const receiver = args[0];
+    if (receiver === void 0 || receiver.kind !== SyntaxKind4.Identifier)
+      return void 0;
+    if (this.rustDeclarationOfIdentifier(receiver) !== param)
+      return void 0;
+    const key = args[1];
+    if (key === void 0 || !_typescript2.default.isStringLiteral(key))
+      return void 0;
+    const keyText = key.text;
+    if (keyText === "" || _RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText))
+      return void 0;
+    if (args.length === 3 && !this.rustProHandlerShadowDefaultShape(args[2]))
+      return void 0;
+    if (probe)
+      return "native";
+    const dflt = args.length === 3 ? this.rustProHandlerShadowDefault(args[2]) : "Value::Null";
+    if (dflt === void 0)
+      return void 0;
+    return this.rustProHandlerShadowReadText(kind, this.escapeRustStringLiteral(keyText), dflt);
+  }
+  /** A miss-arm default the match can hold: absent (`Value::Null`) or a
+   *  literal; a computed default keeps the helper (its Value is not
+   *  re-printable inside an arm without re-evaluating it twice). */
+  rustProHandlerShadowDefaultShape(node) {
+    return node.kind === SyntaxKind4.StringLiteral || node.kind === SyntaxKind4.NumericLiteral || node.kind === SyntaxKind4.TrueKeyword || node.kind === SyntaxKind4.FalseKeyword || node.kind === SyntaxKind4.NullKeyword || node.kind === SyntaxKind4.ArrayLiteralExpression || node.kind === SyntaxKind4.ObjectLiteralExpression || _typescript2.default.isIdentifier(node) && node.escapedText === "undefined";
+  }
+  rustProHandlerShadowDefault(node) {
+    if (!this.rustProHandlerShadowDefaultShape(node))
+      return void 0;
+    const text = this.printNode(node, 0).trim();
+    return text === "" ? void 0 : text;
+  }
+  /** Exact native form of the runtime `_k` helper: same value kinds, same
+   *  empty-string-is-missing rule, same default (verified against
+   *  `exchange_stubs.rs`). `.cloned()` keeps the emitted line clone-free for
+   *  the ccxt clone-pruning passes; the parenthesised `match` keeps the
+   *  driver's `};` trailing-block replacement off the statement's `;`. */
+  rustProHandlerShadowReadText(kind, key, dflt) {
+    const m = _RustTranspiler.PRO_HANDLER_SHADOW_NAME;
+    const at = `${m}.get("${key}").cloned()`;
+    switch (kind) {
+      case "value":
+        return `(match ${at} { Some(Value::Str(__s)) if __s.is_empty() => ${dflt}, Some(__v) => __v, None => ${dflt} })`;
+      case "string":
+        return `(match ${at} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${dflt} })`;
+      case "integer":
+        return `(match ${at} { Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => ${dflt} } }, _ => ${dflt} })`;
+      case "float":
+        return `(match ${at} { Some(Value::Float(__f)) => Value::Float(__f), Some(Value::Int(__n)) => Value::Float(__n as f64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<f64>() { Ok(__f) => Value::Float(__f), Err(_) => ${dflt} }, _ => ${dflt} })`;
+      case "dict":
+        return `(match ${at} { Some(__v) if matches!(__v, Value::Dict(_)) => __v, _ => ${dflt} })`;
+      case "list":
+        return `(match ${at} { Some(__v) if matches!(__v, Value::Arr(_)) => __v, _ => ${dflt} })`;
+      case "bool":
+        return `(match ${at} { Some(__v) if matches!(__v, Value::Bool(_)) => __v, _ => ${dflt} })`;
+    }
+    return void 0;
+  }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
     if (!this.isProvenMapExpression(receiverNode)) {
       if (!this.rustIsDeclaredDictLocal(receiverNode))
@@ -20396,7 +20579,7 @@ ${classMethods}
       return void 0;
     try {
       const symbol = this.getChecker().getSymbolAtLocation(node);
-      return _optionalChain([symbol, 'optionalAccess', _1329 => _1329.valueDeclaration]);
+      return _optionalChain([symbol, 'optionalAccess', _1336 => _1336.valueDeclaration]);
     } catch (e) {
       return void 0;
     }
@@ -20473,7 +20656,7 @@ ${classMethods}
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0)
       return false;
-    const name = _optionalChain([declaration, 'access', _1330 => _1330.name, 'optionalAccess', _1331 => _1331.text]);
+    const name = _optionalChain([declaration, 'access', _1337 => _1337.name, 'optionalAccess', _1338 => _1338.text]);
     if (typeof name !== "string")
       return false;
     if (_typescript2.default.isParameter(declaration)) {
@@ -20501,7 +20684,7 @@ ${classMethods}
       if (type2 === void 0)
         return false;
       const symbol = this.typeSymbolOf(type2);
-      const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1332 => _1332.declarations]), () => ( []));
+      const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1339 => _1339.declarations]), () => ( []));
       return declarations.some((d) => {
         if (!_typescript2.default.isClassDeclaration(d) || d.name === void 0 || d.name.text !== "Client")
           return false;
@@ -20512,7 +20695,7 @@ ${classMethods}
     const type = this.getCheckedTypeOf(declaration.name);
     if (named(type))
       return true;
-    return (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _1333 => _1333.types]), () => ( []))).some((member) => named(member));
+    return (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _1340 => _1340.types]), () => ( []))).some((member) => named(member));
   }
   /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
    *  `str::parse` would; undefined when the fold is not obviously exact. */
@@ -20956,9 +21139,9 @@ ${idn}}`;
       ifComplete = `${this.getIden(identation)}if ${ifComplete}`;
     }
     const elseStatement = node.elseStatement;
-    if (_optionalChain([elseStatement, 'optionalAccess', _1334 => _1334.kind]) === SyntaxKind4.Block) {
+    if (_optionalChain([elseStatement, 'optionalAccess', _1341 => _1341.kind]) === SyntaxKind4.Block) {
       ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
-    } else if (_optionalChain([elseStatement, 'optionalAccess', _1335 => _1335.kind]) === SyntaxKind4.IfStatement) {
+    } else if (_optionalChain([elseStatement, 'optionalAccess', _1342 => _1342.kind]) === SyntaxKind4.IfStatement) {
       ifComplete += " " + this.printIfStatement(elseStatement, identation);
     }
     return this.printNodeCommentsIfAny(node, identation, ifComplete);
@@ -21097,7 +21280,7 @@ ${this.getIden(identation)}})`;
   }
   // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
-    const native = this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1336 => _1336.arguments, 'optionalAccess', _1337 => _1337[0]]), parsedArg);
+    const native = this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1343 => _1343.arguments, 'optionalAccess', _1344 => _1344[0]]), parsedArg);
     if (native !== void 0) {
       return `Value::Bool(${native})`;
     }
@@ -21139,7 +21322,7 @@ ${this.getIden(identation)}})`;
     return `append_to_array(&mut ${name}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
-    const pRef = _optionalChain([parsedArg, 'optionalAccess', _1338 => _1338.startsWith, 'call', _1339 => _1339("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
+    const pRef = _optionalChain([parsedArg, 'optionalAccess', _1345 => _1345.startsWith, 'call', _1346 => _1346("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
     return `Value::Bool(contains(&${name}, ${pRef}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
@@ -21209,7 +21392,7 @@ ${this.getIden(identation)}})`;
   printTryStatement(node, identation) {
     const tryBody = node.tryBlock.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
     const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-    const rawName = _optionalChain([node, 'access', _1340 => _1340.catchClause, 'optionalAccess', _1341 => _1341.variableDeclaration, 'optionalAccess', _1342 => _1342.name, 'optionalAccess', _1343 => _1343.escapedText]);
+    const rawName = _optionalChain([node, 'access', _1347 => _1347.catchClause, 'optionalAccess', _1348 => _1348.variableDeclaration, 'optionalAccess', _1349 => _1349.name, 'optionalAccess', _1350 => _1350.escapedText]);
     const errorName = rawName ? `_${rawName}` : "_e";
     const iden = this.getIden(identation);
     return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -21491,6 +21674,27 @@ _RustTranspiler.RUST_PARSE_HELPERS = {
   parseInt: "i64",
   parseFloat: "f64"
 };
+// ── pro-tier WS handler `message` shadow (D-27) ───────────────────────────
+// `handle_x (client: Client, message: Dict)` is dispatched by NAME with
+// `Value` args, so the printed signature keeps `Value`; the annotation still
+// proves a plain dict, so a borrowed `&IndexMap` view is bound at fn entry
+// and the `safe_*` reads on the parameter print as native `.get("k")`
+// matches instead of `self.safe_*_k(message, "k", ..)` helper calls. The
+// view holds `Arc<IndexMap>` (an Arc bump, never a dict copy), so every
+// other use of the parameter — moves included — prints unchanged.
+/** The borrowed view bound by the shadow. */
+_RustTranspiler.PRO_HANDLER_SHADOW_NAME = "__pro_message";
+/** TS helper name -> emitted match kind. */
+_RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS = {
+  "safeValue": "value",
+  "safeString": "string",
+  "safeInteger": "integer",
+  "safeNumber": "float",
+  "safeFloat": "float",
+  "safeDict": "dict",
+  "safeList": "list",
+  "safeBool": "bool"
+};
 // ── declared-Dict locals ──────────────────────────────────────────────────
 // The TS checker types many dict-holding locals `any` (an element read off
 // a `Dictionary<T>`, a default-valued bag, a reader whose return type is
@@ -21701,7 +21905,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _1344 => _1344.body, 'optionalAccess', _1345 => _1345.statements, 'access', _1346 => _1346.forEach, 'call', _1347 => _1347((statement) => {
+    _optionalChain([node, 'access', _1351 => _1351.body, 'optionalAccess', _1352 => _1352.statements, 'access', _1353 => _1353.forEach, 'call', _1354 => _1354((statement) => {
       if (_typescript2.default.isExpressionStatement(statement)) {
         const expression = statement.expression;
         if (_typescript2.default.isCallExpression(expression)) {
@@ -21862,7 +22066,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _1348 => _1348.name, 'access', _1349 => _1349.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _1355 => _1355.name, 'access', _1356 => _1356.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -22115,14 +22319,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1350 => _1350.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1357 => _1357.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1351 => _1351.getChecker, 'call', _1352 => _1352(), 'access', _1353 => _1353.getDeclaredTypeOfSymbol, 'call', _1354 => _1354(symbol), 'access', _1355 => _1355.symbol, 'optionalAccess', _1356 => _1356.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1358 => _1358.getChecker, 'call', _1359 => _1359(), 'access', _1360 => _1360.getDeclaredTypeOfSymbol, 'call', _1361 => _1361(symbol), 'access', _1362 => _1362.symbol, 'optionalAccess', _1363 => _1363.declarations]), () => ( []));
           const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -22257,7 +22461,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
     options,
     rootNames: [inMemoryFilePath, globalsShimPath],
     host,
-    oldProgram: _optionalChain([cache, 'optionalAccess', _1357 => _1357.memoryOldProgram])
+    oldProgram: _optionalChain([cache, 'optionalAccess', _1364 => _1364.memoryOldProgram])
   });
   if (cache !== void 0) {
     cache.memoryOldProgram = program;
