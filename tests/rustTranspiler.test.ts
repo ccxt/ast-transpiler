@@ -2758,3 +2758,83 @@ describe('rust native value predicates and json', () => {
         expect(output).not.toContain('json_stringify');
     });
 });
+
+describe('rust typed-parameter dict reads', () => {
+    const DICT_DECL =
+        "interface Dictionary<T> { [key: string]: T; }\n" +
+        "type Dict = Dictionary<any>;\n";
+
+    test('dynamic string key on a Dict parameter emits a native read', () => {
+        const ts = DICT_DECL +
+            "function f (balance: Dict, code: string) {\n" +
+            "    return balance[code];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(
+            'balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&balance');
+    });
+
+    test('dynamic Str key (string | undefined) is still a proven string key', () => {
+        const ts = DICT_DECL +
+            "type Str = string | undefined;\n" +
+            "function f (balance: Dict, code: Str) {\n" +
+            "    return balance[code];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('balance.as_map().and_then(|__m| code.as_str()');
+        expect(output).not.toContain('get_value(&balance');
+    });
+
+    test('numeric key on a Dict parameter keeps the helper', () => {
+        const ts = DICT_DECL +
+            "function f (balance: Dict, i: number) {\n" +
+            "    return balance[i];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&balance');
+    });
+
+    test('any-typed receiver keeps the dynamic read helper', () => {
+        const ts =
+            "function f (balance: any, code: string) {\n" +
+            "    return balance[code];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&balance');
+    });
+
+    test('a reassigned Dict parameter keeps the helper (D2)', () => {
+        const ts = DICT_DECL +
+            "function f (balance: Dict, code: string) {\n" +
+            "    balance = {};\n" +
+            "    return balance[code];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&balance');
+    });
+
+    test('a union alias with undefined proves the dict for a literal key', () => {
+        const ts =
+            "interface MarketInterface { id: string; }\n" +
+            "type Market = MarketInterface | undefined;\n" +
+            "function f (market: Market) {\n" +
+            "    return market['id'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('market.as_map().and_then(|__m| __m.get("id"))');
+        expect(output).not.toContain('get_value(&market');
+    });
+
+    test('a union with a non-dict member keeps the helper', () => {
+        const ts =
+            "interface MarketInterface { id: string; }\n" +
+            "type Market = MarketInterface | undefined | number;\n" +
+            "function f (market: Market) {\n" +
+            "    return market['id'];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value_k(&market, \"id\")');
+        expect(output).not.toContain('.as_map()');
+    });
+});

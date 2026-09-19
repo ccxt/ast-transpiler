@@ -16649,7 +16649,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (type.flags & _typescript2.default.TypeFlags.Union) {
       const parts = _nullishCoalesce(type.types, () => ( []));
-      return parts.length > 0 && parts.every((part) => this.isDictShapedType(part));
+      const valueParts = parts.filter((part) => !this.rustTypeIsNullish(part));
+      return parts.length > valueParts.length && valueParts.length > 0 && valueParts.every((part) => this.isDictShapedType(part));
     }
     if (!(type.flags & _typescript2.default.TypeFlags.Object)) {
       return false;
@@ -18202,6 +18203,14 @@ ${classMethods}
   /** True only for object types the rust port represents as `Value::Dict`
    *  (plain interfaces / index-signature / literal types — never classes). */
   isProvenMapType(type) {
+    if (type === void 0)
+      return false;
+    if (type.flags & _typescript2.default.TypeFlags.Union) {
+      const parts = _nullishCoalesce(type.types, () => ( []));
+      const nullish = parts.filter((p) => this.rustTypeIsNullish(p));
+      const valueParts = parts.filter((p) => !this.rustTypeIsNullish(p));
+      return nullish.length > 0 && valueParts.length > 0 && valueParts.every((p) => this.isProvenMapType(p));
+    }
     if (!(type.flags & _typescript2.default.TypeFlags.Object))
       return false;
     if (this.isProvenListType(type))
@@ -18214,6 +18223,11 @@ ${classMethods}
       return false;
     const hasStringIndex = this.getChecker().getIndexTypeOfType(type, _typescript2.default.IndexKind.String) !== void 0;
     return hasStringIndex || this.typeSymbolOf(type) !== void 0;
+  }
+  /** `undefined` / `null` / `void` / `never` — a union member that carries no
+   *  runtime value; `Value::Null` is the only box these ever get. */
+  rustTypeIsNullish(type) {
+    return type !== void 0 && (type.flags & (_typescript2.default.TypeFlags.Undefined | _typescript2.default.TypeFlags.Null | _typescript2.default.TypeFlags.Void | _typescript2.default.TypeFlags.Never)) !== 0;
   }
   isProvenMapExpression(node) {
     const type = this.getCheckedTypeOf(node);
@@ -18240,7 +18254,68 @@ ${classMethods}
         return void 0;
       return this.printNativeListIndex(receiverText, index);
     }
-    return void 0;
+    return this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode);
+  }
+  // ── typed-parameter dict reads ────────────────────────────────────────────
+  //
+  // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
+  // a `Market`-style alias) holds the dict or `Value::Null`, so `get_value`'s
+  // marker routes (`__cacheKind` / `__sideKind` / book id / `__live_id`)
+  // cannot fire on it: the runtime read is `m.get(k)` (or a miss). That makes
+  // the dynamic-key read native, which `get_value`'s literal-key proof cannot
+  // reach (`get_value(&balance, &code)` — 45+ whole-language).
+  //
+  // The key must be a proven string box (`Str`): every non-string key kind
+  // misses in the runtime's dict branch, so `.as_str()` reproduces it.
+  /** The parameter declaration behind a receiver when its *annotation* proves
+   *  a plain dict; undefined otherwise (no proof → keep the helper). */
+  rustProvenDictParameter(node) {
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || !_typescript2.default.isParameter(declaration))
+      return void 0;
+    if (declaration.type === void 0)
+      return void 0;
+    const type = this.getCheckedTypeOf(declaration.type);
+    if (type === void 0 || !this.isProvenMapType(type))
+      return void 0;
+    return this.rustLocalIsReassigned(declaration, String(declaration.name.escapedText)) ? void 0 : declaration;
+  }
+  /** `Str` (`string | undefined`) — the key box is `Value::Str` or Null. */
+  rustKeyIsProvenString(node) {
+    const type = this.getCheckedTypeOf(node);
+    if (type === void 0)
+      return false;
+    const parts = type.flags & _typescript2.default.TypeFlags.Union ? _nullishCoalesce(type.types, () => ( [])) : [type];
+    let strings = 0;
+    for (const part of parts) {
+      if (part.flags & (_typescript2.default.TypeFlags.String | _typescript2.default.TypeFlags.StringLiteral)) {
+        strings++;
+        continue;
+      }
+      if (this.rustTypeIsNullish(part))
+        continue;
+      return false;
+    }
+    return strings > 0;
+  }
+  /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
+  printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) {
+    if (this.rustProvenDictParameter(receiverNode) === void 0)
+      return void 0;
+    if (!this.rustKeyIsProvenString(keyNode))
+      return void 0;
+    const keyText = this.printNode(keyNode, 0).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
+      return void 0;
+    if (this.rustNodeIsKeyUnsafePlace(keyText))
+      return void 0;
+    return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+  }
+  /** Keys `get_value` serves from the book store / cache bucket / live
+   *  snapshot instead of the dict itself — a dynamic read cannot prove the
+   *  key away, so a place named after one stays boxed. */
+  rustNodeIsKeyUnsafePlace(keyText) {
+    return _RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText);
   }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
     if (!this.isProvenMapExpression(receiverNode)) {

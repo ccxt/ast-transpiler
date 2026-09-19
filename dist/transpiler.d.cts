@@ -1686,12 +1686,26 @@ declare class RustTranspiler extends BaseTranspiler {
     /** True only for object types the rust port represents as `Value::Dict`
      *  (plain interfaces / index-signature / literal types — never classes). */
     isProvenMapType(type: ts.Type): boolean;
+    /** `undefined` / `null` / `void` / `never` — a union member that carries no
+     *  runtime value; `Value::Null` is the only box these ever get. */
+    rustTypeIsNullish(type: ts.Type): boolean;
     isProvenMapExpression(node: ts.Node): boolean;
     isProvenListExpression(node: ts.Node): boolean;
     /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
     printNativeListIndex(receiverText: string, index: number): string;
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
+    /** The parameter declaration behind a receiver when its *annotation* proves
+     *  a plain dict; undefined otherwise (no proof → keep the helper). */
+    rustProvenDictParameter(node: ts.Node): ts.ParameterDeclaration | undefined;
+    /** `Str` (`string | undefined`) — the key box is `Value::Str` or Null. */
+    rustKeyIsProvenString(node: ts.Node): boolean;
+    /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
+    printNativeDynamicMapAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
+    /** Keys `get_value` serves from the book store / cache bucket / live
+     *  snapshot instead of the dict itself — a dynamic read cannot prove the
+     *  key away, so a place named after one stays boxed. */
+    rustNodeIsKeyUnsafePlace(keyText: string): boolean;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes
