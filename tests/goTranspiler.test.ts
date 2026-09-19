@@ -671,6 +671,87 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var pair any = this.SafeList2(item, \"a\", \"b\")");
         expect(output).toContain("var deepList any = this.SafeListN(");
     });
+    test('a SafeList local read as a list is declared []any and read with SafeListTyped', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    safeValue(a, b) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const data = this.safeList (item, 'data', []);\n" +
+        "        const out = [];\n" +
+        "        for (let i = 0; i < data.length; i++) {\n" +
+        "            out.push (this.safeValue (data[i], 'id'));\n" +
+        "        }\n" +
+        "        const first = this.safeValue (data[0], 'id');\n" +
+        "        return [out, first];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var data []any = SafeListTyped(item, \"data\")");
+        expect(output).toContain("i < len(data)");
+        expect(output).toContain("DerefScalar(data[i])");
+        expect(output).toContain("DerefScalar(data[0])");
+        expect(output).not.toContain("GetArrayLength(data)");
+    });
+    test('a SafeList local with an empty-array default drops it: SafeListTyped carries no default', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const data = this.safeList (item, 'data', []);\n" +
+        "        const n = data.length;\n" +
+        "        return n;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var data []any = SafeListTyped(item, \"data\")");
+        expect(output).not.toContain("[]any{}");
+    });
+    test('a SafeList local whose value escapes, is compared with nil or carries a default keeps the box', () => {
+        const compared =
+        "class Exchange {\n" +
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const data = this.safeList (item, 'data', []);\n" +
+        "        if (data === undefined) { return []; }\n" +
+        "        return data.length;\n" +
+        "    }\n" +
+        "}\n";
+        expect(squash(transpiler.transpileGo(compared).content)).toContain("var data any = this.SafeList(");
+        const escaped =
+        "class Exchange {\n" +
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const data = this.safeList (item, 'data', []);\n" +
+        "        return data;\n" +
+        "    }\n" +
+        "}\n";
+        expect(squash(transpiler.transpileGo(escaped).content)).toContain("var data any = this.SafeList(");
+        const defaulted =
+        "class Exchange {\n" +
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const data = this.safeList (item, 'data', ['x']);\n" +
+        "        return data.length;\n" +
+        "    }\n" +
+        "}\n";
+        expect(squash(transpiler.transpileGo(defaulted).content)).toContain("var data any = this.SafeList(");
+    });
+    test('a typed SafeList local appends natively on a push', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeList(a, b, c?) { return a; }\n" +
+        "    main(item) {\n" +
+        "        const data = this.safeList (item, 'data', []);\n" +
+        "        data.push ('x');\n" +
+        "        return data.length;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var data []any = SafeListTyped(item, \"data\")");
+        expect(output).toContain("data = append(data, \"x\")");
+        expect(output).not.toContain("AppendToArray(");
+    });
     test('a SafeDict local read as a map is declared map[string]any and read with SafeMapTyped', () => {
         const input =
         "class Exchange {\n" +

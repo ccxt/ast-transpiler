@@ -272,6 +272,15 @@ const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
 // interface the local used to hold
 const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDictionary' ];
 
+// `var x any = this.SafeList(container, key)` may carry the slice type for the same reason: the
+// accessor returns `any`, so SafeListTyped reads the same member and hands back a []any with the
+// same length and elements (every array kind IsArray admits is converted), nil when the member is
+// absent or not array-like. The typed declaration is only emitted when every later use READS the
+// value as a list: a length read, an element read and the native push all answer for a []any what
+// the accessors answered for the box, while a nil test, a truthiness test, IsArray, a rebind or
+// any value position would observe the nil slice the box's absent case used to hide.
+const GO_SAFE_LIST_LOCAL_TYPE = '[]any';
+
 
 // the boundary comment ccxt's base sources (ts/src/base/Exchange.ts, PredictionExchange.ts)
 // carry and build/goTranspiler.ts re-assembles the generated file around
@@ -1968,10 +1977,151 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return `SafeMapTyped(${container}, ${key})`;
     }
 
+    // the container/key argument nodes of a whole `this.SafeList(container, key)` call, or
+    // undefined when the initializer is another shape. A third argument is only droppable when
+    // it is the empty array literal the TS call sites pass (`safeList(x, k, [])`): the typed
+    // reader answers nil for the absent case, which is what the empty slice gave those reads.
+    goSafeListLocalArgs(initializer) {
+        if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        const callee: any = initializer.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.name?.escapedText !== 'safeList') {
+            return undefined;
+        }
+        if (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const args = initializer.arguments;
+        if (args.length === 3) {
+            const fallback = args[2];
+            if (fallback?.kind !== ts.SyntaxKind.ArrayLiteralExpression || fallback.elements.length !== 0) {
+                return undefined;
+            }
+        } else if (args.length !== 2) {
+            return undefined;
+        }
+        return { container: args[0], key: args[1] };
+    }
+
+    // one later use of a list local: it must read the value as a list, never hand the box out.
+    // A length read, an element read and the statement-shaped push all answer for a []any what
+    // the accessors answered for the box; every other use keeps the box.
+    goSafeListUseReadsTheList(node): boolean {
+        const parent: any = node.parent;
+        if (parent === undefined) {
+            return false;
+        }
+        switch (parent.kind) {
+        case ts.SyntaxKind.PropertyAccessExpression: {
+            if (parent.expression !== node) {
+                return false; // the local as the receiver of a further member
+            }
+            if (parent.name?.escapedText === 'length') {
+                return true; // prints GetArrayLength(x)
+            }
+            // `x.push(v)` prints `x = append(x, v)` only in the statement shape; every other
+            // push keeps AppendToArray(&x, …), whose *any parameter a []any local cannot take
+            return (parent.name?.escapedText === 'push') && this.goIsNativeAppendShape(node, parent.parent);
+        }
+        case ts.SyntaxKind.ElementAccessExpression: {
+            if (parent.expression !== node) {
+                return false; // the local as the index
+            }
+            return !this.isGoElementAccessAssignmentTarget(parent); // `x[k] = v` writes through the box
+        }
+        case ts.SyntaxKind.CallExpression: {
+            if (parent.expression === node) {
+                return false; // the local called as a function
+            }
+            if (parent.arguments.indexOf(node) !== 0) {
+                return false; // value position: the box escapes
+            }
+            const callee = this.goPrintedCallee(this.printNode(parent, 0));
+            // both accessors read a []any receiver with the very answer they gave the box
+            return (callee === 'GetValue') || (callee === 'GetArrayLength');
+        }
+        default:
+            return false;
+        }
+    }
+
+    // `var x any = this.SafeList(container, key)` -> `var x []any = SafeListTyped(container, key)`.
+    // The value the accessor returned is the same member SafeListTyped reads, and every later use
+    // of the local reads it as a list: with the absent case left as a nil slice, each read observes
+    // what the box used to (a nil slice counts 0 and indexes to nil). Anything else keeps the box.
+    goSafeListLocalUnboxCache = new Map<any, string | undefined>();
+
+    goSafeListLocalUnbox(declaration): string | undefined {
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        // the printer annotates `var x T = …` only for a declaration statement; a for-init or
+        // any other shape prints `:=`, where the annotation would not appear
+        if (declaration.parent?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
+            return undefined;
+        }
+        if (this.goSafeListLocalUnboxCache.has(declaration)) {
+            return this.goSafeListLocalUnboxCache.get(declaration);
+        }
+        this.goSafeListLocalUnboxCache.set(declaration, undefined); // in-progress guard
+        let result: string | undefined;
+        try {
+            result = this.goSafeListLocalUnboxUncached(declaration);
+        } finally {
+            this.goSafeListLocalUnboxCache.set(declaration, result);
+        }
+        return result;
+    }
+
+    goSafeListLocalUnboxUncached(declaration): string | undefined {
+        if (this.goSafeListLocalArgs(declaration.initializer) === undefined) {
+            return undefined;
+        }
+        const sourceName = declaration.name.escapedText as string;
+        const scope: any = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return undefined;
+        }
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) { return; }
+            if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter)
+                && (n !== declaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.escapedText === sourceName)) {
+                safe = false; // a shadowing binding would mix two values under one name
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === sourceName) && (n !== declaration.name)) {
+                if (!this.goSafeListUseReadsTheList(n)) {
+                    safe = false;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        if (!safe || this.goTypeNameIsShadowed(scope, GO_SAFE_LIST_LOCAL_TYPE)) {
+            return undefined;
+        }
+        return GO_SAFE_LIST_LOCAL_TYPE;
+    }
+
+    // the initializer a typed list local is declared with: the accessor call is replaced by the
+    // typed reader, which reads the same member but names the result
+    goSafeListUnboxValue(declaration, identation: number): string | undefined {
+        if (this.goSafeListLocalUnbox(declaration) !== GO_SAFE_LIST_LOCAL_TYPE) {
+            return undefined;
+        }
+        const args: any = this.goSafeListLocalArgs(declaration.initializer);
+        const container = this.printNode(args.container, identation);
+        const key = this.printNode(args.key, 0);
+        return `SafeListTyped(${container}, ${key})`;
+    }
+
     getGoLocalType(declaration, parsedValue: string): string {
         const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
         if (goType === undefined) {
-            return this.goSafeDictLocalUnbox(declaration) ?? 'any';
+            return this.goSafeDictLocalUnbox(declaration) ?? this.goSafeListLocalUnbox(declaration) ?? 'any';
         }
         // the scan matches AST identifiers, so it needs the source name, not the
         // printed one (`type` is renamed to `typeVar` on the way out)
@@ -2040,11 +2190,12 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             }
             const varName = this.printNode(declaration.name);
             const declaredType = this.getGoLocalType(declaration, parsedValue);
-            // a typed dict local is declared with the typed reader rather than the `any`
-            // accessor, so the declaration compiles against the map type
-            const declaredValue = (declaredType === GO_SAFE_DICT_LOCAL_TYPE)
-                ? (this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart())
-                : parsedValue.trimStart();
+            // a typed dict/list local is declared with the typed reader rather than the `any`
+            // accessor, so the declaration compiles against the map/slice type
+            const unboxValue = (declaredType === GO_SAFE_DICT_LOCAL_TYPE)
+                ? this.goSafeDictUnboxValue(declaration, identation)
+                : ((declaredType === GO_SAFE_LIST_LOCAL_TYPE) ? this.goSafeListUnboxValue(declaration, identation) : undefined);
+            const declaredValue = (unboxValue !== undefined) ? unboxValue : parsedValue.trimStart();
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
             const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
@@ -6224,6 +6375,91 @@ ${tryBodyBlock}
             && ((parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) || (parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken));
     }
 
+    // the key of a native list read: its printed Go type must be `int` for the guard's two
+    // comparisons to compile, and the key expression is printed twice (the bounds test and the
+    // index), so a call operand — evaluated twice — is rejected. Every other key keeps GetValue.
+    goIntIndexExpression(node): boolean {
+        switch (node?.kind) {
+        case ts.SyntaxKind.NumericLiteral: {
+            const text = `${node.text ?? ''}`;
+            return /^\d+$/.test(text);
+        }
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.goIntIndexExpression(node.expression);
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            return (node.operator === ts.SyntaxKind.MinusToken) && this.goIntIndexExpression(node.operand);
+        case ts.SyntaxKind.Identifier:
+            return this.goIntOperandIdentifier(node);
+        case ts.SyntaxKind.BinaryExpression: {
+            const op = node.operatorToken?.kind;
+            if ((op === ts.SyntaxKind.PlusToken) || (op === ts.SyntaxKind.MinusToken)
+                || (op === ts.SyntaxKind.AsteriskToken) || (op === ts.SyntaxKind.SlashToken)
+                || (op === ts.SyntaxKind.PercentToken)) {
+                return this.goIntIndexExpression(node.left) && this.goIntIndexExpression(node.right);
+            }
+            return false;
+        }
+        }
+        return false;
+    }
+
+    // true for an identifier the printer emits as a Go int: a local it declared `int`, and a
+    // `for (let i = 0; …)` counter, which prints `for i := 0` and is inferred as `int`
+    goIntOperandIdentifier(node): boolean {
+        if (this.goDeclaredTypeOfIdentifier(node) === 'int') {
+            return true;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const declaration: any = symbol?.valueDeclaration;
+        if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
+            return false;
+        }
+        const list: any = declaration.parent;
+        const loop: any = list?.parent;
+        if ((list?.kind !== ts.SyntaxKind.VariableDeclarationList) || (list.declarations?.length !== 1)
+            || (loop?.kind !== ts.SyntaxKind.ForStatement) || (loop.initializer !== list)) {
+            return false;
+        }
+        const text = `${declaration.initializer.text ?? ''}`;
+        return (declaration.initializer.kind === ts.SyntaxKind.NumericLiteral) && /^\d+$/.test(text);
+    }
+
+    // true when this identifier is a local the printer declared []any because it was unboxed
+    // from a `this.SafeList` accessor. Only that family carries the guarded element read: a local
+    // typed from a slice literal or another []any source keeps GetValue.
+    goSafeListUnboxIdentifier(node): boolean {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const declaration: any = symbol?.valueDeclaration;
+        return (declaration?.kind === ts.SyntaxKind.VariableDeclaration)
+            && (this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE);
+    }
+
+    // `x[k]` on a local the printer declared []any is a slice index: GetValue answered nil for an
+    // absent index (negative or out of range) and derefs a pointer element, so the native read is
+    // the same index behind that guard. Only a key printed as an `int` carries it; every other
+    // key keeps the helper, which reads a []any with the identical answer.
+    goNativeListElementRead(node, containerStr: string, keyNode, keyStr: string): string | undefined {
+        if (containerStr.includes('\n') || keyStr.includes('\n')) {
+            return undefined;
+        }
+        if (this.isGoElementAccessAssignmentTarget(node) || !this.goIntIndexExpression(keyNode)) {
+            return undefined;
+        }
+        const level = this.goStatementLevel;
+        const body = this.getIden(level + 1);
+        return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden(level + 2)}return DerefScalar(${containerStr}[${keyStr}])\n${body}}\n${body}return nil\n${this.getIden(level)}}()`;
+    }
+
     printElementAccessExpression(node, identation) {
         // Maintain original special-case handling first.
         const special = this.printElementAccessExpressionExceptionIfAny(node);
@@ -6278,6 +6514,16 @@ ${tryBodyBlock}
         keyStrs.forEach(k => {
             acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
         });
+
+        // a local the printer declared []any because it was unboxed from a `this.SafeList`
+        // accessor is a slice, so an element read with a key it prints as an int is the guarded
+        // native index (see goNativeListElementRead)
+        if ((baseExpr?.kind === ts.SyntaxKind.Identifier) && this.goSafeListUnboxIdentifier(baseExpr)) {
+            const nativeRead = this.goNativeListElementRead(node, containerStr, keys[0], keyStrs[0]);
+            if (nativeRead !== undefined) {
+                return this.goElementAccessChain(nativeRead, keyStrs);
+            }
+        }
 
         return acc;
     }

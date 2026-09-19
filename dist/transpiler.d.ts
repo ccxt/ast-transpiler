@@ -856,6 +856,15 @@ declare class GoTranspiler extends BaseTranspiler {
     goSafeDictLocalUnbox(declaration: any): string | undefined;
     goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
+    goSafeListLocalArgs(initializer: any): {
+        container: any;
+        key: any;
+    };
+    goSafeListUseReadsTheList(node: any): boolean;
+    goSafeListLocalUnboxCache: Map<any, string>;
+    goSafeListLocalUnbox(declaration: any): string | undefined;
+    goSafeListLocalUnboxUncached(declaration: any): string | undefined;
+    goSafeListUnboxValue(declaration: any, identation: number): string | undefined;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
@@ -1097,6 +1106,10 @@ declare class GoTranspiler extends BaseTranspiler {
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
+    goIntIndexExpression(node: any): boolean;
+    goIntOperandIdentifier(node: any): boolean;
+    goSafeListUnboxIdentifier(node: any): boolean;
+    goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: ts.Node): boolean;
     /**
