@@ -128,6 +128,19 @@ const JAVA_BOOLEAN_BASE_FIELDS = new Set([
     'this.reloadingEvents',
 ]);
 
+// hand-written map fields of java/lib/src/main/java/io/github/ccxt/BaseExchange.java: every
+// value the field can hold is a java.util.Map, so `this.<field>[k]` is the helper's Map branch.
+// `nullable` marks a field that is set to null (reset / cleanRestData) or written from an
+// Object-typed call, so the read keeps the helper's null answer behind a receiver guard;
+// `ohlcvs`/`orderbooks` are only ever assigned createSafeDictionary(true).
+const JAVA_FIELD_TYPES: { [name: string]: { map: boolean, nullable: boolean } } = {
+    'ohlcvs':     { map: true, nullable: false },
+    'orderbooks': { map: true, nullable: false },
+    'balance':    { map: true, nullable: true },
+    'options':    { map: true, nullable: true },
+    'markets':    { map: true, nullable: true },
+};
+
 // hand-written base methods declared `public boolean` (BaseExchange.java): a call prints a
 // primitive Java boolean, so a local fed by one holds a Boolean box or null.
 const JAVA_BOOLEAN_BASE_CALLS = new Set([
@@ -1787,6 +1800,14 @@ export class JavaTranspiler extends BaseTranspiler {
                 && ts.isStringLiteralLike(keys[0])) {
                 acc = `${containerStr}.get(${keyStrs[0]})`;
                 firstKey = 1;
+            } else if (keyStrs.length > 1) {
+                // `this.<field>[k1][k2] = v`: the bottom step reads the hand-written base map
+                // field natively (JAVA_FIELD_TYPES), every step above it keeps the helper
+                const fieldRead = this.javaFieldMapReadText(baseExpr, keys[0]);
+                if (fieldRead !== undefined) {
+                    acc = fieldRead;
+                    firstKey = 1;
+                }
             }
             for (let i = firstKey; i < keyStrs.length - 1; i++) {
                 acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
@@ -2063,6 +2084,50 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_DECLARED_MAP_TYPES.test(type.trim());
     }
 
+    // `this.<field>[k]` where the field is a hand-written base map field (JAVA_FIELD_TYPES):
+    // the helper's Map branch is the native `get`. The helper answers null for a null
+    // receiver (ConcurrentHashMap.get throws on null) and for a null key, so both keep that
+    // answer behind a guard; the receiver is a `this.` field and the key prints once, so
+    // repeating either is side-effect free. An unguarded read is returned without parens so
+    // an enclosing checkcast binds the whole call.
+    javaFieldMapReadText(receiver, key): string | undefined {
+        if (receiver === undefined || receiver.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || receiver.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const name = receiver.name?.escapedText;
+        const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
+        if (field === undefined || field.map !== true) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        let keyGuarded = false;
+        let keyType;
+        try {
+            keyType = this.getChecker().getTypeAtLocation(key);
+        } catch (e) {
+            return undefined;
+        }
+        if (!this.isJavaStringType(keyType) && !this.javaDeclaredStringType(key)) {
+            // the guard prints the key twice, so only a repeatable operand can take it
+            if (!this.javaRepeatableOperand(key)) {
+                return undefined;
+            }
+            keyGuarded = true;
+        }
+        const target = this.printNode(receiver, 0);
+        const read = `((java.util.Map<?, ?>)${target}).get(${keyText})`;
+        if (!keyGuarded && field.nullable !== true) {
+            return read;
+        }
+        const receiverGuard = (field.nullable === true) ? `${target} == null ? null : ` : '';
+        return `(${keyGuarded ? `${keyText} == null ? null : ` : ''}${receiverGuard}${read})`;
+    }
+
+    javaFieldMapRead(node): string | undefined {
+        return this.javaFieldMapReadText(node.expression, node.argumentExpression);
+    }
+
     // `x[k]` reads: emit the native container accessor when the checker proves the Java
     // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
     printCheckerTypedElementAccessRead(node) {
@@ -2070,6 +2135,14 @@ export class JavaTranspiler extends BaseTranspiler {
         const isStringKey = ts.isStringLiteralLike(key);
         const isNumberKey = ts.isNumericLiteral(key);
         if (!isStringKey && !isNumberKey) {
+            // a `this.<field>` map read carries its own Java proof (JAVA_FIELD_TYPES): the
+            // field declaration the printer cannot see is what makes `k` bind natively
+            const fieldRead = this.javaFieldMapRead(node);
+            if (fieldRead !== undefined) {
+                if (this.printElementAccessExpressionExceptionIfAny(node) === undefined && !this.isLeftSideOfAssignment(node)) {
+                    return fieldRead;
+                }
+            }
             return undefined;
         }
         if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined) {

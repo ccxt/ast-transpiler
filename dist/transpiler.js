@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11549,6 +11549,13 @@ var JAVA_BOOLEAN_BASE_FIELDS = /* @__PURE__ */ new Set([
   // PredictionExchange.java
   "this.reloadingEvents"
 ]);
+var JAVA_FIELD_TYPES = {
+  "ohlcvs": { map: true, nullable: false },
+  "orderbooks": { map: true, nullable: false },
+  "balance": { map: true, nullable: true },
+  "options": { map: true, nullable: true },
+  "markets": { map: true, nullable: true }
+};
 var JAVA_BOOLEAN_BASE_CALLS = /* @__PURE__ */ new Set([
   "valueIsDefined",
   "inArray",
@@ -12963,6 +12970,12 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (keyStrs.length > 1 && this.javaDeclaredMapReceiver(baseExpr) && ts6.isStringLiteralLike(keys[0])) {
         acc = `${containerStr}.get(${keyStrs[0]})`;
         firstKey = 1;
+      } else if (keyStrs.length > 1) {
+        const fieldRead = this.javaFieldMapReadText(baseExpr, keys[0]);
+        if (fieldRead !== void 0) {
+          acc = fieldRead;
+          firstKey = 1;
+        }
       }
       for (let i = firstKey; i < keyStrs.length - 1; i++) {
         acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
@@ -13188,6 +13201,46 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return JAVA_DECLARED_MAP_TYPES.test(type.trim());
   }
+  // `this.<field>[k]` where the field is a hand-written base map field (JAVA_FIELD_TYPES):
+  // the helper's Map branch is the native `get`. The helper answers null for a null
+  // receiver (ConcurrentHashMap.get throws on null) and for a null key, so both keep that
+  // answer behind a guard; the receiver is a `this.` field and the key prints once, so
+  // repeating either is side-effect free. An unguarded read is returned without parens so
+  // an enclosing checkcast binds the whole call.
+  javaFieldMapReadText(receiver, key) {
+    if (receiver === void 0 || receiver.kind !== ts6.SyntaxKind.PropertyAccessExpression || receiver.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    const name = receiver.name?.escapedText;
+    const field = typeof name === "string" ? JAVA_FIELD_TYPES[name] : void 0;
+    if (field === void 0 || field.map !== true) {
+      return void 0;
+    }
+    const keyText = this.printNode(key, 0);
+    let keyGuarded = false;
+    let keyType;
+    try {
+      keyType = this.getChecker().getTypeAtLocation(key);
+    } catch (e) {
+      return void 0;
+    }
+    if (!this.isJavaStringType(keyType) && !this.javaDeclaredStringType(key)) {
+      if (!this.javaRepeatableOperand(key)) {
+        return void 0;
+      }
+      keyGuarded = true;
+    }
+    const target = this.printNode(receiver, 0);
+    const read = `((java.util.Map<?, ?>)${target}).get(${keyText})`;
+    if (!keyGuarded && field.nullable !== true) {
+      return read;
+    }
+    const receiverGuard = field.nullable === true ? `${target} == null ? null : ` : "";
+    return `(${keyGuarded ? `${keyText} == null ? null : ` : ""}${receiverGuard}${read})`;
+  }
+  javaFieldMapRead(node) {
+    return this.javaFieldMapReadText(node.expression, node.argumentExpression);
+  }
   // `x[k]` reads: emit the native container accessor when the checker proves the Java
   // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
   printCheckerTypedElementAccessRead(node) {
@@ -13195,6 +13248,12 @@ var JavaTranspiler = class extends BaseTranspiler {
     const isStringKey = ts6.isStringLiteralLike(key);
     const isNumberKey = ts6.isNumericLiteral(key);
     if (!isStringKey && !isNumberKey) {
+      const fieldRead = this.javaFieldMapRead(node);
+      if (fieldRead !== void 0) {
+        if (this.printElementAccessExpressionExceptionIfAny(node) === void 0 && !this.isLeftSideOfAssignment(node)) {
+          return fieldRead;
+        }
+      }
       return void 0;
     }
     if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0) {
