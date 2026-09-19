@@ -277,7 +277,43 @@ const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|predictio
 
 // the base tier itself keeps `Object` parameters: the hand-written java/lib/.../Exchange.java
 // extends the generated BaseExchange.java and overrides it with `Object` boxes
-const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
+const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads[^/]*)?\.ts$/;
+
+// ===== native RETURN types (D-09) =====
+//
+// The printer declares every generated method `Object` (BaseTranspiler.printFunctionType
+// falls back to DEFAULT_RETURN_TYPE for everything but void/Promise/plain-string). Batch C
+// typed the TS return annotations; this slice makes the INTERNAL (non-override) generated
+// ones load-bearing in Java - a method whose annotation names a carriable type AND whose
+// every return statement already prints that Java type on every path (javaReturnSitesPrintType)
+// prints it. No cast is inserted anywhere: the retype is only admitted when the body already
+// prints the type, so the runtime value and its box are untouched.
+//
+//   * structure interfaces / `Dict` (dict-shaped types.ts declarations, string-index bags)
+//     -> java.util.Map<String, Object>   (the same spelling the structure locals use)
+//   * `Str` / plain `string`             -> String
+//   * `Bool` / plain `boolean`           -> Boolean
+//   * `Int` / `Num` / `IndexType` stay Object: a TS `number` is an Integer/Long/Double box,
+//     so no single Java type describes the returned box (same exclusion as the params).
+//
+// D8: a method with ANY declaration up the heritage chain keeps the boxed signature - the
+// base tier is overridden by the hand-written java/lib Exchange.java / BaseExchange.java
+// surface, which declares `Object` returns. Only a method no base class declares (an
+// internal venue/pro helper) can print a native return.
+const JAVA_NATIVE_RETURN_MAP_TYPE = 'java.util.Map<String, Object>';
+
+// the hand-written `public String` producers of the base tier a `this.<name> (...)` return
+// may print: the safeString* family, decimalToPrecision / numberToString (BaseExchange.java)
+// and the string helpers of base/functions/type.ts. Guarded by the resolved signature still
+// living in the base tier, so a venue override (its generated signature is boxed) keeps
+// Object.
+const JAVA_STRING_RETURN_BASE_METHODS: Set<string> = new Set<string>([
+    'safeString', 'safeString2', 'safeStringN',
+    'safeStringUpper', 'safeStringUpper2', 'safeStringUpperN',
+    'safeStringLower', 'safeStringLower2', 'safeStringLowerN',
+    'decimalToPrecision', 'numberToString', 'formatNumber', 'implodeParams', 'implodeHostname',
+]);
+const JAVA_STRING_RETURN_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](?:functions[\\/](?:type|time)\.ts|Exchange(\.nooverloads[^/]*)?\.ts)$/;
 
 const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
     ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Null
@@ -1947,6 +1983,10 @@ export class JavaTranspiler extends BaseTranspiler {
     // by method node; a plain assignment is handled by javaParameterAssignmentCast
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>> = new WeakMap();
 
+    // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
+    javaReturnTypeCache: WeakMap<ts.Node, string | undefined> = new WeakMap();
+    javaReturnTypeInProgress: Set<ts.Node> = new Set();
+
     javaParameterIsCompoundAssigned(node): boolean {
         const method = node.parent;
         const name = (node.name as any)?.escapedText;
@@ -1995,6 +2035,244 @@ export class JavaTranspiler extends BaseTranspiler {
         // the checkcast carries its own parentheses: a bare `(T) cond ? a : b` binds the
         // condition, not the whole right side
         return `${leftText} = (${native}) (${this.printNode(right, identation)})`;
+    }
+
+    // ===== native return types (D-09) =====
+    //
+    // The native Java return a generated method declaration prints with, when its TS
+    // annotation names a carriable type and EVERY return statement of its body already
+    // prints that same Java type (see the constants above). undefined keeps the boxed
+    // `Object` signature.
+    javaNativeReturnType(node): string | undefined {
+        if (node === undefined || node.kind !== ts.SyntaxKind.MethodDeclaration
+            || node.name === undefined || node.type === undefined || node.body === undefined
+            || !ts.isClassDeclaration(node.parent)) {
+            return undefined;
+        }
+        if (this.javaReturnTypeInProgress.has(node)) {
+            return undefined; // a mutually recursive return chain reads as unproven
+        }
+        if (this.javaReturnTypeCache.has(node)) {
+            return this.javaReturnTypeCache.get(node);
+        }
+        this.javaReturnTypeInProgress.add(node);
+        let result;
+        try {
+            result = this.javaNativeReturnTypeUncached(node);
+        } finally {
+            this.javaReturnTypeInProgress.delete(node);
+        }
+        this.javaReturnTypeCache.set(node, result);
+        return result;
+    }
+
+    javaNativeReturnTypeUncached(node): string | undefined {
+        // only the generated tiers carry the annotation; a ts/src/base/** declaration has a
+        // hand-written java counterpart that keeps `Object`
+        if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
+            return undefined;
+        }
+        if (this.isAsyncFunction(node)) {
+            return undefined;
+        }
+        // D8: an override prints the base declaration's boxed signature
+        if (this.getMethodOverride(node) !== undefined) {
+            return undefined;
+        }
+        const target = this.javaNativeReturnTypeTarget(node);
+        if (target === undefined) {
+            return undefined;
+        }
+        if (!this.javaReturnSitesPrintType(node, target)) {
+            return undefined;
+        }
+        return target;
+    }
+
+    javaNativeReturnTypeTarget(node): string | undefined {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node.type);
+        } catch (e) {
+            return undefined;
+        }
+        if (type === undefined) {
+            return undefined;
+        }
+        const aliasSymbol = (type as any).aliasSymbol;
+        if (aliasSymbol !== undefined) {
+            const name = aliasSymbol.name;
+            const fileName = aliasSymbol.declarations?.[0]?.getSourceFile?.()?.fileName;
+            if (fileName !== undefined && JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName)) {
+                if (name === 'Str') {
+                    return 'String';
+                }
+                if (name === 'Bool') {
+                    return 'Boolean';
+                }
+            }
+        }
+        // a plain (non-alias) string annotation already prints String; the flag proof keeps
+        // this rule consistent with the printer's own plain-string handling
+        if (type.flags === ts.TypeFlags.String) {
+            return 'String';
+        }
+        if (type.flags === ts.TypeFlags.Boolean) {
+            return 'Boolean';
+        }
+        return this.isJavaMapStructureType(type) ? JAVA_NATIVE_RETURN_MAP_TYPE : undefined;
+    }
+
+    // every `return` of the method body (nested functions are separate scopes) prints the
+    // target Java type
+    javaReturnSitesPrintType(method, target: string): boolean {
+        const returns: any[] = [];
+        const collect = (n) => {
+            if (n === undefined) {
+                return;
+            }
+            if (n !== method && ts.isFunctionLike(n)) {
+                return;
+            }
+            if (ts.isReturnStatement(n)) {
+                returns.push(n);
+            }
+            ts.forEachChild(n, collect);
+        };
+        collect(method.body);
+        if (returns.length === 0) {
+            return false;
+        }
+        return returns.every((r) => r.expression !== undefined
+            && this.javaExpressionPrintsType(r.expression, target));
+    }
+
+    javaExpressionPrintsType(expression, target: string): boolean {
+        const node = this.javaUnwrapReturnExpression(expression);
+        if (node === undefined) {
+            return false;
+        }
+        if (node.kind === ts.SyntaxKind.NullKeyword) {
+            return true; // null is assignable to String / Boolean / Map
+        }
+        if (ts.isIdentifier(node) && node.escapedText === 'undefined') {
+            return true;
+        }
+        if (node.kind === ts.SyntaxKind.ConditionalExpression) {
+            return this.javaExpressionPrintsType(node.whenTrue, target)
+                && this.javaExpressionPrintsType(node.whenFalse, target);
+        }
+        if (target === JAVA_NATIVE_RETURN_MAP_TYPE) {
+            if (ts.isObjectLiteralExpression(node)) {
+                return true; // a fresh HashMap literal
+            }
+            if (this.javaReturnedParameterType(node) === target) {
+                return true;
+            }
+            return this.javaReturnedCallType(node) === target;
+        }
+        if (target === 'String') {
+            if (ts.isStringLiteralLike(node)) {
+                return true;
+            }
+            if (this.javaReturnedParameterType(node) === target) {
+                return true;
+            }
+            if (this.javaReturnedCallType(node) === target) {
+                return true;
+            }
+            return this.javaStringCallReturn(node);
+        }
+        if (target === 'Boolean') {
+            // the printer's own proof that this expression prints a Java boolean (or a
+            // Boolean box): the comparison helpers, `!`, the logical operators, boolean
+            // literals and the verified boolean-returning calls
+            if (this.javaPrintsBooleanValue(node, new Set<any>(), 0)) {
+                return true;
+            }
+            if (this.javaReturnedParameterType(node) === target) {
+                return true;
+            }
+            return this.javaReturnedCallType(node) === target;
+        }
+        return false;
+    }
+
+    javaUnwrapReturnExpression(expression) {
+        if (expression === undefined) {
+            return undefined;
+        }
+        let node = expression;
+        while (node !== undefined && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)
+            || ts.isNonNullExpression(node) || ts.isTypeAssertionExpression(node)
+            || node.kind === ts.SyntaxKind.SatisfiesExpression)) {
+            node = node.expression;
+        }
+        return node;
+    }
+
+    // an identifier bound to a parameter the printer itself declares with the target Java
+    // type (javaNativeParameterType: Dict/Market/Currency/Str/Bool annotations)
+    javaReturnedParameterType(node): string | undefined {
+        if (!ts.isIdentifier(node)) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isParameter(declaration)) {
+            return undefined;
+        }
+        return this.javaNativeParameterType(declaration);
+    }
+
+    // a `this.<name> (...)` / `super.<name> (...)` return is the callee's native return type
+    // (fixpoint over javaNativeReturnType)
+    javaReturnedCallType(node): string | undefined {
+        if (!ts.isCallExpression(node)) {
+            return undefined;
+        }
+        const callee = node.expression;
+        if (!ts.isPropertyAccessExpression(callee)
+            || (callee.expression.kind !== ts.SyntaxKind.ThisKeyword
+                && !(ts.isIdentifier(callee.expression) && callee.expression.escapedText === 'super'))) {
+            return undefined;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration === undefined || declaration.kind !== ts.SyntaxKind.MethodDeclaration) {
+            return undefined;
+        }
+        return this.javaNativeReturnType(declaration);
+    }
+
+    // a `this.<name> (...)` return of a hand-written base String producer: the resolved
+    // signature must still live in the base tier (a venue override prints its own boxed
+    // Object signature)
+    javaStringCallReturn(node): boolean {
+        if (!ts.isCallExpression(node)) {
+            return false;
+        }
+        const callee = node.expression;
+        if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        if (!JAVA_STRING_RETURN_BASE_METHODS.has(callee.name.escapedText as string)) {
+            return false;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined) {
+            return false; // an unresolvable call prints Helpers.callDynamically (Object)
+        }
+        const fileName = declaration.getSourceFile?.()?.fileName;
+        return fileName !== undefined && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
     }
 
     // the annotation proof alone, without the heritage check
@@ -4792,6 +5070,16 @@ export class JavaTranspiler extends BaseTranspiler {
         // quick fix
         if (returnType === 'java.util.concurrent.CompletableFuture') {
             returnType = 'java.util.concurrent.CompletableFuture<Object>';
+        }
+
+        // D-09: an internal (non-override) generated method whose every return already
+        // prints the native type carries it in its signature (see javaNativeReturnType).
+        // Only the boxed default is replaced - void/Promise/plain-string stay as printed.
+        if (returnType === this.DEFAULT_RETURN_TYPE) {
+            const native = this.javaNativeReturnType(node);
+            if (native !== undefined) {
+                returnType = native;
+            }
         }
 
         // let modifiers = this.printModifiers(node);
