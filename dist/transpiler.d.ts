@@ -1594,15 +1594,28 @@ declare class RustTranspiler extends BaseTranspiler {
     printNativeInOperator(key: any, obj: any): string;
     rustStringLiteralOf(printedKey: string): string | undefined;
     printNativeDictInsert(baseExpr: any, keyNode: any, keyText: any, valueText: any): string | undefined;
+    /** The `insert` key argument. A literal becomes `"k".into()`; a proven
+     *  string place becomes `crate::runtime::stringify_param(&k)` — the exact
+     *  conversion the helper's dict branch applies to a non-string key, and
+     *  `k.to_string()` for a string one. */
+    rustNativeInsertKeyArg(receiver: any, keyNode: any, keyText: string): string | undefined;
     rustNativeInsertReceiver(expr: any): {
         text: string;
         isField: boolean;
+        plain: boolean;
         nameNode: any;
     } | undefined;
-    /** Element-write receiver proof for a local: the batch-A names (unchanged)
-     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
-     *  build on every path (rust-12's proof, read off the checker). */
-    rustInsertIdentifierReceiver(ident: any): boolean;
+    /** Element-write receiver proof for a local: the batch-A names (rust-13,
+     *  `plain: false` — the whitelist is not a construction proof) or, for any
+     *  other name, the dict-shape proof plus a plain-`Value::Map` build on
+     *  every path (rust-12's proof, read off the checker), or a parameter whose
+     *  annotation proves a plain dict and whose writes keep that shape. The
+     *  returned flag is the *by-construction* plainness (literal-init locals,
+     *  handler tuples, hand-written plain fields) that a book-meta key needs. */
+    rustInsertIdentifierReceiver(ident: any): boolean | undefined;
+    /** A literal initializer must carry no runtime tag key; a call initializer
+     *  is the axiom the declared-Dict table itself rests on. */
+    rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean;
     /** True when every value the local can hold comes from an object literal:
      *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
      *  `__cache_backref`) only on handles its own store builds, so the helper's
@@ -1625,6 +1638,9 @@ declare class RustTranspiler extends BaseTranspiler {
     rustWriteDictShape(type: any): boolean;
     rustReceiverStaysDict(baseExpr: any, receiver: any): boolean;
     rustFieldStaysDict(baseExpr: any, fieldName: string): boolean;
+    rustParamStaysPlainDict(declaration: ts.ParameterDeclaration): boolean;
+    /** RHS of a write to a plain-dict parameter that keeps the shape. */
+    rustPlainDictPreservingRhs(node: ts.Node, name: string): boolean;
     rustPrintedBoolArg(raw: string): boolean;
     foldNegateLiteral(operandText: string): string | undefined;
     ensureRef(expr: string): string;
