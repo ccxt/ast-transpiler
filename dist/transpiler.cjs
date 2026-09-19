@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -12369,8 +12369,8 @@ ${this.getIden(level)}}()`;
     return declaration.initializer.kind === _typescript2.default.SyntaxKind.NumericLiteral && /^\d+$/.test(text);
   }
   // true when this identifier is a local the printer declared []any because it was unboxed
-  // from a `this.SafeList` accessor. Only that family carries the guarded element read: a local
-  // typed from a slice literal or another []any source keeps GetValue.
+  // from a `this.SafeList` accessor. Only that family carried the first guarded element read;
+  // the declared-type arm below is the D-06 widening.
   goSafeListUnboxIdentifier(node) {
     let symbol;
     try {
@@ -12380,6 +12380,13 @@ ${this.getIden(level)}}()`;
     }
     const declaration = _optionalChain([symbol, 'optionalAccess', _847 => _847.valueDeclaration]);
     return _optionalChain([declaration, 'optionalAccess', _848 => _848.kind]) === _typescript2.default.SyntaxKind.VariableDeclaration && this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE;
+  }
+  // true when the identifier's printed Go declaration is a `[]any` slice: the SafeList family
+  // above, or any other local/param the declared-type table proved a slice (a slice literal,
+  // a `[]any`-returning accessor, a slice param the typed-param family registers). All of them
+  // read identically through GetValue, so all of them carry the guarded native element read.
+  goDeclaredListIdentifier(node) {
+    return this.goDeclaredTypeOfIdentifier(node) === GO_SAFE_LIST_LOCAL_TYPE || this.goSafeListUnboxIdentifier(node);
   }
   // `x[k]` on a local the printer declared []any is a slice index: GetValue answered nil for an
   // absent index (negative or out of range) and derefs a pointer element, so the native read is
@@ -12433,7 +12440,7 @@ ${this.getIden(level)}}()`;
     keyStrs.forEach((k) => {
       acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
     });
-    if (_optionalChain([baseExpr, 'optionalAccess', _849 => _849.kind]) === _typescript2.default.SyntaxKind.Identifier && this.goSafeListUnboxIdentifier(baseExpr)) {
+    if (_optionalChain([baseExpr, 'optionalAccess', _849 => _849.kind]) === _typescript2.default.SyntaxKind.Identifier && this.goDeclaredListIdentifier(baseExpr)) {
       const nativeRead = this.goNativeListElementRead(node, containerStr, keys[0], keyStrs[0]);
       if (nativeRead !== void 0) {
         return this.goElementAccessChain(nativeRead, keyStrs);
