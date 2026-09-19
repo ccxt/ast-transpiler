@@ -1378,7 +1378,7 @@ export class RustTranspiler extends BaseTranspiler {
             const elements = left.elements;
             const rhs = this.printNode(right, 0);
             const tmpName = '__destr_tmp';
-            const nativeList = this.isProvenListExpression(right);
+            const nativeList = this.rustNativeListSource(right);
             const assignments = elements.map((e, idx) => {
                 const target = this.printNode(e, 0);
                 if (nativeList) {
@@ -1549,7 +1549,7 @@ export class RustTranspiler extends BaseTranspiler {
             const parsedElements = elements.map(e => this.printNode(e.name, 0));
             const syntheticName = parsedElements.join('') + 'Variable';
             let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
-            const nativeList = this.isProvenListExpression(declaration.initializer);
+            const nativeList = this.rustNativeListSource(declaration.initializer);
             parsedElements.forEach((e, idx) => {
                 const access = nativeList
                     ? this.printNativeListIndex(syntheticName, idx)
@@ -2766,6 +2766,91 @@ export class RustTranspiler extends BaseTranspiler {
     isProvenListExpression(node: ts.Node): boolean {
         const type = this.getCheckedTypeOf(node);
         return type !== undefined && this.isProvenListType(type);
+    }
+
+    /** RHS of a generator destructure that provably holds a `Value::Arr`: the
+     *  checker-proven list, or a call whose callee returns an array literal on
+     *  every path. */
+    rustNativeListSource(node: ts.Node): boolean {
+        return this.isProvenListExpression(node) || this.rustCallReturnsProvenList(node);
+    }
+
+    /** `x.split(sep)` → the runtime `split`, which yields an array on every
+     *  path (a non-string receiver gives the empty array, never a dict). */
+    rustCallPrintsRuntimeSplit(node: ts.Node): boolean {
+        if (!ts.isCallExpression(node) || node.arguments.length === 0) return false;
+        const expression: any = node.expression;
+        if (!ts.isPropertyAccessExpression(expression)) return false;
+        if (expression.expression.kind === SyntaxKind.ThisKeyword) return false;
+        return String(expression.name.escapedText) === 'split';
+    }
+
+    /** True when the call's value is always a runtime array: the `handle*AndParams`
+     *  family and its exchange overrides declare `any`, so the checker cannot
+     *  prove the `[T, Dict]` tuple the body always builds — walk the resolved
+     *  callee instead. */
+    rustCallReturnsProvenList(node: ts.Node): boolean {
+        if (!ts.isCallExpression(node)) return false;
+        return this.rustProvenListCall(node, new Set());
+    }
+
+    private rustProvenListCall(node: ts.Node, stack: Set<ts.Node>): boolean {
+        if (this.rustCallPrintsRuntimeSplit(node)) return true;
+        const declaration = this.rustCalleeDeclaration(node);
+        if (declaration === undefined) return false;
+        return this.rustFunctionReturnsArrayLiteral(declaration, stack);
+    }
+
+    /** Implementation of a `x.y(..)` call, when the checker resolves one. */
+    private rustCalleeDeclaration(node: ts.Node): ts.Node | undefined {
+        if (!ts.isCallExpression(node)) return undefined;
+        if (!ts.isPropertyAccessExpression((node as any).expression)) return undefined;
+        try {
+            const signature: any = (this.getChecker() as any).getResolvedSignature(node);
+            return signature?.declaration ?? undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    /** Every `return` in the function's own body builds an array literal, or
+     *  delegates to a call that does. `throw` and fall-through (the printer's
+     *  `Value::Null`) read the same through both forms. */
+    private rustFunctionReturnsArrayLiteral(declaration: ts.Node, stack: Set<ts.Node>): boolean {
+        if (stack.has(declaration)) return false;
+        const body: any = (declaration as any).body;
+        if (body === undefined || !ts.isBlock(body)) return false;
+        stack.add(declaration);
+        try {
+            let returns = 0;
+            let all = true;
+            const visit = (node: ts.Node) => {
+                if (!all) return;
+                if (node !== body && ts.isFunctionLike(node)) return; // nested closure
+                if (ts.isReturnStatement(node)) {
+                    returns++;
+                    const expression: any = node.expression;
+                    if (expression === undefined || !ts.isArrayLiteralExpression(expression)) {
+                        if (expression !== undefined && ts.isCallExpression(expression) &&
+                            this.rustProvenListCall(expression, stack)) {
+                            return;
+                        }
+                        if (expression !== undefined && ts.isParenthesizedExpression(expression) &&
+                            ts.isArrayLiteralExpression(expression.expression)) {
+                            return;
+                        }
+                        all = false;
+                        return;
+                    }
+                    return;
+                }
+                ts.forEachChild(node, visit);
+            };
+            ts.forEachChild(body, visit);
+            return all && returns > 0;
+        } finally {
+            stack.delete(declaration);
+        }
     }
 
     /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */

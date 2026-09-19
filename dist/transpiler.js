@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -17068,7 +17068,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const elements = left.elements;
       const rhs = this.printNode(right, 0);
       const tmpName = "__destr_tmp";
-      const nativeList = this.isProvenListExpression(right);
+      const nativeList = this.rustNativeListSource(right);
       const assignments = elements.map((e, idx) => {
         const target = this.printNode(e, 0);
         if (nativeList) {
@@ -17216,7 +17216,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const syntheticName = parsedElements.join("") + "Variable";
       let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
 `;
-      const nativeList = this.isProvenListExpression(declaration.initializer);
+      const nativeList = this.rustNativeListSource(declaration.initializer);
       parsedElements.forEach((e, idx) => {
         const access = nativeList ? this.printNativeListIndex(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`;
         const line = `${this.getIden(identation)}let mut ${e}: Value = ${access}`;
@@ -18195,6 +18195,95 @@ ${classMethods}
   isProvenListExpression(node) {
     const type = this.getCheckedTypeOf(node);
     return type !== void 0 && this.isProvenListType(type);
+  }
+  /** RHS of a generator destructure that provably holds a `Value::Arr`: the
+   *  checker-proven list, or a call whose callee returns an array literal on
+   *  every path. */
+  rustNativeListSource(node) {
+    return this.isProvenListExpression(node) || this.rustCallReturnsProvenList(node);
+  }
+  /** `x.split(sep)` → the runtime `split`, which yields an array on every
+   *  path (a non-string receiver gives the empty array, never a dict). */
+  rustCallPrintsRuntimeSplit(node) {
+    if (!ts7.isCallExpression(node) || node.arguments.length === 0)
+      return false;
+    const expression = node.expression;
+    if (!ts7.isPropertyAccessExpression(expression))
+      return false;
+    if (expression.expression.kind === SyntaxKind4.ThisKeyword)
+      return false;
+    return String(expression.name.escapedText) === "split";
+  }
+  /** True when the call's value is always a runtime array: the `handle*AndParams`
+   *  family and its exchange overrides declare `any`, so the checker cannot
+   *  prove the `[T, Dict]` tuple the body always builds — walk the resolved
+   *  callee instead. */
+  rustCallReturnsProvenList(node) {
+    if (!ts7.isCallExpression(node))
+      return false;
+    return this.rustProvenListCall(node, /* @__PURE__ */ new Set());
+  }
+  rustProvenListCall(node, stack) {
+    if (this.rustCallPrintsRuntimeSplit(node))
+      return true;
+    const declaration = this.rustCalleeDeclaration(node);
+    if (declaration === void 0)
+      return false;
+    return this.rustFunctionReturnsArrayLiteral(declaration, stack);
+  }
+  /** Implementation of a `x.y(..)` call, when the checker resolves one. */
+  rustCalleeDeclaration(node) {
+    if (!ts7.isCallExpression(node))
+      return void 0;
+    if (!ts7.isPropertyAccessExpression(node.expression))
+      return void 0;
+    try {
+      const signature = this.getChecker().getResolvedSignature(node);
+      return signature?.declaration ?? void 0;
+    } catch (e) {
+      return void 0;
+    }
+  }
+  /** Every `return` in the function's own body builds an array literal, or
+   *  delegates to a call that does. `throw` and fall-through (the printer's
+   *  `Value::Null`) read the same through both forms. */
+  rustFunctionReturnsArrayLiteral(declaration, stack) {
+    if (stack.has(declaration))
+      return false;
+    const body = declaration.body;
+    if (body === void 0 || !ts7.isBlock(body))
+      return false;
+    stack.add(declaration);
+    try {
+      let returns = 0;
+      let all = true;
+      const visit = (node) => {
+        if (!all)
+          return;
+        if (node !== body && ts7.isFunctionLike(node))
+          return;
+        if (ts7.isReturnStatement(node)) {
+          returns++;
+          const expression = node.expression;
+          if (expression === void 0 || !ts7.isArrayLiteralExpression(expression)) {
+            if (expression !== void 0 && ts7.isCallExpression(expression) && this.rustProvenListCall(expression, stack)) {
+              return;
+            }
+            if (expression !== void 0 && ts7.isParenthesizedExpression(expression) && ts7.isArrayLiteralExpression(expression.expression)) {
+              return;
+            }
+            all = false;
+            return;
+          }
+          return;
+        }
+        ts7.forEachChild(node, visit);
+      };
+      ts7.forEachChild(body, visit);
+      return all && returns > 0;
+    } finally {
+      stack.delete(declaration);
+    }
   }
   /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
   printNativeListIndex(receiverText, index) {

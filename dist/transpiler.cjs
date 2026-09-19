@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -17062,7 +17062,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const elements = left.elements;
       const rhs = this.printNode(right, 0);
       const tmpName = "__destr_tmp";
-      const nativeList = this.isProvenListExpression(right);
+      const nativeList = this.rustNativeListSource(right);
       const assignments = elements.map((e, idx) => {
         const target = this.printNode(e, 0);
         if (nativeList) {
@@ -17210,7 +17210,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const syntheticName = parsedElements.join("") + "Variable";
       let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
 `;
-      const nativeList = this.isProvenListExpression(declaration.initializer);
+      const nativeList = this.rustNativeListSource(declaration.initializer);
       parsedElements.forEach((e, idx) => {
         const access = nativeList ? this.printNativeListIndex(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`;
         const line = `${this.getIden(identation)}let mut ${e}: Value = ${access}`;
@@ -18190,6 +18190,95 @@ ${classMethods}
     const type = this.getCheckedTypeOf(node);
     return type !== void 0 && this.isProvenListType(type);
   }
+  /** RHS of a generator destructure that provably holds a `Value::Arr`: the
+   *  checker-proven list, or a call whose callee returns an array literal on
+   *  every path. */
+  rustNativeListSource(node) {
+    return this.isProvenListExpression(node) || this.rustCallReturnsProvenList(node);
+  }
+  /** `x.split(sep)` → the runtime `split`, which yields an array on every
+   *  path (a non-string receiver gives the empty array, never a dict). */
+  rustCallPrintsRuntimeSplit(node) {
+    if (!_typescript2.default.isCallExpression(node) || node.arguments.length === 0)
+      return false;
+    const expression = node.expression;
+    if (!_typescript2.default.isPropertyAccessExpression(expression))
+      return false;
+    if (expression.expression.kind === SyntaxKind4.ThisKeyword)
+      return false;
+    return String(expression.name.escapedText) === "split";
+  }
+  /** True when the call's value is always a runtime array: the `handle*AndParams`
+   *  family and its exchange overrides declare `any`, so the checker cannot
+   *  prove the `[T, Dict]` tuple the body always builds — walk the resolved
+   *  callee instead. */
+  rustCallReturnsProvenList(node) {
+    if (!_typescript2.default.isCallExpression(node))
+      return false;
+    return this.rustProvenListCall(node, /* @__PURE__ */ new Set());
+  }
+  rustProvenListCall(node, stack) {
+    if (this.rustCallPrintsRuntimeSplit(node))
+      return true;
+    const declaration = this.rustCalleeDeclaration(node);
+    if (declaration === void 0)
+      return false;
+    return this.rustFunctionReturnsArrayLiteral(declaration, stack);
+  }
+  /** Implementation of a `x.y(..)` call, when the checker resolves one. */
+  rustCalleeDeclaration(node) {
+    if (!_typescript2.default.isCallExpression(node))
+      return void 0;
+    if (!_typescript2.default.isPropertyAccessExpression(node.expression))
+      return void 0;
+    try {
+      const signature = this.getChecker().getResolvedSignature(node);
+      return _nullishCoalesce(_optionalChain([signature, 'optionalAccess', _1151 => _1151.declaration]), () => ( void 0));
+    } catch (e) {
+      return void 0;
+    }
+  }
+  /** Every `return` in the function's own body builds an array literal, or
+   *  delegates to a call that does. `throw` and fall-through (the printer's
+   *  `Value::Null`) read the same through both forms. */
+  rustFunctionReturnsArrayLiteral(declaration, stack) {
+    if (stack.has(declaration))
+      return false;
+    const body = declaration.body;
+    if (body === void 0 || !_typescript2.default.isBlock(body))
+      return false;
+    stack.add(declaration);
+    try {
+      let returns = 0;
+      let all = true;
+      const visit = (node) => {
+        if (!all)
+          return;
+        if (node !== body && _typescript2.default.isFunctionLike(node))
+          return;
+        if (_typescript2.default.isReturnStatement(node)) {
+          returns++;
+          const expression = node.expression;
+          if (expression === void 0 || !_typescript2.default.isArrayLiteralExpression(expression)) {
+            if (expression !== void 0 && _typescript2.default.isCallExpression(expression) && this.rustProvenListCall(expression, stack)) {
+              return;
+            }
+            if (expression !== void 0 && _typescript2.default.isParenthesizedExpression(expression) && _typescript2.default.isArrayLiteralExpression(expression.expression)) {
+              return;
+            }
+            all = false;
+            return;
+          }
+          return;
+        }
+        _typescript2.default.forEachChild(node, visit);
+      };
+      _typescript2.default.forEachChild(body, visit);
+      return all && returns > 0;
+    } finally {
+      stack.delete(declaration);
+    }
+  }
   /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
   printNativeListIndex(receiverText, index) {
     return `${receiverText}.as_array().and_then(|__arr| __arr.get(${index})).cloned().unwrap_or(Value::Null)`;
@@ -18226,7 +18315,7 @@ ${classMethods}
       return void 0;
     try {
       const symbol = this.getChecker().getSymbolAtLocation(node);
-      return _optionalChain([symbol, 'optionalAccess', _1151 => _1151.valueDeclaration]);
+      return _optionalChain([symbol, 'optionalAccess', _1152 => _1152.valueDeclaration]);
     } catch (e) {
       return void 0;
     }
@@ -18300,7 +18389,7 @@ ${classMethods}
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0)
       return false;
-    const name = _optionalChain([declaration, 'access', _1152 => _1152.name, 'optionalAccess', _1153 => _1153.text]);
+    const name = _optionalChain([declaration, 'access', _1153 => _1153.name, 'optionalAccess', _1154 => _1154.text]);
     if (typeof name !== "string")
       return false;
     let initializer;
@@ -18676,9 +18765,9 @@ ${idn}}`;
       ifComplete = `${this.getIden(identation)}if ${ifComplete}`;
     }
     const elseStatement = node.elseStatement;
-    if (_optionalChain([elseStatement, 'optionalAccess', _1154 => _1154.kind]) === SyntaxKind4.Block) {
+    if (_optionalChain([elseStatement, 'optionalAccess', _1155 => _1155.kind]) === SyntaxKind4.Block) {
       ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
-    } else if (_optionalChain([elseStatement, 'optionalAccess', _1155 => _1155.kind]) === SyntaxKind4.IfStatement) {
+    } else if (_optionalChain([elseStatement, 'optionalAccess', _1156 => _1156.kind]) === SyntaxKind4.IfStatement) {
       ifComplete += " " + this.printIfStatement(elseStatement, identation);
     }
     return this.printNodeCommentsIfAny(node, identation, ifComplete);
@@ -18817,7 +18906,7 @@ ${this.getIden(identation)}})`;
   }
   // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
-    const native = this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1156 => _1156.arguments, 'optionalAccess', _1157 => _1157[0]]), parsedArg);
+    const native = this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1157 => _1157.arguments, 'optionalAccess', _1158 => _1158[0]]), parsedArg);
     if (native !== void 0) {
       return `Value::Bool(${native})`;
     }
@@ -18859,7 +18948,7 @@ ${this.getIden(identation)}})`;
     return `append_to_array(&mut ${name}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
-    const pRef = _optionalChain([parsedArg, 'optionalAccess', _1158 => _1158.startsWith, 'call', _1159 => _1159("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
+    const pRef = _optionalChain([parsedArg, 'optionalAccess', _1159 => _1159.startsWith, 'call', _1160 => _1160("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
     return `Value::Bool(contains(&${name}, ${pRef}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
@@ -18929,7 +19018,7 @@ ${this.getIden(identation)}})`;
   printTryStatement(node, identation) {
     const tryBody = node.tryBlock.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
     const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-    const rawName = _optionalChain([node, 'access', _1160 => _1160.catchClause, 'optionalAccess', _1161 => _1161.variableDeclaration, 'optionalAccess', _1162 => _1162.name, 'optionalAccess', _1163 => _1163.escapedText]);
+    const rawName = _optionalChain([node, 'access', _1161 => _1161.catchClause, 'optionalAccess', _1162 => _1162.variableDeclaration, 'optionalAccess', _1163 => _1163.name, 'optionalAccess', _1164 => _1164.escapedText]);
     const errorName = rawName ? `_${rawName}` : "_e";
     const iden = this.getIden(identation);
     return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -19403,7 +19492,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _1164 => _1164.body, 'optionalAccess', _1165 => _1165.statements, 'access', _1166 => _1166.forEach, 'call', _1167 => _1167((statement) => {
+    _optionalChain([node, 'access', _1165 => _1165.body, 'optionalAccess', _1166 => _1166.statements, 'access', _1167 => _1167.forEach, 'call', _1168 => _1168((statement) => {
       if (_typescript2.default.isExpressionStatement(statement)) {
         const expression = statement.expression;
         if (_typescript2.default.isCallExpression(expression)) {
@@ -19564,7 +19653,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _1168 => _1168.name, 'access', _1169 => _1169.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _1169 => _1169.name, 'access', _1170 => _1170.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -19817,14 +19906,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1170 => _1170.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1171 => _1171.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1171 => _1171.getChecker, 'call', _1172 => _1172(), 'access', _1173 => _1173.getDeclaredTypeOfSymbol, 'call', _1174 => _1174(symbol), 'access', _1175 => _1175.symbol, 'optionalAccess', _1176 => _1176.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1172 => _1172.getChecker, 'call', _1173 => _1173(), 'access', _1174 => _1174.getDeclaredTypeOfSymbol, 'call', _1175 => _1175(symbol), 'access', _1176 => _1176.symbol, 'optionalAccess', _1177 => _1177.declarations]), () => ( []));
           const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -19959,7 +20048,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
     options,
     rootNames: [inMemoryFilePath, globalsShimPath],
     host,
-    oldProgram: _optionalChain([cache, 'optionalAccess', _1177 => _1177.memoryOldProgram])
+    oldProgram: _optionalChain([cache, 'optionalAccess', _1178 => _1178.memoryOldProgram])
   });
   if (cache !== void 0) {
     cache.memoryOldProgram = program;

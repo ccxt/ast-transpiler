@@ -2758,3 +2758,116 @@ describe('rust native value predicates and json', () => {
         expect(output).not.toContain('json_stringify');
     });
 });
+
+describe('rust destructure over an array-returning callee', () => {
+    // The `handle*AndParams` family (and its exchange overrides) declares
+    // `any`, so the checker cannot prove the `[T, Dict]` tuple the body always
+    // builds; the resolved callee's returns are the proof instead.
+    const ANY_TUPLE_CALLEE =
+        "class E {\n" +
+        "    handleWithdrawTagAndParams (tag: any, params: any): any {\n" +
+        "        return [ tag, params ];\n" +
+        "    }\n" +
+        "    withdraw (tag: any, params: any) {\n" +
+        "        [ tag, params ] = this.handleWithdrawTagAndParams (tag, params);\n" +
+        "        return tag;\n" +
+        "    }\n" +
+        "}";
+
+    test('reassignment destructure over an any-typed tuple callee emits native reads', () => {
+        const output = transpiler.transpileRust(ANY_TUPLE_CALLEE).content;
+        expect(output).toContain('{ let __destr_tmp = self.handleWithdrawTagAndParams(tag, params); tag = __destr_tmp.as_array()');
+        expect(output).not.toContain('get_value(&__destr_tmp');
+    });
+
+    test('declaration destructure over an any-typed tuple callee emits native reads', () => {
+        const ts =
+            "class E {\n" +
+            "    prepare (code: any, params: any): any { return [ code, params ]; }\n" +
+            "    f (code: any, params: any) {\n" +
+            "        const [ request, extraParams ] = this.prepare (code, params);\n" +
+            "        return request;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut request: Value = requestextraParamsVariable.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&requestextraParamsVariable');
+    });
+
+    test('a callee delegating to another array-returning method emits native reads', () => {
+        const ts =
+            "class E {\n" +
+            "    inner (a: any, b: any): any { return [ a, b ]; }\n" +
+            "    handleX (a: any, b: any): any { return this.inner (a, b); }\n" +
+            "    f (a: any, b: any) {\n" +
+            "        [ a, b ] = this.handleX (a, b);\n" +
+            "        return a;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a = __destr_tmp.as_array().and_then(|__arr| __arr.get(0))');
+        expect(output).not.toContain('get_value(&__destr_tmp');
+    });
+
+    test('a super-call override emits native reads', () => {
+        const ts =
+            "class A {\n" +
+            "    handleX (a: any, b: any): any { if (a) { return [ a, b ]; } return [ a, b ]; }\n" +
+            "}\n" +
+            "class B extends A {\n" +
+            "    handleX (a: any, b: any): any { return super.handleX (a, b); }\n" +
+            "    f (a: any, b: any) {\n" +
+            "        [ a, b ] = this.handleX (a, b);\n" +
+            "        return a;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a = __destr_tmp.as_array().and_then(|__arr| __arr.get(0))');
+        expect(output).not.toContain('get_value(&__destr_tmp');
+    });
+
+    test('string split destructure emits native reads (runtime split always yields an array)', () => {
+        const ts =
+            "function f (addressString: any) {\n" +
+            "    let address: any = undefined;\n" +
+            "    let rawTag: any = undefined;\n" +
+            "    [ address, rawTag ] = addressString.split ('?');\n" +
+            "    return address;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('{ let __destr_tmp = split(&addressString');
+        expect(output).not.toContain('get_value(&__destr_tmp');
+    });
+
+    test('a callee returning a non-array keeps the helper', () => {
+        const ts =
+            "class E {\n" +
+            "    handleX (a: any, b: any): any { return a; }\n" +
+            "    f (a: any, b: any) {\n" +
+            "        [ a, b ] = this.handleX (a, b);\n" +
+            "        return a;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
+    });
+
+    test('an unresolved callee keeps the helper', () => {
+        const ts = "function f (g: any, a: any, b: any) {\n    [ a, b ] = g ();\n    return a;\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
+    });
+
+    test('a callee that never returns a value keeps the helper', () => {
+        const ts =
+            "class E {\n" +
+            "    handleX (a: any, b: any): any { throw new Error ('x'); }\n" +
+            "    f (a: any, b: any) {\n" +
+            "        [ a, b ] = this.handleX (a, b);\n" +
+            "        return a;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
+    });
+});
