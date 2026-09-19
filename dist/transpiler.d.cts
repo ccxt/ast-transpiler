@@ -1632,6 +1632,36 @@ declare class RustTranspiler extends BaseTranspiler {
     rustIdentifierIsPropertyName(node: any): boolean;
     rustStringLocalIdentifierIsTyped(node: any): boolean;
     getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
+    private rustNativeStrReturnDecisions;
+    private static readonly RUST_BASE_TIER_FILE;
+    /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
+    rustNativeStrReturnKind(node: ts.Node): string | undefined;
+    private rustNativeStrReturnDecisionUncached;
+    /** Every `return` of the method's own body converts, and the body's last
+     *  statement is one of them (so Rust sees no `()`-valued tail the
+     *  `-> Value` post-passes would have patched with `Value::Null`). */
+    rustStrReturnPathsConvert(body: ts.Block): boolean;
+    /** A `return` value of a native-`Str` method: a nullish literal, an
+     *  expression already printing an `Option<String>` (a nested retyped call
+     *  or a typed string local), or a `Value`-printing expression the checker
+     *  types `string | undefined`. */
+    rustStrReturnValueConverts(expression: ts.Node): boolean;
+    /** An expression that already prints an `Option<String>` in a `: Str`
+     *  method's return position. */
+    rustStrNativeExpression(expression: ts.Node): boolean;
+    unwrapParensNode(node: ts.Node): ts.Node | undefined;
+    /** The callee declaration behind `self.<method>(..)` when it is emitted
+     *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+    rustNativeStrCalleeKind(node: ts.Node): string | undefined;
+    /** `Option<String>` → `Value` (exact inverse of the return conversion). */
+    rustNativeStrValueBox(text: string): string;
+    /** True when a call to a native-`Str` callee must be boxed back to a
+     *  `Value` at this position; the declaration and return printers run the
+     *  conversion themselves. */
+    rustNativeStrCallNeedsBox(node: ts.Node): boolean;
+    /** Wrap a call text when the callee returns a native `Option<String>`
+     *  and the position still needs a `Value`. */
+    rustBoxNativeStrCallIfNeeded(node: ts.Node, text: string): string;
     private declaredDictLocalsCache;
     /** All `let x: Value = <dict-proven initialiser>` declarations of the current
      *  source file, keyed by local name in declaration order. */
@@ -1702,7 +1732,7 @@ declare class RustTranspiler extends BaseTranspiler {
     printFunctionDefinition(node: any, identation: any): string;
     printFunctionDeclaration(node: any, identation: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
-    printCallExpression(node: any, identation: any): any;
+    printCallExpression(node: any, identation: any): string;
     printThisKeyword(node: any, identation: any): string;
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS;
     printErrorConstructorArg(name: string, index: number, node: any, identation: number): string;

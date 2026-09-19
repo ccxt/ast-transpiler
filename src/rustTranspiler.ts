@@ -1770,7 +1770,16 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         if (this.rustSafeStringLocalIsTyped(declaration)) {
-            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}.as_str().map(str::to_owned)`;
+            // A call to a native-`Option<String>` method already carries the
+            // native payload; the `safeString` helpers still need the unwrap.
+            const suffix = this.rustNativeStrCalleeKind(declaration.initializer) === 'str'
+                ? '' : '.as_str().map(str::to_owned)';
+            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}${suffix}`;
+        }
+
+        if (this.rustNativeStrCalleeKind(declaration.initializer) === 'str') {
+            // The callee returns `Option<String>`; this local keeps the box.
+            return `${this.getIden(identation)}let mut ${varName}: Value = ${this.rustNativeStrValueBox(parsedValue)}`;
         }
 
         return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
@@ -2051,12 +2060,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustStringLocalDecisions = new Map<any, boolean>();
 
-    // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer.
+    // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer;
+    // a call whose callee already returns `Option<String>` (a native-`Str`
+    // method) is the same payload without the unwrap.
     rustSafeStringLocalInitializer(declaration): boolean {
         const initializer = declaration.initializer;
         if (declaration.name?.kind !== SyntaxKind.Identifier
             || initializer?.kind !== SyntaxKind.CallExpression) {
             return false;
+        }
+        if (this.rustNativeStrCalleeKind(initializer) === 'str') {
+            return true;
         }
         const callee = initializer.expression;
         if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
@@ -2198,6 +2212,203 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         return peeled !== undefined ? peeled : inner;
+    }
+
+    // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
+    //
+    // An internal, non-override, non-async method declared `: Str`
+    // (`string | undefined`) returns a native `Option<String>` when every
+    // `return` in its own body converts exactly. `Str` admits only
+    // `Value::Str(payload)` and `Value::Null` at run time, and
+    // `X.as_str().map(str::to_owned)` maps those to `Some(payload)` / `None`
+    // unchanged (the checker's primitive kind proves each returned
+    // expression's box). Call sites that still need a `Value` box the result
+    // back with the exact inverse; a local whose uses are all native sinks
+    // binds the `Option<String>` directly (the `safeString`-local whitelist,
+    // extended to this initializer shape). Override declarations keep the
+    // boxed signature (D8): the trait copies (`DerivedExchange` forwarder,
+    // base declaration) print `-> Value`.
+
+    private rustNativeStrReturnDecisions = new WeakMap<ts.Node, boolean>();
+
+    // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
+    // (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
+    private static readonly RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;
+
+    /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
+    rustNativeStrReturnKind(node: ts.Node): string | undefined {
+        if (node === undefined || node.kind !== SyntaxKind.MethodDeclaration) {
+            return undefined;
+        }
+        const cached = this.rustNativeStrReturnDecisions.get(node);
+        if (cached !== undefined) {
+            return cached ? 'str' : undefined;
+        }
+        this.rustNativeStrReturnDecisions.set(node, false); // re-entrancy guard
+        const decision = this.rustNativeStrReturnDecisionUncached(node);
+        this.rustNativeStrReturnDecisions.set(node, decision);
+        return decision ? 'str' : undefined;
+    }
+
+    private rustNativeStrReturnDecisionUncached(node): boolean {
+        if (node.type === undefined || this.isAsyncFunction(node)) {
+            return false;
+        }
+        if (this.getMethodOverride(node) !== undefined) {
+            return false; // the base/trait copy prints `-> Value`
+        }
+        // The base classes are hand-tuned across the whole tree: their methods
+        // are called from ~every derived file (and the hand-written runtime),
+        // where the boxed `Value` ABI is load-bearing. Only per-exchange
+        // internal methods are retyped.
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
+            return false;
+        }
+        let type: ts.Type;
+        try {
+            type = this.getChecker().getTypeFromTypeNode(node.type);
+        } catch (e) {
+            return false;
+        }
+        if (this.primitiveKindOfType(type) !== 'string') {
+            return false;
+        }
+        return this.rustStrReturnPathsConvert(node.body);
+    }
+
+    /** Every `return` of the method's own body converts, and the body's last
+     *  statement is one of them (so Rust sees no `()`-valued tail the
+     *  `-> Value` post-passes would have patched with `Value::Null`). */
+    rustStrReturnPathsConvert(body: ts.Block): boolean {
+        if (body === undefined) {
+            return false;
+        }
+        const statements = body.statements;
+        const last = statements[statements.length - 1];
+        if (last === undefined || !ts.isReturnStatement(last)) {
+            return false;
+        }
+        let ok = true;
+        const visit = (n: ts.Node) => {
+            if (!ok) {
+                return;
+            }
+            if (n !== body && ts.isFunctionLike(n)) {
+                return; // a nested function keeps the boxed signature
+            }
+            if (ts.isReturnStatement(n) && !this.rustStrReturnValueConverts(n.expression)) {
+                ok = false;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(body, visit);
+        return ok;
+    }
+
+    /** A `return` value of a native-`Str` method: a nullish literal, an
+     *  expression already printing an `Option<String>` (a nested retyped call
+     *  or a typed string local), or a `Value`-printing expression the checker
+     *  types `string | undefined`. */
+    rustStrReturnValueConverts(expression: ts.Node): boolean {
+        const inner = this.unwrapParensNode(expression);
+        if (inner === undefined) {
+            return false;
+        }
+        if (this.literalKindOfNode(inner) === 'null') {
+            return true;
+        }
+        if (this.rustStrNativeExpression(inner)) {
+            return true;
+        }
+        if (!this.printsValueExpression(inner)) {
+            return false;
+        }
+        return this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
+    }
+
+    /** An expression that already prints an `Option<String>` in a `: Str`
+     *  method's return position. */
+    rustStrNativeExpression(expression: ts.Node): boolean {
+        const inner = this.unwrapParensNode(expression);
+        if (inner === undefined) {
+            return false;
+        }
+        if (ts.isCallExpression(inner)) {
+            return this.rustNativeStrCalleeKind(inner) === 'str';
+        }
+        if (ts.isIdentifier(inner)) {
+            return this.rustStringLocalIdentifierIsTyped(inner);
+        }
+        return false;
+    }
+
+    unwrapParensNode(node: ts.Node): ts.Node | undefined {
+        let current = node;
+        while (current !== undefined && ts.isParenthesizedExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    /** The callee declaration behind `self.<method>(..)` when it is emitted
+     *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+    rustNativeStrCalleeKind(node: ts.Node): string | undefined {
+        if (node === undefined || node.kind !== SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        let declaration: ts.Node;
+        try {
+            declaration = (this.getChecker() as any).getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration === undefined || declaration.kind !== SyntaxKind.MethodDeclaration) {
+            return undefined;
+        }
+        return this.rustNativeStrReturnKind(declaration);
+    }
+
+    /** `Option<String>` → `Value` (exact inverse of the return conversion). */
+    rustNativeStrValueBox(text: string): string {
+        return `${text}.map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
+    }
+
+    /** True when a call to a native-`Str` callee must be boxed back to a
+     *  `Value` at this position; the declaration and return printers run the
+     *  conversion themselves. */
+    rustNativeStrCallNeedsBox(node: ts.Node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while (parent !== undefined && ts.isParenthesizedExpression(parent) && parent.expression === current) {
+            current = parent;
+            parent = parent.parent;
+        }
+        if (parent === undefined) {
+            return true;
+        }
+        if (ts.isVariableDeclaration(parent) && parent.initializer === current
+            && ts.isIdentifier(parent.name)) {
+            return false; // the declaration printer binds the type / boxes it
+        }
+        if (ts.isReturnStatement(parent) && parent.expression === current) {
+            // only a native-`Str` method's own return printer runs the conversion
+            const fn: any = ts.findAncestor(parent.parent, ts.isFunctionLike);
+            return this.rustNativeStrReturnKind(fn) !== 'str';
+        }
+        return true;
+    }
+
+    /** Wrap a call text when the callee returns a native `Option<String>`
+     *  and the position still needs a `Value`. */
+    rustBoxNativeStrCallIfNeeded(node: ts.Node, text: string): string {
+        if (this.rustNativeStrCalleeKind(node) !== 'str') {
+            return text;
+        }
+        if (!this.rustNativeStrCallNeedsBox(node)) {
+            return text;
+        }
+        return this.rustNativeStrValueBox(text);
     }
 
     // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
@@ -2590,6 +2801,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printRustFunctionType(node): string {
+        // An internal `: Str` method that proves the conversion prints the
+        // native `Option<String>` (its returns run the conversion; callers
+        // box back where a `Value` is still needed).
+        if (this.rustNativeStrReturnKind(node) === 'str') {
+            return 'Option<String>';
+        }
         try {
             const type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
             if (type.flags === ts.TypeFlags.Void) {
@@ -2693,7 +2910,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
-        if (outOfOrder) return outOfOrder;
+        if (outOfOrder) {
+            return this.rustBoxNativeStrCallIfNeeded(node, outOfOrder);
+        }
 
         // `parseInt`/`parseFloat` on a checker-proven string: native `str::parse`
         // instead of the runtime helper the ccxt post-pass would emit.
@@ -2716,7 +2935,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
 
-        return super.printCallExpression(node, identation);
+        return this.rustBoxNativeStrCallIfNeeded(node, super.printCallExpression(node, identation));
     }
 
     printThisKeyword(node, identation) {
@@ -4217,6 +4436,19 @@ export class RustTranspiler extends BaseTranspiler {
         const exp = node.expression;
         if (!exp) {
             return `${this.getIden(identation)}return;`;
+        }
+        // `return X;` inside a native-`Option<String>` method: the printed
+        // expression is still the `Value` box, so convert it back to the
+        // native payload (a nullish literal is the `None` arm).
+        const fn: any = ts.findAncestor(node.parent, ts.isFunctionLike);
+        if (this.rustNativeStrReturnKind(fn) === 'str' && this.rustStrReturnValueConverts(exp)) {
+            const inner = this.unwrapParensNode(exp);
+            if (this.literalKindOfNode(inner) === 'null') {
+                return `${this.getIden(identation)}return None;`;
+            }
+            const text = this.printNode(exp, 0).trim();
+            const suffix = this.rustStrNativeExpression(exp) ? '' : '.as_str().map(str::to_owned)';
+            return `${this.getIden(identation)}return ${text}${suffix};`;
         }
         const rightPart = this.printNode(exp, 0).trim();
         return `${this.getIden(identation)}return ${rightPart};`;
