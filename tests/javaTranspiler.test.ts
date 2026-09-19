@@ -2902,6 +2902,114 @@ ${body}
     });
 });
 
+describe('java isTrue: locals bound to boolean-returning calls / awaits (d13)', () => {
+    // the box of a local is proven from every write: a `this.<name>(...)` whose resolved body
+    // returns a boolean value on every path, the awaited value of such an async method, both
+    // branches of a `cond ? a : b`, and a hand-written relational Precise static
+    const inputOf = (body: string) => `
+class T {
+    isBool(): boolean { return true; }
+    isCompared(a: any): boolean { return (a === 1) || !!(a > 2); }
+    isFromLocal(a: any): boolean { return a; }
+    isFromString(a: any): string { return ''; }
+    async isBoolAsync(): Promise<boolean> { return this.isBool(); }
+    async isFromStringAsync(a: any): Promise<string> { return ''; }
+    handleOptionAndParams(p: any, m: string, k: string, d: any = undefined): [any, any] { return [ d, p ]; }
+    handleParamBool(p: any, k: string, d: any = undefined): [any, any] { return [ d, p ]; }
+    test(x: any, params: any): void {
+${body}
+    }
+}
+`;
+    const outputOf = (body: string) => transpiler.transpileJava(inputOf(body)).content;
+
+    test('a call whose body returns booleans on every path proves the bound local', () => {
+        const output = outputOf("        const aggressive = this.isBool();\n        if (aggressive) { return; }\n");
+        expect(output).toContain('if (Boolean.TRUE.equals(aggressive))');
+        expect(output).not.toContain('Helpers.isTrue(aggressive)');
+        const compared = outputOf("        const ok = this.isCompared(x);\n        if (!ok) { return; }\n");
+        expect(compared).toContain('if (!Boolean.TRUE.equals(ok))');
+        // a body returning an unproven value (a bare parameter) keeps the helper
+        expect(outputOf("        const box = this.isFromLocal(x);\n        if (box) { return; }\n"))
+            .toContain('if (Helpers.isTrue(box))');
+        // a non-boolean TS return type keeps the helper
+        expect(outputOf("        const box = this.isFromString(x);\n        if (box) { return; }\n"))
+            .toContain('if (Helpers.isTrue(box))');
+    });
+
+    test('an await-written local keeps the helper (no sound sites today)', () => {
+        // audited: every `Helpers.isTrue(x)` site whose x is written from `await this.<m>()`
+        // also carries a `[ x, params ] = this.handleOptionAndParams(...)` raw-member write
+        // (35 whole-tree), so the awaited-box proof has no sound site at this base
+        const output = outputOf("        let uta: boolean | undefined = undefined;\n"
+            + "        uta = await this.isBoolAsync();\n        if (uta) { return; }\n");
+        expect(output).toContain('if (Helpers.isTrue(uta))');
+        expect(outputOf("        let uta: boolean | undefined = undefined;\n"
+            + "        uta = await this.isFromStringAsync(x);\n        if (uta) { return; }\n"))
+            .toContain('if (Helpers.isTrue(uta))');
+    });
+
+    test('a conditional whose branches both print boolean values proves the local', () => {
+        const output = outputOf("        const deduction = this.isFromString(x) === '' ? true : false;\n"
+            + "        if (deduction) { return; }\n");
+        expect(output).toContain('if (Boolean.TRUE.equals(deduction))');
+        expect(output).not.toContain('Helpers.isTrue(deduction)');
+        // a non-boolean branch keeps the helper
+        expect(outputOf("        const box = this.isBool() ? 1 : 0;\n        if (box) { return; }\n"))
+            .toContain('if (Helpers.isTrue(box))');
+    });
+
+    test('a relational Precise static bound to a local proves it', () => {
+        const input = `
+class Precise {
+    static stringLt (a: any, b: any): boolean { return false; }
+}
+class T {
+    test(a: any): void {
+        const isAmountNeg = Precise.stringLt(a, "0");
+        if (isAmountNeg) { return; }
+    }
+}
+`;
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('if (Boolean.TRUE.equals(isAmountNeg))');
+        expect(output).not.toContain('Helpers.isTrue(isAmountNeg)');
+    });
+
+    test('a parameter the printer declares Boolean prints Boolean.TRUE.equals (d13)', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaNativeParameterType;
+        try {
+            printer.javaNativeParameterType = (node: any) => {
+                const name = node?.name?.escapedText;
+                if (name === 'trigger') { return 'Boolean'; }
+                if (name === 'enabled') { return 'boolean'; }
+                if (name === 'parameters') { return 'java.util.Map<String, Object>'; }
+                return original.call(printer, node);
+            };
+            const input = `
+class T {
+    test(trigger: any, enabled: any, parameters: any, x: any): void {
+        if (trigger) { return; }
+        if (!trigger) { return; }
+        if (enabled) { return; }
+        if ('k' in parameters) { return; }
+        if (x) { return; }
+    }
+}
+`;
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('if (Boolean.TRUE.equals(trigger))');
+            expect(output).toContain('if (!Boolean.TRUE.equals(trigger))');
+            expect(output).toContain('if (enabled)');
+            expect(output).toContain('parameters.containsKey("k")');
+            expect(output).toContain('if (Helpers.isTrue(x))');
+        } finally {
+            printer.javaNativeParameterType = original;
+        }
+    });
+});
+
 describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
     test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
         const input =
@@ -5587,10 +5695,17 @@ describe('falsy-wrapper removal: boolean identifiers and Array.isArray', () => {
         expect(output).toContain("if (Boolean.TRUE.equals(d))");
     });
 
-    test('a generated boolean-returning method keeps the helper', () => {
+    test('a local bound to a generated boolean-returning method prints Boolean.TRUE.equals (d13)', () => {
+        // the box is the call's own proven box: every return of the resolved body prints a
+        // Java boolean value, so the local can never hold anything else
         const output = wrapped("        const a: boolean = this.isBool();\n" +
-            "        if (a) { return; }\n");
-        expect(output).toContain("if (Helpers.isTrue(a))");
+            "        if (a) { return; }");
+        expect(output).toContain("if (Boolean.TRUE.equals(a))");
+        expect(output).not.toContain("Helpers.isTrue(a)");
+        // an unproven callee body (string return / a bare local) keeps the helper
+        const unproven = wrapped("        const b: boolean = this.isBoolNamed(x);\n" +
+            "        if (b) { return; }");
+        expect(unproven).toContain("if (Helpers.isTrue(b))");
     });
 
     test('a later non-boolean write keeps the box (D2 scan)', () => {
