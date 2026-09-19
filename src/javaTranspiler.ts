@@ -279,6 +279,12 @@ const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|predictio
 // extends the generated BaseExchange.java and overrides it with `Object` boxes
 const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
 
+// prediction venues (ts/src/prediction/<id>.ts) live in their own package: their Java base,
+// PredictionExchange.java, carries the injected Exchange-tier body (javaTranspiler.ts
+// getExchangeTierBody), and the venue chain (abstract/prediction/<id> -> PredictionExchange ->
+// BaseExchange) never reaches the `Exchange` class the heritage walk below can see.
+const JAVA_NATIVE_PARAMETER_PREDICTION_FILES = /(^|\/)ts\/src\/prediction\/[a-z0-9_]+\.ts$/;
+
 const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
     ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Null
     | ts.TypeFlags.Void | ts.TypeFlags.Never | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional
@@ -1930,6 +1936,14 @@ export class JavaTranspiler extends BaseTranspiler {
             const method = node.parent;
             const index = method.parameters.indexOf(node);
             let override = this.getMethodOverride(method);
+            if (override === undefined
+                && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName)
+                && method.name !== undefined
+                && this.exchangeTierMethodNames().has(method.name.getText().trim())) {
+                // the venue method overrides the Exchange-tier core the generated prediction base
+                // carries; those declarations keep `Object` parameters (D8: the override must match)
+                return undefined;
+            }
             while (override !== undefined) {
                 const baseParam = (override as any).parameters?.[index];
                 if (baseParam === undefined || this.javaNativeParameterTypeOf(baseParam) !== type) {
@@ -1941,6 +1955,38 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined; // an unresolvable heritage keeps the box
         }
         return type;
+    }
+
+    // method names declared by the `Exchange` class of ts/src/base/Exchange.ts, read off the
+    // program the warp ran on. A prediction venue's method with one of these names overrides
+    // the tier body javaTranspiler.ts injects into PredictionExchange.java.
+    private _exchangeTierMethodNames: Set<string> | undefined = undefined;
+    exchangeTierMethodNames(): Set<string> {
+        if (this._exchangeTierMethodNames !== undefined) {
+            return this._exchangeTierMethodNames;
+        }
+        const names = new Set<string>();
+        try {
+            const file = this.getProgram().getSourceFiles()
+                .find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
+            const collect = (node: ts.Node) => {
+                if (ts.isClassDeclaration(node) && node.name?.text === 'Exchange') {
+                    for (const member of node.members) {
+                        if (ts.isMethodDeclaration(member) && member.name !== undefined) {
+                            names.add(member.name.getText().trim());
+                        }
+                    }
+                }
+                ts.forEachChild(node, collect);
+            };
+            if (file !== undefined) {
+                collect(file);
+            }
+        } catch (e) {
+            // no program yet: the heritage walk above already answered
+        }
+        this._exchangeTierMethodNames = names;
+        return names;
     }
 
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
