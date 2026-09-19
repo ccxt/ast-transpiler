@@ -12701,7 +12701,24 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
 };
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
-  "handleErrors": [4]
+  "handleErrors": [4],
+  "parseOrder": [0],
+  "parseTrade": [0],
+  "amountToPrecision": [0],
+  "client": [0],
+  "costToPrecision": [0],
+  "handleOptionAndParams": [1],
+  "market": [0],
+  "marketSymbols": [1],
+  "parseAccount": [0],
+  "parseMarket": [0],
+  "parseOrderBook": [1],
+  "priceToPrecision": [0],
+  "safeBalance": [0],
+  "safeOpenInterest": [0],
+  "safeSymbol": [0],
+  "symbol": [0],
+  "watch": [0, 1]
 };
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
