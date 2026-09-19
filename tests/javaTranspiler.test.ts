@@ -6737,3 +6737,134 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('Object data = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>()');
     });
 });
+
+describe('inOp on a proven map: containsKey for keys the checker does not type as strings', () => {
+    test('a dict receiver and a repeatable key print the null-guarded containsKey', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "function f (m: Dict, k: any) {\n" +
+        "    const a = k in m;\n" +
+        "    const b = !(k in m);\n" +
+        "    return [ a, b ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('(k != null && ((java.util.Map<?, ?>)m).containsKey(k))');
+        expect(output).not.toContain('Helpers.inOp');
+    });
+
+    test('a key the printer replays (call, element read) keeps the helper', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "function f (m: Dict, xs: any) {\n" +
+        "    const a = xs.length in m;\n" +
+        "    return [ a ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.inOp(m, Helpers.getArrayLength(xs))');
+    });
+
+    test('a string key keeps the unguarded containsKey', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "function f (m: Dict) {\n" +
+        "    const a = 'code' in m;\n" +
+        "    return [ a ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<?, ?>)m).containsKey("code")');
+    });
+});
+
+describe('isEqual on printed Java primitives and declared numerics', () => {
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('.length and indexOf results are ints, so the compare is native', () => {
+        const input =
+        "function f (xs: any, s: string) {\n" +
+        "    const a = xs.length === 3;\n" +
+        "    const b = s.indexOf('x') === -1;\n" +
+        "    const c = xs.length !== 0;\n" +
+        "    return [ a, b, c ];\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('(Helpers.getArrayLength(xs) == 3)');
+        expect(output).toContain('(((String)s).indexOf("x") == -1)');
+        expect(output).toContain('(Helpers.getArrayLength(xs) != 0)');
+        expect(output).not.toContain('Helpers.isEqual');
+    });
+
+    test('a declared numeric compares with the operator and a null test for the box', () => {
+        const input =
+        "function f (a: any, b: any) {\n" +
+        "    const x = a === 1;\n" +
+        "    const y = a !== 1;\n" +
+        "    const z = b === 2;\n" +
+        "    return [ x, y, z ];\n" +
+        "}\n"
+        withResolver((declaration: any) => declaration.name?.escapedText === 'a' ? 'Long' : 'Double', () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(a != null && a == 1)');
+            expect(output).toContain('(a == null || a != 1)');
+            expect(output).toContain('(b != null && b == 2)');
+            expect(output).not.toContain('Helpers.isEqual');
+        });
+    });
+
+    test('a declared String compares through Objects.equals against any operand', () => {
+        const input =
+        "function f (a: any, n: any) {\n" +
+        "    const x = a === 1;\n" +
+        "    const y = a === n;\n" +
+        "    return [ x, y ];\n" +
+        "}\n"
+        withResolver((declaration: any) => declaration.name?.escapedText === 'a' ? 'String' : undefined, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('java.util.Objects.equals(a, 1)');
+            expect(output).toContain('java.util.Objects.equals(a, n)');
+            expect(output).not.toContain('Helpers.isEqual');
+        });
+    });
+});
+
+describe('objectKeys on a declared map local', () => {
+    test('a declared map receiver copies keySet natively', () => {
+        const input =
+        "function f (x: any) {\n" +
+        "    const keys = Object.keys(x);\n" +
+        "    return [ keys ];\n" +
+        "}\n"
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.Map<String, Object>';
+        try {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('new java.util.ArrayList<Object>(x.keySet())');
+            expect(output).not.toContain('Helpers.objectKeys');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+
+    test('a field receiver keeps the synchronized helper', () => {
+        const input =
+        "class T {\n" +
+        "    options: any = {};\n" +
+        "    test(): void {\n" +
+        "        const keys = Object.keys(this.options);\n" +
+        "        this.something(keys);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}\n"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.objectKeys(this.options)');
+    });
+});

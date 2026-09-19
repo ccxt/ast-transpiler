@@ -1170,6 +1170,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaEqualityNumberKind(node: any): any;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     javaOperandPrintsPrimitiveNumber(node: any): boolean;
+    javaDeclaredNumericFamily(expression: any): string | undefined;
     elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
     elementWriteKeyText(key: any, keyText: string): string;
     isPlainHashMapReceiver(container: any, keys: any[]): boolean;

@@ -214,6 +214,14 @@ const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\
 // the read prints `x.get(i)` / `x.size()` with no cast, because the declaration is the List
 const JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
 
+// the numeric declaration types the ccxt-side pass publishes; the boxed ones can hold
+// null, so a native compare guards them first
+const JAVA_DECLARED_NUMERIC_TYPES: Set<string> =
+    new Set<string>(['Integer', 'Long', 'Double', 'int', 'long', 'double']);
+
+const JAVA_BOXED_NUMERIC_TYPES: Set<string> =
+    new Set<string>(['Integer', 'Long', 'Double']);
+
 // receiver node kinds whose printed Java is a primary expression, so the `(String)`
 // checkcast in front of them binds the whole receiver (a native `+` prints its own parens)
 const JAVA_SPLIT_RECEIVER_KINDS: Set<number> = new Set<number>([
@@ -987,7 +995,16 @@ export class JavaTranspiler extends BaseTranspiler {
     // Java double. TypeScript normalizes the literal text (`1e3` -> `1000`, `0x10` ->
     // `16`, `100.0` -> `100`), so node.text is exactly what prints.
     javaEqualityLiteralKind(node) {
-        if (!node || !ts.isNumericLiteral(node)) {
+        if (!node) {
+            return undefined;
+        }
+        // `-1`: the printer prints the sign in front of the literal, so the value is a Java
+        // primitive of the operand's own kind — only an int-range operand keeps it (a long
+        // literal would print with its own `L` suffix and the sign would not widen)
+        if (node.kind === ts.SyntaxKind.PrefixUnaryExpression && node.operator === ts.SyntaxKind.MinusToken) {
+            return this.javaIntegerLiteralKind(node.operand) === 'int' ? 'int' : undefined;
+        }
+        if (!ts.isNumericLiteral(node)) {
             return undefined;
         }
         return /[.eE]/.test(node.text) ? 'double' : this.javaIntegerLiteralKind(node);
@@ -1178,6 +1195,20 @@ export class JavaTranspiler extends BaseTranspiler {
             const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
             return negated ? `!${equalCall}` : equalCall;
         }
+        // a declared Java String on either side: a String never equals a non-String, and
+        // Objects.equals carries the same null answer, so the class-strict compare is the
+        // helper's own String branch for every other operand.
+        if (this.javaDeclaredStringType(node.left) || this.javaDeclaredStringType(node.right)) {
+            const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+            return negated ? `!${equalCall}` : equalCall;
+        }
+        // both operands print a Java numeric primitive (literals, `.length`, index/search
+        // results, for counters, native arithmetic): neither can be null, so the operator
+        // is the helper's value compare on the two boxes (never a boxed Double, whose
+        // equals would separate -0.0).
+        if (this.javaOperandPrintsPrimitiveNumber(node.left) && this.javaOperandPrintsPrimitiveNumber(node.right)) {
+            return `(${leftText} ${negated ? '!=' : '=='} ${rightText})`;
+        }
         // java-15: two checker-typed plain numbers whose printed Java values carry the same
         // kind. Two primitives compare with the native operator; a box compares with
         // Objects.equals, whose class the kind pins to the box the helper would compare.
@@ -1195,6 +1226,33 @@ export class JavaTranspiler extends BaseTranspiler {
                 return negated ? `!${equalCall}` : equalCall;
             }
         }
+        // a numeric operand the pass declared Long/Double/Integer/int/long/double: the box
+        // is unboxed by the operator (numeric compare, exactly the helper's toLong/toDouble
+        // path) and a boxed declaration is null-tested first, which the helper answers false.
+        const leftDeclared = this.javaDeclaredNumericFamily(node.left);
+        const rightDeclared = this.javaDeclaredNumericFamily(node.right);
+        if (leftDeclared !== undefined || rightDeclared !== undefined) {
+            const leftOk = leftDeclared !== undefined || this.javaOperandPrintsPrimitiveNumber(node.left);
+            const rightOk = rightDeclared !== undefined || this.javaOperandPrintsPrimitiveNumber(node.right);
+            if (leftOk && rightOk) {
+                const boxes: string[] = [];
+                if (leftDeclared !== undefined && JAVA_BOXED_NUMERIC_TYPES.has(leftDeclared)) {
+                    boxes.push(leftText);
+                }
+                if (rightDeclared !== undefined && JAVA_BOXED_NUMERIC_TYPES.has(rightDeclared)) {
+                    boxes.push(rightText);
+                }
+                const compare = `${leftText} ${negated ? '!=' : '=='} ${rightText}`;
+                if (boxes.length === 0) {
+                    return `(${compare})`;
+                }
+                // a boxed declaration can hold null, which the helper answers false for; the
+                // negated comparison therefore has to accept the null arm instead of testing it
+                return negated
+                    ? `(${boxes.map((box) => `${box} == null`).join(' || ')} || ${compare})`
+                    : `(${boxes.map((box) => `${box} != null`).join(' && ')} && ${compare})`;
+            }
+        }
         return undefined;
     }
 
@@ -1205,7 +1263,22 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaEqualityLiteralKind(node) !== undefined
             || this.javaNativeLengthKind(node) !== undefined
             || this.isJavaPrimitiveCounterReference(node)
-            || this.javaNativeArithmeticKind(node) !== undefined;
+            || this.javaNativeArithmeticKind(node) !== undefined
+            // `.length` on a receiver whose Java text the printer does not prove is still
+            // the int-returning Helpers.getArrayLength; indexOf/search print int helpers
+            || this.javaPrimitiveOperandKind(node) !== undefined;
+    }
+
+    // the numeric family the pass declared for a local (`Long`/`Double`/`Integer` boxed,
+    // `int`/`long`/`double` primitive), undefined when nothing was declared or the declared
+    // type is not numeric
+    javaDeclaredNumericFamily(expression): string | undefined {
+        const type = this.javaDeclaredTypeOf(expression);
+        if (type === undefined) {
+            return undefined;
+        }
+        const trimmed = type.trim();
+        return JAVA_DECLARED_NUMERIC_TYPES.has(trimmed) ? trimmed : undefined;
     }
 
     // `x[k] = v` prints the runtime helper by default. Helpers.addElementToObject
@@ -2111,6 +2184,24 @@ export class JavaTranspiler extends BaseTranspiler {
                 // false for the nullish arm, the guard keeps exactly that
                 if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
                     return `(${objText} != null && ((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
+                }
+            }
+            // A key the checker does not prove to be a Java String: the helper's map branch
+            // answers false for it, and so does containsKey on every String-keyed map — the
+            // null test keeps the ConcurrentHashMap/TreeMap receivers from throwing on a
+            // null key. The key prints once per guard, so it must be a side-effect-free read.
+            if (this.javaSideEffectFreeReference(left) && !this.javaOperandPrintsPrimitiveNumber(left)
+                && !this.isNullishLiteral(left)
+                && left.kind !== ts.SyntaxKind.TrueKeyword && left.kind !== ts.SyntaxKind.FalseKeyword) {
+                const guarded = `${keyText} != null && `;
+                if (this.javaDeclaredMapReceiver(right)) {
+                    return `(${guarded}${objText}.containsKey(${keyText}))`;
+                }
+                if (this.isJavaMapType(objectType)) {
+                    return `(${guarded}((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
+                }
+                if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
+                    return `(${objText} != null && ${guarded}((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
                 }
             }
             return `Helpers.inOp(${objText}, ${keyText})`;
@@ -4883,6 +4974,11 @@ export class JavaTranspiler extends BaseTranspiler {
         const argument = node?.arguments?.[0];
         if (argument === undefined || ts.isPropertyAccessExpression(argument)) {
             return undefined;
+        }
+        // a local the pass declares a Map needs no checkcast: the key copy binds on the
+        // declaration's own type, exactly the helper's synchronized map branch
+        if (this.javaDeclaredMapReceiver(argument)) {
+            return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.keySet())`;
         }
         let type;
         try {
