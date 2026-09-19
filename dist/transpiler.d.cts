@@ -1279,11 +1279,14 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaThisCallNumericKind(node: any): string | undefined;
     javaProvableNumericKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaDeclaredNumericLocalKind(node: any): string | undefined;
+    javaDeclaredNumericTypeKind(javaType: any): string | undefined;
+    javaIdentifierPrintsDeclaredName(node: any): boolean;
     javaIdentifierKeepsDeclaredName(node: any): boolean;
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaBaseTimeLongCall(node: any): boolean;
+    javaBaseIntCall(node: any): boolean;
     javaIntForCounter(node: any): boolean;
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
@@ -1296,6 +1299,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaPrintOperandAsLong(node: any, text: any): any;
     javaProvableCounterInt(node: any): boolean;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
+    javaPrintArithmeticOperand(kind: any, node: any, text: any): any;
     javaNativeMathMinMaxOperandKind(node: any): "double" | "integral";
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;

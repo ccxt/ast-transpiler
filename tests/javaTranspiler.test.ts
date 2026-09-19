@@ -5242,7 +5242,7 @@ describe('java replaceAll native emission', () => {
         });
     });
 
-    test('a declared numeric local never turns `+` native (java-13/14 own Add)', () => {
+    test('a declared Long local adds an integer literal natively (D-14 widened add)', () => {
         withNumericLocals({ now: 'Long' }, () => {
             const input =
             "class T {\n" +
@@ -5252,7 +5252,97 @@ describe('java replaceAll native emission', () => {
             "    }\n" +
             "}"
             const output = transpiler.transpileJava(input).content;
-            expect(output).toContain('Object x = Helpers.add(now, 1);');
+            expect(output).toContain('Object x = (now + 1L);');
+            expect(output).not.toContain('Helpers.add(now, 1)');
+        });
+    });
+
+    // D-14: the production proof source is the embedding layer's declared-local table
+    // (build/java-local-types.js#installJavaDeclaredLocalTypes records the printed type of
+    // every declaration the local-typing chain wrote); the tests fake that table.
+    const withDeclaredLocalTypes = (javaTypes: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => javaTypes[declaration?.name?.escapedText];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('two Integer-declared locals multiply with an explicit long widening', () => {
+        withDeclaredLocalTypes({ maxDistance: 'Integer', msInDay: 'Integer' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const maxDistance = 20;\n" +
+            "        const msInDay = 86400000;\n" +
+            "        const x = maxDistance * msInDay;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Long x = (((long) maxDistance) * ((long) msInDay));');
+            expect(output).not.toContain('Helpers.multiply(');
+        });
+    });
+
+    test('a literal-typed Integer local subtracts a declared Long local natively', () => {
+        withDeclaredLocalTypes({ msInDay: 'Integer', now: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const msInDay = 86400000;\n" +
+            "        const now = 1;\n" +
+            "        const x = now - msInDay;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Long x = (now - ((long) msInDay));');
+            expect(output).not.toContain('Helpers.subtract(');
+        });
+    });
+
+    test('an Object-declared local keeps the subtract helper (the box may hold null)', () => {
+        withDeclaredLocalTypes({ since: 'Object' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const since: number = 1;\n" +
+            "        const x = since - 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = Helpers.subtract(since, 1);');
+        });
+    });
+
+    test('an int-declared local divides natively as a double division', () => {
+        withDeclaredLocalTypes({ timeframeMs: 'int' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const timeframeMs: number = 1000;\n" +
+            "        const x = timeframeMs / 1000;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Double x = (((double) timeframeMs) / ((double) 1000));');
+            expect(output).not.toContain('Helpers.divide(');
+        });
+    });
+
+    test('a nullable declared numeric keeps the add helper (a null box would NPE)', () => {
+        withNumericLocals({ until: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const until: number | undefined = undefined;\n" +
+            "        const x = until + 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.add(until, 1)');
         });
     });
 
