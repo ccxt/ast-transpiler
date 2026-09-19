@@ -6869,3 +6869,99 @@ describe('objectKeys on a declared map local', () => {
         expect(output).toContain('Helpers.objectKeys(this.options)');
     });
 });
+
+// d-12: `this.spawn(this.someMethod, args...)` is the pro-tier dispatch shape - the ccxt
+// post-pass rewrites the reference into a lambda `() -> { this.someMethod(args); }`, so the
+// arguments bind to the METHOD's printed parameters. A parameter the printer declared
+// natively (`Dict`/`Str`/`Bool`/`Market`/`Currency`) needs the same checkcast a direct call
+// site carries, or `Object message` cannot convert to `Map<String,Object>` (job 1008:
+// Lbank/Binance/Weex pro handlers). Fixtures mirror the repository layout, because the
+// alias declarations and the base-tier policy are file-anchored.
+describe('java spawn method references (d-12)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-d12-spawn');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Client.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'probe.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n");
+        fs.writeFileSync(CLIENT_FIXTURE,
+            "export default class Client {\n    resolve (x: any, y: any): void {}\n}\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict } from './types';\n" +
+            "import Client from './Client';\n" +
+            "export default class Exchange {\n" +
+            "    spawn (method: any, ...args: any[]): any {\n" +
+            "    }\n" +
+            "    handleBase (client: Client, data: Dict): void {\n" +
+            "    }\n" +
+            "}\n");
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str } from '../base/types';\n" +
+            "import Exchange from '../base/Exchange';\n" +
+            "import Client from '../base/Client';\n" +
+            "class Probe extends Exchange {\n" +
+            "    handlePing (client: Client, message: Dict): void {\n" +
+            "        const x = message['ping'];\n" +
+            "    }\n" +
+            "    handleSnapshot (client: Client, message: Dict, subscription: Dict): Promise<void> {\n" +
+            "        return undefined as any;\n" +
+            "    }\n" +
+            "    handleString (client: Client, mode: Str): void {\n" +
+            "    }\n" +
+            "    handleUntyped (client: Client, message: any): void {\n" +
+            "    }\n" +
+            "    handleMessage (client: Client, message: any): void {\n" +
+            "        this.spawn (this.handlePing, client, message);\n" +
+            "        this.spawn (this.handleSnapshot, client, message, message);\n" +
+            "        this.spawn (this.handleString, client, message);\n" +
+            "        this.spawn (this.handleUntyped, client, message);\n" +
+            "        this.spawn (async () => { this.handlePing (client, message); });\n" +
+            "        this.spawn (this.handleBase, client, message);\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a spawned method reference casts its argument to the printed parameter type', () => {
+        expect(venueOutput).toContain('this.spawn(this.handlePing, client, (java.util.Map<String, Object>) (message));');
+    });
+
+    test('every spawned argument position carries its own checkcast', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleSnapshot, client, (java.util.Map<String, Object>) (message), (java.util.Map<String, Object>) (message));');
+    });
+
+    test('a Str parameter casts to String', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleString, client, (String) (message));');
+    });
+
+    test('the method-reference argument itself is never cast', () => {
+        expect(venueOutput).not.toContain('(java.util.Map<String, Object>) (this.handlePing)');
+    });
+
+    test('a spawned method with untyped parameters keeps its arguments verbatim', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleUntyped, client, message);');
+    });
+
+    test('a spawned hand-written base method keeps the box (no cast)', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleBase, client, message);');
+    });
+
+    test('an arrow-function spawn keeps the ordinary call-site cast inside its body', () => {
+        expect(venueOutput).toContain('this.spawn(() => ');
+        expect(venueOutput).toContain('this.handlePing(client, (java.util.Map<String, Object>) (message));');
+    });
+});

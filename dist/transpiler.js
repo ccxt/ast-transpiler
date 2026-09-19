@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -12806,7 +12806,8 @@ var JavaTranspiler = class extends BaseTranspiler {
   // checker proved the argument's TypeScript type assignable to the parameter's, so the
   // declared type describes the value the parameter really receives.
   javaPrintCallArguments(args, node, identation) {
-    const parameterTypes = this.javaNativeCallParameterTypes(node);
+    const spawnTypes = this.javaSpawnCallParameterTypes(node);
+    const parameterTypes = spawnTypes !== void 0 ? spawnTypes : this.javaNativeCallParameterTypes(node);
     return args.map((a, i) => {
       const parsedArg = this.printNode(a, identation).trim();
       const type = parameterTypes[i];
@@ -12815,6 +12816,41 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       return `(${type}) (${parsedArg})`;
     }).join(", ");
+  }
+  // `this.spawn(this.someMethod, args...)`: the spawned work executes `this.someMethod(args)`
+  // (the ccxt post-pass rewrites the reference into a lambda), so the arguments belong to the
+  // referenced method's signature, not to spawn's `...args` - each one carries the checkcast
+  // its parameter demands, or the Object local would not convert to the printed native type.
+  javaSpawnCallParameterTypes(node) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.ThisKeyword || callee.name?.escapedText !== "spawn") {
+      return void 0;
+    }
+    const reference = (node.arguments ?? [])[0];
+    if (reference?.kind !== ts6.SyntaxKind.PropertyAccessExpression || reference.expression?.kind !== ts6.SyntaxKind.ThisKeyword || reference.name?.escapedText === void 0) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      const symbol = this.getChecker().getSymbolAtLocation(reference.name);
+      declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    } catch (e) {
+      return void 0;
+    }
+    const parameters = declaration?.parameters;
+    if (parameters === void 0) {
+      return void 0;
+    }
+    return (node.arguments ?? []).map((a, i) => {
+      if (i === 0) {
+        return void 0;
+      }
+      const param = parameters[i - 1];
+      if (param === void 0 || !ts6.isParameter(param)) {
+        return void 0;
+      }
+      return this.javaNativeParameterType(param);
+    });
   }
   // the argument is a literal (or a String the embedding build layer's resolver proves)
   // and the parameter declares exactly that type, so no cast is needed. Every other
