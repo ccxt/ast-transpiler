@@ -423,8 +423,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpHandlerCalled = new WeakMap<ts.Node, boolean>();
     // class declaration -> the class routes the raw message through a list test
     csharpListRouteClasses = new WeakMap<ts.Node, boolean>();
-    // program -> method symbol -> a static call reference exists (built once per program)
-    csharpHandlerCallIndex = new WeakMap<ts.Program, Map<ts.Symbol, boolean>>();
+    // source file -> method symbol -> a static call reference exists (built once per file: a
+    // sticky batch program is shared by every file of the stage, so a program-keyed index
+    // would answer for another venue's class)
+    csharpHandlerCallIndex = new WeakMap<ts.Node, Map<ts.Symbol, boolean>>();
 
     constructor(config = {}) {
         config['parser'] = Object.assign ({}, parserConfig, config['parser'] ?? {});
@@ -1394,18 +1396,17 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         let called = true; // no symbol answer: keep the box
         const cls = this.csharpEnclosingClass(method);
-        if (cls !== undefined) {
-            const names = new Set<string>();
-            for (const member of cls.members) {
-                const name: any = (member as any).name?.escapedText;
-                if (ts.isMethodDeclaration(member) && (name !== undefined)) {
-                    names.add(name);
-                }
-            }
+        let file: any;
+        try {
+            file = method.getSourceFile();
+        } catch (e) {
+            file = undefined;
+        }
+        if ((cls !== undefined) && (file !== undefined)) {
             try {
                 const symbol = this.getChecker().getSymbolAtLocation(method.name);
                 if (symbol !== undefined) {
-                    called = this.csharpHandlerCallIndexFor(names).get(symbol) === true;
+                    called = this.csharpHandlerCallIndexFor(file).get(symbol) === true;
                 }
             } catch (e) {
                 called = true;
@@ -1415,51 +1416,62 @@ export class CSharpTranspiler extends BaseTranspiler {
         return called;
     }
 
-    // every identifier in the program that resolves to one of the class's own method names,
+    // every identifier of the FILE that resolves to one of its classes' own method names,
     // recorded as a call when it is the callee of a call expression; keyed by symbol, so a
     // same-named method of another class never marks this one
-    csharpHandlerCallIndexFor(names: Set<string>): Map<ts.Symbol, boolean> {
-        let program: any;
-        try {
-            program = this.getProgram();
-        } catch (e) {
-            return new Map();
+    csharpHandlerCallIndexFor(file): Map<ts.Symbol, boolean> {
+        const cached = this.csharpHandlerCallIndex.get(file);
+        if (cached !== undefined) {
+            return cached;
         }
-        const cached = this.csharpHandlerCallIndex.get(program);
-        if ((cached !== undefined) || (names.size === 0)) {
-            return cached ?? new Map();
-        }
-        const index = new Map<ts.Symbol, boolean>();
-        const checker = this.getChecker();
-        for (const file of program.getSourceFiles()) {
-            if (file.isDeclarationFile) {
-                continue;
-            }
-            const walk = (n: any) => {
-                if (ts.isIdentifier(n) && names.has(n.escapedText as string)) {
-                    let symbol;
-                    try {
-                        symbol = checker.getSymbolAtLocation(n);
-                    } catch (e) {
-                        symbol = undefined;
-                    }
-                    if (symbol !== undefined) {
-                        const parent: any = n.parent;
-                        const isCall = (ts.isPropertyAccessExpression(parent) && (parent.name === n) &&
-                            ts.isCallExpression(parent.parent) && (parent.parent.expression === parent)) ||
-                            (ts.isCallExpression(parent) && (parent.expression === n));
-                        if (isCall) {
-                            index.set(symbol, true);
-                        } else if (index.get(symbol) === undefined) {
-                            index.set(symbol, false);
-                        }
+        const names = new Set<string>();
+        const collect = (n: any) => {
+            if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) {
+                for (const member of n.members) {
+                    const name: any = (member as any).name?.escapedText;
+                    if (ts.isMethodDeclaration(member) && (name !== undefined)) {
+                        names.add(name);
                     }
                 }
-                ts.forEachChild(n, walk);
-            };
-            walk(file);
+            }
+            ts.forEachChild(n, collect);
+        };
+        collect(file);
+        const index = new Map<ts.Symbol, boolean>();
+        if (names.size > 0) {
+            let checker;
+            try {
+                checker = this.getChecker();
+            } catch (e) {
+                checker = undefined;
+            }
+            if (checker !== undefined) {
+                const walk = (n: any) => {
+                    if (ts.isIdentifier(n) && names.has(n.escapedText as string)) {
+                        let symbol;
+                        try {
+                            symbol = checker.getSymbolAtLocation(n);
+                        } catch (e) {
+                            symbol = undefined;
+                        }
+                        if (symbol !== undefined) {
+                            const parent: any = n.parent;
+                            const isCall = (ts.isPropertyAccessExpression(parent) && (parent.name === n) &&
+                                ts.isCallExpression(parent.parent) && (parent.parent.expression === parent)) ||
+                                (ts.isCallExpression(parent) && (parent.expression === n));
+                            if (isCall) {
+                                index.set(symbol, true);
+                            } else if (index.get(symbol) === undefined) {
+                                index.set(symbol, false);
+                            }
+                        }
+                    }
+                    ts.forEachChild(n, walk);
+                };
+                walk(file);
+            }
         }
-        this.csharpHandlerCallIndex.set(program, index);
+        this.csharpHandlerCallIndex.set(file, index);
         return index;
     }
 

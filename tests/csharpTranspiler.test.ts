@@ -4307,4 +4307,28 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         // the helper's `Array.isArray (symbols)` is not the handler message
         expect(output).toContain('public virtual void handleTicker(object client, Dictionary<string, object> message)');
     });
+    test('a call from another class of the same file keeps the box', () => {
+        const input =
+            'type Dict = { [key: string]: any };\n' +
+            'interface Client { id: string; }\n' +
+            'class Alpha {\n' +
+            '    alphaHelper (client: Client, message: Dict): void {\n' +
+            '        const a = message[\'k\'];\n' +
+            '    }\n' +
+            '}\n' +
+            'class Exchange {\n' +
+            '    handleTicker (client: Client, message: Dict): void {\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        this.betaPing (client, message);\n' +
+            '    }\n' +
+            '    betaPing (client: Client, message: Dict): void {\n' +
+            '        const b = message[\'k\'];\n' +
+            '    }\n' +
+            '}\n';
+        const output = transpiler.transpileCSharp(input).content;
+        // the file-level index records the static call, so the callee keeps the box
+        expect(output).toContain('public virtual void betaPing(object client, object message)');
+        expect(output).not.toContain('betaPing(object client, Dictionary<string, object> message)');
+        expect(output).toContain('getValue(message, "k")');
+    });
 });

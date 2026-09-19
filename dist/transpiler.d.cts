@@ -499,7 +499,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpHandlerMessageTypes: WeakMap<ts.Node, string>;
     csharpHandlerCalled: WeakMap<ts.Node, boolean>;
     csharpListRouteClasses: WeakMap<ts.Node, boolean>;
-    csharpHandlerCallIndex: WeakMap<ts.Program, Map<ts.Symbol, boolean>>;
+    csharpHandlerCallIndex: WeakMap<ts.Node, Map<ts.Symbol, boolean>>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -543,7 +543,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsHandlerMessageIdentifier(node: any): boolean;
     csharpClassHasListRoute(method: any): boolean;
     csharpHandlerIsCalled(method: any): boolean;
-    csharpHandlerCallIndexFor(names: Set<string>): Map<ts.Symbol, boolean>;
+    csharpHandlerCallIndexFor(file: any): Map<ts.Symbol, boolean>;
     csharpHasKeyRemoval(func: any, expression: any, key: any): boolean;
     csharpGuardIsNegated(guard: any): boolean;
     csharpAlwaysExits(statement: any): boolean;

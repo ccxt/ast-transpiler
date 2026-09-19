@@ -2936,7 +2936,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpHandlerCalled = /* @__PURE__ */ new WeakMap();
     // class declaration -> the class routes the raw message through a list test
     this.csharpListRouteClasses = /* @__PURE__ */ new WeakMap();
-    // program -> method symbol -> a static call reference exists (built once per program)
+    // source file -> method symbol -> a static call reference exists (built once per file: a
+    // sticky batch program is shared by every file of the stage, so a program-keyed index
+    // would answer for another venue's class)
     this.csharpHandlerCallIndex = /* @__PURE__ */ new WeakMap();
     this.csModifiers = {};
     this.requiresParameterType = true;
@@ -3787,18 +3789,17 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     let called = true;
     const cls = this.csharpEnclosingClass(method);
-    if (cls !== void 0) {
-      const names = /* @__PURE__ */ new Set();
-      for (const member of cls.members) {
-        const name = member.name?.escapedText;
-        if (ts4.isMethodDeclaration(member) && name !== void 0) {
-          names.add(name);
-        }
-      }
+    let file;
+    try {
+      file = method.getSourceFile();
+    } catch (e) {
+      file = void 0;
+    }
+    if (cls !== void 0 && file !== void 0) {
       try {
         const symbol = this.getChecker().getSymbolAtLocation(method.name);
         if (symbol !== void 0) {
-          called = this.csharpHandlerCallIndexFor(names).get(symbol) === true;
+          called = this.csharpHandlerCallIndexFor(file).get(symbol) === true;
         }
       } catch (e) {
         called = true;
@@ -3807,49 +3808,60 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpHandlerCalled.set(method, called);
     return called;
   }
-  // every identifier in the program that resolves to one of the class's own method names,
+  // every identifier of the FILE that resolves to one of its classes' own method names,
   // recorded as a call when it is the callee of a call expression; keyed by symbol, so a
   // same-named method of another class never marks this one
-  csharpHandlerCallIndexFor(names) {
-    let program;
-    try {
-      program = this.getProgram();
-    } catch (e) {
-      return /* @__PURE__ */ new Map();
+  csharpHandlerCallIndexFor(file) {
+    const cached = this.csharpHandlerCallIndex.get(file);
+    if (cached !== void 0) {
+      return cached;
     }
-    const cached = this.csharpHandlerCallIndex.get(program);
-    if (cached !== void 0 || names.size === 0) {
-      return cached ?? /* @__PURE__ */ new Map();
-    }
-    const index = /* @__PURE__ */ new Map();
-    const checker = this.getChecker();
-    for (const file of program.getSourceFiles()) {
-      if (file.isDeclarationFile) {
-        continue;
-      }
-      const walk = (n) => {
-        if (ts4.isIdentifier(n) && names.has(n.escapedText)) {
-          let symbol;
-          try {
-            symbol = checker.getSymbolAtLocation(n);
-          } catch (e) {
-            symbol = void 0;
-          }
-          if (symbol !== void 0) {
-            const parent = n.parent;
-            const isCall = ts4.isPropertyAccessExpression(parent) && parent.name === n && ts4.isCallExpression(parent.parent) && parent.parent.expression === parent || ts4.isCallExpression(parent) && parent.expression === n;
-            if (isCall) {
-              index.set(symbol, true);
-            } else if (index.get(symbol) === void 0) {
-              index.set(symbol, false);
-            }
+    const names = /* @__PURE__ */ new Set();
+    const collect = (n) => {
+      if (ts4.isClassDeclaration(n) || ts4.isClassExpression(n)) {
+        for (const member of n.members) {
+          const name = member.name?.escapedText;
+          if (ts4.isMethodDeclaration(member) && name !== void 0) {
+            names.add(name);
           }
         }
-        ts4.forEachChild(n, walk);
-      };
-      walk(file);
+      }
+      ts4.forEachChild(n, collect);
+    };
+    collect(file);
+    const index = /* @__PURE__ */ new Map();
+    if (names.size > 0) {
+      let checker;
+      try {
+        checker = this.getChecker();
+      } catch (e) {
+        checker = void 0;
+      }
+      if (checker !== void 0) {
+        const walk = (n) => {
+          if (ts4.isIdentifier(n) && names.has(n.escapedText)) {
+            let symbol;
+            try {
+              symbol = checker.getSymbolAtLocation(n);
+            } catch (e) {
+              symbol = void 0;
+            }
+            if (symbol !== void 0) {
+              const parent = n.parent;
+              const isCall = ts4.isPropertyAccessExpression(parent) && parent.name === n && ts4.isCallExpression(parent.parent) && parent.parent.expression === parent || ts4.isCallExpression(parent) && parent.expression === n;
+              if (isCall) {
+                index.set(symbol, true);
+              } else if (index.get(symbol) === void 0) {
+                index.set(symbol, false);
+              }
+            }
+          }
+          ts4.forEachChild(n, walk);
+        };
+        walk(file);
+      }
     }
-    this.csharpHandlerCallIndex.set(program, index);
+    this.csharpHandlerCallIndex.set(file, index);
     return index;
   }
   csharpHasKeyRemoval(func, expression, key) {
