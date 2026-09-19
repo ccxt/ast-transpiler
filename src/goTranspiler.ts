@@ -272,6 +272,16 @@ const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
 // interface the local used to hold
 const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDictionary' ];
 
+// `var market any = this.Market(symbol)` / `this.SafeMarket(…)`: the generated method's Go
+// signature returns `any`, but its TypeScript return type is the `MarketInterface` interface, so
+// the box always holds the market dictionary. The runtime MapTyped hands that same map back (nil
+// for a value that is not a map, the absent case the boxed nil used to answer), so the local can
+// be declared `map[string]any` and its element reads print natively. The refinement is only
+// emitted while every later use of the local READS it as a dictionary — the same use scan the
+// SafeDict family runs, because a value position, a nil comparison or a write into the map would
+// observe the typed nil a boxed local hides.
+const GO_MARKET_LOCAL_TYPE = 'map[string]any';
+
 
 // the boundary comment ccxt's base sources (ts/src/base/Exchange.ts, PredictionExchange.ts)
 // carry and build/goTranspiler.ts re-assembles the generated file around
@@ -1968,10 +1978,172 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return `SafeMapTyped(${container}, ${key})`;
     }
 
+    // the TypeScript return type of the initializer proves the boxed value is the market
+    // dictionary: the checker reports the `MarketInterface` interface for `this.Market(...)` /
+    // `this.SafeMarket(...)` (the `Market` alias is the same interface unioned with undefined).
+    // Read from the checker, never from a printed name.
+    goMarketCallReturnsDict(initializer): boolean {
+        if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee: any = initializer.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) {
+            return false;
+        }
+        const name = callee.name?.escapedText;
+        if ((name !== 'market') && (name !== 'safeMarket')) {
+            return false;
+        }
+        const receiver: any = callee.expression;
+        const onThis = receiver?.kind === ts.SyntaxKind.ThisKeyword;
+        const onDerived = (receiver?.kind === ts.SyntaxKind.PropertyAccessExpression)
+            && (receiver.expression?.kind === ts.SyntaxKind.ThisKeyword)
+            && (receiver.name?.escapedText === 'DerivedExchange');
+        if (!onThis && !onDerived) {
+            return false;
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(initializer);
+        } catch (e) {
+            return false;
+        }
+        if (type === undefined) {
+            return false;
+        }
+        const isMarketInterface = (t) => {
+            const names = [ t?.symbol?.getName?.() ?? t?.symbol?.escapedName, t?.aliasSymbol?.getName?.() ];
+            return names.indexOf('MarketInterface') >= 0;
+        };
+        if (isMarketInterface(type)) {
+            return true;
+        }
+        if ((typeof type.isUnion === 'function') && type.isUnion()) {
+            return type.types.some((t) => isMarketInterface(t));
+        }
+        return false;
+    }
+
+    // `var market any = this.Market(symbol)` -> `var market map[string]any = MapTyped(this.Market(symbol))`.
+    // The box holds the dictionary the checker proved, and every later use reads it (SafeDict's own
+    // scan/emit wrapper), so the declaration and the conversion are pure refinements. Anything else
+    // — a value position, a nil test, a write into the map — keeps the box.
+    goMarketLocalUnboxCache = new Map<any, string | undefined>();
+
+    goMarketLocalUnbox(declaration): string | undefined {
+        if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        // only a declaration statement prints `var x T = …`; a for-init or the await form prints
+        // `:=`, where the annotation (and this conversion) would not appear
+        if (declaration.parent?.parent?.kind !== ts.SyntaxKind.FirstStatement) {
+            return undefined;
+        }
+        if (this.goMarketLocalUnboxCache.has(declaration)) {
+            return this.goMarketLocalUnboxCache.get(declaration);
+        }
+        this.goMarketLocalUnboxCache.set(declaration, undefined); // in-progress guard
+        let result: string | undefined;
+        try {
+            result = this.goMarketLocalUnboxUncached(declaration);
+        } finally {
+            this.goMarketLocalUnboxCache.set(declaration, result);
+        }
+        return result;
+    }
+
+    // true when this identifier resolves to the declaration being typed (a property name or a
+    // binding of the same name in another scope is not a use of the local). Without checker
+    // information the name match stands.
+    goIdentifierRefersToDeclaration(node, declaration): boolean {
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return true;
+        }
+        if (symbol === undefined) {
+            return true;
+        }
+        const valueDeclaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+        return (valueDeclaration === undefined) || (valueDeclaration === declaration);
+    }
+
+    // one later use of the market local: the dictionary read shapes the SafeDict family already
+    // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
+    // instead of answering an absent value — a plain argument position, because Go re-boxes the
+    // declared map into the callee's `any` parameter exactly as the local's own box did.
+    goMarketUseReadsTheValue(node, throwingAccessor: boolean): boolean {
+        if (this.goSafeDictUseReadsTheMap(node)) {
+            return true;
+        }
+        if (!throwingAccessor) {
+            return false;
+        }
+        const parent: any = node.parent;
+        return (parent?.kind === ts.SyntaxKind.CallExpression)
+            && (parent.expression !== node) && (parent.arguments.indexOf(node) >= 0);
+    }
+
+    goMarketLocalUnboxUncached(declaration): string | undefined {
+        if (!this.goMarketCallReturnsDict(declaration.initializer)) {
+            return undefined;
+        }
+        // the throwing accessor (`this.market`) never answers an absent value — it panics — so the
+        // boxed result is always a dictionary; handing the local to a call therefore re-boxes the
+        // same map into the callee's `any` parameter, the identical interface value. SafeMarket may
+        // answer its own optional argument, so those locals only take the read shapes below.
+        const throwingAccessor = (declaration.initializer.expression?.name?.escapedText === 'market');
+        const sourceName = declaration.name.escapedText as string;
+        const scope: any = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return undefined;
+        }
+        let safe = true;
+        const visit = (n) => {
+            if (!safe) { return; }
+            if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter)
+                && (n !== declaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.escapedText === sourceName)) {
+                safe = false; // a shadowing binding would mix two values under one name
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === sourceName) && (n !== declaration.name)) {
+                // `this.market(…)` carries the same name as the local: a property/method name is
+                // not a reference, and neither is a different binding of the same name
+                const parent: any = n.parent;
+                if ((parent?.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
+                    return;
+                }
+                if (!this.goIdentifierRefersToDeclaration(n, declaration)) {
+                    return;
+                }
+                if (!this.goMarketUseReadsTheValue(n, throwingAccessor)) {
+                    safe = false;
+                    return;
+                }
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        if (!safe || this.goTypeNameIsShadowed(scope, GO_MARKET_LOCAL_TYPE)) {
+            return undefined;
+        }
+        return GO_MARKET_LOCAL_TYPE;
+    }
+
+    // the initializer a typed market local is declared with: the same call, its boxed result
+    // converted to the map the checker proved (nil when the call answered a non-map)
+    goMarketUnboxValue(declaration, parsedValue: string): string | undefined {
+        if (this.goMarketLocalUnbox(declaration) !== GO_MARKET_LOCAL_TYPE) {
+            return undefined;
+        }
+        return `MapTyped(${parsedValue.trimStart()})`;
+    }
+
     getGoLocalType(declaration, parsedValue: string): string {
         const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
         if (goType === undefined) {
-            return this.goSafeDictLocalUnbox(declaration) ?? 'any';
+            return this.goSafeDictLocalUnbox(declaration) ?? this.goMarketLocalUnbox(declaration) ?? 'any';
         }
         // the scan matches AST identifiers, so it needs the source name, not the
         // printed one (`type` is renamed to `typeVar` on the way out)
@@ -2042,9 +2214,10 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             const declaredType = this.getGoLocalType(declaration, parsedValue);
             // a typed dict local is declared with the typed reader rather than the `any`
             // accessor, so the declaration compiles against the map type
-            const declaredValue = (declaredType === GO_SAFE_DICT_LOCAL_TYPE)
-                ? (this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart())
-                : parsedValue.trimStart();
+            const declaredValue = this.goMarketUnboxValue(declaration, parsedValue)
+                ?? ((declaredType === GO_SAFE_DICT_LOCAL_TYPE)
+                    ? (this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart())
+                    : parsedValue.trimStart());
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
             const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;

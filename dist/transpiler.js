@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6382,6 +6382,7 @@ var GO_NILABLE_FIELDS_Typed = {
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
 var GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
 var GO_SAFE_DICT_READ_HELPERS = ["GetValue", "InOp", "ObjectKeys", "IsDictionary"];
+var GO_MARKET_LOCAL_TYPE = "map[string]any";
 var GO_NUMERIC_KINDS = ["int", "int64", "float64"];
 var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.GreaterThanToken]: ">",
@@ -6609,6 +6610,11 @@ var GoTranspiler = class extends BaseTranspiler {
     // what the nil interface used to (GetValue/InOp/ObjectKeys/IsDictionary and the Safe*
     // accessors all normalise a nil receiver). Anything else keeps the box.
     this.goSafeDictLocalUnboxCache = /* @__PURE__ */ new Map();
+    // `var market any = this.Market(symbol)` -> `var market map[string]any = MapTyped(this.Market(symbol))`.
+    // The box holds the dictionary the checker proved, and every later use reads it (SafeDict's own
+    // scan/emit wrapper), so the declaration and the conversion are pure refinements. Anything else
+    // — a value position, a nil test, a write into the map — keeps the box.
+    this.goMarketLocalUnboxCache = /* @__PURE__ */ new Map();
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
@@ -7893,10 +7899,150 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const key = this.printNode(args.key, 0);
     return `SafeMapTyped(${container}, ${key})`;
   }
+  // the TypeScript return type of the initializer proves the boxed value is the market
+  // dictionary: the checker reports the `MarketInterface` interface for `this.Market(...)` /
+  // `this.SafeMarket(...)` (the `Market` alias is the same interface unioned with undefined).
+  // Read from the checker, never from a printed name.
+  goMarketCallReturnsDict(initializer) {
+    if (initializer?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const callee = initializer.expression;
+    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression) {
+      return false;
+    }
+    const name = callee.name?.escapedText;
+    if (name !== "market" && name !== "safeMarket") {
+      return false;
+    }
+    const receiver = callee.expression;
+    const onThis = receiver?.kind === ts5.SyntaxKind.ThisKeyword;
+    const onDerived = receiver?.kind === ts5.SyntaxKind.PropertyAccessExpression && receiver.expression?.kind === ts5.SyntaxKind.ThisKeyword && receiver.name?.escapedText === "DerivedExchange";
+    if (!onThis && !onDerived) {
+      return false;
+    }
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(initializer);
+    } catch (e) {
+      return false;
+    }
+    if (type === void 0) {
+      return false;
+    }
+    const isMarketInterface = (t) => {
+      const names = [t?.symbol?.getName?.() ?? t?.symbol?.escapedName, t?.aliasSymbol?.getName?.()];
+      return names.indexOf("MarketInterface") >= 0;
+    };
+    if (isMarketInterface(type)) {
+      return true;
+    }
+    if (typeof type.isUnion === "function" && type.isUnion()) {
+      return type.types.some((t) => isMarketInterface(t));
+    }
+    return false;
+  }
+  goMarketLocalUnbox(declaration) {
+    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    if (declaration.parent?.parent?.kind !== ts5.SyntaxKind.FirstStatement) {
+      return void 0;
+    }
+    if (this.goMarketLocalUnboxCache.has(declaration)) {
+      return this.goMarketLocalUnboxCache.get(declaration);
+    }
+    this.goMarketLocalUnboxCache.set(declaration, void 0);
+    let result;
+    try {
+      result = this.goMarketLocalUnboxUncached(declaration);
+    } finally {
+      this.goMarketLocalUnboxCache.set(declaration, result);
+    }
+    return result;
+  }
+  // true when this identifier resolves to the declaration being typed (a property name or a
+  // binding of the same name in another scope is not a use of the local). Without checker
+  // information the name match stands.
+  goIdentifierRefersToDeclaration(node, declaration) {
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return true;
+    }
+    if (symbol === void 0) {
+      return true;
+    }
+    const valueDeclaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+    return valueDeclaration === void 0 || valueDeclaration === declaration;
+  }
+  // one later use of the market local: the dictionary read shapes the SafeDict family already
+  // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
+  // instead of answering an absent value — a plain argument position, because Go re-boxes the
+  // declared map into the callee's `any` parameter exactly as the local's own box did.
+  goMarketUseReadsTheValue(node, throwingAccessor) {
+    if (this.goSafeDictUseReadsTheMap(node)) {
+      return true;
+    }
+    if (!throwingAccessor) {
+      return false;
+    }
+    const parent = node.parent;
+    return parent?.kind === ts5.SyntaxKind.CallExpression && parent.expression !== node && parent.arguments.indexOf(node) >= 0;
+  }
+  goMarketLocalUnboxUncached(declaration) {
+    if (!this.goMarketCallReturnsDict(declaration.initializer)) {
+      return void 0;
+    }
+    const throwingAccessor = declaration.initializer.expression?.name?.escapedText === "market";
+    const sourceName = declaration.name.escapedText;
+    const scope = this.goEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return void 0;
+    }
+    let safe = true;
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if ((n.kind === ts5.SyntaxKind.VariableDeclaration || n.kind === ts5.SyntaxKind.Parameter) && n !== declaration && n.name?.kind === ts5.SyntaxKind.Identifier && n.name.escapedText === sourceName) {
+        safe = false;
+        return;
+      }
+      if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
+        const parent = n.parent;
+        if (parent?.kind === ts5.SyntaxKind.PropertyAccessExpression && parent.name === n) {
+          return;
+        }
+        if (!this.goIdentifierRefersToDeclaration(n, declaration)) {
+          return;
+        }
+        if (!this.goMarketUseReadsTheValue(n, throwingAccessor)) {
+          safe = false;
+          return;
+        }
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(scope, visit);
+    if (!safe || this.goTypeNameIsShadowed(scope, GO_MARKET_LOCAL_TYPE)) {
+      return void 0;
+    }
+    return GO_MARKET_LOCAL_TYPE;
+  }
+  // the initializer a typed market local is declared with: the same call, its boxed result
+  // converted to the map the checker proved (nil when the call answered a non-map)
+  goMarketUnboxValue(declaration, parsedValue) {
+    if (this.goMarketLocalUnbox(declaration) !== GO_MARKET_LOCAL_TYPE) {
+      return void 0;
+    }
+    return `MapTyped(${parsedValue.trimStart()})`;
+  }
   getGoLocalType(declaration, parsedValue) {
     const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
     if (goType === void 0) {
-      return this.goSafeDictLocalUnbox(declaration) ?? "any";
+      return this.goSafeDictLocalUnbox(declaration) ?? this.goMarketLocalUnbox(declaration) ?? "any";
     }
     const sourceName = declaration.name?.escapedText;
     if (sourceName === void 0) {
@@ -7945,7 +8091,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
       }
       const varName = this.printNode(declaration.name);
       const declaredType = this.getGoLocalType(declaration, parsedValue);
-      const declaredValue = declaredType === GO_SAFE_DICT_LOCAL_TYPE ? this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart() : parsedValue.trimStart();
+      const declaredValue = this.goMarketUnboxValue(declaration, parsedValue) ?? (declaredType === GO_SAFE_DICT_LOCAL_TYPE ? this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart() : parsedValue.trimStart());
       const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
       if (parsedValue.startsWith("<-this.callInternal(")) {
         return `

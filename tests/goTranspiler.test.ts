@@ -716,6 +716,53 @@ describe('go pointer-typed Safe* body locals', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var info map[string]any = SafeMapTyped(item, \"info\")");
     });
+    test('a market local (checker: MarketInterface) is declared map[string]any and reads natively', () => {
+        const input =
+        "type MarketInterface = { id: string; type: string };\n" +
+        "class Exchange {\n" +
+        "    market(symbol): MarketInterface { return undefined; }\n" +
+        "    main(symbol) {\n" +
+        "        const market = this.market (symbol);\n" +
+        "        const id = market['id'];\n" +
+        "        const type = this.safeString (market, 'type');\n" +
+        "        return [id, type];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var market map[string]any = MapTyped(this.Market(symbol))");
+        expect(output).toContain("market[\"id\"]");
+        expect(output).not.toContain("GetValue(market, \"id\")");
+    });
+    test('a market local written into keeps the box', () => {
+        const input =
+        "type MarketInterface = { id: string };\n" +
+        "class Exchange {\n" +
+        "    market(symbol): MarketInterface { return undefined; }\n" +
+        "    main(symbol) {\n" +
+        "        const market = this.market (symbol);\n" +
+        "        market['created'] = 1;\n" +
+        "        return market['id'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var market any = this.Market(symbol)");
+        expect(output).not.toContain("MapTyped(");
+    });
+    test('a SafeMarket local handed to a call keeps the box (it may answer an absent value)', () => {
+        const input =
+        "type MarketInterface = { id: string };\n" +
+        "class Exchange {\n" +
+        "    safeMarket(symbol): MarketInterface { return undefined; }\n" +
+        "    parseFee(fee, market) { return market; }\n" +
+        "    main(symbol, fee) {\n" +
+        "        const market = this.safeMarket (symbol);\n" +
+        "        return this.parseFee (fee, market);\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var market any = this.SafeMarket(symbol)");
+        expect(output).not.toContain("MapTyped(");
+    });
     test('a SafeDict local read through the `in` operator stays typed', () => {
         const input =
         "class Exchange {\n" +

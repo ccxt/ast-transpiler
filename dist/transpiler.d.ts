@@ -856,6 +856,13 @@ declare class GoTranspiler extends BaseTranspiler {
     goSafeDictLocalUnbox(declaration: any): string | undefined;
     goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
+    goMarketCallReturnsDict(initializer: any): boolean;
+    goMarketLocalUnboxCache: Map<any, string>;
+    goMarketLocalUnbox(declaration: any): string | undefined;
+    goIdentifierRefersToDeclaration(node: any, declaration: any): boolean;
+    goMarketUseReadsTheValue(node: any, throwingAccessor: boolean): boolean;
+    goMarketLocalUnboxUncached(declaration: any): string | undefined;
+    goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
     getGoLocalType(declaration: any, parsedValue: string): string;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
