@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -18110,7 +18110,7 @@ ${classMethods}
     if (rightSide === "length") {
       return this.printArrayLength(node, 0, leftExpr);
     }
-    if (ts7.isIdentifier(node.name) && this.isShallowValueReceiver(node.expression) && this.isNativeAccessPositionSafe(node)) {
+    if (ts7.isIdentifier(node.name) && this.isShallowValueReceiver(node.expression) && this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node)) {
       const native = this.printNativeMapAccess(leftExpr, node.expression, String(rightSide));
       if (native)
         return native;
@@ -18213,7 +18213,46 @@ ${classMethods}
         return void 0;
       return this.printNativeListIndex(receiverText, index);
     }
-    return void 0;
+    return this.printNativeDynamicListIndex(receiverText, receiverNode, keyNode);
+  }
+  /** `get_value(&X, &i)` for a checker-proven list `X` and a dynamic integer
+   *  index local `i`: the runtime's own array branch, spelled natively.
+   *  `get_value` reaches its array arm for an `Arr` receiver and its default
+   *  (`Value::Null`) otherwise, so the emitted match reproduces both — an
+   *  `Int` index by value (a negative or out-of-range index misses), a
+   *  numeric string by parse, anything else a miss. */
+  printNativeDynamicListIndex(receiverText, receiverNode, keyNode) {
+    if (!this.isProvenListExpression(receiverNode))
+      return void 0;
+    if (!this.isRustValueIndexKey(keyNode))
+      return void 0;
+    const keyText = this.printNode(keyNode, 0).trim();
+    if (!keyText || keyText.startsWith("&"))
+      return void 0;
+    return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
+  }
+  /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric
+   *  literal>` declaration of the same function (the C-style loop counter).
+   *  Any other shape keeps the helper — the printed local could be a native
+   *  `i64`/`f64`, which the `Value` match would not compile against. */
+  isRustValueIndexKey(node) {
+    let current = node;
+    while (ts7.isParenthesizedExpression(current) || ts7.isAsExpression(current) || ts7.isNonNullExpression(current)) {
+      current = current.expression;
+    }
+    if (!ts7.isIdentifier(current))
+      return false;
+    const type = this.getCheckedTypeOf(current);
+    if (type === void 0 || !(type.flags & (ts7.TypeFlags.Number | ts7.TypeFlags.NumberLiteral)))
+      return false;
+    const declaration = this.rustDeclarationOfIdentifier(current);
+    if (declaration === void 0 || !ts7.isVariableDeclaration(declaration) || declaration.initializer === void 0)
+      return false;
+    let initializer = declaration.initializer;
+    while (ts7.isParenthesizedExpression(initializer) || ts7.isAsExpression(initializer) || ts7.isNonNullExpression(initializer)) {
+      initializer = initializer.expression;
+    }
+    return ts7.isNumericLiteral(initializer);
   }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
     if (!this.isProvenMapExpression(receiverNode)) {
@@ -18270,6 +18309,9 @@ ${classMethods}
     if (name === "safeDict" || name === "safeMarketStructure" || name === "market" || name === "currency" || name === "safeMarket" || name === "safeCurrency") {
       return true;
     }
+    if (name === "client") {
+      return true;
+    }
     if (name === "extend" || name === "deepExtend") {
       return this.rustDictProducingInitializer(node.arguments[0], seen);
     }
@@ -18309,17 +18351,43 @@ ${classMethods}
     const name = declaration.name?.text;
     if (typeof name !== "string")
       return false;
-    let initializer;
     if (ts7.isParameter(declaration)) {
-      initializer = declaration.initializer;
+      if (!this.rustParameterIsClientHandle(declaration)) {
+        const fallback = declaration.initializer;
+        if (fallback === void 0 || !this.rustDictProducingInitializer(fallback, /* @__PURE__ */ new Set()))
+          return false;
+      }
     } else if (ts7.isVariableDeclaration(declaration)) {
-      initializer = declaration.initializer;
+      const initializer = declaration.initializer;
+      if (initializer === void 0)
+        return false;
+      if (!this.rustDictProducingInitializer(initializer, /* @__PURE__ */ new Set()))
+        return false;
+    } else {
+      return false;
     }
-    if (initializer === void 0)
-      return false;
-    if (!this.rustDictProducingInitializer(initializer, /* @__PURE__ */ new Set()))
-      return false;
     return !this.rustLocalIsReassigned(declaration, name);
+  }
+  /** A parameter declared as the ws `Client` class (or a union with it). The
+   *  class is the default export of `ts/src/base/ws/Client.ts`, so its type
+   *  symbol is named `default`; the declaration itself carries the name. */
+  rustParameterIsClientHandle(declaration) {
+    const named = (type2) => {
+      if (type2 === void 0)
+        return false;
+      const symbol = this.typeSymbolOf(type2);
+      const declarations = symbol?.declarations ?? [];
+      return declarations.some((d) => {
+        if (!ts7.isClassDeclaration(d) || d.name === void 0 || d.name.text !== "Client")
+          return false;
+        const file = String(d.getSourceFile().fileName).replace(/\\/g, "/");
+        return file.endsWith("/ws/Client.ts") || file.endsWith("/ws/Client.d.ts");
+      });
+    };
+    const type = this.getCheckedTypeOf(declaration.name);
+    if (named(type))
+      return true;
+    return (type?.types ?? []).some((member) => named(member));
   }
   /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
    *  `str::parse` would; undefined when the fold is not obviously exact. */
@@ -18434,6 +18502,32 @@ ${classMethods}
       return true;
     return ts7.isPropertyAccessExpression(node) && node.expression.kind === ts7.SyntaxKind.ThisKeyword;
   }
+  /** True when this read is the receiver of an element-access chain that is
+   *  written (`x['a'] = v`, `x['a']['b'] = v`, `delete x['a']['b']`), or a
+   *  property write itself (`x.k = v`, `delete x.k`). The ccxt write passes
+   *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
+   *  native read would write into a discarded clone. */
+  isNativeWriteTargetBase(node) {
+    const parent = node.parent;
+    if (parent === void 0)
+      return false;
+    if (ts7.isBinaryExpression(parent) && parent.left === node && rustIsAssignmentOperator(parent.operatorToken.kind))
+      return true;
+    if (ts7.isDeleteExpression(parent))
+      return true;
+    if (!ts7.isElementAccessExpression(parent) || parent.expression !== node)
+      return false;
+    let current = parent;
+    while (current.parent !== void 0 && ts7.isElementAccessExpression(current.parent) && current.parent.expression === current) {
+      current = current.parent;
+    }
+    const top = current.parent;
+    if (top === void 0)
+      return false;
+    if (ts7.isDeleteExpression(top))
+      return true;
+    return ts7.isBinaryExpression(top) && top.left === current && rustIsAssignmentOperator(top.operatorToken.kind);
+  }
   transformPropertyAcessExpressionIfNeeded(node) {
     const rightSide = node.name.escapedText;
     const leftExpr = this.printNode(node.expression, 0);
@@ -18499,7 +18593,7 @@ ${classMethods}
       }
       current = expr;
     }
-    const nativeAllowed = this.isNativeAccessPositionSafe(node);
+    const nativeAllowed = this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node);
     let acc = this.printNode(baseExpr, 0);
     keys.forEach((key, index) => {
       const native = nativeAllowed ? this.printNativeContainerAccess(acc, receivers[index], key) : void 0;

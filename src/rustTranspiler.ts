@@ -2656,7 +2656,7 @@ export class RustTranspiler extends BaseTranspiler {
         // Typed field on a checker-proven map local (`x.field`) reads natively;
         // the ccxt post-pass otherwise rewrites it to `get_value(&x, "field")`.
         if (ts.isIdentifier(node.name) && this.isShallowValueReceiver(node.expression) &&
-            this.isNativeAccessPositionSafe(node)) {
+            this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node)) {
             const native = this.printNativeMapAccess(leftExpr, node.expression, String(rightSide));
             if (native) return native;
         }
@@ -2784,7 +2784,45 @@ export class RustTranspiler extends BaseTranspiler {
             if (!this.isProvenListExpression(receiverNode)) return undefined;
             return this.printNativeListIndex(receiverText, index);
         }
-        return undefined;
+        // A non-literal index (the `for (let i = 0; …)` counter) into a
+        // checker-proven list reads natively too.
+        return this.printNativeDynamicListIndex(receiverText, receiverNode, keyNode);
+    }
+
+    /** `get_value(&X, &i)` for a checker-proven list `X` and a dynamic integer
+     *  index local `i`: the runtime's own array branch, spelled natively.
+     *  `get_value` reaches its array arm for an `Arr` receiver and its default
+     *  (`Value::Null`) otherwise, so the emitted match reproduces both — an
+     *  `Int` index by value (a negative or out-of-range index misses), a
+     *  numeric string by parse, anything else a miss. */
+    printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
+        if (!this.isProvenListExpression(receiverNode)) return undefined;
+        if (!this.isRustValueIndexKey(keyNode)) return undefined;
+        const keyText = this.printNode(keyNode, 0).trim();
+        // A text that already carries the post-pass `&` is not a place.
+        if (!keyText || keyText.startsWith('&')) return undefined;
+        return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric
+     *  literal>` declaration of the same function (the C-style loop counter).
+     *  Any other shape keeps the helper — the printed local could be a native
+     *  `i64`/`f64`, which the `Value` match would not compile against. */
+    isRustValueIndexKey(node: ts.Node): boolean {
+        let current: any = node;
+        while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current)) {
+            current = current.expression;
+        }
+        if (!ts.isIdentifier(current)) return false;
+        const type = this.getCheckedTypeOf(current);
+        if (type === undefined || !(type.flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral))) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(current);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        let initializer: any = declaration.initializer;
+        while (ts.isParenthesizedExpression(initializer) || ts.isAsExpression(initializer) || ts.isNonNullExpression(initializer)) {
+            initializer = initializer.expression;
+        }
+        return ts.isNumericLiteral(initializer);
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined {
@@ -2857,6 +2895,11 @@ export class RustTranspiler extends BaseTranspiler {
             name === 'currency' || name === 'safeMarket' || name === 'safeCurrency') {
             return true;
         }
+        // `this.client(url)` returns the WS client handle Dict the runtime keeps
+        // (`Map{url, subscriptions, futures}`), never a class instance.
+        if (name === 'client') {
+            return true;
+        }
         // `extend`/`deepExtend` merge onto their first argument.
         if (name === 'extend' || name === 'deepExtend') {
             return this.rustDictProducingInitializer((node as any).arguments[0], seen);
@@ -2896,15 +2939,42 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined) return false;
         const name = declaration.name?.text;
         if (typeof name !== 'string') return false;
-        let initializer: ts.Node | undefined;
         if (ts.isParameter(declaration)) {
-            initializer = declaration.initializer;
+            // A `Client`-typed parameter is the WS handle the driver passes to
+            // `handle_message`/`handle*` (`ws_client::client_value`): a
+            // `Value::Dict{url, subscriptions, futures}` in the port, not the TS
+            // class. Its fields are plain map reads.
+            if (!this.rustParameterIsClientHandle(declaration)) {
+                const fallback = declaration.initializer;
+                if (fallback === undefined || !this.rustDictProducingInitializer(fallback, new Set())) return false;
+            }
         } else if (ts.isVariableDeclaration(declaration)) {
-            initializer = declaration.initializer;
+            const initializer = declaration.initializer;
+            if (initializer === undefined) return false;
+            if (!this.rustDictProducingInitializer(initializer, new Set())) return false;
+        } else {
+            return false;
         }
-        if (initializer === undefined) return false;
-        if (!this.rustDictProducingInitializer(initializer, new Set())) return false;
         return !this.rustLocalIsReassigned(declaration, name);
+    }
+
+    /** A parameter declared as the ws `Client` class (or a union with it). The
+     *  class is the default export of `ts/src/base/ws/Client.ts`, so its type
+     *  symbol is named `default`; the declaration itself carries the name. */
+    rustParameterIsClientHandle(declaration: ts.ParameterDeclaration): boolean {
+        const named = (type: ts.Type | undefined): boolean => {
+            if (type === undefined) return false;
+            const symbol: any = this.typeSymbolOf(type);
+            const declarations: any[] = symbol?.declarations ?? [];
+            return declarations.some((d) => {
+                if (!ts.isClassDeclaration(d) || d.name === undefined || d.name.text !== 'Client') return false;
+                const file = String(d.getSourceFile().fileName).replace(/\\/g, '/');
+                return file.endsWith('/ws/Client.ts') || file.endsWith('/ws/Client.d.ts');
+            });
+        };
+        const type = this.getCheckedTypeOf(declaration.name);
+        if (named(type)) return true;
+        return ((type as any)?.types ?? []).some((member: ts.Type) => named(member));
     }
 
     /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
@@ -3016,6 +3086,27 @@ export class RustTranspiler extends BaseTranspiler {
         return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword;
     }
 
+    /** True when this read is the receiver of an element-access chain that is
+     *  written (`x['a'] = v`, `x['a']['b'] = v`, `delete x['a']['b']`), or a
+     *  property write itself (`x.k = v`, `delete x.k`). The ccxt write passes
+     *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
+     *  native read would write into a discarded clone. */
+    isNativeWriteTargetBase(node: ts.Node): boolean {
+        const parent: any = node.parent;
+        if (parent === undefined) return false;
+        if (ts.isBinaryExpression(parent) && parent.left === node && rustIsAssignmentOperator(parent.operatorToken.kind)) return true;
+        if (ts.isDeleteExpression(parent)) return true;
+        if (!ts.isElementAccessExpression(parent) || parent.expression !== node) return false;
+        let current: any = parent;
+        while (current.parent !== undefined && ts.isElementAccessExpression(current.parent) && current.parent.expression === current) {
+            current = current.parent;
+        }
+        const top: any = current.parent;
+        if (top === undefined) return false;
+        if (ts.isDeleteExpression(top)) return true;
+        return ts.isBinaryExpression(top) && top.left === current && rustIsAssignmentOperator(top.operatorToken.kind);
+    }
+
     transformPropertyAcessExpressionIfNeeded(node) {
         const rightSide = node.name.escapedText;
         // Printed here (as before) so the receiver's loop-flag numbering in the
@@ -3108,7 +3199,7 @@ export class RustTranspiler extends BaseTranspiler {
 
         // One checker proof per chain: the emitted text replaces `get_value` only
         // when it is legal at the position the whole chain occupies.
-        const nativeAllowed = this.isNativeAccessPositionSafe(node);
+        const nativeAllowed = this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node);
 
         let acc = this.printNode(baseExpr, 0);
         keys.forEach((key, index) => {
