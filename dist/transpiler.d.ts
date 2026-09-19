@@ -1504,6 +1504,17 @@ interface RustDeclaredDictLocalEntry {
     declaration: ts.VariableDeclaration;
     start: number;
 }
+/** A `Dict`/`List` parameter whose body uses are all printable reads: the
+ *  printer re-binds the same name to a borrowed container at fn entry
+ *  (`let x = x.as_map().unwrap_or(&__x_empty);`) so every read is native. */
+interface RustParamShadow {
+    kind: RustParamShadowKind;
+    /** the parameter name; the shadow re-binds it, the `Value` ABI is untouched. */
+    name: string;
+    declaration: ts.ParameterDeclaration;
+}
+/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>` (D-25). */
+type RustParamShadowKind = 'map' | 'list';
 /** Vocabulary of the declared-Dict locals table (see
  *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
 declare const RUST_DECLARED_DICT_LOCALS: {
@@ -1816,6 +1827,54 @@ declare class RustTranspiler extends BaseTranspiler {
      *  snapshot instead of the dict itself — a dynamic read cannot prove the
      *  key away, so a place named after one stays boxed. */
     rustNodeIsKeyUnsafePlace(keyText: string): boolean;
+    private paramShadowCache;
+    /** Functions whose shadow lines were actually emitted — a read converts
+     *  only inside one of those (an arrow body prints inline and gets none). */
+    private paramShadowEmitted;
+    private rustParamShadowEmittedSet;
+    rustParamShadowTables(): Map<ts.Node, Map<string, RustParamShadow>>;
+    /** Emitted shadow lines for a function, or '' when no parameter qualifies.
+     *  The caller must use this before printing the body statements (it both
+     *  registers the function as shadowed and computes the lines). */
+    rustParamShadowLines(fn: ts.Node, identation: number): string;
+    private rustParamShadowTable;
+    /** The shadow a read receiver resolves to, or undefined (no proof → helper). */
+    rustParamShadowOf(node: ts.Node): RustParamShadow | undefined;
+    /** True when the enclosing function already binds this name somewhere. */
+    private rustFunctionDeclaresName;
+    private collectRustParamShadows;
+    /** A checker-proven array parameter type (`Vec<Value>` on the rust side);
+     *  tuples are excluded (their printed shape is not a plain `Vec`). */
+    isProvenShadowListType(type: ts.Type): boolean;
+    /** Every reference to the parameter must be a printable read, and at least
+     *  one must exist; anything else (a write, a `Value` pass-through, a Null
+     *  comparison, a marker key) answers undefined and the parameter keeps its
+     *  box. */
+    private rustParamShadowUseCensus;
+    /** One reference of a shadow candidate: true only for a read the shadow can
+     *  print exactly (same proofs the emitted forms re-check). */
+    private rustParamUseIsRead;
+    /** A key a shadow read can print: dicts take a bare string literal or a
+     *  proven-string place, lists a literal non-negative index; the `safe_*`
+     *  inline takes the literal key form only. Marker-route key names and keys
+     *  whose text needs escaping are excluded. */
+    private rustShadowKeyIsReadable;
+    private rustShadowKeyIsLiteral;
+    /** Keys whose text is safe to inline into a rust string literal. */
+    private rustShadowKeyLiteral;
+    /** `this.safeString`-style callee of a call, or undefined. */
+    private rustShadowSafeCallee;
+    /** `x['k']` / `x[i]` / `'k' in x` on a shadowed parameter: the native read,
+     *  or undefined to keep the helper (the census guarantees it never happens
+     *  for an emitted shadow). */
+    printShadowContainerRead(shadow: RustParamShadow, keyNode: ts.Node): string | undefined;
+    /** `'k' in x` on a shadowed dict parameter. */
+    printShadowInOperator(shadow: RustParamShadow, keyNode: ts.Node): string | undefined;
+    /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
+    printShadowLength(shadow: RustParamShadow): string | undefined;
+    /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
+     *  runtime helper's exact semantics over `.get(..)`. */
+    printShadowSafeReadCall(node: ts.CallExpression): string | undefined;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes
