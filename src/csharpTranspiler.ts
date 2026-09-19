@@ -778,9 +778,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const field = this.printNode(expression, 0);
         const printedKey = this.printNode(argumentExpression, 0);
-        // `urls` is declared `object`: the same cast the transpiled helper body applies
-        const receiver = CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0 ? `((IDictionary<string, object>)${field})` : field;
-        return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        // `urls`/`markets`/`exceptions` are declared `object`: the same cast the transpiled helper
+        // body applies, and the same null receiver branch it has (initializeProperties may leave
+        // the box null when the venue's describe() carries no such row) -- `has`/`options` are
+        // concrete dictionaries, initialized and never null, so they need no test
+        if (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) {
+            const receiver = `((IDictionary<string, object>)${field})`;
+            return `(${field} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        }
+        return `(${field}.ContainsKey(${printedKey}) ? ${field}[${printedKey}] : null)`;
     }
 
     // A literal-key read on a local whose C# declaration is already a collection: the static type

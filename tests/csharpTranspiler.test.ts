@@ -3723,7 +3723,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         const output = transpiler.transpileCSharp(input).content;
         // `urls` is declared `object`: the same (IDictionary<string, object>) cast the helper
         // body applies to its box, on both the key test and the indexer
-        expect(output).toContain('(((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
+        expect(output).toContain('(this.urls != null && ((IDictionary<string, object>)this.urls).ContainsKey("demo") ? ((IDictionary<string, object>)this.urls)["demo"] : null)');
         expect(output).not.toContain('getValue(this.urls,');
     });
     test('a non-literal key and a numeric key keep the helper on these fields', () => {
@@ -3779,7 +3779,7 @@ describe('csharp helper removal: reads of the hand-written has/options/urls dict
         const output = transpiler.transpileCSharp(input).content;
         // the inner 'api' read is a field read; the outer key is an identifier, so the helper
         // still picks the endpoint the way the runtime helper does
-        expect(output).toContain('getValue((((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
+        expect(output).toContain('getValue((this.urls != null && ((IDictionary<string, object>)this.urls).ContainsKey("api") ? ((IDictionary<string, object>)this.urls)["api"] : null), endpoint)');
     });
 });
 
@@ -3907,7 +3907,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         const output = transpiler.transpileCSharp(input).content;
         // `exceptions` is declared `object` (Exchange.Options.cs `= new dict()`): the same cast the
         // transpiled helper body applies to its box, on both the key test and the indexer
-        expect(output).toContain('(((IDictionary<string, object>)this.exceptions).ContainsKey("exact") ? ((IDictionary<string, object>)this.exceptions)["exact"] : null)');
+        expect(output).toContain('(this.exceptions != null && ((IDictionary<string, object>)this.exceptions).ContainsKey("exact") ? ((IDictionary<string, object>)this.exceptions)["exact"] : null)');
         expect(output).not.toContain('getValue(this.exceptions,');
     });
     test('a literal-key read of the markets field goes native too', () => {
@@ -3919,7 +3919,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "    }\n" +
         "}\n";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain('(((IDictionary<string, object>)this.markets).ContainsKey("BTC/USDT") ? ((IDictionary<string, object>)this.markets)["BTC/USDT"] : null)');
+        expect(output).toContain('(this.markets != null && ((IDictionary<string, object>)this.markets).ContainsKey("BTC/USDT") ? ((IDictionary<string, object>)this.markets)["BTC/USDT"] : null)');
         expect(output).not.toContain('getValue(this.markets,');
     });
     test('a non-literal key on these fields keeps the helper', () => {
