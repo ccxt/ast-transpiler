@@ -52,7 +52,7 @@ describe('rust transpiling tests', () => {
         "    break;\n" +
         "}"
         const rust =
-        "while is_true(&(true)) {\n" +
+        "while (true) {\n" +
         "    let mut x: Value = Value::Int(1);\n" +
         "    break;\n" +
         "}";
@@ -1866,20 +1866,20 @@ describe('rust truthiness sinks take the bare bool', () => {
     test('a boxed condition loses the Value::Bool box', () => {
         const ts = 'class A { f(x) { if (Array.isArray (x)) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if is_true(&(matches!(&x, Value::Arr(_)))) {');
+        expect(output).toContain('if (matches!(&x, Value::Arr(_))) {');
         expect(output).not.toContain('Value::Bool(matches!(&x, Value::Arr(_)))');
     });
 
-    test('a negated boxed condition keeps the is_true marker', () => {
+    test('a negated boxed condition prints the bare bool', () => {
         const ts = 'class A { f(x) { if (!Array.isArray (x)) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if !is_true(&(matches!(&x, Value::Arr(_)))) {');
+        expect(output).toContain('if !(matches!(&x, Value::Arr(_))) {');
     });
 
     test('every &&/|| operand is unboxed on its own', () => {
         const ts = 'class A { f(x, y) { if (Array.isArray (x) || y) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if is_true(&(matches!(&x, Value::Arr(_)))) || is_true(&y) {');
+        expect(output).toContain('if (matches!(&x, Value::Arr(_))) || is_true(&y) {');
     });
 
     test('a boxed `in` condition loses the box', () => {
@@ -1911,6 +1911,88 @@ describe('rust truthiness sinks take the bare bool', () => {
         const ts = 'class A { f(x) { if (x === true) { return 1; } return 2; } }';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('if is_equal(&x, &Value::Bool(true)) {');
+    });
+});
+
+// B-26: the condition printer's last resort wraps an operand no earlier branch
+// claimed. A parenthesised comparison the checker proved native (or the
+// `Value::Bool(…)` the printer boxes it in for a `Value` slot) is already a Rust
+// `bool`, so `is_true(&(…))` — the identity over `IsTruthy for bool` — is dropped.
+describe('rust is_true over an already-native bool expression', () => {
+    test('a parenthesised null compare prints bare', () => {
+        const ts = 'class A { f(a) { if ((a !== undefined)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (a != Value::Null) {');
+        expect(output).not.toContain('is_true(&(a != Value::Null))');
+    });
+
+    test('a parenthesised string compare prints bare', () => {
+        const ts = 'class A { f(a: string) { if ((a === "lit")) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (a.as_str() == Some("lit")) {');
+        expect(output).not.toContain('is_true(&(a.as_str() == Some("lit")))');
+    });
+
+    test('a parenthesised bool compare prints bare', () => {
+        const ts = 'class A { f(a: boolean) { if ((a === true)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (a.as_bool() == Some(true)) {');
+        expect(output).not.toContain('is_true(&(a.as_bool() == Some(true)))');
+    });
+
+    test('a parenthesised ordered compare prints bare', () => {
+        const ts = 'class A { f(a: number, b: number) { if ((a < b)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (a.as_f64().unwrap_or(f64::NAN) < b.as_f64().unwrap_or(f64::NAN)) {');
+    });
+
+    test('a parenthesised numeric literal compare prints bare', () => {
+        const ts = 'class A { f(a: number) { if ((a === 1)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (a.as_f64() == Some(1.0)) {');
+    });
+
+    test('a ternary condition prints bare', () => {
+        const ts = 'class A { f(a: boolean) { const r: any = (a === true) ? 1 : 2; return r; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(if (a.as_bool() == Some(true)) {');
+    });
+
+    test('a while condition prints bare', () => {
+        const ts = 'class A { f(a) { while ((a !== undefined)) { return 1; } } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('while (a != Value::Null) {');
+    });
+
+    test('every logical operand prints bare on its own', () => {
+        const ts = 'class A { f(a: number, b: string) { if ((a !== undefined) && (b !== "x")) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if (a != Value::Null) && (b.as_str() != Some("x")) {');
+    });
+
+    test('a negated native compare prints bare', () => {
+        const ts = 'class A { f(a) { if (!(a !== undefined)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if !(a != Value::Null) {');
+    });
+
+    // negatives — a helper-led text keeps the is_true marker the post-passes key on.
+    test('a helper-led comparison keeps the wrapper', () => {
+        const ts = 'class A { f(a, b) { if ((a === b)) { return 1; } return 2; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('if is_true(&(is_equal(&a, &b))) {');
+    });
+
+    test('a boxed Value-slot logical prints its native operands bare', () => {
+        const ts = 'class A { f(a, b) { const r = (a === null) && b; return r; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut r: Value = Value::Bool((a == Value::Null) && is_true(&b));');
+    });
+
+    test('a helper-led Value-slot logical keeps the is_true markers', () => {
+        const ts = 'class A { f(a, b, c) { const r = (a === b) && c; return r; } }';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut r: Value = is_true(&(is_equal(&a, &b))) && is_true(&c);');
     });
 });
 
@@ -2681,14 +2763,14 @@ describe('rust native value predicates and json', () => {
     test('Array.isArray on a declared local emits the native match', () => {
         const ts = "function f(response: any) {\n    if (Array.isArray(response)) {\n        return response;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_true(&(matches!(&response, Value::Arr(_))))');
+        expect(output).toContain('if (matches!(&response, Value::Arr(_))) {');
         expect(output).not.toContain('is_array(');
     });
 
     test('Array.isArray on a declared field emits the native match', () => {
         const ts = "class A {\n    x: any;\n    f() {\n        if (Array.isArray(this.x)) {\n            return 1;\n        }\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_true(&(matches!(&self.x, Value::Arr(_))))');
+        expect(output).toContain('if (matches!(&self.x, Value::Arr(_))) {');
         expect(output).not.toContain('is_array(');
     });
 

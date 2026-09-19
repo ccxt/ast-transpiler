@@ -1442,6 +1442,7 @@ declare class RustTranspiler extends BaseTranspiler {
      *  ccxt post-passes, which key on the leading helper token the operand would
      *  no longer provide. */
     isBareBoolEmissionSafe(node: any): boolean;
+    rustConditionBoolSlot(node: any): boolean;
     /** Native truthiness text of the operand, or undefined to keep `is_true`. */
     printNativeTruthiness(node: any): string | undefined;
     literalKindOfNode(node: any): string;
@@ -1666,6 +1667,8 @@ declare class RustTranspiler extends BaseTranspiler {
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
     printCondition(node: any, identation: any): any;
+    /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
+    printNativeParenthesizedCondition(node: any): string | undefined;
     printTruthyArgument(expression: string): string;
     printAssertCall(node: any, identation: any, parsedArgs: any): string;
     splitFirstArgument(parsedArgs: string): [string, string];
