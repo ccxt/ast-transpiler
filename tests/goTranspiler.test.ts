@@ -3565,6 +3565,98 @@ describe('go string concat chains -> native +', () => {
     });
 });
 
+// helper-family removal: a hand-written BaseExchange field declared plain `string`
+// (go/v4/exchange.go) is a non-nil Go string whatever its TypeScript annotation says,
+// and a parameter the signature printer types with a Go scalar is that scalar at
+// every use — both are operands the concat rule consumes.
+describe('go string concat operands -> declared Go string', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('a `string | undefined` BaseExchange field prints as a non-nil Go string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    version: string | undefined = undefined;\n" +
+        "    f () {\n" +
+        "        const u = this.version + '/';\n" +
+        "        return u;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var u any = this.Version + "/"');
+        expect(output).not.toContain('Add(');
+    });
+    test('every hand-written string field in the table concats natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    name: string | undefined = undefined;\n" +
+        "    hostname: string | undefined = undefined;\n" +
+        "    userAgent: string | undefined = undefined;\n" +
+        "    url: string | undefined = undefined;\n" +
+        "    f () {\n" +
+        "        return this.name + ':' + 'x' + this.hostname + this.userAgent + this.url;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('return this.Name + ":" + "x" + this.Hostname + this.UserAgent + this.Url');
+        expect(output).not.toContain('Add(');
+    });
+    test('a field the Go struct declares `interface{}` keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    apiKey: string | undefined = undefined;\n" +
+        "    f () {\n" +
+        "        return this.apiKey + ':';\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('return Add(this.ApiKey, ":")');
+    });
+    test('a parameter the signature printer types `string` is a concat operand', () => {
+        const inst = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        // the typed-param families re-type selected params at the signature, which is
+        // the same oracle the operand classifier reads back here
+        const printer: any = inst.goTranspiler;
+        const upstream = printer.printParameterType;
+        printer.printParameterType = function (node) {
+            return (node?.name?.escapedText === 'symbol') ? 'string' : upstream.call(this, node);
+        };
+        const input =
+        "class Exchange {\n" +
+        "    f (symbol: any) {\n" +
+        "        const id = symbol + '-';\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(inst.transpileGo(input).content);
+        expect(output).toContain('func (this *Exchange) F(symbol string) any {');
+        expect(output).toContain('var id any = symbol + "-"');
+        expect(output).not.toContain('Add(');
+    });
+    test('an `any` parameter keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    f (symbol: any) {\n" +
+        "        const id = symbol + '-';\n" +
+        "        return id;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var id any = Add(symbol, "-")');
+    });
+    test('a hand-written string-returning helper call is a concat operand', () => {
+        const input =
+        "class Exchange {\n" +
+        "    urlencodeNested (x: any): string { return ''; }\n" +
+        "    f (params: any) {\n" +
+        "        const u = '?' + this.urlencodeNested (params);\n" +
+        "        return u;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var u any = "?" + this.UrlencodeNested(params)');
+        expect(output).not.toContain('Add(');
+    });
+});
+
 describe('go ternary func literal typing', () => {
     // Ternary(c, a, b) prints as the lazy func literal; when both arms print as one and
     // the same Go scalar the literal names it (`func() string`), so the value leaves the
