@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -2930,6 +2930,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
     // prefix is final, so every later read of the local is statically that type and its
     // members may replace inOp/getArrayLength
     this.csharpTypedLocals = /* @__PURE__ */ new WeakMap();
+    // ws handler `message` parameter -> the typed signature this printer prints for it (D-19)
+    this.csharpHandlerMessageTypes = /* @__PURE__ */ new WeakMap();
+    // method declaration -> a static call reference exists (a call binds its arguments)
+    this.csharpHandlerCalled = /* @__PURE__ */ new WeakMap();
+    // class declaration -> the class routes the raw message through a list test
+    this.csharpListRouteClasses = /* @__PURE__ */ new WeakMap();
+    // program -> method symbol -> a static call reference exists (built once per program)
+    this.csharpHandlerCallIndex = /* @__PURE__ */ new WeakMap();
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -3673,6 +3681,176 @@ var CSharpTranspiler = class extends BaseTranspiler {
     };
     walk(func);
     return rewritten;
+  }
+  // ===== ws handler `message` parameter (batch D, D-19) =====
+  // A ws handler `handleX (client: Client, message: Dict)` is reached at runtime either
+  // through a dispatch-table entry (`{ "k", this.handleX }` -> DynamicInvoker) or a direct
+  // call. The typed `Dictionary<string, object>` signature is printed only when the
+  // checker annotates the parameter `Dict`, no reference in the program CALLS the method
+  // (a call binds the boxed argument, CS1503), the body never writes the parameter (D2),
+  // the method is no override (the hand-written ws bridge prints `object messageContent`),
+  // and the class holds no list route (a venue that tests the message for a list hands the
+  // array itself to a table entry).
+  csharpHandlerMessageType(param) {
+    if (this.csharpHandlerMessageTypes.has(param)) {
+      return this.csharpHandlerMessageTypes.get(param);
+    }
+    let result = void 0;
+    const method = param?.parent;
+    if (ts4.isMethodDeclaration(method) && method.parameters.length >= 2 && method.parameters[1] === param) {
+      if (this.csharpCheckerTypeName(method.parameters[0]) === "Client" && this.csharpCheckerTypeName(param) === "Dict" && this.getMethodOverride(method) === void 0 && !this.csharpReceiverIsRewritten(method, param.name) && !this.csharpHandlerIsCalled(method) && !this.csharpClassHasListRoute(method)) {
+        result = this.ArgTypeReplacements["Dict"] ?? "Dictionary<string, object>";
+      }
+    }
+    this.csharpHandlerMessageTypes.set(param, result);
+    return result;
+  }
+  // the type name the checker prints for a node's type, or undefined in an in-memory
+  // program (no checker answer: the printer keeps its own)
+  csharpCheckerTypeName(node) {
+    if (node === void 0) {
+      return void 0;
+    }
+    try {
+      const checker = this.getChecker();
+      const type = checker.getTypeAtLocation(node);
+      return type === void 0 ? void 0 : checker.typeToString(type);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  csharpEnclosingClass(node) {
+    let current = node?.parent;
+    while (current !== void 0) {
+      if (ts4.isClassDeclaration(current) || ts4.isClassExpression(current)) {
+        return current;
+      }
+      current = current.parent;
+    }
+    return void 0;
+  }
+  // the identifier is the raw `message` parameter of a handler-shaped method (a `Client`
+  // first parameter, so `handleMessage` with its `any` annotation included): the class can
+  // route that same value through its list arm
+  csharpIsHandlerMessageIdentifier(node) {
+    if (!ts4.isIdentifier(node)) {
+      return false;
+    }
+    try {
+      const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+      if (declaration === void 0 || !ts4.isParameter(declaration)) {
+        return false;
+      }
+      const owner = declaration.parent;
+      return ts4.isMethodDeclaration(owner) && owner.parameters.length >= 2 && owner.parameters[1] === declaration && this.csharpCheckerTypeName(owner.parameters[0]) === "Client";
+    } catch (e) {
+      return false;
+    }
+  }
+  // a class that tests the message (or another dict parameter) for a list can hand the
+  // array itself to a dispatch-table entry (binance `'x@arr'`), so its handlers keep the
+  // box; a class testing unrelated lists (an array-typed `symbols` parameter, a field of
+  // the message) never routes the raw message through the list arm
+  csharpClassHasListRoute(method) {
+    const cls = this.csharpEnclosingClass(method);
+    if (cls === void 0) {
+      return true;
+    }
+    const cached = this.csharpListRouteClasses.get(cls);
+    if (cached !== void 0) {
+      return cached;
+    }
+    let found = false;
+    const walk = (n) => {
+      if (found) {
+        return;
+      }
+      if (ts4.isCallExpression(n) && ts4.isPropertyAccessExpression(n.expression) && n.expression.expression?.escapedText === "Array" && n.expression.name?.escapedText === "isArray") {
+        const argument = n.arguments[0];
+        if (this.csharpIsHandlerMessageIdentifier(argument)) {
+          found = true;
+          return;
+        }
+      }
+      ts4.forEachChild(n, walk);
+    };
+    walk(cls);
+    this.csharpListRouteClasses.set(cls, found);
+    return found;
+  }
+  // a static call reference (`this.handleX (…)`) binds the argument to the printed
+  // signature; a method-group value (a dispatch-table entry) does not
+  csharpHandlerIsCalled(method) {
+    const cached = this.csharpHandlerCalled.get(method);
+    if (cached !== void 0) {
+      return cached;
+    }
+    let called = true;
+    const cls = this.csharpEnclosingClass(method);
+    if (cls !== void 0) {
+      const names = /* @__PURE__ */ new Set();
+      for (const member of cls.members) {
+        const name = member.name?.escapedText;
+        if (ts4.isMethodDeclaration(member) && name !== void 0) {
+          names.add(name);
+        }
+      }
+      try {
+        const symbol = this.getChecker().getSymbolAtLocation(method.name);
+        if (symbol !== void 0) {
+          called = this.csharpHandlerCallIndexFor(names).get(symbol) === true;
+        }
+      } catch (e) {
+        called = true;
+      }
+    }
+    this.csharpHandlerCalled.set(method, called);
+    return called;
+  }
+  // every identifier in the program that resolves to one of the class's own method names,
+  // recorded as a call when it is the callee of a call expression; keyed by symbol, so a
+  // same-named method of another class never marks this one
+  csharpHandlerCallIndexFor(names) {
+    let program;
+    try {
+      program = this.getProgram();
+    } catch (e) {
+      return /* @__PURE__ */ new Map();
+    }
+    const cached = this.csharpHandlerCallIndex.get(program);
+    if (cached !== void 0 || names.size === 0) {
+      return cached ?? /* @__PURE__ */ new Map();
+    }
+    const index = /* @__PURE__ */ new Map();
+    const checker = this.getChecker();
+    for (const file of program.getSourceFiles()) {
+      if (file.isDeclarationFile) {
+        continue;
+      }
+      const walk = (n) => {
+        if (ts4.isIdentifier(n) && names.has(n.escapedText)) {
+          let symbol;
+          try {
+            symbol = checker.getSymbolAtLocation(n);
+          } catch (e) {
+            symbol = void 0;
+          }
+          if (symbol !== void 0) {
+            const parent = n.parent;
+            const isCall = ts4.isPropertyAccessExpression(parent) && parent.name === n && ts4.isCallExpression(parent.parent) && parent.parent.expression === parent || ts4.isCallExpression(parent) && parent.expression === n;
+            if (isCall) {
+              index.set(symbol, true);
+            } else if (index.get(symbol) === void 0) {
+              index.set(symbol, false);
+            }
+          }
+        }
+        ts4.forEachChild(n, walk);
+      };
+      walk(file);
+    }
+    this.csharpHandlerCallIndex.set(program, index);
+    return index;
   }
   csharpHasKeyRemoval(func, expression, key) {
     const text = expression.getText();
@@ -5280,7 +5458,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
   printParameter(node, defaultValue = true) {
     const name = this.printNode(node.name, 0);
     const initializer = node.initializer;
-    let type = this.printParameterType(node);
+    const handlerType = this.csharpHandlerMessageType(node);
+    if (handlerType !== void 0) {
+      this.csharpTypedLocals.set(node, handlerType);
+    }
+    let type = handlerType !== void 0 ? handlerType : this.printParameterType(node);
     type = type ? type : "";
     if (defaultValue) {
       if (initializer) {
