@@ -197,6 +197,10 @@ const JAVA_THIS_BOOLEAN_BOX_METHODS: { [name: string]: number } = {
 // included); every other declared type keeps Helpers.GetValue
 const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
 
+// the Java spellings a consumer declares an element-read receiver with when it is a List:
+// the read prints `x.get(i)` / `x.size()` with no cast, because the declaration is the List
+const JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
+
 // receiver node kinds whose printed Java is a primary expression, so the `(String)`
 // checkcast in front of them binds the whole receiver (a native `+` prints its own parens)
 const JAVA_SPLIT_RECEIVER_KINDS: Set<number> = new Set<number>([
@@ -2301,13 +2305,50 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_DECLARED_MAP_TYPES.test(type);
     }
 
+    // `x[i]` where a consumer declares x a java List and the index is the primitive int
+    // counter of `for (var i = <int literal>; …; i++)`: the native element read. GetValue
+    // answers null for a null receiver and for an index outside [0, size) while List.get
+    // throws on both, so the emission carries the same tests. `||` short-circuits and both
+    // operands are identifiers, so nothing is evaluated twice and nothing is re-evaluated
+    // between the size test and the get.
+    javaDeclaredListElementRead(node, isCounter) {
+        if (node.parent?.kind === ts.SyntaxKind.ExpressionStatement) {
+            return undefined; // a bare conditional expression is not a Java statement
+        }
+        const declared = this.javaDeclaredTypeOf(node.expression);
+        if (declared === undefined || !JAVA_DECLARED_LIST_TYPES.test(declared)) {
+            return undefined;
+        }
+        if (!isCounter && Number(node.argumentExpression.text) > 2147483647) {
+            return undefined; // printNumericLiteral would add an `L` suffix List.get cannot take
+        }
+        if (this.javaStringElementsReceiver(node.expression)) {
+            return undefined; // its String consumers are typed from the `Helpers.GetValue(` prefix
+        }
+        const target = this.printNode(node.expression, 0);
+        const indexText = this.printNode(node.argumentExpression, 0);
+        const lowerBound = isCounter ? `${indexText} < 0 || ` : '';
+        return `(${target} == null || ${lowerBound}${indexText} >= ${target}.size() ? null : ${target}.get(${indexText}))`;
+    }
+
+    // the identifier of a `for (var i = <int literal>; …; i++)` counter that still prints as
+    // `i`: the JN capture rename prints `finalI`, a `final Object` box, which is not an int
+    javaPrimitiveCounterIndex(node) {
+        if (!this.isJavaPrimitiveCounterReference(node)) {
+            return false;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        return declaration !== undefined && node.escapedText === declaration.name?.escapedText;
+    }
+
     // `x[k]` reads: emit the native container accessor when the checker proves the Java
     // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
     printCheckerTypedElementAccessRead(node) {
         const key = node.argumentExpression;
         const isStringKey = ts.isStringLiteralLike(key);
         const isNumberKey = ts.isNumericLiteral(key);
-        if (!isStringKey && !isNumberKey) {
+        const isCounterKey = !isStringKey && !isNumberKey && this.javaPrimitiveCounterIndex(key);
+        if (!isStringKey && !isNumberKey && !isCounterKey) {
             return undefined;
         }
         if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined) {
@@ -2328,6 +2369,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const target = this.printNode(node.expression, 0);
             return `((java.util.Map<String, Object>)${target}).get(${this.printNode(key, 0)})`;
         }
+        if (isCounterKey) {
+            // a `var` int loop index on a declared List: the only proof that prints an int
+            return this.javaDeclaredListElementRead(node, true);
+        }
         const index = Number(key.text);
         if (!Number.isInteger(index) || index < 0) {
             return undefined;
@@ -2340,7 +2385,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return `((java.util.List<Object>)${target}).get(${this.printNode(key, 0)})`;
         }
         if (!this.isJavaArrayStructureType(type)) {
-            return undefined;
+            // the checker leaves the receiver boxed: a declared List still reads natively
+            return this.javaDeclaredListElementRead(node, false);
         }
         if (!this.javaSideEffectFreeReference(node.expression) || this.javaStringElementsReceiver(node.expression)) {
             return undefined;

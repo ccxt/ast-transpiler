@@ -3321,6 +3321,147 @@ describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")
     });
 });
 
+describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () => {
+    // a `List<Object>` declaration (from the list-producer / collection slices) with a `var`
+    // int loop counter prints the native element read. GetValue answers null for a null
+    // receiver and for an index outside [0, size) where List.get throws on both, so the
+    // emission keeps the helper's own tests; every unproven index or receiver keeps the helper.
+    const LIST_TYPE = 'java.util.List<Object>';
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const counterLoop =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const a = x[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+
+    test('a declared List with a for-counter index reads native behind the null / range guard', () => {
+        withResolver(() => LIST_TYPE, () => {
+            const output = transpiler.transpileJava(counterLoop).content;
+            expect(output).toContain('(x == null || i < 0 || i >= x.size() ? null : x.get(i))');
+            expect(output).not.toContain('Helpers.GetValue(x, i)');
+        });
+    });
+
+    test('a declared List with a numeric literal index reads native too', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x[0];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => LIST_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(x == null || 0 >= x.size() ? null : x.get(0))');
+            expect(output).not.toContain('Helpers.GetValue(x, 0)');
+        });
+    });
+
+    test('no consumer installed: the counter read keeps the helper', () => {
+        const output = transpiler.transpileJava(counterLoop).content;
+        expect(output).toContain('Helpers.GetValue(x, i)');
+        expect(output).not.toContain('x.get(i)');
+    });
+
+    test('a non-counter identifier index keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, i: number): void {\n" +
+        "        const a = x[i];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => LIST_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, i)');
+            expect(output).not.toContain('x.get(i)');
+        });
+    });
+
+    test('a declared type that is not a List keeps the helper', () => {
+        for (const type of [ 'Object', 'java.util.Map<String, Object>', 'String', 'java.util.List' ]) {
+            withResolver(() => type, () => {
+                const output = transpiler.transpileJava(counterLoop).content;
+                expect(output).toContain('Helpers.GetValue(x, i)');
+                expect(output).not.toContain('x.get(i)');
+            });
+        }
+    });
+
+    test('a split-produced receiver keeps the helper (its consumers are typed from the call)', () => {
+        const input =
+        "class T {\n" +
+        "    test(name: string): void {\n" +
+        "        const parts = name.split('.');\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const root = parts[i];\n" +
+        "            this.something(root);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => 'java.util.List<Object>', () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(parts, i)');
+            expect(output).not.toContain('parts.get(i)');
+        });
+    });
+
+    test('a counter captured as finalI keeps the helper (finalI is a boxed Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(ids: any): void {\n" +
+        "        ids = this.filterIds(ids);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < ids.length; i++) {\n" +
+        "            result.push({ 'id': ids[i] });\n" +
+        "        }\n" +
+        "        this.something(result);\n" +
+        "    }\n" +
+        "    filterIds(ids: any): any { return ids; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => LIST_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('final Object finalI = i;');
+            expect(output).toContain('Helpers.GetValue(finalIds, finalI)');
+            expect(output).not.toContain('.get(finalI)');
+        });
+    });
+
+    test('a read in statement position keeps the helper (a bare conditional is not a statement)', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            x[i];\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        withResolver(() => LIST_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, i);');
+            expect(output).not.toContain('x.get(i)');
+        });
+    });
+});
+
 describe('java helper-family inlining (+ - * / += -=)', () => {
     test('string + string with one statically-String operand prints a native concat', () => {
         const input =

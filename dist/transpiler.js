@@ -11627,6 +11627,7 @@ var JAVA_THIS_BOOLEAN_BOX_METHODS = {
   "safeBoolN": 2
 };
 var JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
+var JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
 var JAVA_SPLIT_RECEIVER_KINDS = /* @__PURE__ */ new Set([
   ts6.SyntaxKind.Identifier,
   ts6.SyntaxKind.PropertyAccessExpression,
@@ -13415,13 +13416,48 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return JAVA_DECLARED_MAP_TYPES.test(type);
   }
+  // `x[i]` where a consumer declares x a java List and the index is the primitive int
+  // counter of `for (var i = <int literal>; …; i++)`: the native element read. GetValue
+  // answers null for a null receiver and for an index outside [0, size) while List.get
+  // throws on both, so the emission carries the same tests. `||` short-circuits and both
+  // operands are identifiers, so nothing is evaluated twice and nothing is re-evaluated
+  // between the size test and the get.
+  javaDeclaredListElementRead(node, isCounter) {
+    if (node.parent?.kind === ts6.SyntaxKind.ExpressionStatement) {
+      return void 0;
+    }
+    const declared = this.javaDeclaredTypeOf(node.expression);
+    if (declared === void 0 || !JAVA_DECLARED_LIST_TYPES.test(declared)) {
+      return void 0;
+    }
+    if (!isCounter && Number(node.argumentExpression.text) > 2147483647) {
+      return void 0;
+    }
+    if (this.javaStringElementsReceiver(node.expression)) {
+      return void 0;
+    }
+    const target = this.printNode(node.expression, 0);
+    const indexText = this.printNode(node.argumentExpression, 0);
+    const lowerBound = isCounter ? `${indexText} < 0 || ` : "";
+    return `(${target} == null || ${lowerBound}${indexText} >= ${target}.size() ? null : ${target}.get(${indexText}))`;
+  }
+  // the identifier of a `for (var i = <int literal>; …; i++)` counter that still prints as
+  // `i`: the JN capture rename prints `finalI`, a `final Object` box, which is not an int
+  javaPrimitiveCounterIndex(node) {
+    if (!this.isJavaPrimitiveCounterReference(node)) {
+      return false;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(node);
+    return declaration !== void 0 && node.escapedText === declaration.name?.escapedText;
+  }
   // `x[k]` reads: emit the native container accessor when the checker proves the Java
   // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
   printCheckerTypedElementAccessRead(node) {
     const key = node.argumentExpression;
     const isStringKey = ts6.isStringLiteralLike(key);
     const isNumberKey = ts6.isNumericLiteral(key);
-    if (!isStringKey && !isNumberKey) {
+    const isCounterKey = !isStringKey && !isNumberKey && this.javaPrimitiveCounterIndex(key);
+    if (!isStringKey && !isNumberKey && !isCounterKey) {
       return void 0;
     }
     if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0) {
@@ -13441,6 +13477,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       const target2 = this.printNode(node.expression, 0);
       return `((java.util.Map<String, Object>)${target2}).get(${this.printNode(key, 0)})`;
     }
+    if (isCounterKey) {
+      return this.javaDeclaredListElementRead(node, true);
+    }
     const index = Number(key.text);
     if (!Number.isInteger(index) || index < 0) {
       return void 0;
@@ -13453,7 +13492,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `((java.util.List<Object>)${target2}).get(${this.printNode(key, 0)})`;
     }
     if (!this.isJavaArrayStructureType(type)) {
-      return void 0;
+      return this.javaDeclaredListElementRead(node, false);
     }
     if (!this.javaSideEffectFreeReference(node.expression) || this.javaStringElementsReceiver(node.expression)) {
       return void 0;
