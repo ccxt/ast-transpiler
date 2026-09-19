@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6142,14 +6142,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
 };
 
 // src/transpiler.ts
-import * as path3 from "path";
-import * as fs2 from "fs";
+import * as path2 from "path";
+import * as fs from "fs";
 
 // src/goTranspiler.ts
 init_esm_shims();
 import ts5 from "typescript";
-import * as fs from "fs";
-import * as path2 from "path";
 var SyntaxKind3 = ts5.SyntaxKind;
 var parserConfig4 = {
   "ELSEIF_TOKEN": "else if",
@@ -6223,6 +6221,8 @@ var GO_HELPER_RETURN_TYPES = {
   "len": "int",
   "GetIndexOf": "int",
   "ToString": "string",
+  // hand-written exchange_encode.go helper, a plain Go `string` on its only return path
+  "this.UrlencodeNested": "string",
   "ToLower": "string",
   "ToUpper": "string",
   "JsonStringify": "string",
@@ -6343,7 +6343,6 @@ var GO_BOOL_CALL_NAMES_NATIVE = [
   "this.IsJsonEncodedObject",
   "this.IsBinaryMessage"
 ];
-var GO_DEREF_WRAPPED_CALLS = ["NumberToString", "Parse8601", "Iso8601"];
 var GO_ANY_BOX_CALLS = [
   "GetValue",
   "Ternary",
@@ -6355,19 +6354,6 @@ var GO_ANY_BOX_CALLS = [
   "this.SafeList",
   "SafeNumber",
   "this.SafeNumber"
-];
-var GO_PURE_STRING_ACCESSORS = [
-  "this.SafeString",
-  "this.SafeString2",
-  "this.SafeStringN",
-  "this.SafeStringLower",
-  "this.SafeStringLower2",
-  "this.SafeStringLowerN",
-  "this.SafeStringUpper",
-  "this.SafeStringUpper2",
-  "this.SafeStringUpperN",
-  "this.NumberToString",
-  "this.SafeCurrencyCode"
 ];
 var GO_NIL_EQUIVALENT_POINTER_TYPES_Native = /* @__PURE__ */ new Set([
   "*sync.Map",
@@ -6398,7 +6384,6 @@ var GO_NILABLE_FIELDS_Typed = {
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
 var GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
 var GO_SAFE_DICT_READ_HELPERS = ["GetValue", "InOp", "ObjectKeys", "IsDictionary"];
-var GO_MARKET_LOCAL_TYPE = "map[string]any";
 var GO_NUMERIC_KINDS = ["int", "int64", "float64"];
 var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.GreaterThanToken]: ">",
@@ -6406,7 +6391,7 @@ var ORDERED_COMPARISON_OPERATORS = {
   [ts5.SyntaxKind.LessThanToken]: "<",
   [ts5.SyntaxKind.LessThanEqualsToken]: "<="
 };
-var GO_STRING_FIELD_NAMES = ["Id", "Name", "Version"];
+var GO_STRING_FIELD_NAMES = ["Id", "Name", "Version", "Url", "Hostname", "UserAgent"];
 var GO_FIELD_CONTAINER_TYPES_NATIVE = {
   "Has": "map[string]any",
   "Api": "map[string]any",
@@ -6599,75 +6584,6 @@ function alignGoTrailingComments(content) {
   }
   return lines.join("\n");
 }
-var GO_TS_SRC_STRING_PRODUCERS = [
-  /^this\s*\.\s*safeString\s*\(/,
-  /^this\s*\.\s*safeString2\s*\(/,
-  /^this\s*\.\s*safeString3\s*\(/,
-  /^this\s*\.\s*safeStringN\s*\(/,
-  /^this\s*\.\s*safeStringLower\s*\(/,
-  /^this\s*\.\s*safeStringLower2\s*\(/,
-  /^this\s*\.\s*safeStringUpper\s*\(/,
-  /^this\s*\.\s*safeStringUpper2\s*\(/,
-  /^this\s*\.\s*safeCurrencyCode\s*\(/,
-  /^this\s*\.\s*safeSymbol\s*\(/
-];
-function goBalancedCallArgs(text, open) {
-  const args = [];
-  let depth = 0;
-  let current = "";
-  let quote;
-  for (let i = open; i < text.length; i++) {
-    const ch = text[i];
-    if (quote !== void 0) {
-      current += ch;
-      if (ch === "\\") {
-        current += text[i + 1] ?? "";
-        i++;
-        continue;
-      }
-      if (ch === quote) {
-        quote = void 0;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      quote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === "/" && text[i + 1] === "/") {
-      while (i < text.length && text[i] !== "\n") {
-        i++;
-      }
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      if (depth > 1) {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === ")") {
-      depth--;
-      if (depth === 0) {
-        if (current.trim().length > 0) {
-          args.push(current.trim());
-        }
-        return args;
-      }
-      current += ch;
-      continue;
-    }
-    if (ch === "," && depth === 1) {
-      args.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  return void 0;
-}
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the source file being printed references. A Go import may only be
   // declared before the file's first declaration, i.e. in the head of the printed body
@@ -6695,11 +6611,6 @@ var GoTranspiler = class extends BaseTranspiler {
     // what the nil interface used to (GetValue/InOp/ObjectKeys/IsDictionary and the Safe*
     // accessors all normalise a nil receiver). Anything else keeps the box.
     this.goSafeDictLocalUnboxCache = /* @__PURE__ */ new Map();
-    // `var market any = this.Market(symbol)` -> `var market map[string]any = MapTyped(this.Market(symbol))`.
-    // The box holds the dictionary the checker proved, and every later use reads it (SafeDict's own
-    // scan/emit wrapper), so the declaration and the conversion are pure refinements. Anything else
-    // — a value position, a nil test, a write into the map — keeps the box.
-    this.goMarketLocalUnboxCache = /* @__PURE__ */ new Map();
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
@@ -6707,30 +6618,11 @@ var GoTranspiler = class extends BaseTranspiler {
     // box holds a container, a scalar or nil, so IsEqual(x, nil) is exactly `x == nil`.
     // A write of any other shape in the enclosing function (D2 scan) keeps the helper
     this.goAnyLocalHoldsNonPointerCache = /* @__PURE__ */ new Map();
-    // ---- B-02: native parameter types on internal parse*/helper methods --------
-    //
-    // A parameter declared with a nullable ccxt alias (`Str` = string | undefined) can
-    // be printed with the native Go type the printer already uses for that value
-    // (`*string`), but only when
-    //   * the method is internal — not async, not an override, and no member of that
-    //     name exists on the class it extends: the generated base classes and the
-    //     hand-written IDerivedExchange interface compile against the base signature,
-    //   * every call site of the method passes exactly that Go type — the checker
-    //     proves the ones in this file; the sibling files of the same ts/src tree
-    //     (pro/ and the derived exchanges, absent from a scoped run's program) are
-    //     proven textually, and an unprovable call site keeps the box,
-    //   * the body never writes the parameter another printed type (D2).
-    // Each qualifying parameter is also registered in goDeclaredTypeOfIdentifier, so
-    // the readers that consult it (pointer-aware equality, element access) go native.
-    this.goNativeParameterTypeCache = /* @__PURE__ */ new Map();
-    this.goSameFileCallCache = /* @__PURE__ */ new Map();
-    this.goTsSrcTreeCache = /* @__PURE__ */ new Map();
     // the Go type this identifier is actually *declared* with, or undefined when it
     // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
     // declaration the reject filters demoted back to `any` is reported as `any` here
     // too — otherwise we would emit `*x` against an `any` box.
-    // A parameter resolves to its declared Go type only when goNativeParameterType
-    // proved it (see the B-02 block above); everything else stays `any`.
+    // Parameters stay `any` today, so they never resolve to a concrete type.
     //
     // getGoLocalType re-prints every reassignment's right-hand side, and printing a
     // ternary re-enters printCondition, which lands back here: `x = (x === 'a') ? …`
@@ -7253,10 +7145,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
     return name + " " + type;
   }
   printParameterType(node) {
-    const nativeType = this.goNativeParameterType(node);
-    if (nativeType !== void 0) {
-      return nativeType;
-    }
     const typeText = this.getType(node);
     return "any";
     if (typeText === this.STRING_KEYWORD) {
@@ -7457,7 +7345,31 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (match === null || GO_STRING_FIELD_NAMES.indexOf(match[1]) < 0) {
       return void 0;
     }
-    return this.getChecker().getTypeAtLocation(node).flags === ts5.TypeFlags.String ? "string" : void 0;
+    return "string";
+  }
+  // a parameter the printer's own signature printer types with a concrete Go scalar:
+  // the emitted Go parameter holds that type at every use, so the operator rule can
+  // consume it (the typed-param families re-type `Str`/`Int`/`Num` params this way)
+  goDeclaredParamStaticType(node) {
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration?.kind !== ts5.SyntaxKind.Parameter) {
+      return void 0;
+    }
+    let type;
+    try {
+      type = this.printParameterType(declaration);
+    } catch (e) {
+      return void 0;
+    }
+    if (typeof type !== "string" || type === "any" || GO_TYPE_NAMES.indexOf(type) < 0) {
+      return void 0;
+    }
+    return this.goTypeNameIsShadowed(this.goEnclosingFunction(declaration), type) ? void 0 : type;
   }
   // a `*string` local prints a nilable Go pointer; it may only be dereferenced
   // where the checker narrowed it to a non-nilable string (a guard that always
@@ -7510,7 +7422,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case ts5.SyntaxKind.BinaryExpression:
         return this.goNativeArithmetic(node)?.goType;
       case ts5.SyntaxKind.Identifier:
-        return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node);
+        return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
       case ts5.SyntaxKind.PropertyAccessExpression:
         return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
     }
@@ -8007,150 +7919,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const key = this.printNode(args.key, 0);
     return `SafeMapTyped(${container}, ${key})`;
   }
-  // the TypeScript return type of the initializer proves the boxed value is the market
-  // dictionary: the checker reports the `MarketInterface` interface for `this.Market(...)` /
-  // `this.SafeMarket(...)` (the `Market` alias is the same interface unioned with undefined).
-  // Read from the checker, never from a printed name.
-  goMarketCallReturnsDict(initializer) {
-    if (initializer?.kind !== ts5.SyntaxKind.CallExpression) {
-      return false;
-    }
-    const callee = initializer.expression;
-    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression) {
-      return false;
-    }
-    const name = callee.name?.escapedText;
-    if (name !== "market" && name !== "safeMarket") {
-      return false;
-    }
-    const receiver = callee.expression;
-    const onThis = receiver?.kind === ts5.SyntaxKind.ThisKeyword;
-    const onDerived = receiver?.kind === ts5.SyntaxKind.PropertyAccessExpression && receiver.expression?.kind === ts5.SyntaxKind.ThisKeyword && receiver.name?.escapedText === "DerivedExchange";
-    if (!onThis && !onDerived) {
-      return false;
-    }
-    let type;
-    try {
-      type = this.getChecker().getTypeAtLocation(initializer);
-    } catch (e) {
-      return false;
-    }
-    if (type === void 0) {
-      return false;
-    }
-    const isMarketInterface = (t) => {
-      const names = [t?.symbol?.getName?.() ?? t?.symbol?.escapedName, t?.aliasSymbol?.getName?.()];
-      return names.indexOf("MarketInterface") >= 0;
-    };
-    if (isMarketInterface(type)) {
-      return true;
-    }
-    if (typeof type.isUnion === "function" && type.isUnion()) {
-      return type.types.some((t) => isMarketInterface(t));
-    }
-    return false;
-  }
-  goMarketLocalUnbox(declaration) {
-    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts5.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (declaration.parent?.parent?.kind !== ts5.SyntaxKind.FirstStatement) {
-      return void 0;
-    }
-    if (this.goMarketLocalUnboxCache.has(declaration)) {
-      return this.goMarketLocalUnboxCache.get(declaration);
-    }
-    this.goMarketLocalUnboxCache.set(declaration, void 0);
-    let result;
-    try {
-      result = this.goMarketLocalUnboxUncached(declaration);
-    } finally {
-      this.goMarketLocalUnboxCache.set(declaration, result);
-    }
-    return result;
-  }
-  // true when this identifier resolves to the declaration being typed (a property name or a
-  // binding of the same name in another scope is not a use of the local). Without checker
-  // information the name match stands.
-  goIdentifierRefersToDeclaration(node, declaration) {
-    let symbol;
-    try {
-      symbol = this.getChecker().getSymbolAtLocation(node);
-    } catch (e) {
-      return true;
-    }
-    if (symbol === void 0) {
-      return true;
-    }
-    const valueDeclaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
-    return valueDeclaration === void 0 || valueDeclaration === declaration;
-  }
-  // one later use of the market local: the dictionary read shapes the SafeDict family already
-  // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
-  // instead of answering an absent value — a plain argument position, because Go re-boxes the
-  // declared map into the callee's `any` parameter exactly as the local's own box did.
-  goMarketUseReadsTheValue(node, throwingAccessor) {
-    if (this.goSafeDictUseReadsTheMap(node)) {
-      return true;
-    }
-    if (!throwingAccessor) {
-      return false;
-    }
-    const parent = node.parent;
-    return parent?.kind === ts5.SyntaxKind.CallExpression && parent.expression !== node && parent.arguments.indexOf(node) >= 0;
-  }
-  goMarketLocalUnboxUncached(declaration) {
-    if (!this.goMarketCallReturnsDict(declaration.initializer)) {
-      return void 0;
-    }
-    const throwingAccessor = declaration.initializer.expression?.name?.escapedText === "market";
-    const sourceName = declaration.name.escapedText;
-    const scope = this.goEnclosingFunction(declaration);
-    if (scope === void 0) {
-      return void 0;
-    }
-    let safe = true;
-    const visit = (n) => {
-      if (!safe) {
-        return;
-      }
-      if ((n.kind === ts5.SyntaxKind.VariableDeclaration || n.kind === ts5.SyntaxKind.Parameter) && n !== declaration && n.name?.kind === ts5.SyntaxKind.Identifier && n.name.escapedText === sourceName) {
-        safe = false;
-        return;
-      }
-      if (n.kind === ts5.SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
-        const parent = n.parent;
-        if (parent?.kind === ts5.SyntaxKind.PropertyAccessExpression && parent.name === n) {
-          return;
-        }
-        if (!this.goIdentifierRefersToDeclaration(n, declaration)) {
-          return;
-        }
-        if (!this.goMarketUseReadsTheValue(n, throwingAccessor)) {
-          safe = false;
-          return;
-        }
-      }
-      ts5.forEachChild(n, visit);
-    };
-    ts5.forEachChild(scope, visit);
-    if (!safe || this.goTypeNameIsShadowed(scope, GO_MARKET_LOCAL_TYPE)) {
-      return void 0;
-    }
-    return GO_MARKET_LOCAL_TYPE;
-  }
-  // the initializer a typed market local is declared with: the same call, its boxed result
-  // converted to the map the checker proved (nil when the call answered a non-map)
-  goMarketUnboxValue(declaration, parsedValue) {
-    if (this.goMarketLocalUnbox(declaration) !== GO_MARKET_LOCAL_TYPE) {
-      return void 0;
-    }
-    return `MapTyped(${parsedValue.trimStart()})`;
-  }
   getGoLocalType(declaration, parsedValue) {
     const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
     if (goType === void 0) {
-      return this.goSafeDictLocalUnbox(declaration) ?? this.goMarketLocalUnbox(declaration) ?? "any";
+      return this.goSafeDictLocalUnbox(declaration) ?? "any";
     }
     const sourceName = declaration.name?.escapedText;
     if (sourceName === void 0) {
@@ -8199,7 +7971,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
       }
       const varName = this.printNode(declaration.name);
       const declaredType = this.getGoLocalType(declaration, parsedValue);
-      const declaredValue = this.goMarketUnboxValue(declaration, parsedValue) ?? (declaredType === GO_SAFE_DICT_LOCAL_TYPE ? this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart() : parsedValue.trimStart());
+      const declaredValue = declaredType === GO_SAFE_DICT_LOCAL_TYPE ? this.goSafeDictUnboxValue(declaration, identation) ?? parsedValue.trimStart() : parsedValue.trimStart();
       const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
       if (parsedValue.startsWith("<-this.callInternal(")) {
         return `
@@ -9032,86 +8804,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return symbol?.valueDeclaration;
   }
-  // true when this identifier is a parameter of the TypeScript method that the printed Go
-  // binds with `x := GetArg(optionalArgs, i, default)`: GetArg runs derefScalar and folds a
-  // typed nil pointer (and a nil []string/[]any) into the untyped default, so the box the
-  // parameter is read through holds a plain scalar or an untyped nil, never a nil *T.
-  goGetArgBoundParameter(node) {
-    if (node?.kind !== ts5.SyntaxKind.Identifier) {
-      return false;
-    }
-    let symbol;
-    try {
-      symbol = this.getChecker().getSymbolAtLocation(node);
-    } catch (e) {
-      return false;
-    }
-    const decl = symbol?.valueDeclaration;
-    if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0) {
-      return false;
-    }
-    const owner = decl.parent?.kind;
-    if (owner !== ts5.SyntaxKind.MethodDeclaration && owner !== ts5.SyntaxKind.FunctionDeclaration && owner !== ts5.SyntaxKind.Constructor) {
-      return false;
-    }
-    return !this.goParameterLaterWritesPointerBox(decl);
-  }
-  // D2 for a GetArg-bound parameter: a later `x = …` write whose printed value is a typed
-  // pointer puts a nil *T back in the box, where IsEqual(x, nil) is true but `x == nil` is not
-  goParameterLaterWritesPointerBox(decl) {
-    const name = decl?.name?.kind === ts5.SyntaxKind.Identifier ? decl.name.escapedText : void 0;
-    if (typeof name !== "string") {
-      return true;
-    }
-    const scope = this.goEnclosingFunction(decl);
-    if (scope === void 0) {
-      return true;
-    }
-    let pointerWrite = false;
-    const visit = (n) => {
-      if (pointerWrite) {
-        return;
-      }
-      if (n.kind === ts5.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && this.goAssignmentWritesName(n.left, name) && this.goWritePrintsPointerBox(n.right)) {
-        pointerWrite = true;
-        return;
-      }
-      ts5.forEachChild(n, visit);
-    };
-    ts5.forEachChild(scope, visit);
-    return pointerWrite;
-  }
-  // true when the printed value of an assignment's right-hand side is a typed pointer: a
-  // `this.safeX(…)`/`this.Parse8601(…)` accessor (GO_HELPER_RETURN_TYPES), an identifier the
-  // printer declared `*T`, or a hand-written *sync.Map field. Read from the AST, never printed.
-  goWritePrintsPointerBox(expr) {
-    while (expr?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
-      expr = expr.expression;
-    }
-    if (expr === void 0) {
-      return false;
-    }
-    if (expr.kind === ts5.SyntaxKind.CallExpression) {
-      const name = this.goAstCalleeName(expr);
-      if (typeof name === "string") {
-        const goType = GO_HELPER_RETURN_TYPES[name];
-        if (typeof goType === "string" && goType.startsWith("*")) {
-          return true;
-        }
-        return GO_DEREF_WRAPPED_CALLS.indexOf(name.replace(/^this\./, "")) >= 0;
-      }
-      return false;
-    }
-    if (expr.kind === ts5.SyntaxKind.Identifier) {
-      const declared = this.goDeclaredTypeOfIdentifier(expr);
-      return typeof declared === "string" && declared.startsWith("*");
-    }
-    if (expr.kind === ts5.SyntaxKind.PropertyAccessExpression && expr.expression?.kind === ts5.SyntaxKind.ThisKeyword) {
-      const fieldType = GO_NILABLE_FIELDS_Typed["this." + expr.name?.escapedText];
-      return typeof fieldType === "string" && GO_NIL_EQUIVALENT_POINTER_TYPES_Native.has(fieldType);
-    }
-    return false;
-  }
   goScalarFamilyOfType(type, allowNil = false) {
     if (type === void 0) {
       return void 0;
@@ -9161,302 +8853,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return void 0;
   }
-  goNativeParameterType(param) {
-    if (param?.kind !== ts5.SyntaxKind.Parameter) {
-      return void 0;
-    }
-    if (this.goNativeParameterTypeCache.has(param)) {
-      return this.goNativeParameterTypeCache.get(param);
-    }
-    this.goNativeParameterTypeCache.set(param, void 0);
-    const result = this.goNativeParameterTypeOf(param);
-    this.goNativeParameterTypeCache.set(param, result);
-    return result;
-  }
-  goNativeParameterTypeOf(param) {
-    if (param.initializer !== void 0 || param.dotDotDotToken !== void 0) {
-      return void 0;
-    }
-    if (param.name?.kind !== ts5.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    const fn = param.parent;
-    if (fn?.kind !== ts5.SyntaxKind.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== ts5.SyntaxKind.Identifier) {
-      return void 0;
-    }
-    if (!fn.name.escapedText.startsWith("parse")) {
-      return void 0;
-    }
-    if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
-      return void 0;
-    }
-    const index = fn.parameters.indexOf(param);
-    for (const goType of this.goNativeParameterTypeCandidates(param)) {
-      if (this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)) {
-        return goType;
-      }
-    }
-    return void 0;
-  }
-  // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
-  // have no call-site proof yet (the corpus passes `any` locals) and keep the box.
-  goNativeParameterTypeCandidates(param) {
-    let type;
-    try {
-      type = this.getChecker().getTypeAtLocation(param);
-    } catch (e) {
-      return [];
-    }
-    if (type === void 0) {
-      return [];
-    }
-    let parts = typeof type.isUnion === "function" && type.isUnion() ? type.types.slice() : [type];
-    parts = parts.filter((p) => !(p.flags & (ts5.TypeFlags.Undefined | ts5.TypeFlags.Null)));
-    if (parts.length !== 1) {
-      return [];
-    }
-    const inner = parts[0];
-    if (inner.flags & ts5.TypeFlags.String) {
-      return ["*string"];
-    }
-    return [];
-  }
-  // true when the method overrides (or shadows) a member of the class it extends, or
-  // carries an explicit `override`: those print the base signature so the generated
-  // base classes and IDerivedExchange keep compiling against it. The abstract base
-  // itself (ts/src/base/**, or any root class) is public surface and never retyped.
-  goMethodKeepsBaseSignature(fn) {
-    if ((fn.modifiers ?? []).some((m) => m.kind === ts5.SyntaxKind.OverrideKeyword)) {
-      return true;
-    }
-    if (fn.getSourceFile().fileName.includes("/ts/src/base/")) {
-      return true;
-    }
-    const name = fn.name.escapedText;
-    let cls = fn.parent;
-    while (cls !== void 0 && cls.kind !== ts5.SyntaxKind.ClassDeclaration && cls.kind !== ts5.SyntaxKind.ClassExpression) {
-      cls = cls.parent;
-    }
-    if (cls === void 0) {
-      return true;
-    }
-    const clauses = cls.heritageClauses ?? [];
-    if (!clauses.some((clause) => clause.token === ts5.SyntaxKind.ExtendsKeyword)) {
-      return true;
-    }
-    for (const clause of clauses) {
-      if (clause.token !== ts5.SyntaxKind.ExtendsKeyword) {
-        continue;
-      }
-      for (const expr of clause.types ?? []) {
-        let baseType;
-        try {
-          baseType = this.getChecker().getTypeAtLocation(expr);
-        } catch (e) {
-          baseType = void 0;
-        }
-        if (baseType?.getProperty?.(name) !== void 0) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-  // every call site of `fn` in the whole tree must pass exactly `goType` at `index`
-  goParameterCallSitesPassType(fn, index, goType) {
-    const name = fn.name.escapedText;
-    for (const call of this.goSameFileCallsOf(fn, name)) {
-      const arg = call.arguments?.[index];
-      if (arg === void 0 || arg.kind === ts5.SyntaxKind.SpreadElement) {
-        return false;
-      }
-      if (this.goPrintedArgType(arg) !== goType) {
-        return false;
-      }
-    }
-    const tree = this.goTsSrcTree(fn.getSourceFile());
-    if (tree !== void 0) {
-      const myClass = this.goEnclosingClassName(fn);
-      const myFile = tree.relativeOf.get(fn.getSourceFile().fileName);
-      for (const site of tree.callIndex.get(name) ?? []) {
-        if (site.file === myFile) {
-          continue;
-        }
-        if (!this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
-          continue;
-        }
-        const arg = site.args[index];
-        if (arg === void 0 || !this.goTextArgMatchesType(arg, goType, site.file, tree)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-  goEnclosingClassName(fn) {
-    let cls = fn.parent;
-    while (cls !== void 0 && cls.kind !== ts5.SyntaxKind.ClassDeclaration && cls.kind !== ts5.SyntaxKind.ClassExpression) {
-      cls = cls.parent;
-    }
-    return cls?.name?.kind === ts5.SyntaxKind.Identifier ? cls.name.escapedText : void 0;
-  }
-  // the printed Go type of a call-site argument, or undefined when the printer
-  // cannot name it (then the call site does not prove anything)
-  goPrintedArgType(arg) {
-    if (arg.kind === ts5.SyntaxKind.Identifier) {
-      return this.goDeclaredTypeOfIdentifier(arg);
-    }
-    return this.goTypeOfInitializer(arg, this.printNode(arg, 0));
-  }
-  // every `this.<name>(...)` of this file whose resolved signature is `fn`
-  goSameFileCallsOf(fn, name) {
-    const file = fn.getSourceFile();
-    let index = this.goSameFileCallCache.get(file);
-    if (index === void 0) {
-      index = /* @__PURE__ */ new Map();
-      const visit = (node) => {
-        if (node.kind === ts5.SyntaxKind.CallExpression) {
-          const callee = node.expression;
-          const calleeName = callee?.kind === ts5.SyntaxKind.PropertyAccessExpression ? callee.name?.escapedText : void 0;
-          if (typeof calleeName === "string") {
-            const list = index.get(calleeName) ?? [];
-            list.push(node);
-            index.set(calleeName, list);
-          }
-        }
-        ts5.forEachChild(node, visit);
-      };
-      visit(file);
-      this.goSameFileCallCache.set(file, index);
-    }
-    const checker = this.getChecker();
-    const result = [];
-    for (const call of index.get(name) ?? []) {
-      let declaration;
-      try {
-        declaration = checker.getResolvedSignature(call)?.declaration;
-      } catch (e) {
-        declaration = void 0;
-      }
-      if (declaration === fn) {
-        result.push(call);
-      }
-    }
-    return result;
-  }
-  // Lazily read the ts/src tree this file belongs to: the call sites of every
-  // `this.x(...)`, each file's text and its class -> base map. A scoped run's
-  // program holds one exchange, so the sibling files are only provable textually.
-  goTsSrcTree(file) {
-    const fileName = file.fileName;
-    const marker = "/ts/src/";
-    const at = fileName.lastIndexOf(marker);
-    if (at < 0) {
-      return void 0;
-    }
-    const root = fileName.substring(0, at + marker.length - 1);
-    if (!this.goTsSrcTreeCache.has(root)) {
-      this.goTsSrcTreeCache.set(root, this.goTsSrcTreeBuild(root));
-    }
-    return this.goTsSrcTreeCache.get(root);
-  }
-  goTsSrcTreeBuild(root) {
-    const callIndex = /* @__PURE__ */ new Map();
-    const fileText = /* @__PURE__ */ new Map();
-    const classBases = /* @__PURE__ */ new Map();
-    const relativeOf = /* @__PURE__ */ new Map();
-    const walk = (dir, rel) => {
-      let entries;
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch (e) {
-        return;
-      }
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          if (entry.name !== "node_modules") {
-            walk(path2.join(dir, entry.name), rel + entry.name + "/");
-          }
-          continue;
-        }
-        if (!entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) {
-          continue;
-        }
-        const relPath = rel + entry.name;
-        let text;
-        try {
-          text = fs.readFileSync(path2.join(dir, entry.name), "utf8");
-        } catch (e) {
-          continue;
-        }
-        fileText.set(relPath, text);
-        relativeOf.set(path2.join(dir, entry.name), relPath);
-        const classRe = /\bclass\s+([A-Za-z_$][\w$]*)\s+extends\s+([A-Za-z_$][\w$]*)/g;
-        let match;
-        while ((match = classRe.exec(text)) !== null) {
-          classBases.set(match[1], match[2]);
-        }
-        const callRe = /this\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/g;
-        while ((match = callRe.exec(text)) !== null) {
-          const args = goBalancedCallArgs(text, callRe.lastIndex - 1);
-          if (args === void 0) {
-            continue;
-          }
-          const list = callIndex.get(match[1]) ?? [];
-          list.push({ file: relPath, args });
-          callIndex.set(match[1], list);
-        }
-      }
-    };
-    walk(root, "");
-    return { callIndex, fileText, classBases, relativeOf };
-  }
-  goTsSrcFileDerivesFrom(tree, file, className) {
-    if (className === void 0) {
-      return true;
-    }
-    const text = tree.fileText.get(file);
-    if (text === void 0) {
-      return true;
-    }
-    const classRe = /\bclass\s+([A-Za-z_$][\w$]*)/g;
-    let match;
-    while ((match = classRe.exec(text)) !== null) {
-      let current = match[1];
-      for (let hops = 0; hops < 12 && current !== void 0; hops++) {
-        if (current === className) {
-          return true;
-        }
-        current = tree.classBases.get(current);
-      }
-    }
-    return false;
-  }
-  // the textual call-site proof. `*string` is the only native parameter type the
-  // corpus proves today: the argument is either one of the accessors whose Go
-  // signature is a `*string` or a local assigned from one in that same file.
-  goTextArgMatchesType(argText, goType, file, tree) {
-    let text = (argText ?? "").trim();
-    while (text.startsWith("(") && text.endsWith(")")) {
-      text = text.substring(1, text.length - 1).trim();
-    }
-    const isStringProducer = (candidate) => GO_TS_SRC_STRING_PRODUCERS.some((rx) => rx.test(candidate));
-    if (goType === "*string") {
-      if (isStringProducer(text)) {
-        return true;
-      }
-      const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
-      if (identifier !== null) {
-        const fileText = tree.fileText.get(file) ?? "";
-        const declRe = new RegExp("(?:const|let|var)\\s+" + identifier[1] + "\\s*(?::[^=]*)?=\\s*([^;\\n]+)");
-        const match = declRe.exec(fileText);
-        if (match !== null) {
-          return isStringProducer(match[1].trim());
-        }
-      }
-    }
-    return false;
-  }
   goDeclaredTypeOfIdentifier(node) {
     if (node?.kind !== ts5.SyntaxKind.Identifier) {
       return void 0;
@@ -9468,13 +8864,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return void 0;
     }
     const decl = symbol?.valueDeclaration;
-    if (decl === void 0) {
-      return void 0;
-    }
-    if (decl.kind === ts5.SyntaxKind.Parameter) {
-      return this.goNativeParameterType(decl);
-    }
-    if (decl.kind !== ts5.SyntaxKind.VariableDeclaration) {
+    if (decl === void 0 || decl.kind !== ts5.SyntaxKind.VariableDeclaration) {
       return void 0;
     }
     if (decl.initializer === void 0 || decl.name?.kind !== ts5.SyntaxKind.Identifier) {
@@ -10130,7 +9520,7 @@ ${this.getIden(level)}}()`;
     if (fileImports.size === 0) {
       return body;
     }
-    return [...fileImports].sort().map((path4) => `import "${path4}"`).join("\n") + "\n\n" + body;
+    return [...fileImports].sort().map((path3) => `import "${path3}"`).join("\n") + "\n\n" + body;
   }
   printNode(node, identation = 0) {
     if (node !== void 0 && ts5.isSourceFile(node)) {
@@ -10208,68 +9598,11 @@ ${this.getIden(level)}}()`;
     }
     return node.kind === ts5.SyntaxKind.StringLiteral || node.kind === ts5.SyntaxKind.NoSubstitutionTemplateLiteral;
   }
-  // the deref arms print their operand twice, so the operand must read the same
-  // value both times: an identifier is a plain read, and a string accessor call
-  // whose arguments are all identifiers/literals re-reads those arguments (no
-  // statement can run between the two evaluations of one expression)
-  goDerefRepeatableOperand(node, printedText) {
-    if (node?.kind === ts5.SyntaxKind.Identifier) {
-      return true;
-    }
-    if (node?.kind !== ts5.SyntaxKind.CallExpression) {
-      return false;
-    }
-    if (GO_PURE_STRING_ACCESSORS.indexOf(this.goPrintedCallee(printedText)) < 0) {
-      return false;
-    }
-    return node.arguments.every((argument) => this.goIsReadOnlyCallArgument(argument));
-  }
-  // an argument whose evaluation is a plain read: a value the printer already
-  // holds, never a call that could observe or cause a change
-  goIsReadOnlyCallArgument(node) {
-    while (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
-      node = node.expression;
-    }
-    switch (node?.kind) {
-      case ts5.SyntaxKind.Identifier:
-      case ts5.SyntaxKind.StringLiteral:
-      case ts5.SyntaxKind.NoSubstitutionTemplateLiteral:
-      case ts5.SyntaxKind.NumericLiteral:
-      case ts5.SyntaxKind.TrueKeyword:
-      case ts5.SyntaxKind.FalseKeyword:
-      case ts5.SyntaxKind.NullKeyword:
-        return true;
-    }
-    return false;
-  }
-  // true when the Go value of this operand is a bare `string`: a local the printer
-  // declared `string`, or a parameter its own signature printer emits as `string`.
-  // A Go string can hold neither nil nor a pointer, so `x == "lit"` is exactly
-  // IsEqual(x, "lit") — the pointer arms above never see a value of this type.
-  goIsBareStringOperand(node) {
-    if (this.goDeclaredTypeOfIdentifier(node) === "string") {
-      return true;
-    }
-    if (node?.kind !== ts5.SyntaxKind.Identifier) {
-      return false;
-    }
-    let symbol;
-    try {
-      symbol = this.getChecker().getSymbolAtLocation(node);
-    } catch (e) {
-      return false;
-    }
-    const declaration = symbol?.valueDeclaration;
-    if (declaration?.kind !== ts5.SyntaxKind.Parameter) {
-      return false;
-    }
-    return this.printParameterType(declaration) === "string";
-  }
   printInlineEquality(left, right, leftText, rightText, isEq) {
     const lPtr = this.goPointerTypeOfExpression(left, leftText) !== void 0;
     const rPtr = this.goPointerTypeOfExpression(right, rightText) !== void 0;
-    const lRepeatable = this.goDerefRepeatableOperand(left, leftText);
-    const rRepeatable = this.goDerefRepeatableOperand(right, rightText);
+    const lRepeatable = left?.kind === ts5.SyntaxKind.Identifier;
+    const rRepeatable = right?.kind === ts5.SyntaxKind.Identifier;
     const lFam = this.goScalarFamily(left);
     const rFam = this.goScalarFamily(right);
     if (lFam === "nil" && rPtr) {
@@ -10304,10 +9637,10 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     if (!lPtr && !rPtr) {
-      if (this.goIsBareStringOperand(left) && this.goIsStringLiteralNode(right)) {
+      if (this.goDeclaredTypeOfIdentifier(left) === "string" && this.goIsStringLiteralNode(right)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
       }
-      if (this.goIsBareStringOperand(right) && this.goIsStringLiteralNode(left)) {
+      if (this.goDeclaredTypeOfIdentifier(right) === "string" && this.goIsStringLiteralNode(left)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
       }
     }
@@ -10333,12 +9666,6 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
     }
     if (rBox && lFam === "nil" && this.goAnyLocalHoldsNonPointer(this.goAnyBoxLocalDeclaration(right))) {
-      return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
-    }
-    if (lNilFam === "number" && rFam === "nil" && this.goGetArgBoundParameter(left)) {
-      return isEq ? `(${leftText} == nil)` : `(${leftText} != nil)`;
-    }
-    if (rNilFam === "number" && lFam === "nil" && this.goGetArgBoundParameter(right)) {
       return isEq ? `(${rightText} == nil)` : `(${rightText} != nil)`;
     }
     const isLiteral = (node) => {
@@ -20587,21 +19914,21 @@ declare var WebSocket: any;
 declare var atob: any;
 declare var btoa: any;
 `;
-var globalsShimPath = path3.resolve(path3.join(__dirname_mock, "__globals-shim.d.ts"));
+var globalsShimPath = path2.resolve(path2.join(__dirname_mock, "__globals-shim.d.ts"));
 function overrideHostForVirtualFiles(host, files) {
   const originalGetSourceFile = host.getSourceFile.bind(host);
   const originalReadFile = host.readFile.bind(host);
   const originalFileExists = host.fileExists.bind(host);
   host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-    const virtual = files.get(path3.resolve(fileName));
+    const virtual = files.get(path2.resolve(fileName));
     return virtual !== void 0 ? virtual : originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
   };
   host.readFile = (fileName) => {
-    const virtual = files.get(path3.resolve(fileName));
+    const virtual = files.get(path2.resolve(fileName));
     return virtual !== void 0 ? virtual.text : originalReadFile(fileName);
   };
   host.fileExists = (fileName) => {
-    return files.has(path3.resolve(fileName)) || originalFileExists(fileName);
+    return files.has(path2.resolve(fileName)) || originalFileExists(fileName);
   };
 }
 var NO_SYMBOL_SENTINEL = Symbol("noSymbol");
@@ -20634,7 +19961,7 @@ function memoizeCheckerCalls(checker) {
 }
 function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) {
   options = options || ts9.getDefaultCompilerOptions();
-  const inMemoryFilePath = path3.resolve(path3.join(rootDir, "__dummy-file.ts"));
+  const inMemoryFilePath = path2.resolve(path2.join(rootDir, "__dummy-file.ts"));
   const textAst = ts9.createSourceFile(inMemoryFilePath, text, options.target || ts9.ScriptTarget.Latest);
   const shimAst = ts9.createSourceFile(globalsShimPath, globalsShim, options.target || ts9.ScriptTarget.Latest);
   const host = ts9.createCompilerHost(options, true);
@@ -20645,7 +19972,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
   if (cache !== void 0) {
     const originalGetSourceFile = host.getSourceFile.bind(host);
     host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-      const resolved = path3.resolve(fileName);
+      const resolved = path2.resolve(fileName);
       if (resolved === inMemoryFilePath) {
         return textAst;
       }
@@ -20736,7 +20063,7 @@ var Transpiler = class _Transpiler {
       host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
         let mtimeMs = 0;
         try {
-          mtimeMs = fs2.statSync(fileName).mtimeMs;
+          mtimeMs = fs.statSync(fileName).mtimeMs;
         } catch (e) {
         }
         const cached = cache.get(fileName);
@@ -20755,12 +20082,12 @@ var Transpiler = class _Transpiler {
     }
     return this.programCache.byPathHost;
   }
-  createProgramByPathAndSetContext(path4) {
+  createProgramByPathAndSetContext(path3) {
     const options = fastCompilerOptions;
     const host = this.getByPathCompilerHost(options);
-    const program = ts9.createProgram([path4, globalsShimPath], options, host, this.programCache.byPathOldProgram);
+    const program = ts9.createProgram([path3, globalsShimPath], options, host, this.programCache.byPathOldProgram);
     this.programCache.byPathOldProgram = program;
-    const sourceFile = program.getSourceFile(path4);
+    const sourceFile = program.getSourceFile(path3);
     const typeChecker = program.getTypeChecker();
     memoizeCheckerCalls(typeChecker);
     return this.setContext({
@@ -20811,8 +20138,8 @@ var Transpiler = class _Transpiler {
     return this.createProgramInMemoryAndSetContext(content);
   }
   /** @deprecated renamed to createProgramByPathAndSetContext */
-  createProgramByPathAndSetGlobals(path4) {
-    return this.createProgramByPathAndSetContext(path4);
+  createProgramByPathAndSetGlobals(path3) {
+    return this.createProgramByPathAndSetContext(path3);
   }
   checkFileDiagnostics(context = this.context) {
     const diagnostics = ts9.getPreEmitDiagnostics(context.program, context.src);
@@ -20926,29 +20253,29 @@ var Transpiler = class _Transpiler {
   transpilePython(content) {
     return this.transpile(0 /* Python */, 1 /* ByContent */, content, !this.pythonTranspiler.asyncTranspiling);
   }
-  transpilePythonByPath(path4) {
-    return this.transpile(0 /* Python */, 0 /* ByPath */, path4, !this.pythonTranspiler.asyncTranspiling);
+  transpilePythonByPath(path3) {
+    return this.transpile(0 /* Python */, 0 /* ByPath */, path3, !this.pythonTranspiler.asyncTranspiling);
   }
   transpilePhp(content) {
     return this.transpile(1 /* Php */, 1 /* ByContent */, content, !this.phpTranspiler.asyncTranspiling);
   }
-  transpilePhpByPath(path4) {
-    return this.transpile(1 /* Php */, 0 /* ByPath */, path4, !this.phpTranspiler.asyncTranspiling);
+  transpilePhpByPath(path3) {
+    return this.transpile(1 /* Php */, 0 /* ByPath */, path3, !this.phpTranspiler.asyncTranspiling);
   }
   transpileCSharp(content) {
     return this.transpile(2 /* CSharp */, 1 /* ByContent */, content);
   }
-  transpileCSharpByPath(path4) {
-    return this.transpile(2 /* CSharp */, 0 /* ByPath */, path4);
+  transpileCSharpByPath(path3) {
+    return this.transpile(2 /* CSharp */, 0 /* ByPath */, path3);
   }
   transpileJava(content) {
     return this.transpile(4 /* Java */, 1 /* ByContent */, content);
   }
-  transpileJavaByPath(path4) {
-    return this.transpile(4 /* Java */, 0 /* ByPath */, path4);
+  transpileJavaByPath(path3) {
+    return this.transpile(4 /* Java */, 0 /* ByPath */, path3);
   }
-  transpileGoByPath(path4) {
-    return this.transpile(3 /* Go */, 0 /* ByPath */, path4);
+  transpileGoByPath(path3) {
+    return this.transpile(3 /* Go */, 0 /* ByPath */, path3);
   }
   transpileGo(content) {
     return this.transpile(3 /* Go */, 1 /* ByContent */, content);
@@ -20956,14 +20283,14 @@ var Transpiler = class _Transpiler {
   transpileRust(content) {
     return this.transpile(5 /* Rust */, 1 /* ByContent */, content);
   }
-  transpileRustByPath(path4) {
-    return this.transpile(5 /* Rust */, 0 /* ByPath */, path4);
+  transpileRustByPath(path3) {
+    return this.transpile(5 /* Rust */, 0 /* ByPath */, path3);
   }
   transpileCpp(content) {
     return this.transpile(6 /* Cpp */, 1 /* ByContent */, content);
   }
-  transpileCppByPath(path4) {
-    return this.transpile(6 /* Cpp */, 0 /* ByPath */, path4);
+  transpileCppByPath(path3) {
+    return this.transpile(6 /* Cpp */, 0 /* ByPath */, path3);
   }
   getFileImports(content) {
     const context = this.createProgramInMemoryAndSetContext(content);
@@ -21023,7 +20350,7 @@ var TranspileProgramBatch = class {
   // diagnostics pass the single-file path runs — the printers read checker state
   // back from it, so it is not optional
   setContextForPath(filePath) {
-    const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path3.resolve(filePath));
+    const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path2.resolve(filePath));
     if (src === void 0) {
       throw new Error(`ast-transpiler: "${filePath}" is not a file of this program batch`);
     }

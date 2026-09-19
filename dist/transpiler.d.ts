@@ -821,6 +821,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goLocalStaticType(node: any): string | undefined;
     goInferredLocalStaticType(node: any): string | undefined;
     goStringFieldStaticType(node: any, printedText: string): string | undefined;
+    goDeclaredParamStaticType(node: any): string | undefined;
     goNilProvenStringDeref(node: any): boolean;
     goStringConcatOperandType(node: any, printedText: string): string | undefined;
     goNativeStringConcat(node: any, leftText: string, rightText: string): {

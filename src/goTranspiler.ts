@@ -85,6 +85,8 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'len': 'int',
     'GetIndexOf': 'int',
     'ToString': 'string',
+    // hand-written exchange_encode.go helper, a plain Go `string` on its only return path
+    'this.UrlencodeNested': 'string',
     'ToLower': 'string',
     'ToUpper': 'string',
     'JsonStringify': 'string',
@@ -314,8 +316,10 @@ const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
 };
 
 // hand-written BaseExchange fields (go/v4/exchange.go) declared `string`: their Go
-// value is never nil, so `this.<field> + s` matches Add(field, s) exactly.
-const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version' ];
+// value is never nil, so `this.<field> + s` matches Add(field, s) exactly. The Go
+// struct field is what decides — a batch-A `Str` TS annotation (`version: Str`)
+// still prints this field as a plain Go string.
+const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version', 'Url', 'Hostname', 'UserAgent' ];
 
 // hand-written BaseExchange fields (go/v4/exchange.go) declared as a container: an
 // element write on one of them is native code — a map index write, or `Store` for the
@@ -1461,9 +1465,34 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (match === null || GO_STRING_FIELD_NAMES.indexOf(match[1]) < 0) {
             return undefined;
         }
-        // a `string | undefined` field prints a nilable Go value, where Add's nil
-        // branch is reachable — only a non-optional string is provable
-        return this.getChecker().getTypeAtLocation(node).flags === ts.TypeFlags.String ? 'string' : undefined;
+        // the struct field is a plain Go `string`: a string cannot be nil, so Add's
+        // nil branch is unreachable and every read is the same non-nil string
+        return 'string';
+    }
+
+    // a parameter the printer's own signature printer types with a concrete Go scalar:
+    // the emitted Go parameter holds that type at every use, so the operator rule can
+    // consume it (the typed-param families re-type `Str`/`Int`/`Num` params this way)
+    goDeclaredParamStaticType(node): string | undefined {
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration?.kind !== ts.SyntaxKind.Parameter) {
+            return undefined;
+        }
+        let type;
+        try {
+            type = this.printParameterType(declaration);
+        } catch (e) {
+            return undefined;
+        }
+        if ((typeof type !== 'string') || (type === 'any') || (GO_TYPE_NAMES.indexOf(type) < 0)) {
+            return undefined;
+        }
+        return this.goTypeNameIsShadowed(this.goEnclosingFunction(declaration), type) ? undefined : type;
     }
 
     // a `*string` local prints a nilable Go pointer; it may only be dereferenced
@@ -1521,7 +1550,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case ts.SyntaxKind.BinaryExpression:
             return this.goNativeArithmetic(node)?.goType;
         case ts.SyntaxKind.Identifier:
-            return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node);
+            return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
         case ts.SyntaxKind.PropertyAccessExpression:
             // `a.length` / `s.replace(...)` print as helper calls, `this.Id` as a field
             return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
