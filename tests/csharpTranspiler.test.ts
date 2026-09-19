@@ -1876,7 +1876,7 @@ describe('isTrue is dropped when the condition already prints a C# bool', () => 
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("if (isTrue(v))");
         expect(output).toContain("if (isTrue(p))");
-        expect(output).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+        expect(output).toContain("if ((this.safeBool(a, \"k\") == true))");
     });
     test('logical conditions keep their operator binding when the wrapper goes', () => {
         const input =
@@ -2078,7 +2078,7 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
         const objectOutput = transpiler.transpileCSharp(boolProgram("        const o = a['k'];\n        if (o) { return 1; }\n")).content;
         expect(objectOutput).toContain("if (isTrue(o))");
         const callOutput = transpiler.transpileCSharp(boolProgram("        if (this.safeBool(a, 'k')) { return 1; }\n")).content;
-        expect(callOutput).toContain("if (isTrue(this.safeBool(a, \"k\")))");
+        expect(callOutput).toContain("if ((this.safeBool(a, \"k\") == true))");
         const demotedOutput = transpiler.transpileCSharp(
         "class T {\n" +
         "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
@@ -2107,6 +2107,64 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
         expect(output).toContain("object v = getValue(a, \"k\");");
         expect(output).toContain("if ((v == true))");
         expect(output).not.toContain("isTrue");
+    });
+});
+
+// D-24: `isTrue(<call>)` where the call's PRINTED C# signature is `bool?` — the hand-written
+// `bool? safeBool(...)` base family and a `this.<name>(...)` whose TS declaration the generator
+// prints itself — answers exactly what the lifted `== true` answers for that box (null -> false,
+// the box's own bool otherwise), so the wrapper goes. A receiver the printer cannot name, or a
+// callee whose declaration does not carry the `bool?` spelling, keeps the helper.
+describe('isTrue on a bool?-returning call becomes the lifted `== true` comparison', () => {
+    const callProgram = (body: string) =>
+        "class T {\n" +
+        "    safeBool(d: any, k: any): boolean | undefined { return undefined; }\n" +
+        "    couldBe(a: any): boolean | undefined { return undefined; }\n" +
+        "    f(a) {\n" +
+        body +
+        "    }\n" +
+        "}";
+    test('a this.<name>(...) declared `boolean | undefined` goes native in if / ! / ternary', () => {
+        const ifOutput = transpiler.transpileCSharp(callProgram("        if (this.couldBe(a)) { return 1; }\n")).content;
+        expect(ifOutput).toContain("if ((this.couldBe(a) == true))");
+        expect(ifOutput).not.toContain("isTrue");
+        const notOutput = transpiler.transpileCSharp(callProgram("        if (!this.couldBe(a)) { return 1; }\n")).content;
+        expect(notOutput).toContain("if (!(this.couldBe(a) == true))");
+        const ternaryOutput = transpiler.transpileCSharp(callProgram("        const s = this.couldBe(a) ? 'yes' : 'no';\n        return s;\n")).content;
+        expect(ternaryOutput).toContain("(this.couldBe(a) == true) ? \"yes\" : \"no\"");
+    });
+    test('the hand-written safeBool family is proven by the printed return table', () => {
+        const output = transpiler.transpileCSharp(callProgram("        if (this.safeBool(a, 'k')) { return 1; }\n        return 2;\n")).content;
+        expect(output).toContain("if ((this.safeBool(a, \"k\") == true))");
+        expect(output).not.toContain("isTrue");
+    });
+    test('a parameter the build layer retyped `bool?` goes native too', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        const input =
+        "class T {\n" +
+        "    f(hedged: any) {\n" +
+        "        if (hedged) { return 1; }\n" +
+        "        const s = hedged ? 'a' : 'b';\n" +
+        "        return s;\n" +
+        "    }\n" +
+        "}";
+        try {
+            // no declaration-level proof: the parameter stays a boxed read
+            expect(transpiler.transpileCSharp(input).content).toContain("if (isTrue(hedged))");
+            // the hook the typed-parameter units register names the PRINTED `bool?`
+            printer.csharpDeclaredLocalTypeResolver = (declaration: any) => ((declaration?.name?.escapedText === 'hedged') ? 'bool?' : undefined);
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("if ((hedged == true))");
+            expect(output).toContain("(hedged == true) ? \"a\" : \"b\"");
+            expect(output).not.toContain("isTrue");
+        } finally {
+            printer.csharpDeclaredLocalTypeResolver = previous;
+        }
+    });
+    test('a call on a non-this receiver keeps the wrapper', () => {
+        const output = transpiler.transpileCSharp(callProgram("        if (m.couldBe(a)) { return 1; }\n        return 2;\n")).content;
+        expect(output).toContain("isTrue(m.couldBe(a))");
     });
 });
 
@@ -2636,6 +2694,135 @@ describe('csharp equality of two reads the embedding build layer typed', () => {
         "}";
         const output = withReadKinds({ alpha: 'string?' }, input);
         expect(output).toContain("(alpha == \"a\")");
+    });
+});
+
+describe('csharp equality on a declared scalar read: literals and the parameter registry', () => {
+    // D-21: a read the printer's own tables can only call `object` still compares by value
+    // when its emitted DECLARATION carries a scalar type -- the build layer's read oracle
+    // (locals it retyped) or its declared-type registry (parameters its typing pass narrowed).
+    const p = () => transpiler.csharpTranspiler;
+    const withResolver = (resolver, input) => {
+        p().csharpExpressionTypeResolver = resolver;
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            p().csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const withRegistry = (resolver, input) => {
+        p().csharpDeclaredLocalTypeResolver = resolver;
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            p().csharpDeclaredLocalTypeResolver = undefined;
+        }
+    };
+    const boolRead =
+        "function f () {\n" +
+        "    const v = this.safeValue({}, 'v');\n" +
+        "    const yes = v === true;\n" +
+        "    const no = v !== false;\n" +
+        "    return [yes, no];\n" +
+        "}";
+    test('a bool? read against a bool literal prints the operator', () => {
+        const output = withResolver((node) => (node?.escapedText === 'v') ? 'bool?' : undefined, boolRead);
+        expect(output).toContain("bool yes = (v == true);");
+        expect(output).toContain("bool no = (v != false);");
+        expect(output).not.toContain("isEqual(v, true)");
+    });
+    test('an Int64? read against an integer literal prints the operator', () => {
+        const input =
+        "function f () {\n" +
+        "    const n = this.safeValue({}, 'n');\n" +
+        "    const isOne = n === 1;\n" +
+        "    return isOne;\n" +
+        "}";
+        const output = withResolver((node) => (node?.escapedText === 'n') ? 'Int64?' : undefined, input);
+        expect(output).toContain("bool isOne = (n == 1);");
+        expect(output).not.toContain("isEqual(n, 1)");
+    });
+    test('a parameter the declared-type registry types compares to a literal and to a read', () => {
+        const input =
+        "class T {\n" +
+        "    f(x: string, y: string): boolean {\n" +
+        "        const isA = x === 'a';\n" +
+        "        const same = x === y;\n" +
+        "        return isA || same;\n" +
+        "    }\n" +
+        "}";
+        const output = withRegistry((declaration) => (declaration?.name?.escapedText === 'x' || declaration?.name?.escapedText === 'y') ? 'string' : undefined, input);
+        expect(output).toContain("bool isA = (x == \"a\");");
+        expect(output).toContain("bool same = (x == y);");
+        expect(output).not.toContain("isEqual(x");
+    });
+    test('a registry-typed Int64? parameter against a numeric literal prints the operator', () => {
+        const input =
+        "class T {\n" +
+        "    f(x: number): boolean {\n" +
+        "        return x === 3;\n" +
+        "    }\n" +
+        "}";
+        const output = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, input);
+        expect(output).toContain("(x == 3)");
+        expect(output).not.toContain("isEqual(x, 3)");
+    });
+    test('a string read against a number stays on the helper in every spelling', () => {
+        const literal =
+        "function f () {\n" +
+        "    const s = this.safeValue({}, 's');\n" +
+        "    const isOne = s === 1;\n" +
+        "    return isOne;\n" +
+        "}";
+        expect(withResolver((node) => (node?.escapedText === 's') ? 'string?' : undefined, literal)).toContain("isEqual(s, 1)");
+        const pair =
+        "class T {\n" +
+        "    f(x: string, n: number): boolean {\n" +
+        "        return x === n;\n" +
+        "    }\n" +
+        "}";
+        const kinds = { x: 'string', n: 'Int64?' };
+        const output = withRegistry((declaration) => kinds[declaration?.name?.escapedText], pair);
+        expect(output).toContain("isEqual(x, n)");
+    });
+    test('a mixed numeric pair and a collection still keep the helper', () => {
+        const mixed =
+        "class T {\n" +
+        "    f(a: number, b: number): boolean {\n" +
+        "        return a === b;\n" +
+        "    }\n" +
+        "}";
+        const kinds = { a: 'double?', b: 'Int64?' };
+        expect(withRegistry((declaration) => kinds[declaration?.name?.escapedText], mixed)).toContain("isEqual(a, b)");
+        const collections =
+        "class T {\n" +
+        "    f(rows, other): boolean {\n" +
+        "        return rows === other;\n" +
+        "    }\n" +
+        "}";
+        const rowKinds = { rows: 'List<object>', other: 'List<object>' };
+        expect(withRegistry((declaration) => rowKinds[declaration?.name?.escapedText], collections)).toContain("isEqual(rows, other)");
+    });
+    test('a registered read against null keeps the null branch decision', () => {
+        // a required numeric parameter keeps B-18's answer (the helper): the registry spelling
+        // must not turn the null branch into a native comparison; an optional one is
+        // null-comparable and keeps printing `== null`
+        const required =
+        "class T {\n" +
+        "    f(x: number): boolean {\n" +
+        "        return x === undefined;\n" +
+        "    }\n" +
+        "}";
+        const requiredOutput = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, required);
+        expect(requiredOutput).toContain("isEqual(x, null)");
+        const optional =
+        "class T {\n" +
+        "    f(x?: number): boolean {\n" +
+        "        return x === undefined;\n" +
+        "    }\n" +
+        "}";
+        const optionalOutput = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, optional);
+        expect(optionalOutput).toContain("(x == null)");
     });
 });
 
@@ -4654,6 +4841,166 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
         }
     });
+    // D-18: a name the ts/src census cleared (every declaration agrees, every call site passes a
+    // compatible argument) prints the typed spelling on the base declaration and on every override;
+    // every other name keeps `object` (C# overrides are invariant on parameter types, so a
+    // half-retyped name cannot compile).
+    describe('override parameter types', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "type List = any[];\n" +
+        "class Exchange {\n" +
+        "    parsePredictionOpenInterest (interest: Dict, market: Dict = undefined): Dict {\n" +
+        "        return interest;\n" +
+        "    }\n" +
+        "    ethRpc (chainId: string, method: string, request: List = undefined): Dict {\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "    parseOrder (order: Dict, market: Dict = undefined): Dict {\n" +
+        "        return order;\n" +
+        "    }\n" +
+        "}";
+        test('a cleared name prints the dictionary / list spelling', () => {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('parsePredictionOpenInterest(IDictionary<string, object> interest, object market = null)');
+            expect(output).toContain('ethRpc(object chainId, object method, IList<object>? request = null)');
+        });
+        test('a name outside the census table keeps object', () => {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain('parseOrder(object order, object market = null)');
+        });
+        test('a parameter whose checker shape does not answer the table spelling keeps object', () => {
+            const other =
+            "type Dict = { [key: string]: any };\n" +
+            "class Exchange {\n" +
+            "    parsePredictionOpenInterest (interest: any, market: Dict = undefined): Dict {\n" +
+            "        return interest;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(other).content;
+            expect(output).toContain('parsePredictionOpenInterest(object interest, object market = null)');
+        });
+    });
+    // ---- batch D, D-19: ws handler `message` parameter ----
+    const wsHandlerSource = (body: string, messageType: string = 'Dict', extra: string = '') =>
+        'type Dict = { [key: string]: any };\n' +
+        'interface Client { id: string; }\n' +
+        extra +
+        'class Exchange {\n' +
+        '    helper (symbols: Dict): void {\n' +
+        '        if (Array.isArray (symbols)) { return; }\n' +
+        '    }\n' +
+        '    handleTicker (client: Client, message: ' + messageType + '): void {\n' +
+        '        ' + body + '\n' +
+        '    }\n' +
+        '}\n';
+    test('a table-only ws handler prints the typed message parameter and native reads', () => {
+        const input = wsHandlerSource(
+            'const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];\n' +
+            '        const n = message.length;\n' +
+            '        const has = \'k\' in message;\n' +
+            '        return [methods, a, n, has];');
+        const output = transpiler.transpileCSharp(input).content;
+        // the typed signature (the class itself is not the ws bridge; the ccxt build layer
+        // rewrites the client parameter)
+        expect(output).toContain('public virtual void handleTicker(object client, Dictionary<string, object> message)');
+        // the element read keeps the helper's missing-key null
+        expect(output).toContain('(message != null && message.ContainsKey("ticker") ? message["ticker"] : null)');
+        // the length read keeps the helper's null -> 0
+        expect(output).toContain('(message?.Count ?? 0)');
+        // `key in message` binds ContainsKey on the declared dictionary
+        expect(output).toContain('message.ContainsKey("k")');
+        // the message parameter itself keeps a dispatch-table entry (a method-group value)
+        expect(output).toContain('{ "ticker", this.handleTicker }');
+    });
+    test('a ws handler called statically keeps the boxed message parameter', () => {
+        const input = wsHandlerSource(
+            'this.handleTicker (client, message);\n' +
+            '        const a = message[\'ticker\'];',
+            'Dict',
+            'class Other extends Exchange { }\n');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+        expect(output).toContain('this.handleTicker(client, message);');
+        expect(output).toContain('getValue(message, "ticker")');
+    });
+    test('a class with a list route keeps every handler message boxed', () => {
+        const input = wsHandlerSource(
+            'if (Array.isArray (message)) { return; }\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];',
+            'any');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+        expect(output).toContain('getValue(message, "ticker")');
+    });
+    test('a written message parameter keeps the box', () => {
+        const input = wsHandlerSource(
+            'message = this.safeDict (message, \'data\', message);\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+    });
+    test('an untyped message parameter keeps the box', () => {
+        const input = wsHandlerSource(
+            'const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];',
+            'any');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+        expect(output).toContain('getValue(message, "ticker")');
+    });
+    test('an override keeps the base class signature', () => {
+        const input =
+            'type Dict = { [key: string]: any };\n' +
+            'interface Client { id: string; }\n' +
+            'class Base {\n' +
+            '    handleTicker (client: Client, message: Dict): void {}\n' +
+            '}\n' +
+            'class Exchange extends Base {\n' +
+            '    override handleTicker (client: Client, message: Dict): void {\n' +
+            '        const a = message[\'ticker\'];\n' +
+            '    }\n' +
+            '}\n';
+        const output = transpiler.transpileCSharp(input).content;
+        const overrideLine = output.split('\n').filter((line: string) => line.indexOf('override void handleTicker') >= 0);
+        expect(overrideLine.length).toBe(1);
+        expect(overrideLine[0]).toContain('object message');
+    });
+    test('a list test on an unrelated parameter keeps the handler typed', () => {
+        const input = wsHandlerSource(
+            'const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];');
+        const output = transpiler.transpileCSharp(input).content;
+        // the helper's `Array.isArray (symbols)` is not the handler message
+        expect(output).toContain('public virtual void handleTicker(object client, Dictionary<string, object> message)');
+    });
+    test('a call from another class of the same file keeps the box', () => {
+        const input =
+            'type Dict = { [key: string]: any };\n' +
+            'interface Client { id: string; }\n' +
+            'class Alpha {\n' +
+            '    alphaHelper (client: Client, message: Dict): void {\n' +
+            '        const a = message[\'k\'];\n' +
+            '    }\n' +
+            '}\n' +
+            'class Exchange {\n' +
+            '    handleTicker (client: Client, message: Dict): void {\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        this.betaPing (client, message);\n' +
+            '    }\n' +
+            '    betaPing (client: Client, message: Dict): void {\n' +
+            '        const b = message[\'k\'];\n' +
+            '    }\n' +
+            '}\n';
+        const output = transpiler.transpileCSharp(input).content;
+        // the file-level index records the static call, so the callee keeps the box
+        expect(output).toContain('public virtual void betaPing(object client, object message)');
+        expect(output).not.toContain('betaPing(object client, Dictionary<string, object> message)');
+        expect(output).toContain('getValue(message, "k")');
+    });
     test('destructuring holder stays untyped while csharpDestructuringTempType returns undefined', () => {
         const input =
         "class Exchange {\n" +
@@ -5238,7 +5585,8 @@ describe('S62: falsy wrapper around a printed bool', () => {
         "}";
         const output = transpiler.transpileCSharp(input).content;
         expect(output).toContain("if (isTrue(flag))");
-        expect(output).toContain("if (isTrue(this.safeBool(a, \"x\")))");
+        // safeBool is a hand-written bool? producer: its read is the lifted comparison (cs-22)
+        expect(output).toContain("if ((this.safeBool(a, \"x\") == true))");
         expect(output).toContain("if (isTrue(this.isThing(a)))");
         expect(output).toContain("if (a is Object)");
         // wave-1's ternary unit dropped the `((bool) …)` cast around the condition; the ternary

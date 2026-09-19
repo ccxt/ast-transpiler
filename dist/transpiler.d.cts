@@ -222,6 +222,8 @@ declare class BaseTranspiler {
     setContext(context: ITranspileContext | undefined): void;
     getSrc(): ts.SourceFile;
     getChecker(): ts.TypeChecker;
+    hasNodeWhere(scope: ts.Node | undefined, predicate: (n: any) => boolean): boolean;
+    checkerOrUndefined(): ts.TypeChecker | undefined;
     getProgram(): ts.Program;
     initOperators(): void;
     capitalize(str: string): string;
@@ -497,6 +499,10 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
     csharpDeclaredLocalTypeResolver?: (declaration: any) => string | undefined;
     csharpTypedLocals: WeakMap<ts.Node, string>;
+    csharpHandlerMessageTypes: WeakMap<ts.Node, string>;
+    csharpHandlerCalled: WeakMap<ts.Node, boolean>;
+    csharpListRouteClasses: WeakMap<ts.Node, boolean>;
+    csharpHandlerCallIndex: WeakMap<ts.Node, Map<ts.Symbol, boolean>>;
     csharpParamTypes: WeakMap<ts.Node, string>;
     stringReceiverTypes: WeakMap<ts.Node, string>;
     conditionOperandTypes: WeakMap<ts.Node, string>;
@@ -541,6 +547,13 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpObjectLiteralDeclaresKey(literal: any, key: any): boolean;
     csharpReceiverIsDictionaryLike(expression: any, key: any): boolean;
     csharpReceiverIsRewritten(func: any, expression: any): boolean;
+    csharpHandlerMessageType(param: any): string | undefined;
+    csharpCheckerTypeName(node: any): string | undefined;
+    csharpEnclosingClass(node: any): any | undefined;
+    csharpIsHandlerMessageIdentifier(node: any): boolean;
+    csharpClassHasListRoute(method: any): boolean;
+    csharpHandlerIsCalled(method: any): boolean;
+    csharpHandlerCallIndexFor(file: any): Map<ts.Symbol, boolean>;
     csharpHasKeyRemoval(func: any, expression: any, key: any): boolean;
     csharpGuardIsNegated(guard: any): boolean;
     csharpAlwaysExits(statement: any): boolean;
@@ -586,6 +599,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpOperandsAreDeclaredReads(left: any, right: any): boolean;
     csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpDeclaredReadEqualityKind(node: any, operandType: string | undefined): string | undefined;
     csharpNullComparison(text: string, isEquality: boolean): string;
     csharpNativeNumericCallEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpNumericCallKind(node: any): string | undefined;
@@ -664,6 +678,9 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printFunctionBody(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
+    printParameterType(node: any): any;
+    csharpOverrideParamSpelling(node: any): string | undefined;
+    csharpOverrideParamSpellingOfType(type: any, unionArms?: number): string | undefined;
     printParameter(node: any, defaultValue?: boolean): string;
     printArrayLiteralExpression(node: any): string;
     csharpBooleanReturnType(node: any): string | undefined;
@@ -744,6 +761,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpBoolCall_Native(node: any): boolean;
     csharpCallPrintsBool(node: any): boolean;
     csharpNullableBoolCondition(node: any): string | undefined;
+    csharpCallPrintsNullableBool(node: any): boolean;
     printCondition(node: any, identation: any): any;
     csharpConditionParensIfNeeded(node: any, printed: string): string;
     printConditionalExpression(node: any, identation: any): string;
@@ -880,6 +898,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goStringFieldStaticType(node: any, printedText: string): string | undefined;
     goDeclaredParamStaticType(node: any): string | undefined;
     goNilProvenStringDeref(node: any): boolean;
+    goDefaultedSafeStringLocal(node: any): boolean;
+    goDefaultedSafeStringCall(node: any): boolean;
+    goDerefableStringOperand(node: any): boolean;
     goStringConcatOperandType(node: any, printedText: string): string | undefined;
     goNativeStringConcat(node: any, leftText: string, rightText: string): {
         goType: string;
@@ -912,6 +933,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goSafeDictUseReadsTheMap(node: any): boolean;
     goSafeDictLocalUnboxCache: Map<any, string>;
     goSafeDictLocalUnbox(declaration: any): string | undefined;
+    goDeclaredLocalTypeIfSafe(declaration: any, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined;
     goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
     goMarketCallReturnsDict(initializer: any): boolean;
@@ -921,6 +943,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goMarketUseReadsTheValue(node: any, throwingAccessor: boolean): boolean;
     goMarketLocalUnboxUncached(declaration: any): string | undefined;
     goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
+    goDeclarationOfIdentifier(node: any): any;
+    goMarketComparisonElementRead(node: any): boolean;
     goSafeListLocalArgs(initializer: any): {
         container: any;
         key: any;
@@ -984,7 +1008,10 @@ declare class GoTranspiler extends BaseTranspiler {
     goTsSrcTreeCache: Map<string, any>;
     goNativeParameterType(param: any): string | undefined;
     goNativeParameterTypeOf(param: any): string | undefined;
-    goNativeParameterTypeCandidates(param: any): string[];
+    goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
+    goIsProHandlerMethod(fn: any): boolean;
+    goParameterTypeIsDict(type: any): boolean;
+    goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
     goEnclosingClassName(fn: any): string | undefined;
@@ -1026,6 +1053,9 @@ declare class GoTranspiler extends BaseTranspiler {
     comparisonHelpers: string[];
     printInlineOpNeg(node: any, printedText: string): string | undefined;
     printInlineTruthy(node: any): string | undefined;
+    printInlineBoolBoxTruthy(node: any): string | undefined;
+    printInlineBoolPointerTruthy(node: any, printedText: string): string | undefined;
+    goIsRepeatSafePointerArgument(node: any): boolean;
     goNativeCondition(node: any): string | undefined;
     goControlClauseParens(node: any, expression: string): string;
     goEnclosedExpression(text: string): string | undefined;
@@ -1200,6 +1230,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goIntIndexExpression(node: any): boolean;
     goIntOperandIdentifier(node: any): boolean;
     goSafeListUnboxIdentifier(node: any): boolean;
+    goDeclaredListIdentifier(node: any): boolean;
     goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: ts.Node): boolean;
@@ -1218,6 +1249,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
+    javaSpawnCallParameterTypes(node: any): (string | undefined)[] | undefined;
     javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
     binaryExpressionsWrappers: any;
@@ -1295,9 +1327,24 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredTypeOf(expression: any): string | undefined;
     javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
     javaNativeParameterType(node: any): string | undefined;
+    private _exchangeTierMethodNames;
+    exchangeTierMethodNames(): Set<string>;
+    javaParameterPrintsType(baseParam: any, type: string): boolean;
+    javaInheritedParameterType(node: any): string | undefined;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
+    javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
+    javaReturnTypeInProgress: Set<ts.Node>;
     javaParameterIsCompoundAssigned(node: any): boolean;
     javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
+    javaNativeReturnType(node: any): string | undefined;
+    javaNativeReturnTypeUncached(node: any): string | undefined;
+    javaNativeReturnTypeTarget(node: any): string | undefined;
+    javaReturnSitesPrintType(method: any, target: string): boolean;
+    javaExpressionPrintsType(expression: any, target: string): boolean;
+    javaUnwrapReturnExpression(expression: any): any;
+    javaReturnedParameterType(node: any): string | undefined;
+    javaReturnedCallType(node: any): string | undefined;
+    javaStringCallReturn(node: any): boolean;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -1312,6 +1359,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclarationOfIdentifier(expression: any): any;
     javaDeclaredMapReceiver(expression: any): boolean;
     javaDeclaredListElementRead(node: any, isCounter: any): string;
+    javaDeclaredMapElementRead(node: any): string;
     javaPrimitiveCounterIndex(node: any): boolean;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
     javaFieldMapRead(node: any): string | undefined;
@@ -1329,11 +1377,14 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaThisCallNumericKind(node: any): string | undefined;
     javaProvableNumericKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaDeclaredNumericLocalKind(node: any): string | undefined;
+    javaDeclaredNumericTypeKind(javaType: any): string | undefined;
+    javaIdentifierPrintsDeclaredName(node: any): boolean;
     javaIdentifierKeepsDeclaredName(node: any): boolean;
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaBaseTimeLongCall(node: any): boolean;
+    javaBaseIntCall(node: any): boolean;
     javaIntForCounter(node: any): boolean;
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
@@ -1346,6 +1397,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaPrintOperandAsLong(node: any, text: any): any;
     javaProvableCounterInt(node: any): boolean;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
+    javaPrintArithmeticOperand(kind: any, node: any, text: any): any;
     javaNativeMathMinMaxOperandKind(node: any): "double" | "integral";
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
@@ -1473,7 +1525,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaTypeOfDeclaration(decl: any): any;
     javaPrintsBooleanValue(node: any, seen: Set<any>, depth?: number): boolean;
     javaCallReturnsBooleanBox(node: any, seen: Set<any>, depth: number): boolean;
-    javaPrintsBooleanCall(node: any): boolean;
+    javaPrintsBooleanCall(node: any, seen?: Set<any>, depth?: number): boolean;
     isArrayIsArrayCall(node: any): boolean;
     javaBooleanBaseField(node: any): string | undefined;
     javaBooleanBoxIdentifier(node: any, seen: Set<any>): string | undefined;
@@ -1483,7 +1535,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaPrintsBooleanBoxValue(node: any, seen: Set<any>): boolean;
     javaBooleanBoxTupleElement(node: any, index: number): boolean;
     javaBooleanNullableWritesAreBoxed(symbol: any, declaration: any, node: any, seen: Set<any>): boolean;
-    javaNullableBooleanBoxIdentifier(node: any): string | undefined;
+    javaNullableBooleanBoxIdentifier(node: any, seen?: Set<any>): string | undefined;
     javaBooleanWrapperFreeCondition(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;
@@ -1524,6 +1576,17 @@ interface RustDeclaredDictLocalEntry {
     declaration: ts.VariableDeclaration;
     start: number;
 }
+/** A `Dict`/`List` parameter whose body uses are all printable reads: the
+ *  printer re-binds the same name to a borrowed container at fn entry
+ *  (`let x = x.as_map().unwrap_or(&__x_empty);`) so every read is native. */
+interface RustParamShadow {
+    kind: RustParamShadowKind;
+    /** the parameter name; the shadow re-binds it, the `Value` ABI is untouched. */
+    name: string;
+    declaration: ts.ParameterDeclaration;
+}
+/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>` (D-25). */
+type RustParamShadowKind = 'map' | 'list';
 /** Vocabulary of the declared-Dict locals table (see
  *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
 declare const RUST_DECLARED_DICT_LOCALS: {
@@ -1543,6 +1606,9 @@ declare class RustTranspiler extends BaseTranspiler {
         requiredCount: number;
     }>;
     forLoopCounter: number;
+    /** The handler `message` parameter a shadow is being printed for (set only
+     *  while its method body is printed). */
+    rustProHandlerShadowParam: ts.ParameterDeclaration | undefined;
     constructor(config?: {});
     initConfig(): void;
     capitalize(str: string): string;
@@ -1603,15 +1669,28 @@ declare class RustTranspiler extends BaseTranspiler {
     printNativeInOperator(key: any, obj: any): string;
     rustStringLiteralOf(printedKey: string): string | undefined;
     printNativeDictInsert(baseExpr: any, keyNode: any, keyText: any, valueText: any): string | undefined;
+    /** The `insert` key argument. A literal becomes `"k".into()`; a proven
+     *  string place becomes `crate::runtime::stringify_param(&k)` — the exact
+     *  conversion the helper's dict branch applies to a non-string key, and
+     *  `k.to_string()` for a string one. */
+    rustNativeInsertKeyArg(receiver: any, keyNode: any, keyText: string): string | undefined;
     rustNativeInsertReceiver(expr: any): {
         text: string;
         isField: boolean;
+        plain: boolean;
         nameNode: any;
     } | undefined;
-    /** Element-write receiver proof for a local: the batch-A names (unchanged)
-     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
-     *  build on every path (rust-12's proof, read off the checker). */
-    rustInsertIdentifierReceiver(ident: any): boolean;
+    /** Element-write receiver proof for a local: the batch-A names (rust-13,
+     *  `plain: false` — the whitelist is not a construction proof) or, for any
+     *  other name, the dict-shape proof plus a plain-`Value::Map` build on
+     *  every path (rust-12's proof, read off the checker), or a parameter whose
+     *  annotation proves a plain dict and whose writes keep that shape. The
+     *  returned flag is the *by-construction* plainness (literal-init locals,
+     *  handler tuples, hand-written plain fields) that a book-meta key needs. */
+    rustInsertIdentifierReceiver(ident: any): boolean | undefined;
+    /** A literal initializer must carry no runtime tag key; a call initializer
+     *  is the axiom the declared-Dict table itself rests on. */
+    rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean;
     /** True when every value the local can hold comes from an object literal:
      *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
      *  `__cache_backref`) only on handles its own store builds, so the helper's
@@ -1634,6 +1713,9 @@ declare class RustTranspiler extends BaseTranspiler {
     rustWriteDictShape(type: any): boolean;
     rustReceiverStaysDict(baseExpr: any, receiver: any): boolean;
     rustFieldStaysDict(baseExpr: any, fieldName: string): boolean;
+    rustParamStaysPlainDict(declaration: ts.ParameterDeclaration): boolean;
+    /** RHS of a write to a plain-dict parameter that keeps the shape. */
+    rustPlainDictPreservingRhs(node: ts.Node, name: string): boolean;
     rustPrintedBoolArg(raw: string): boolean;
     foldNegateLiteral(operandText: string): string | undefined;
     ensureRef(expr: string): string;
@@ -1682,6 +1764,36 @@ declare class RustTranspiler extends BaseTranspiler {
     rustIdentifierIsPropertyName(node: any): boolean;
     rustStringLocalIdentifierIsTyped(node: any): boolean;
     getRustBoolLocalInitializer(declaration: any, printedValue: string): string | undefined;
+    private rustNativeStrReturnDecisions;
+    private static readonly RUST_BASE_TIER_FILE;
+    /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
+    rustNativeStrReturnKind(node: ts.Node): string | undefined;
+    private rustNativeStrReturnDecisionUncached;
+    /** Every `return` of the method's own body converts, and the body's last
+     *  statement is one of them (so Rust sees no `()`-valued tail the
+     *  `-> Value` post-passes would have patched with `Value::Null`). */
+    rustStrReturnPathsConvert(body: ts.Block): boolean;
+    /** A `return` value of a native-`Str` method: a nullish literal, an
+     *  expression already printing an `Option<String>` (a nested retyped call
+     *  or a typed string local), or a `Value`-printing expression the checker
+     *  types `string | undefined`. */
+    rustStrReturnValueConverts(expression: ts.Node): boolean;
+    /** An expression that already prints an `Option<String>` in a `: Str`
+     *  method's return position. */
+    rustStrNativeExpression(expression: ts.Node): boolean;
+    unwrapParensNode(node: ts.Node): ts.Node | undefined;
+    /** The callee declaration behind `self.<method>(..)` when it is emitted
+     *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+    rustNativeStrCalleeKind(node: ts.Node): string | undefined;
+    /** `Option<String>` → `Value` (exact inverse of the return conversion). */
+    rustNativeStrValueBox(text: string): string;
+    /** True when a call to a native-`Str` callee must be boxed back to a
+     *  `Value` at this position; the declaration and return printers run the
+     *  conversion themselves. */
+    rustNativeStrCallNeedsBox(node: ts.Node): boolean;
+    /** Wrap a call text when the callee returns a native `Option<String>`
+     *  and the position still needs a `Value`. */
+    rustBoxNativeStrCallIfNeeded(node: ts.Node, text: string): string;
     private declaredDictLocalsCache;
     /** All `let x: Value = <dict-proven initialiser>` declarations of the current
      *  source file, keyed by local name in declaration order. */
@@ -1752,7 +1864,7 @@ declare class RustTranspiler extends BaseTranspiler {
     printFunctionDefinition(node: any, identation: any): string;
     printFunctionDeclaration(node: any, identation: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
-    printCallExpression(node: any, identation: any): any;
+    printCallExpression(node: any, identation: any): string;
     printThisKeyword(node: any, identation: any): string;
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS;
     printErrorConstructorArg(name: string, index: number, node: any, identation: number): string;
@@ -1830,12 +1942,100 @@ declare class RustTranspiler extends BaseTranspiler {
     rustProvenDictParameter(node: ts.Node): ts.ParameterDeclaration | undefined;
     /** `Str` (`string | undefined`) — the key box is `Value::Str` or Null. */
     rustKeyIsProvenString(node: ts.Node): boolean;
+    /** The local/parameter proof of a dynamic-key map read: a parameter whose
+     *  annotation proves a plain dict (B-25), or any local whose checker type
+     *  proves a plain map and which nothing in the enclosing function
+     *  re-assigns (D2). Returns the proven declaration. */
+    rustProvenDynamicMapReceiver(node: ts.Node): ts.Declaration | undefined;
+    /** The element-access read a key node belongs to (`x[k]`, `x[(k)]`). */
+    rustElementReadOfKey(keyNode: ts.Node): ts.Node | undefined;
     /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
     printNativeDynamicMapAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
     /** Keys `get_value` serves from the book store / cache bucket / live
      *  snapshot instead of the dict itself — a dynamic read cannot prove the
      *  key away, so a place named after one stays boxed. */
     rustNodeIsKeyUnsafePlace(keyText: string): boolean;
+    private paramShadowCache;
+    /** Functions whose shadow lines were actually emitted — a read converts
+     *  only inside one of those (an arrow body prints inline and gets none). */
+    private paramShadowEmitted;
+    private rustParamShadowEmittedSet;
+    rustParamShadowTables(): Map<ts.Node, Map<string, RustParamShadow>>;
+    /** Emitted shadow lines for a function, or '' when no parameter qualifies.
+     *  The caller must use this before printing the body statements (it both
+     *  registers the function as shadowed and computes the lines). */
+    rustParamShadowLines(fn: ts.Node, identation: number): string;
+    private rustParamShadowTable;
+    /** The shadow a read receiver resolves to, or undefined (no proof → helper). */
+    rustParamShadowOf(node: ts.Node): RustParamShadow | undefined;
+    /** True when the enclosing function already binds this name somewhere. */
+    private rustFunctionDeclaresName;
+    private collectRustParamShadows;
+    /** A checker-proven array parameter type (`Vec<Value>` on the rust side);
+     *  tuples are excluded (their printed shape is not a plain `Vec`). */
+    isProvenShadowListType(type: ts.Type): boolean;
+    /** Every reference to the parameter must be a printable read, and at least
+     *  one must exist; anything else (a write, a `Value` pass-through, a Null
+     *  comparison, a marker key) answers undefined and the parameter keeps its
+     *  box. */
+    private rustParamShadowUseCensus;
+    /** One reference of a shadow candidate: true only for a read the shadow can
+     *  print exactly (same proofs the emitted forms re-check). */
+    private rustParamUseIsRead;
+    /** A key a shadow read can print: dicts take a bare string literal or a
+     *  proven-string place, lists a literal non-negative index; the `safe_*`
+     *  inline takes the literal key form only. Marker-route key names and keys
+     *  whose text needs escaping are excluded. */
+    private rustShadowKeyIsReadable;
+    private rustShadowKeyIsLiteral;
+    /** Keys whose text is safe to inline into a rust string literal. */
+    private rustShadowKeyLiteral;
+    /** `this.safeString`-style callee of a call, or undefined. */
+    private rustShadowSafeCallee;
+    /** `x['k']` / `x[i]` / `'k' in x` on a shadowed parameter: the native read,
+     *  or undefined to keep the helper (the census guarantees it never happens
+     *  for an emitted shadow). */
+    printShadowContainerRead(shadow: RustParamShadow, keyNode: ts.Node): string | undefined;
+    /** `'k' in x` on a shadowed dict parameter. */
+    printShadowInOperator(shadow: RustParamShadow, keyNode: ts.Node): string | undefined;
+    /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
+    printShadowLength(shadow: RustParamShadow): string | undefined;
+    /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
+     *  runtime helper's exact semantics over `.get(..)`. */
+    printShadowSafeReadCall(node: ts.CallExpression): string | undefined;
+    /** The borrowed view bound by the shadow. */
+    private static readonly PRO_HANDLER_SHADOW_NAME;
+    /** TS helper name -> emitted match kind. */
+    private static readonly PRO_HANDLER_SHADOW_SAFE_READS;
+    /** The `message: Dict` parameter of a WS handler method (2nd param of a
+     *  `handle*` method), undefined when unproven or written (D2). */
+    rustProHandlerMessageParam(node: ts.Node): ts.ParameterDeclaration | undefined;
+    /** D2: a write rooted at the parameter (reassignment, element/property
+     *  write, a merge/splice onto it) can reshape the dict after the shadow is
+     *  taken — the shadow is skipped and every read keeps the helper. */
+    rustProHandlerParamIsWritten(param: ts.ParameterDeclaration, name: string): boolean;
+    /** Shadow plan for a handler: the parameter plus the two binding lines,
+     *  present only when some body read actually turns native (no dead shed). */
+    rustProHandlerShadowPlan(node: ts.Node, identation: number): {
+        param: ts.ParameterDeclaration;
+        lines: string;
+    } | undefined;
+    /** The `safe_*` call on the shadowed parameter prints as a native
+     *  `.get("k")` match, or undefined when the call is not one. In `probe`
+     *  mode the shape is checked without printing (the pre-scan must not print
+     *  a node twice). */
+    printProHandlerShadowRead(node: ts.Node, probe?: boolean): string | undefined;
+    /** A miss-arm default the match can hold: absent (`Value::Null`) or a
+     *  literal; a computed default keeps the helper (its Value is not
+     *  re-printable inside an arm without re-evaluating it twice). */
+    rustProHandlerShadowDefaultShape(node: ts.Node): boolean;
+    rustProHandlerShadowDefault(node: ts.Node): string | undefined;
+    /** Exact native form of the runtime `_k` helper: same value kinds, same
+     *  empty-string-is-missing rule, same default (verified against
+     *  `exchange_stubs.rs`). `.cloned()` keeps the emitted line clone-free for
+     *  the ccxt clone-pruning passes; the parenthesised `match` keeps the
+     *  driver's `};` trailing-block replacement off the statement's `;`. */
+    rustProHandlerShadowReadText(kind: string, key: string, dflt: string): string;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes

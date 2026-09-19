@@ -2902,6 +2902,114 @@ ${body}
     });
 });
 
+describe('java isTrue: locals bound to boolean-returning calls / awaits (d13)', () => {
+    // the box of a local is proven from every write: a `this.<name>(...)` whose resolved body
+    // returns a boolean value on every path, the awaited value of such an async method, both
+    // branches of a `cond ? a : b`, and a hand-written relational Precise static
+    const inputOf = (body: string) => `
+class T {
+    isBool(): boolean { return true; }
+    isCompared(a: any): boolean { return (a === 1) || !!(a > 2); }
+    isFromLocal(a: any): boolean { return a; }
+    isFromString(a: any): string { return ''; }
+    async isBoolAsync(): Promise<boolean> { return this.isBool(); }
+    async isFromStringAsync(a: any): Promise<string> { return ''; }
+    handleOptionAndParams(p: any, m: string, k: string, d: any = undefined): [any, any] { return [ d, p ]; }
+    handleParamBool(p: any, k: string, d: any = undefined): [any, any] { return [ d, p ]; }
+    test(x: any, params: any): void {
+${body}
+    }
+}
+`;
+    const outputOf = (body: string) => transpiler.transpileJava(inputOf(body)).content;
+
+    test('a call whose body returns booleans on every path proves the bound local', () => {
+        const output = outputOf("        const aggressive = this.isBool();\n        if (aggressive) { return; }\n");
+        expect(output).toContain('if (Boolean.TRUE.equals(aggressive))');
+        expect(output).not.toContain('Helpers.isTrue(aggressive)');
+        const compared = outputOf("        const ok = this.isCompared(x);\n        if (!ok) { return; }\n");
+        expect(compared).toContain('if (!Boolean.TRUE.equals(ok))');
+        // a body returning an unproven value (a bare parameter) keeps the helper
+        expect(outputOf("        const box = this.isFromLocal(x);\n        if (box) { return; }\n"))
+            .toContain('if (Helpers.isTrue(box))');
+        // a non-boolean TS return type keeps the helper
+        expect(outputOf("        const box = this.isFromString(x);\n        if (box) { return; }\n"))
+            .toContain('if (Helpers.isTrue(box))');
+    });
+
+    test('an await-written local keeps the helper (no sound sites today)', () => {
+        // audited: every `Helpers.isTrue(x)` site whose x is written from `await this.<m>()`
+        // also carries a `[ x, params ] = this.handleOptionAndParams(...)` raw-member write
+        // (35 whole-tree), so the awaited-box proof has no sound site at this base
+        const output = outputOf("        let uta: boolean | undefined = undefined;\n"
+            + "        uta = await this.isBoolAsync();\n        if (uta) { return; }\n");
+        expect(output).toContain('if (Helpers.isTrue(uta))');
+        expect(outputOf("        let uta: boolean | undefined = undefined;\n"
+            + "        uta = await this.isFromStringAsync(x);\n        if (uta) { return; }\n"))
+            .toContain('if (Helpers.isTrue(uta))');
+    });
+
+    test('a conditional whose branches both print boolean values proves the local', () => {
+        const output = outputOf("        const deduction = this.isFromString(x) === '' ? true : false;\n"
+            + "        if (deduction) { return; }\n");
+        expect(output).toContain('if (Boolean.TRUE.equals(deduction))');
+        expect(output).not.toContain('Helpers.isTrue(deduction)');
+        // a non-boolean branch keeps the helper
+        expect(outputOf("        const box = this.isBool() ? 1 : 0;\n        if (box) { return; }\n"))
+            .toContain('if (Helpers.isTrue(box))');
+    });
+
+    test('a relational Precise static bound to a local proves it', () => {
+        const input = `
+class Precise {
+    static stringLt (a: any, b: any): boolean { return false; }
+}
+class T {
+    test(a: any): void {
+        const isAmountNeg = Precise.stringLt(a, "0");
+        if (isAmountNeg) { return; }
+    }
+}
+`;
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('if (Boolean.TRUE.equals(isAmountNeg))');
+        expect(output).not.toContain('Helpers.isTrue(isAmountNeg)');
+    });
+
+    test('a parameter the printer declares Boolean prints Boolean.TRUE.equals (d13)', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaNativeParameterType;
+        try {
+            printer.javaNativeParameterType = (node: any) => {
+                const name = node?.name?.escapedText;
+                if (name === 'trigger') { return 'Boolean'; }
+                if (name === 'enabled') { return 'boolean'; }
+                if (name === 'parameters') { return 'java.util.Map<String, Object>'; }
+                return original.call(printer, node);
+            };
+            const input = `
+class T {
+    test(trigger: any, enabled: any, parameters: any, x: any): void {
+        if (trigger) { return; }
+        if (!trigger) { return; }
+        if (enabled) { return; }
+        if ('k' in parameters) { return; }
+        if (x) { return; }
+    }
+}
+`;
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('if (Boolean.TRUE.equals(trigger))');
+            expect(output).toContain('if (!Boolean.TRUE.equals(trigger))');
+            expect(output).toContain('if (enabled)');
+            expect(output).toContain('parameters.containsKey("k")');
+            expect(output).toContain('if (Helpers.isTrue(x))');
+        } finally {
+            printer.javaNativeParameterType = original;
+        }
+    });
+});
+
 describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
     test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
         const input =
@@ -3475,7 +3583,7 @@ describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")
         });
     });
 
-    test('non-literal keys and non-identifier receivers keep the helper', () => {
+    test('a non-literal key on a declared map reads native, a field receiver keeps the helper', () => {
         const keys =
         "class T {\\n" +
         "    test(x: any, k: string): void {\\n" +
@@ -3494,7 +3602,7 @@ describe('declared-map element reads: Helpers.GetValue(x, "lit") -> x.get("lit")
         "    something(...args: any[]): void {}\\n" +
         "}"
         withResolver(() => MAP_TYPE, () => {
-            expect(transpiler.transpileJava(keys).content).toContain('Helpers.GetValue(x, k)');
+            expect(transpiler.transpileJava(keys).content).toContain('(x == null || k == null ? null : x.get(k))');
             expect(transpiler.transpileJava(field).content).toContain('Helpers.GetValue(this.foo, "k")');
         });
     });
@@ -3648,6 +3756,70 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
         });
     });
 
+    // the param is declared `Object` in the Java signature: the checker proof carries the
+    // wildcard cast, which a `List<String>` declaration would not accept
+    test('a checker-proven array parameter reads natively behind the wildcard cast and the guard', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: string[]): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            const a = xs[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('(xs == null || i < 0 || i >= ((java.util.List<?>)xs).size() ? null : ((java.util.List<?>)xs).get(i))');
+        expect(output).not.toContain('Helpers.GetValue(xs, i)');
+    });
+
+    test('the same parameter without a `var` counter index keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: string[], i: number): void {\n" +
+        "        const a = xs[i];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(xs, i)');
+        expect(output).not.toContain('((java.util.List<?>)xs).get(i)');
+    });
+
+    test('a call receiver keeps the helper (the guards would evaluate it twice)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const a = this.list()[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    list(): any[] { return []; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(this.list(), i)');
+    });
+
+    test('a varargs receiver keeps the helper (a Java array, not a List)', () => {
+        const input =
+        "class T {\n" +
+        "    test(...args: any[]): void {\n" +
+        "        for (let i = 0; i < args.length; i++) {\n" +
+        "            const a = args[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(args, i)');
+        expect(output).not.toContain('((java.util.List<?>)args).get(i)');
+    });
+
     test('a counter captured as finalI keeps the helper (finalI is a boxed Object)', () => {
         const input =
         "class T {\n" +
@@ -3684,6 +3856,231 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
             expect(output).toContain('Helpers.GetValue(x, i);');
             expect(output).not.toContain('x.get(i)');
         });
+    });
+});
+
+describe('declared-map element reads: Helpers.GetValue(m, k) -> guarded m.get(k)', () => {
+    // a `Map<String, Object>` declaration (the B-11/B-15 local table, or a param the printer
+    // retypes per B-09/D-10) with a key the printer cannot fold into a literal prints the
+    // native map accessor. GetValue's Map branch answers null for a null receiver, a null
+    // key and a key that is not a String, so the emission carries the same tests; every
+    // unproven receiver or key keeps the helper.
+    const MAP_TYPE = 'Map<String, Object>';
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('a declared Map with a plain string key reads native behind the null guards', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string): void {\n" +
+        "        const a = x[key];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(x == null || key == null ? null : x.get(key))');
+            expect(output).not.toContain('Helpers.GetValue(x, key)');
+        });
+    });
+
+    test('a key the checker does not prove a string carries the not-a-String test', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, k: any): void {\n" +
+        "        const a = x[k];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(x == null || !(k instanceof String) ? null : x.get(k))');
+            expect(output).not.toContain('Helpers.GetValue(x, k)');
+        });
+    });
+
+    test('no consumer installed: the read keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string): void {\n" +
+        "        const a = x[key];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(x, key)');
+        expect(output).not.toContain('x.get(key)');
+    });
+
+    test('a declared type that is not a Map keeps the helper', () => {
+        for (const type of [ 'Object', 'String', 'java.util.List<Object>', 'List<String>' ]) {
+            withResolver(() => type, () => {
+                const input =
+                "class T {\n" +
+                "    test(x: any, key: string): void {\n" +
+                "        const a = x[key];\n" +
+                "        this.something(a);\n" +
+                "    }\n" +
+                "    something(...args: any[]): void {}\n" +
+                "}";
+                const output = transpiler.transpileJava(input).content;
+                expect(output).toContain('Helpers.GetValue(x, key)');
+                expect(output).not.toContain('x.get(key)');
+            });
+        }
+    });
+
+    test('a counter index on a declared Map keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const a = x[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, i)');
+            expect(output).not.toContain('x.get(i)');
+        });
+    });
+
+    test('a numeric literal key on a declared Map keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x[0];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, 0)');
+            expect(output).not.toContain('x.get(0)');
+        });
+    });
+
+    test('a key that is not a repeatable operand keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x[this.key()];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    key(): string { return 'k'; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(x, this.key())');
+            expect(output).not.toContain('x.get(this.key())');
+        });
+    });
+
+    test('a write target keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string, v: any): void {\n" +
+        "        x[key] = v;\n" +
+        "    }\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.addElementToObject(x, key, v)');
+            expect(output).not.toContain('x.get(key)');
+        });
+    });
+
+    test('a capture-renamed receiver keeps the helper (finalX is a boxed Object)', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any, key: string): void {\n" +
+        "        x = this.prepare(x);\n" +
+        "        const result = [];\n" +
+        "        for (let i = 0; i < 1; i++) {\n" +
+        "            result.push({ 'id': x[key] });\n" +
+        "        }\n" +
+        "        this.something(result);\n" +
+        "    }\n" +
+        "    prepare(x: any): any { return x; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        withResolver(() => MAP_TYPE, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('final Object finalX = x;');
+            expect(output).toContain('Helpers.GetValue(finalX, key)');
+            expect(output).not.toContain('.get(key)');
+        });
+    });
+});
+
+describe('declared-map element reads (d-11): a retyped Dict parameter consumes the read', () => {
+    // the headline shape of D-11: the receiver is a parameter B-09/D-10 print as a Java Map,
+    // so the read binds natively exactly as it does for a typed local.
+    const TMP = path.join(__dirname, 'files', 'tmp-d11-map-params');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict } from './base/types';\n" +
+            "class Venue {\n" +
+            "    parseAccounts (data: Dict, code: string): void {\n" +
+            "        const id = data[code];\n" +
+            "    }\n" +
+            "    parseAny (data: Dict, code: any): void {\n" +
+            "        const id = data[code];\n" +
+            "    }\n" +
+            "    parseKey (data: Dict, code: string): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('the Dict parameter prints the native Java type', () => {
+        expect(venueOutput).toContain('public void parseAccounts(java.util.Map<String, Object> data, Object code)');
+        expect(venueOutput).toContain('public void parseAny(java.util.Map<String, Object> data, Object code)');
+    });
+
+    test('a non-literal key on the retyped parameter reads native', () => {
+        expect(venueOutput).toContain('(data == null || code == null ? null : data.get(code))');
+        expect(venueOutput).not.toContain('Helpers.GetValue(data, code)');
+    });
+
+    test('a key the checker does not prove a string carries the not-a-String test', () => {
+        expect(venueOutput).toContain('(data == null || !(code instanceof String) ? null : data.get(code))');
+    });
+
+    test('the literal-key read on the same parameter still prints the B-09 shape', () => {
+        expect(venueOutput).toContain('((java.util.Map<String, Object>)data).get("id")');
     });
 });
 
@@ -4636,6 +5033,81 @@ describe('helper removal: native comparison / containsKey / size', () => {
         expect(output).toContain("Helpers.getArrayLength(args)");
     });
 
+    // a local the embedding pass declared a java.util.List (a typed list return bound to a
+    // local, a split/list-producer local, a list parameter the pass retyped): the `.length`
+    // read is the same int the helper computes, and the null arm keeps its 0
+    test('a declared List receiver prints x.size() behind the helper\'s zero-for-null guard', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const xs = this.getList();\n" +
+        "        const n = xs.length;\n" +
+        "        this.something(n);\n" +
+        "    }\n" +
+        "    getList(): any { return []; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.List<Object>';
+        try {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(xs == null ? 0 : xs.size())');
+            expect(output).not.toContain('Helpers.getArrayLength(xs)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+        // without a consumer the read keeps the helper
+        const baseline = transpiler.transpileJava(input).content;
+        expect(baseline).toContain('Helpers.getArrayLength(xs)');
+    });
+
+    test('a declared List<Object> parameter prints the size without a cast', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: any): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.List<Object>';
+        try {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('for (var i = 0; i < (xs == null ? 0 : xs.size()); i++)');
+            expect(output).not.toContain('Helpers.getArrayLength(xs)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+
+    test('a declared non-List type keeps the length helper', () => {
+        for (const type of [ 'java.util.Map<String, Object>', 'String', 'Long', 'var' ]) {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const xs = this.getList();\n" +
+            "        const n = xs.length;\n" +
+            "        this.something(n);\n" +
+            "    }\n" +
+            "    getList(): any { return []; }\n" +
+            "    something(...args: any[]): void {}\n" +
+            "}";
+            const printer: any = (transpiler as any).javaTranspiler;
+            const previous = printer.javaDeclaredLocalTypeResolver;
+            printer.javaDeclaredLocalTypeResolver = () => type;
+            try {
+                const output = transpiler.transpileJava(input).content;
+                expect(output).toContain('Helpers.getArrayLength(xs)');
+                expect(output).not.toContain('xs.size()');
+            } finally {
+                printer.javaDeclaredLocalTypeResolver = previous;
+            }
+        }
+    });
+
     test('for-loop counter with an integer-literal initializer compares natively', () => {
         const input =
         "class T {\n" +
@@ -5242,7 +5714,7 @@ describe('java replaceAll native emission', () => {
         });
     });
 
-    test('a declared numeric local never turns `+` native (java-13/14 own Add)', () => {
+    test('a declared Long local adds an integer literal natively (D-14 widened add)', () => {
         withNumericLocals({ now: 'Long' }, () => {
             const input =
             "class T {\n" +
@@ -5252,7 +5724,97 @@ describe('java replaceAll native emission', () => {
             "    }\n" +
             "}"
             const output = transpiler.transpileJava(input).content;
-            expect(output).toContain('Object x = Helpers.add(now, 1);');
+            expect(output).toContain('Object x = (now + 1L);');
+            expect(output).not.toContain('Helpers.add(now, 1)');
+        });
+    });
+
+    // D-14: the production proof source is the embedding layer's declared-local table
+    // (build/java-local-types.js#installJavaDeclaredLocalTypes records the printed type of
+    // every declaration the local-typing chain wrote); the tests fake that table.
+    const withDeclaredLocalTypes = (javaTypes: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => javaTypes[declaration?.name?.escapedText];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+
+    test('two Integer-declared locals multiply with an explicit long widening', () => {
+        withDeclaredLocalTypes({ maxDistance: 'Integer', msInDay: 'Integer' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const maxDistance = 20;\n" +
+            "        const msInDay = 86400000;\n" +
+            "        const x = maxDistance * msInDay;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Long x = (((long) maxDistance) * ((long) msInDay));');
+            expect(output).not.toContain('Helpers.multiply(');
+        });
+    });
+
+    test('a literal-typed Integer local subtracts a declared Long local natively', () => {
+        withDeclaredLocalTypes({ msInDay: 'Integer', now: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const msInDay = 86400000;\n" +
+            "        const now = 1;\n" +
+            "        const x = now - msInDay;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Long x = (now - ((long) msInDay));');
+            expect(output).not.toContain('Helpers.subtract(');
+        });
+    });
+
+    test('an Object-declared local keeps the subtract helper (the box may hold null)', () => {
+        withDeclaredLocalTypes({ since: 'Object' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const since: number = 1;\n" +
+            "        const x = since - 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Object x = Helpers.subtract(since, 1);');
+        });
+    });
+
+    test('an int-declared local divides natively as a double division', () => {
+        withDeclaredLocalTypes({ timeframeMs: 'int' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const timeframeMs: number = 1000;\n" +
+            "        const x = timeframeMs / 1000;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Double x = (((double) timeframeMs) / ((double) 1000));');
+            expect(output).not.toContain('Helpers.divide(');
+        });
+    });
+
+    test('a nullable declared numeric keeps the add helper (a null box would NPE)', () => {
+        withNumericLocals({ until: 'Long' }, () => {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const until: number | undefined = undefined;\n" +
+            "        const x = until + 1;\n" +
+            "    }\n" +
+            "}"
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.add(until, 1)');
         });
     });
 
@@ -5362,10 +5924,17 @@ describe('falsy-wrapper removal: boolean identifiers and Array.isArray', () => {
         expect(output).toContain("if (Boolean.TRUE.equals(d))");
     });
 
-    test('a generated boolean-returning method keeps the helper', () => {
+    test('a local bound to a generated boolean-returning method prints Boolean.TRUE.equals (d13)', () => {
+        // the box is the call's own proven box: every return of the resolved body prints a
+        // Java boolean value, so the local can never hold anything else
         const output = wrapped("        const a: boolean = this.isBool();\n" +
-            "        if (a) { return; }\n");
-        expect(output).toContain("if (Helpers.isTrue(a))");
+            "        if (a) { return; }");
+        expect(output).toContain("if (Boolean.TRUE.equals(a))");
+        expect(output).not.toContain("Helpers.isTrue(a)");
+        // an unproven callee body (string return / a bare local) keeps the helper
+        const unproven = wrapped("        const b: boolean = this.isBoolNamed(x);\n" +
+            "        if (b) { return; }");
+        expect(unproven).toContain("if (Helpers.isTrue(b))");
     });
 
     test('a later non-boolean write keeps the box (D2 scan)', () => {
@@ -6705,8 +7274,12 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).not.toContain('Helpers.GetValue(market');
     });
 
-    test('a method overriding a hand-written base signature keeps Object parameters', () => {
-        expect(venueOutput).toContain('public void parseX(Object data, Object status)');
+    // d-10: the base tier prints its annotated parameters too, and every declaration of
+    // the method up and down the chain prints the same native type - the override moves
+    // with the base declaration (Java overrides are invariant on parameter types), and a
+    // fixed parameter with no annotation of its own takes the inherited type.
+    test('the base declaration and its override print the same typed signature (d-10)', () => {
+        expect(venueOutput).toContain('public void parseX(java.util.Map<String, Object> data, String status)');
     });
 
     test('an override of a generated method moves with its base declaration', () => {
@@ -6736,6 +7309,91 @@ describe('java typed parameters (b-09)', () => {
     test('an optional parameter keeps its optionalArgs prologue and type', () => {
         expect(venueOutput).toContain('public void parseOpt(Object... optionalArgs)');
         expect(venueOutput).toContain('Object data = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>()');
+    });
+});
+
+// d-10: override parameters/returns move with the base declaration. A declaration whose
+// parameter carries no native annotation of its own still prints the type its base prints
+// (otherwise the override would stop overriding the typed base method in Java), and a
+// declaration whose own annotation disagrees with the base keeps the boxed signature.
+describe('java override parameters move with the base declaration (d-10)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-d10-overrides');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venue10.ts');
+
+    let output: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n" +
+            "export interface MarketInterface {\n    id: string;\n}\n" +
+            "export type Market = MarketInterface | undefined;\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict, Str, Market } from './types';\n" +
+            "export default class Exchange {\n" +
+            "    parseTyped (data: Dict, market: Market = undefined): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseForced (data: Dict, status: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseLoose (data, status): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseConflict (data: Dict): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str, Market } from './base/types';\n" +
+            "import Exchange from './base/Exchange';\n" +
+            "class Venue extends Exchange {\n" +
+            "    parseTyped (data: Dict, market: Market = undefined): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseForced (data, status): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseLoose (data: Dict, status: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseConflict (data: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('an override of a typed base declaration prints the same typed signature', () => {
+        // the venue output carries the Venue declaration; the base declaration prints the
+        // same signature in Exchange.ts (checked by the b-09 parseX case above)
+        expect(output).toContain('public void parseTyped(java.util.Map<String, Object> data, Object... optionalArgs)');
+        expect(output).not.toContain('parseTyped(Object data');
+    });
+
+    test('a fixed override parameter with no annotation takes the base declaration type', () => {
+        expect(output).toContain('public void parseForced(java.util.Map<String, Object> data, String status)');
+        expect(output).not.toContain('parseForced(Object data');
+    });
+
+    test('an unannotated base declaration boxes the whole chain', () => {
+        expect(output).toContain('public void parseLoose(Object data, Object status)');
+        expect(output).not.toContain('parseLoose(java.util.Map<String, Object> data');
+    });
+
+    test('an override annotation that disagrees with the base keeps the boxed signature', () => {
+        // D8: the base declaration prints its own Dict type, the disagreeing override keeps
+        // the box (no site in ts/src disagrees today)
+        expect(output).toContain('public void parseConflict(Object data)');
     });
 });
 
@@ -6867,5 +7525,238 @@ describe('objectKeys on a declared map local', () => {
         "}\n"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain('Helpers.objectKeys(this.options)');
+    });
+});
+// D-09: internal (non-override) generated methods print the native Java type named by the
+// TS annotation (Map<String, Object> for dict-shaped types, String for Str, Boolean for
+// Bool) when EVERY return statement of the body already prints that type. A method a base
+// class declares (D8), an async method and any body whose returns are not provable keep the
+// boxed `Object` signature. The fixtures mirror the repository layout because the rule is
+// gated on the declaration living in a generated tier file (ts/src/<name>.ts).
+describe('java native return types of internal methods (d09)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-javad09');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuefake.ts');
+    const TYPES_SOURCE =
+        "export type Dict = Record<string, any>;\n" +
+        "export type Str = string | undefined;\n" +
+        "export type Bool = boolean | undefined;\n";
+    const VENUE_SOURCE =
+        "import { Dict, Str, Bool } from './base/types';\n" +
+        "interface Row { [key: string]: any }\n" +
+        "class BaseFake {\n" +
+        "    parseOrder (order: Dict): any { return order; }\n" +
+        "    safeValue (x: any, k: any, d: any = undefined): any { return x; }\n" +
+        "}\n" +
+        "export default class venuefake extends BaseFake {\n" +
+        "    parseRow (data: Dict): Row { return { 'a': data }; }\n" +
+        "    parseEcho (data: Dict): Row { return data; }\n" +
+        "    parseChoice (data: Dict, flag: boolean): Dict { return flag ? { 'x': data } : data; }\n" +
+        "    parseName (s: Str): Str { return s; }\n" +
+        "    parseFlag (a: any): Bool { return a === 1; }\n" +
+        "    parseOrder (order: Dict): Dict { return order; }\n" +
+        "    parseUnproven (data: Dict): Dict { return this.safeValue (data, 'k'); }\n" +
+        "    async parseAsync (data: Dict): Promise<Dict> { return data; }\n" +
+        "}\n";
+
+    let output: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, TYPES_SOURCE);
+        fs.writeFileSync(VENUE_FIXTURE, VENUE_SOURCE);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a dict-shaped return whose every return prints a map is native', () => {
+        expect(output).toContain('public java.util.Map<String, Object> parseRow(');
+        expect(output).not.toContain('public Object parseRow(');
+    });
+
+    test('a return of a parameter the printer declares a map is native', () => {
+        expect(output).toContain('public java.util.Map<String, Object> parseEcho(');
+    });
+
+    test('a ternary with both arms provable is native', () => {
+        expect(output).toContain('public java.util.Map<String, Object> parseChoice(');
+    });
+
+    test('a Str return is native String', () => {
+        expect(output).toContain('public String parseName(');
+    });
+
+    test('a Bool return over a comparison is native Boolean', () => {
+        expect(output).toContain('public Boolean parseFlag(');
+    });
+
+    test('an override keeps the boxed signature (D8)', () => {
+        expect(output).toContain('public Object parseOrder(');
+        expect(output).not.toContain('public java.util.Map<String, Object> parseOrder(');
+    });
+
+    test('an unprovable return keeps the boxed signature', () => {
+        expect(output).toContain('public Object parseUnproven(');
+    });
+
+    test('an async method keeps the future signature', () => {
+        expect(output).toContain('public java.util.concurrent.CompletableFuture<Object> parseAsync(');
+    });
+});
+
+// d-12: `this.spawn(this.someMethod, args...)` is the pro-tier dispatch shape - the ccxt
+// post-pass rewrites the reference into a lambda `() -> { this.someMethod(args); }`, so the
+// arguments bind to the METHOD's printed parameters. A parameter the printer declared
+// natively (`Dict`/`Str`/`Bool`/`Market`/`Currency`) needs the same checkcast a direct call
+// site carries, or `Object message` cannot convert to `Map<String,Object>` (job 1008:
+// Lbank/Binance/Weex pro handlers). Fixtures mirror the repository layout, because the
+// alias declarations and the base-tier policy are file-anchored.
+describe('java spawn method references (d-12)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-d12-spawn');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Client.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'probe.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n");
+        fs.writeFileSync(CLIENT_FIXTURE,
+            "export default class Client {\n    resolve (x: any, y: any): void {}\n}\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict } from './types';\n" +
+            "import Client from './Client';\n" +
+            "export default class Exchange {\n" +
+            "    spawn (method: any, ...args: any[]): any {\n" +
+            "    }\n" +
+            "    handleBase (client: Client, data: Dict): void {\n" +
+            "    }\n" +
+            "}\n");
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str } from '../base/types';\n" +
+            "import Exchange from '../base/Exchange';\n" +
+            "import Client from '../base/Client';\n" +
+            "class Probe extends Exchange {\n" +
+            "    handlePing (client: Client, message: Dict): void {\n" +
+            "        const x = message['ping'];\n" +
+            "    }\n" +
+            "    handleSnapshot (client: Client, message: Dict, subscription: Dict): Promise<void> {\n" +
+            "        return undefined as any;\n" +
+            "    }\n" +
+            "    handleString (client: Client, mode: Str): void {\n" +
+            "    }\n" +
+            "    handleUntyped (client: Client, message: any): void {\n" +
+            "    }\n" +
+            "    handleMessage (client: Client, message: any): void {\n" +
+            "        this.spawn (this.handlePing, client, message);\n" +
+            "        this.spawn (this.handleSnapshot, client, message, message);\n" +
+            "        this.spawn (this.handleString, client, message);\n" +
+            "        this.spawn (this.handleUntyped, client, message);\n" +
+            "        this.spawn (async () => { this.handlePing (client, message); });\n" +
+            "        this.spawn (this.handleBase, client, message);\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a spawned method reference casts its argument to the printed parameter type', () => {
+        expect(venueOutput).toContain('this.spawn(this.handlePing, client, (java.util.Map<String, Object>) (message));');
+    });
+
+    test('every spawned argument position carries its own checkcast', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleSnapshot, client, (java.util.Map<String, Object>) (message), (java.util.Map<String, Object>) (message));');
+    });
+
+    test('a Str parameter casts to String', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleString, client, (String) (message));');
+    });
+
+    test('the method-reference argument itself is never cast', () => {
+        expect(venueOutput).not.toContain('(java.util.Map<String, Object>) (this.handlePing)');
+    });
+
+    test('a spawned method with untyped parameters keeps its arguments verbatim', () => {
+        expect(venueOutput).toContain('this.spawn(this.handleUntyped, client, message);');
+    });
+
+    test('a spawned base-tier method follows the typed base declaration (D-10)', () => {
+        // the base tier is generated too, so its annotated `data: Dict` prints the Map and the spawn casts to it
+        expect(venueOutput).toContain('this.spawn(this.handleBase, client, (java.util.Map<String, Object>) (message));');
+    });
+
+    test('an arrow-function spawn keeps the ordinary call-site cast inside its body', () => {
+        expect(venueOutput).toContain('this.spawn(() => ');
+        expect(venueOutput).toContain('this.handlePing(client, (java.util.Map<String, Object>) (message));');
+    });
+});
+
+// D-16: a prediction venue (ts/src/prediction/<id>.ts) extends its abstract class ->
+// PredictionExchange -> BaseExchange, a chain that never reaches the `Exchange` class of
+// ts/src/base/Exchange.ts. The venue's method still overrides the Exchange-tier body
+// javaTranspiler.ts injects into the generated PredictionExchange.java, and those declarations
+// keep `Object` parameters (the base tier is a JAVA_NATIVE_PARAMETER_BASE_FILE) - so the venue
+// parameter prints `Object` too, whatever alias its own annotation names.
+describe('java prediction venue Exchange-tier parameter boxing (D-16)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-d16');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const PREDICTION_BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'PredictionExchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'prediction', 'kalshi.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(PREDICTION_BASE_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export type Str = string | undefined;\n" +
+            "export type Dict = { [key: string]: any } | undefined;\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Str, Dict } from './types.js';\n" +
+            "export class BaseExchange {}\n" +
+            "export default class Exchange extends BaseExchange {\n" +
+            "    async fetchOrder (id: string, symbol: Str = undefined, params: Dict = {}): Promise<any> { return null; }\n" +
+            "}\n");
+        fs.writeFileSync(PREDICTION_BASE_FIXTURE,
+            "import { BaseExchange } from './Exchange.js';\n" +
+            "export default class PredictionExchange extends BaseExchange {}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import Exchange from '../base/PredictionExchange.js';\n" +
+            "import type { Str, Dict } from '../base/types.js';\n" +
+            "export default class kalshi extends Exchange {\n" +
+            "    async fetchOrder (id: Str, outcome: Str = undefined, params: Dict = {}): Promise<any> { return null; }\n" +
+            "    async fetchEvents (query: Str, params: Dict = {}): Promise<any> { return null; }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a venue method named after the injected Exchange tier prints Object parameters', () => {
+        expect(venueOutput).toContain('fetchOrder(Object id');
+        expect(venueOutput).not.toContain('fetchOrder(String id');
+    });
+
+    test('a venue-local method keeps its native parameter', () => {
+        expect(venueOutput).toContain('fetchEvents(String query');
     });
 });

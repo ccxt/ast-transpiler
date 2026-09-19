@@ -1799,7 +1799,9 @@ describe('rust borrowed string literals (Cow payload)', () => {
 
 describe('rust native dict inserts', () => {
     const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".to_string(), ${value}); }`;
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    const dynamic = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&${key}), ${value}); }`;
 
     test('string-literal write on a typed dict local inserts natively', () => {
         const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = 1;';
@@ -1824,20 +1826,20 @@ describe('rust native dict inserts', () => {
         const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = result["j"];';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('{ let __be_tmp = ');
-        expect(output).toContain('&mut result { std::sync::Arc::make_mut(__d).insert("k".to_string(), __be_tmp); }');
+        expect(output).toContain('&mut result { std::sync::Arc::make_mut(__d).insert("k".into(), __be_tmp); }');
         expect(output).not.toContain('add_element_to_object(&mut result');
     });
 
     test('a call passing the receiver as an arg is hoisted too', () => {
         const ts = 'const params: { [key: string]: any } = {};\nparams["auth"] = this.createAuth(params);';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('{ let __be_tmp = self.createAuth(params); if let Value::Dict(__d) = &mut params { std::sync::Arc::make_mut(__d).insert("auth".to_string(), __be_tmp); } }');
+        expect(output).toContain('{ let __be_tmp = self.createAuth(params); if let Value::Dict(__d) = &mut params { std::sync::Arc::make_mut(__d).insert("auth".into(), __be_tmp); } }');
     });
 
     test('a bool-typed value operand is boxed in Value::Bool', () => {
         const ts = 'const result: { [key: string]: any } = {};\nconst a: any = 1;\nresult["k"] = (a === 1);';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('insert("k".to_string(), Value::Bool(');
+        expect(output).toContain('insert("k".into(), Value::Bool(');
     });
 
     test('this.<field> receivers insert natively', () => {
@@ -1865,16 +1867,54 @@ describe('rust native dict inserts', () => {
         expect(output).toContain('add_element_to_object(&mut result');
     });
 
-    test('book-meta keys keep the helper', () => {
+    test('book-meta keys insert natively on a constructed dict', () => {
         const ts = 'const result: { [key: string]: any } = {};\nresult["timestamp"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('result', 'timestamp', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('book-meta keys keep the helper on a declared-Dict local', () => {
+        const ts = 'function f(response) {\n    const data = this.safeDict(response, "data", {});\n    data["timestamp"] = 1;\n}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut data, &Value::Str("timestamp"');
+    });
+
+    test('book-meta keys keep the helper on a whitelisted name without a construction proof', () => {
+        const ts = 'let result = undefined;\nresult = {};\nresult["timestamp"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result, &Value::Str("timestamp"');
+    });
+
+    test('computed keys insert natively through stringify_param', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst k = "x";\nresult[k] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(dynamic('result', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('computed keys on a base dict field insert natively', () => {
+        const ts = 'class A {\n' +
+            '    balance: any = {};\n' +
+            '    f(account) {\n' +
+            '        this.balance[account] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(dynamic('self.balance', 'account', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut self.balance');
+    });
+
+    test('a computed key reading the receiver keeps the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult[result["k"]] = 1;';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut result');
     });
 
-    test('computed keys keep the helper', () => {
-        const ts = 'const result: { [key: string]: any } = {};\nconst k = "x";\nresult[k] = 1;';
+    test('a computed key that is not a plain place keeps the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst o: any = {};\nresult[o.k] = 1;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add_element_to_object(&mut result, &k,');
+        expect(output).toContain('add_element_to_object(&mut result');
     });
 
     test('a later write of another shape keeps the helper', () => {
@@ -1961,6 +2001,66 @@ describe('rust native dict inserts', () => {
             '}';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut self.subscriptions');
+    });
+
+    test('a declared-Dict local (safeDict with an object default) inserts natively', () => {
+        const ts = 'function f(response) {\n' +
+            '    const data = this.safeDict(response, "data", {});\n' +
+            '    data["ts"] = 1;\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('data', 'ts', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut data');
+    });
+
+    test('a declared-Dict local with a computed key inserts natively', () => {
+        const ts = 'function f(response, code) {\n' +
+            '    const data = this.safeDict(response, "data", {});\n' +
+            '    data[code] = 1;\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(dynamic('data', 'code', 'Value::Int(1)'));
+    });
+
+    test('a Dict-typed parameter inserts natively for literal and computed keys', () => {
+        const decl = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\ntype Str = string | undefined;\n';
+        const literal = transpiler.transpileRust(decl + 'function f (balance: Dict) {\n    balance["k"] = 1;\n}').content;
+        expect(literal).toContain(insert('balance', 'k', 'Value::Int(1)'));
+        expect(literal).not.toContain('add_element_to_object(&mut balance');
+        const computed = transpiler.transpileRust(decl + 'function f (balance: Dict, code: Str) {\n    balance[code] = 1;\n}').content;
+        expect(computed).toContain(dynamic('balance', 'code', 'Value::Int(1)'));
+    });
+
+    test('a parameter with a default value keeps the pre-unit tuple proof', () => {
+        const decl = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\n';
+        const ts = decl + 'class A {\n' +
+            '    f(params: Dict = {}) {\n' +
+            '        let uta: any = undefined;\n' +
+            '        [ uta, params ] = this.getInstType("m", params);\n' +
+            '        params["uta"] = true;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('params', 'uta', 'Value::Bool(true)'));
+        expect(output).not.toContain('add_element_to_object(&mut params');
+    });
+
+    test('a parameter reassigned from a call keeps the helper', () => {
+        const decl = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\n';
+        const ts = decl + 'class A {\n' +
+            '    f(params: Dict = {}) {\n' +
+            '        params = this.omit(params, "margin");\n' +
+            '        params["k"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut params');
+    });
+
+    test('any-typed receivers keep the helper', () => {
+        const ts = 'function f(params: any) {\n    params["k"] = 1;\n}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut params');
     });
 });
 
@@ -2237,7 +2337,7 @@ describe('rust is_true over a proven boolean Value', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('if matches!(options.as_map().and_then(|__m| __m.get("foo")).cloned().unwrap_or(Value::Null), Value::Bool(true))');
+        expect(output).toContain('if matches!(options.get("foo").cloned().unwrap_or(Value::Null), Value::Bool(true))');
         expect(output).not.toContain('is_true(&options');
     });
 
@@ -3314,5 +3414,491 @@ describe('rust destructure over an array-returning callee', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
+    });
+});
+
+describe('rust parameter shadows (D-25)', () => {
+    const DICT_DECL =
+        "interface Dictionary<T> { [key: string]: T; }\n" +
+        "type Dict = Dictionary<any>;\n";
+
+    test('a Dict parameter read but never written is shadowed at fn entry', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        return data['id'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let __data_empty = indexmap::IndexMap::new();');
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('return data.get("id").cloned().unwrap_or(Value::Null);');
+        expect(output).not.toContain('get_value(&data');
+    });
+
+    test('a dynamic string key reads through the shadow', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict, code: string): any {\n" +
+            "        return data[code];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('code.as_str().and_then(|__k| data.get(__k)).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('a `this.safeString` read inlines the coercion over the shadow', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const id = this.safeString (data, 'id');\n" +
+            "        return id;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('match data.get("id") { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s.clone()), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => Value::Null }');
+        expect(output).not.toContain('self.safeString(data');
+    });
+
+    test('a `this.safeBool` read keeps its default argument', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const ok = this.safeBool (data, 'ok', false);\n" +
+            "        return ok;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('match data.get("ok") { Some(Value::Bool(__b)) => Value::Bool(*__b), _ => Value::Bool(false) }');
+    });
+
+    test('the `in` operator reads the shadow', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        return 'id' in data;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Value::Bool(data.contains_key("id"))');
+    });
+
+    test('a List parameter reads length and literal indices natively', () => {
+        const ts =
+            "class C {\n" +
+            "    f (rows: Array<any>): any {\n" +
+            "        const n = rows.length;\n" +
+            "        return rows[0];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let __rows_empty = Vec::new();');
+        expect(output).toContain('let rows = rows.as_array().unwrap_or(&__rows_empty);');
+        expect(output).toContain('let mut n: Value = Value::Int(rows.len() as i64);');
+        expect(output).toContain('return rows.get(0).cloned().unwrap_or(Value::Null);');
+    });
+
+    test('returning the parameter keeps the box (D2/census)', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const id = data['id'];\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+        expect(output).toContain('data.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('a written key keeps the box', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        data['id'] = 1;\n" +
+            "        return data['id'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+        // the boxed write is D-31's native insert on the (unshadowed) Value
+        expect(output).toContain('if let Value::Dict(__d) = &mut data { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); };');
+    });
+
+    test('passing the parameter to another method keeps the box', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const id = data['id'];\n" +
+            "        return this.other (data);\n" +
+            "    }\n" +
+            "    other (d: Dict): any { return d; }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+    });
+
+    test('a marker-route key name keeps the box', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        return data['subscriptions'];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+        expect(output).toContain('data.as_map().and_then(|__m| __m.get("subscriptions"))');
+    });
+});
+
+describe('rust native Option<String> returns for `: Str` methods', () => {
+    // An internal, non-override, non-async method declared `: Str` returns a
+    // native `Option<String>` when every `return` in its own body converts
+    // (`X.as_str().map(str::to_owned)`, or `None` for a nullish literal); a
+    // call site that still needs a `Value` boxes the result back with the exact
+    // inverse, and a local whose uses are all native sinks binds the
+    // `Option<String>` directly.
+    const HEAD = "type Str = string | undefined;\n";
+
+    test('a proven `: Str` method returns Option<String> with the conversion', () => {
+        const ts = HEAD + "class E {\n    parseStatus (status: any): Str {\n        return 'open';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
+        expect(output).toContain('return Value::Str("open".into()).as_str().map(str::to_owned);');
+    });
+
+    test('a nullish return becomes the None arm', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str {\n" +
+            "        if (status === undefined) { return undefined; }\n" +
+            "        return 'open';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
+        expect(output).toContain('return None;');
+    });
+
+    test('a body whose last statement is not a return keeps -> Value', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str {\n" +
+            "        if (status === undefined) { return undefined; }\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Value');
+        expect(output).not.toContain('Option<String>');
+    });
+
+    test('a return the checker cannot prove is a string keeps -> Value', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str {\n" +
+            "        return this.safeValue (status);\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Value');
+        expect(output).not.toContain('Option<String>');
+    });
+
+    test('an override keeps the boxed signature', () => {
+        const ts = HEAD +
+            "class A {\n    parseStatus (status: any): Str { return 'x'; }\n}\n" +
+            "class E extends A {\n    override parseStatus (status: any): Str { return 'y'; }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        const overridden = output.split('class E')[1] ?? output;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
+        expect(output.match(/pub fn parseStatus\(&self, status: Value\) -> Value \{/g)?.length).toBe(1);
+        expect(overridden.length).toBeGreaterThan(0);
+    });
+
+    test('a Value-position call site boxes the native return back', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        const m: any = {};\n" +
+            "        m['status'] = this.parseStatus (status);\n        return m;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('.insert("status".into(), self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null));');
+    });
+
+    test('an assignment of a native return boxes', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        let x: any = undefined;\n" +
+            "        x = this.parseStatus (status);\n        return x;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('x = self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null);');
+    });
+
+    test('a declaration whose uses are not all native sinks stays a Value box', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        const x = this.parseStatus (status);\n" +
+            "        const m: any = {};\n        m['status'] = x;\n        return m;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut x: Value = self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null);');
+    });
+
+    test('a caller whose uses are all native sinks binds Option<String>', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        const x = this.parseStatus (status);\n" +
+            "        if (x === undefined) { return 'a'; }\n" +
+            "        if (x === 'open') { return 'b'; }\n        return 'c';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut x: Option<String> = self.parseStatus(status);');
+        expect(output).not.toContain('let mut x: Value = self.parseStatus(status)');
+    });
+});
+
+describe('rust typed-receiver native reads (D-28)', () => {
+    // A dynamic-key read on a checker-proven map local (not only on an
+    // annotated parameter) reads natively, and a local/parameter read stays
+    // native inside the args of a `&mut self` call while a `this`-field read
+    // there keeps the helper the ccxt hoist pass needs.
+
+    const PLAIN = 'interface Plain { [key: string]: any; }\n';
+
+    test('a dynamic-key read on a checker-proven map local reads natively', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(code: string) {\n' +
+            '        const currencies: Plain = {};\n' +
+            '        return currencies[code];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('currencies.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&currencies, &code)');
+    });
+
+    test('an any-typed local keeps the helper', () => {
+        const ts =
+            'class T {\n' +
+            '    m(code: string) {\n' +
+            '        const currencies: any = {};\n' +
+            '        return currencies[code];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&currencies, &code)');
+        expect(output).not.toContain('currencies.as_map()');
+    });
+
+    test('a re-assigned local keeps the helper (D2)', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(code: string) {\n' +
+            '        let currencies: Plain = {};\n' +
+            '        currencies = {};\n' +
+            '        return currencies[code];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&currencies, &code)');
+    });
+
+    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(key: string, vs: number[]) {\n' +
+            '        const result: Plain = {};\n' +
+            '        result[key] = [];\n' +
+            '        for (let i = 0; i < vs.length; i++) {\n' +
+            '            const row = result[key];\n' +
+            '            row.push(vs[i]);\n' +
+            '        }\n' +
+            '        return result;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut row: Value = get_value(&result, &key);');
+        expect(output).not.toContain('row.as_map()');
+    });
+
+    test('a local read inside a &mut self call reads natively', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(key: string, items: string[]) {\n' +
+            '        const dict: Plain = {};\n' +
+            '        return this.extend(dict, { "a": dict[key], "b": items[0] });\n' +
+            '    }\n' +
+            '    extend(a: any, b: any) { return a; }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('dict.as_map().and_then(|__m| key.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        // the List parameter is shadowed (D-25), so the index reads on the borrowed slice
+        expect(output).toContain('items.get(0).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&dict, &key)');
+    });
+
+    test('a self-field read inside a &mut self call keeps the helper', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    dict: Plain;\n' +
+            '    m(key: string) {\n' +
+            '        return this.extend(this.dict, { "a": this.dict[key] });\n' +
+            '    }\n' +
+            '    extend(a: any, b: any) { return a; }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.dict, &key)');
+        expect(output).not.toContain('self.dict.as_map()');
+    });
+});
+
+describe('rust pro-tier handler message shadow (D-27)', () => {
+    // `Client` is a class in the pro tier (base/ws/Client.ts); the shadow is
+    // scoped to the `handle_x (client: Client, message: Dict)` shape.
+    // A parameter whose every use is a read gets the D-25 borrowed shadow instead;
+    // the handler view fires when the message is also passed on (a move the D-25
+    // census rejects), so these fixtures forward the frame to the client.
+    const DECLS =
+        "interface Dictionary<T> { [key: string]: T; }\n" +
+        "type Dict = Dictionary<any>;\n" +
+        "class Client { resolve (v: any): void {} }\n";
+    const SHADOW = 'let __pro_message: &indexmap::IndexMap<String, Value> = &__pro_message_arc;';
+
+    test('a safeString read on the handler message param prints as a native .get match', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (channel);\n" +
+            "        client.resolve (message);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(SHADOW);
+        expect(output).toContain('(match __pro_message.get("channel").cloned() { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s),');
+        expect(output).not.toContain('self.safeString(message, Value::Str("channel"');
+    });
+
+    test('value/dict/list/bool reads print the helper value kinds natively', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const v = this.safeValue (message, 'any');\n" +
+            "        const d = this.safeDict (message, 'payload');\n" +
+            "        const l = this.safeList (message, 'data', []);\n" +
+            "        const b = this.safeBool (message, 'ok', false);\n" +
+            "        client.resolve (v); client.resolve (d); client.resolve (l); client.resolve (b);\n" +
+            "        client.resolve (message);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('(match __pro_message.get("any").cloned() { Some(Value::Str(__s)) if __s.is_empty() => Value::Null, Some(__v) => __v, None => Value::Null })');
+        expect(output).toContain('(match __pro_message.get("payload").cloned() { Some(__v) if matches!(__v, Value::Dict(_)) => __v, _ => Value::Null })');
+        expect(output).toContain('(match __pro_message.get("data").cloned() { Some(__v) if matches!(__v, Value::Arr(_)) => __v, _ => Value::from(vec![]) })');
+        expect(output).toContain('(match __pro_message.get("ok").cloned() { Some(__v) if matches!(__v, Value::Bool(_)) => __v, _ => Value::Bool(false) })');
+    });
+
+    test('the integer and float coercions mirror the runtime helper', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const n = this.safeInteger (message, 'count');\n" +
+            "        const f = this.safeNumber (message, 'px');\n" +
+            "        client.resolve (n); client.resolve (f);\n" +
+            "        client.resolve (message);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>()');
+        expect(output).toContain('Some(Value::Float(__f)) => Value::Float(__f), Some(Value::Int(__n)) => Value::Float(__n as f64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<f64>()');
+    });
+
+    test('a book-store key keeps the helper (marker routes cannot be proven away)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const symbol = this.safeString (message, 'symbol');\n" +
+            "        client.resolve (symbol);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.safeString(message, Value::Str("symbol"');
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('a non-handler method with a Dict param keeps the helper (scope is the pro tier)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    parseWsTicker (message: Dict): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        console.log (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        // read-only Dict param: the D-25 shadow prints the read, never the handler view
+        expect(output).toContain('let message = message.as_map().unwrap_or(&__message_empty);');
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('a written message param keeps the helper (D2)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTrade (client: Client, message: Dict): void {\n" +
+            "        message['k'] = 1;\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.safeString(message, Value::Str("channel"');
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('a merge onto the message param keeps the helper (D2)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleTrade (client: Client, message: Dict): void {\n" +
+            "        const merged = this.deepExtend (message, { 'a': 1 });\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (merged); client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('other uses of the param print unchanged next to the shadow', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    parseWsTrade (m: Dict, market: any): void { console.log (m, market); }\n" +
+            "    handleTicker (client: Client, message: Dict): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        this.parseWsTrade (message, undefined);\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(SHADOW);
+        expect(output).toContain('self.parseWsTrade(message, Value::Null);');
+    });
+
+    test('an unproven (any) message param keeps everything boxed', () => {
+        const ts =
+            "class Client { resolve (v: any): void {} }\n" +
+            "class T {\n" +
+            "    handleTicker (client: Client, message: any): void {\n" +
+            "        const channel = this.safeString (message, 'channel');\n" +
+            "        client.resolve (channel);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__pro_message');
+    });
+
+    test('no nativizable read emits no shadow (no dead binding)', () => {
+        const ts = DECLS +
+            "class T {\n" +
+            "    handleSmall (client: Client, message: Dict): void {\n" +
+            "        client.resolve (message);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__pro_message');
     });
 });

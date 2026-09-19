@@ -91,6 +91,30 @@ export interface RustDeclaredDictLocalEntry {
     start: number;
 }
 
+/** A `Dict`/`List` parameter whose body uses are all printable reads: the
+ *  printer re-binds the same name to a borrowed container at fn entry
+ *  (`let x = x.as_map().unwrap_or(&__x_empty);`) so every read is native. */
+export interface RustParamShadow {
+    kind: RustParamShadowKind;
+    /** the parameter name; the shadow re-binds it, the `Value` ABI is untouched. */
+    name: string;
+    declaration: ts.ParameterDeclaration;
+}
+
+/** Shadow kinds: `&IndexMap<String, Value>` / `&Vec<Value>` (D-25). */
+export type RustParamShadowKind = 'map' | 'list';
+
+/** Vocabulary of the parameter-shadow table (`RustTranspiler.rustParamShadowOf`). */
+export const RUST_PARAM_SHADOWS = {
+    MAP: 'map' as RustParamShadowKind,
+    LIST: 'list' as RustParamShadowKind,
+    /** `this.<safe*>` reads inlined natively against a shadowed dict param. */
+    SAFE_READS: new Set([
+        'safeValue', 'safeString', 'safeInteger', 'safeNumber', 'safeBool',
+        'safeDict', 'safeList',
+    ]),
+};
+
 /** Vocabulary of the declared-Dict locals table (see
  *  `RustTranspiler.rustDeclaredLocalTypeResolver`). */
 export const RUST_DECLARED_DICT_LOCALS = {
@@ -124,6 +148,9 @@ export class RustTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     methodSignatures: Record<string, { requiredCount: number }>;
     forLoopCounter: number;
+    /** The handler `message` parameter a shadow is being printed for (set only
+     *  while its method body is printed). */
+    rustProHandlerShadowParam: ts.ParameterDeclaration | undefined;
 
     constructor(config = {}) {
         config['parser'] = Object.assign({}, parserConfig, config['parser'] ?? {});
@@ -974,14 +1001,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (receiver === undefined) {
             return undefined;
         }
-        if (!ts.isStringLiteral(keyNode) || RustTranspiler.RUST_BOOK_META_KEYS.has(keyNode.text)) {
-            return undefined;
-        }
         if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
             return undefined;
         }
-        const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
-        if (!keyLiteral) {
+        const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
+        if (keyArg === undefined) {
             return undefined;
         }
         const name = receiver.text;
@@ -990,7 +1014,7 @@ export class RustTranspiler extends BaseTranspiler {
             value = `Value::Bool(${value})`;
         }
         const insert = (val: string) =>
-            `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyLiteral[1]}.to_string(), ${val}); }`;
+            `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyArg}, ${val}); }`;
         // Any mention of the receiver in the value operand reads it while the
         // write holds the `&mut` — ccxt's splitAddElementBorrowConflicts pass
         // hoists on the same signal, so mirror it with a temp binding.
@@ -1006,32 +1030,103 @@ export class RustTranspiler extends BaseTranspiler {
         return insert(value);
     }
 
-    // Receivers this unit may write natively: any local whose every path builds a plain
-    // `Value::Map` (name-independent — rust-13's four names are the batch-A subset), plus
-    // `self.<field>` on a field the hand-written base holds as a plain dict. `request` is rust-12's.
-    rustNativeInsertReceiver(expr): { text: string, isField: boolean, nameNode: any } | undefined {
-        if (ts.isIdentifier(expr) && this.rustInsertIdentifierReceiver(expr)) {
-            return { text: expr.text, isField: false, nameNode: expr };
+    /** The `insert` key argument. A literal becomes `"k".into()`; a proven
+     *  string place becomes `crate::runtime::stringify_param(&k)` — the exact
+     *  conversion the helper's dict branch applies to a non-string key, and
+     *  `k.to_string()` for a string one. */
+    rustNativeInsertKeyArg(receiver, keyNode, keyText: string): string | undefined {
+        if (ts.isStringLiteral(keyNode)) {
+            // A book-meta key can only reach the store through a `__book_id`:
+            // provable only for receivers the transpiler itself built as plain
+            // maps or the hand-written base never tags (fields).
+            if (RustTranspiler.RUST_BOOK_META_KEYS.has(keyNode.text) && !receiver.plain) {
+                return undefined;
+            }
+            const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
+            return keyLiteral === null ? undefined : `${keyLiteral[1]}.into()`;
+        }
+        // Dynamic key: a plain place, never one that reads the receiver (the
+        // insert holds its `&mut`). Every other key shape keeps the helper.
+        const key = keyText.trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            return undefined;
+        }
+        if (receiver.isField ? key.includes('self') : new RegExp(`\\b${receiver.text}\\b`).test(key)) {
+            return undefined;
+        }
+        return `crate::runtime::stringify_param(&${key})`;
+    }
+
+    // Receivers this unit may write natively: any local whose every path builds
+    // a plain `Value::Map` (name-independent — rust-13's four names are the
+    // batch-A subset of this proof), any parameter the checker proves is a
+    rustNativeInsertReceiver(expr): { text: string, isField: boolean, plain: boolean, nameNode: any } | undefined {
+        if (ts.isIdentifier(expr)) {
+            const plain = this.rustInsertIdentifierReceiver(expr);
+            if (plain !== undefined) {
+                return { text: expr.text, isField: false, plain, nameNode: expr };
+            }
+            return undefined;
         }
         if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind.ThisKeyword
             && expr.name?.kind === SyntaxKind.Identifier) {
-            return { text: `self.${expr.name.text}`, isField: true, nameNode: expr.name };
+            return {
+                text: `self.${expr.name.text}`, isField: true,
+                plain: RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(expr.name.text),
+                nameNode: expr.name,
+            };
         }
         return undefined;
     }
 
-    /** Element-write receiver proof for a local: the batch-A names (unchanged)
-     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
-     *  build on every path (rust-12's proof, read off the checker). */
-    rustInsertIdentifierReceiver(ident): boolean {
+    /** Element-write receiver proof for a local: the batch-A names (rust-13,
+     *  `plain: false` — the whitelist is not a construction proof) or, for any
+     *  other name, the dict-shape proof plus a plain-`Value::Map` build on
+     *  every path (rust-12's proof, read off the checker), or a parameter whose
+     *  annotation proves a plain dict and whose writes keep that shape. The
+     *  returned flag is the *by-construction* plainness (literal-init locals,
+     *  handler tuples, hand-written plain fields) that a book-meta key needs. */
+    rustInsertIdentifierReceiver(ident): boolean | undefined {
+        const declaration = this.rustSingleLocalDeclaration(ident);
+        if (declaration !== undefined && ts.isParameter(declaration as any)) {
+            // A default value (`params: Dict = {}`) keeps the pre-unit
+            // initializer proof — `rustReceiverStaysDict` runs both it and the
+            // annotation proof and rejects the site when neither holds.
+            const admitted = this.rustParamStaysPlainDict(declaration as ts.ParameterDeclaration)
+                || (declaration as ts.ParameterDeclaration).initializer !== undefined;
+            if (admitted) {
+                return false;
+            }
+        } else if (declaration !== undefined && ts.isVariableDeclaration(declaration as any)) {
+            if (this.rustInsertReceiverBuildsPlainDict(declaration as ts.VariableDeclaration)) {
+                return true;
+            }
+            // A local the declared-Dict table proves holds a Dict at every use
+            // (alwaysDict && stable): the helper's non-dict branches are dead,
+            // so only the tag hooks and the insert remain — the key rules of
+            if (this.rustDeclaredLocalEntry(ident) !== undefined
+                && this.rustDeclaredInitIsTagFree(declaration as ts.VariableDeclaration)) {
+                return false;
+            }
+        }
         if (RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(ident.text)) {
+            return false; // rust-13 whitelist: not a construction proof
+        }
+        return undefined;
+    }
+
+    /** A literal initializer must carry no runtime tag key; a call initializer
+     *  is the axiom the declared-Dict table itself rests on. */
+    rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean {
+        let init: any = declaration.initializer;
+        while (init !== undefined
+            && (ts.isParenthesizedExpression(init) || ts.isNonNullExpression(init) || ts.isAsExpression(init))) {
+            init = init.expression;
+        }
+        if (init === undefined || !ts.isObjectLiteralExpression(init)) {
             return true;
         }
-        const declaration = this.rustSingleLocalDeclaration(ident);
-        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
-            return false;
-        }
-        return this.rustInsertReceiverBuildsPlainDict(declaration);
+        return this.rustPlainDictLiteral(init);
     }
 
     /** True when every value the local can hold comes from an object literal:
@@ -1188,6 +1283,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
             return false;
         }
+        // The declared-Dict table is its own proof (alwaysDict && stable, D2):
+        // a table local the checker cannot type (an untyped `safe_dict*`
+        // default) still stays a Dict at every use.
+        if (this.rustDeclaredLocalEntry(ident) !== undefined) {
+            return true;
+        }
+        // A parameter with a default carries the transpiler's own initializer,
+        // so it keeps the pre-unit proof; without one only the annotation proof
+        // (`Dict`-style params — the B-25 read family) can admit it.
+        if (ts.isParameter(declaration) && this.rustParamStaysPlainDict(declaration)) {
+            return true;
+        }
         const name = ident.text;
         const initializer = declaration.initializer;
         if (initializer === undefined || ts.isElementAccessExpression(initializer)
@@ -1251,6 +1358,74 @@ export class RustTranspiler extends BaseTranspiler {
         };
         ts.forEachChild(scope, visit);
         return safe;
+    }
+
+    // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
+    // a `Market`-style alias — the proof B-25's native reads use) whose every
+    // write in the body keeps that shape: an object literal with no runtime tag
+    rustParamStaysPlainDict(declaration: ts.ParameterDeclaration): boolean {
+        if (declaration.type === undefined || declaration.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const type = this.getCheckedTypeOf(declaration.type);
+        if (type === undefined || !this.isProvenMapType(type)) {
+            return false;
+        }
+        const name = String((declaration.name as ts.Identifier).escapedText);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        let plain = true;
+        const visit = (n) => {
+            if (!plain) {
+                return;
+            }
+            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind)
+                && ts.isIdentifier(n.left) && n.left.text === name
+                && !this.rustPlainDictPreservingRhs(n.right, name)) {
+                plain = false;
+                return;
+            }
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
+                && ts.isArrayLiteralExpression(n.left)
+                && n.left.elements.some((e) => ts.isIdentifier(e) && String((e as ts.Identifier).escapedText) === name)
+                && !this.rustHandlerTupleCall(n.right)) {
+                plain = false; // a tuple write keeps only the handle-arg family
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return plain;
+    }
+
+    /** RHS of a write to a plain-dict parameter that keeps the shape. */
+    rustPlainDictPreservingRhs(node: ts.Node, name: string): boolean {
+        if (this.rustPlainDictLiteral(node) || this.rustTypeIsUndefinedish(node)) {
+            return true;
+        }
+        if (ts.isIdentifier(node) && node.text === name) {
+            return true;
+        }
+        // `this.handle…(…)` returns its own dict arguments (rust-12's proof).
+        if (this.rustHandlerTupleCall(node)) {
+            return true;
+        }
+        if (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node)) {
+            return this.rustPlainDictPreservingRhs(node.expression, name);
+        }
+        if (ts.isConditionalExpression(node)) {
+            return this.rustPlainDictPreservingRhs(node.whenTrue, name)
+                && this.rustPlainDictPreservingRhs(node.whenFalse, name);
+        }
+        if (ts.isBinaryExpression(node)
+            && (node.operatorToken.kind === SyntaxKind.BarBarToken
+                || node.operatorToken.kind === SyntaxKind.QuestionQuestionToken)) {
+            return this.rustPlainDictPreservingRhs(node.left, name)
+                && this.rustPlainDictPreservingRhs(node.right, name);
+        }
+        return false;
     }
 
     // Conservative "argument position expects a Value" bool test — the same set
@@ -1612,6 +1787,13 @@ export class RustTranspiler extends BaseTranspiler {
 
         // Handle in operator — wrap as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
+            const shadow = this.rustParamShadowOf(right);
+            if (shadow !== undefined) {
+                const native = this.printShadowInOperator(shadow, left);
+                if (native !== undefined) {
+                    return native;
+                }
+            }
             const native = this.printNativeInOperator(left, right);
             if (native !== undefined) {
                 return native;
@@ -1745,7 +1927,16 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         if (this.rustSafeStringLocalIsTyped(declaration)) {
-            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}.as_str().map(str::to_owned)`;
+            // A call to a native-`Option<String>` method already carries the
+            // native payload; the `safeString` helpers still need the unwrap.
+            const suffix = this.rustNativeStrCalleeKind(declaration.initializer) === 'str'
+                ? '' : '.as_str().map(str::to_owned)';
+            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}${suffix}`;
+        }
+
+        if (this.rustNativeStrCalleeKind(declaration.initializer) === 'str') {
+            // The callee returns `Option<String>`; this local keeps the box.
+            return `${this.getIden(identation)}let mut ${varName}: Value = ${this.rustNativeStrValueBox(parsedValue)}`;
         }
 
         return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
@@ -2015,12 +2206,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustStringLocalDecisions = new Map<any, boolean>();
 
-    // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer.
+    // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer;
+    // a call whose callee already returns `Option<String>` (a native-`Str`
+    // method) is the same payload without the unwrap.
     rustSafeStringLocalInitializer(declaration): boolean {
         const initializer = declaration.initializer;
         if (declaration.name?.kind !== SyntaxKind.Identifier
             || initializer?.kind !== SyntaxKind.CallExpression) {
             return false;
+        }
+        if (this.rustNativeStrCalleeKind(initializer) === 'str') {
+            return true;
         }
         const callee = initializer.expression;
         if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
@@ -2163,9 +2359,194 @@ export class RustTranspiler extends BaseTranspiler {
         return peeled !== undefined ? peeled : inner;
     }
 
-    // Declared-Dict locals: the checker types `safe_dict*` results `object | undefined`, so this
-    // table proves a Dict printer-side (a `safe_dict*` call with a Dict-proven default, or a
-    // `Value::Map(..)` literal, no later kind-changing write — D2) while the declaration stays `Value`.
+    // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
+    //
+    // An internal, non-override, non-async method declared `: Str`
+
+    private rustNativeStrReturnDecisions = new WeakMap<ts.Node, boolean>();
+
+    // `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
+    // (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
+    private static readonly RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;
+
+    /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
+    rustNativeStrReturnKind(node: ts.Node): string | undefined {
+        if (node === undefined || node.kind !== SyntaxKind.MethodDeclaration) {
+            return undefined;
+        }
+        const cached = this.rustNativeStrReturnDecisions.get(node);
+        if (cached !== undefined) {
+            return cached ? 'str' : undefined;
+        }
+        this.rustNativeStrReturnDecisions.set(node, false); // re-entrancy guard
+        const decision = this.rustNativeStrReturnDecisionUncached(node);
+        this.rustNativeStrReturnDecisions.set(node, decision);
+        return decision ? 'str' : undefined;
+    }
+
+    private rustNativeStrReturnDecisionUncached(node): boolean {
+        if (node.type === undefined || this.isAsyncFunction(node)) {
+            return false;
+        }
+        if (this.getMethodOverride(node) !== undefined) {
+            return false; // the base/trait copy prints `-> Value`
+        }
+        // The base classes are hand-tuned across the whole tree: their methods
+        // are called from ~every derived file (and the hand-written runtime),
+        // where the boxed `Value` ABI is load-bearing. Only per-exchange
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
+            return false;
+        }
+        let type: ts.Type;
+        try {
+            type = this.getChecker().getTypeFromTypeNode(node.type);
+        } catch (e) {
+            return false;
+        }
+        if (this.primitiveKindOfType(type) !== 'string') {
+            return false;
+        }
+        return this.rustStrReturnPathsConvert(node.body);
+    }
+
+    /** Every `return` of the method's own body converts, and the body's last
+     *  statement is one of them (so Rust sees no `()`-valued tail the
+     *  `-> Value` post-passes would have patched with `Value::Null`). */
+    rustStrReturnPathsConvert(body: ts.Block): boolean {
+        if (body === undefined) {
+            return false;
+        }
+        const statements = body.statements;
+        const last = statements[statements.length - 1];
+        if (last === undefined || !ts.isReturnStatement(last)) {
+            return false;
+        }
+        let ok = true;
+        const visit = (n: ts.Node) => {
+            if (!ok) {
+                return;
+            }
+            if (n !== body && ts.isFunctionLike(n)) {
+                return; // a nested function keeps the boxed signature
+            }
+            if (ts.isReturnStatement(n) && !this.rustStrReturnValueConverts(n.expression)) {
+                ok = false;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(body, visit);
+        return ok;
+    }
+
+    /** A `return` value of a native-`Str` method: a nullish literal, an
+     *  expression already printing an `Option<String>` (a nested retyped call
+     *  or a typed string local), or a `Value`-printing expression the checker
+     *  types `string | undefined`. */
+    rustStrReturnValueConverts(expression: ts.Node): boolean {
+        const inner = this.unwrapParensNode(expression);
+        if (inner === undefined) {
+            return false;
+        }
+        if (this.literalKindOfNode(inner) === 'null') {
+            return true;
+        }
+        if (this.rustStrNativeExpression(inner)) {
+            return true;
+        }
+        if (!this.printsValueExpression(inner)) {
+            return false;
+        }
+        return this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
+    }
+
+    /** An expression that already prints an `Option<String>` in a `: Str`
+     *  method's return position. */
+    rustStrNativeExpression(expression: ts.Node): boolean {
+        const inner = this.unwrapParensNode(expression);
+        if (inner === undefined) {
+            return false;
+        }
+        if (ts.isCallExpression(inner)) {
+            return this.rustNativeStrCalleeKind(inner) === 'str';
+        }
+        if (ts.isIdentifier(inner)) {
+            return this.rustStringLocalIdentifierIsTyped(inner);
+        }
+        return false;
+    }
+
+    unwrapParensNode(node: ts.Node): ts.Node | undefined {
+        let current = node;
+        while (current !== undefined && ts.isParenthesizedExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    /** The callee declaration behind `self.<method>(..)` when it is emitted
+     *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+    rustNativeStrCalleeKind(node: ts.Node): string | undefined {
+        if (node === undefined || node.kind !== SyntaxKind.CallExpression) {
+            return undefined;
+        }
+        let declaration: ts.Node;
+        try {
+            declaration = (this.getChecker() as any).getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration === undefined || declaration.kind !== SyntaxKind.MethodDeclaration) {
+            return undefined;
+        }
+        return this.rustNativeStrReturnKind(declaration);
+    }
+
+    /** `Option<String>` → `Value` (exact inverse of the return conversion). */
+    rustNativeStrValueBox(text: string): string {
+        return `${text}.map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
+    }
+
+    /** True when a call to a native-`Str` callee must be boxed back to a
+     *  `Value` at this position; the declaration and return printers run the
+     *  conversion themselves. */
+    rustNativeStrCallNeedsBox(node: ts.Node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while (parent !== undefined && ts.isParenthesizedExpression(parent) && parent.expression === current) {
+            current = parent;
+            parent = parent.parent;
+        }
+        if (parent === undefined) {
+            return true;
+        }
+        if (ts.isVariableDeclaration(parent) && parent.initializer === current
+            && ts.isIdentifier(parent.name)) {
+            return false; // the declaration printer binds the type / boxes it
+        }
+        if (ts.isReturnStatement(parent) && parent.expression === current) {
+            // only a native-`Str` method's own return printer runs the conversion
+            const fn: any = ts.findAncestor(parent.parent, ts.isFunctionLike);
+            return this.rustNativeStrReturnKind(fn) !== 'str';
+        }
+        return true;
+    }
+
+    /** Wrap a call text when the callee returns a native `Option<String>`
+     *  and the position still needs a `Value`. */
+    rustBoxNativeStrCallIfNeeded(node: ts.Node, text: string): string {
+        if (this.rustNativeStrCalleeKind(node) !== 'str') {
+            return text;
+        }
+        if (!this.rustNativeStrCallNeedsBox(node)) {
+            return text;
+        }
+        return this.rustNativeStrValueBox(text);
+    }
+
+    // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
+    //
+    // The printer declares non-bool locals `Value`, and the checker types a
 
     private declaredDictLocalsCache: { src: ts.SourceFile, table: Map<string, RustDeclaredDictLocalEntry[]> } | undefined;
 
@@ -2534,6 +2915,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printRustFunctionType(node): string {
+        // An internal `: Str` method that proves the conversion prints the
+        // native `Option<String>` (its returns run the conversion; callers
+        // box back where a `Value` is still needed).
+        if (this.rustNativeStrReturnKind(node) === 'str') {
+            return 'Option<String>';
+        }
         try {
             const type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
             if (type.flags === ts.TypeFlags.Void) {
@@ -2563,8 +2950,18 @@ export class RustTranspiler extends BaseTranspiler {
 
         const blockOpen = this.getBlockOpen(identation);
         const blockClose = this.getBlockClose(identation);
+        const shadows = this.rustParamShadowLines(node, identation + 2);
+        // D-27: a `handle*` method's `message: Dict` param gets a borrowed
+        // `&IndexMap` shadow so its `safe_*` reads print natively.
+        const shadowPlan = this.rustProHandlerShadowPlan(node, identation);
+        const savedShadowParam = this.rustProHandlerShadowParam;
+        if (shadowPlan !== undefined) {
+            this.rustProHandlerShadowParam = shadowPlan.param;
+        }
         const statements = node.body.statements.map(s => this.printNode(s, identation + 2)).join('\n');
-        const body = blockOpen + optionalInits + statements + blockClose;
+        this.rustProHandlerShadowParam = savedShadowParam;
+        const shadow = shadowPlan === undefined ? '' : shadowPlan.lines;
+        const body = blockOpen + optionalInits + shadows + shadow + statements + blockClose;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef + body);
     }
@@ -2616,6 +3013,18 @@ export class RustTranspiler extends BaseTranspiler {
     printCallExpression(node, identation) {
         const expression = node.expression;
 
+        // `this.safeString(<shadowed param>, 'k')` — the read inlined against
+        // the parameter shadow (D-25). Ahead of the optional-arg dispatch below,
+        // which prints the call for any callee with optional parameters
+        const shadowSafeRead = this.printShadowSafeReadCall(node);
+        if (shadowSafeRead !== undefined) return shadowSafeRead;
+
+        // D-27: `this.safe_*(message, "k")` on a shadowed WS-handler param —
+        // the native `.get("k")` match replaces the `safe_*_k` helper call.
+        // Checked first: the out-of-order path would print the boxed call for
+        const shadowRead = this.printProHandlerShadowRead(node);
+        if (shadowRead !== undefined) return shadowRead;
+
         // Handle console.log specially
         if (expression.kind === SyntaxKind.PropertyAccessExpression) {
             const exprText = expression.getText().trim();
@@ -2637,7 +3046,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
 
         const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
-        if (outOfOrder) return outOfOrder;
+        if (outOfOrder) {
+            return this.rustBoxNativeStrCallIfNeeded(node, outOfOrder);
+        }
 
         // `parseInt`/`parseFloat` on a checker-proven string: native `str::parse`
         // instead of the runtime helper the ccxt post-pass would emit.
@@ -2657,7 +3068,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
 
-        return super.printCallExpression(node, identation);
+        return this.rustBoxNativeStrCallIfNeeded(node, super.printCallExpression(node, identation));
     }
 
     printThisKeyword(node, identation) {
@@ -3009,6 +3420,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
+        // A shadowed parameter reads through the borrowed container.
+        const shadow = this.rustParamShadowOf(receiverNode);
+        if (shadow !== undefined) {
+            const native = this.printShadowContainerRead(shadow, keyNode);
+            if (native !== undefined) return native;
+        }
         if (ts.isStringLiteralLike(keyNode)) {
             return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text);
         }
@@ -3136,10 +3553,42 @@ export class RustTranspiler extends BaseTranspiler {
         return strings > 0;
     }
 
+    /** The local/parameter proof of a dynamic-key map read: a parameter whose
+     *  annotation proves a plain dict (B-25), or any local whose checker type
+     *  proves a plain map and which nothing in the enclosing function
+     *  re-assigns (D2). Returns the proven declaration. */
+    rustProvenDynamicMapReceiver(node: ts.Node): ts.Declaration | undefined {
+        const parameter = this.rustProvenDictParameter(node);
+        if (parameter !== undefined) return parameter;
+        if (!ts.isIdentifier(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return undefined;
+        if (declaration.initializer === undefined) return undefined;
+        if (!this.isProvenMapExpression(node)) return undefined;
+        if (this.rustLocalIsReassigned(declaration, String(node.escapedText))) return undefined;
+        return declaration;
+    }
+
+    /** The element-access read a key node belongs to (`x[k]`, `x[(k)]`). */
+    rustElementReadOfKey(keyNode: ts.Node): ts.Node | undefined {
+        let current: any = keyNode;
+        while (current !== undefined && (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current))) {
+            current = current.parent;
+        }
+        const parent: any = current === undefined ? undefined : current.parent;
+        if (parent === undefined || !ts.isElementAccessExpression(parent) || parent.argumentExpression !== current) return undefined;
+        return parent;
+    }
+
     /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
     printNativeDynamicMapAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
-        if (this.rustProvenDictParameter(receiverNode) === undefined) return undefined;
+        if (this.rustProvenDynamicMapReceiver(receiverNode) === undefined) return undefined;
         if (!this.rustKeyIsProvenString(keyNode)) return undefined;
+        // The ccxt `writeBackIndexedMutations` pass matches the
+        // `let x = get_value(&C, &K)` text to write a mutated `x` back into
+        // `C[K]`; the native text is invisible to it, so a bind the next
+        const read = this.rustElementReadOfKey(keyNode);
+        if (read !== undefined && this.isWriteBackBindRead(read)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();
         // A plain place keeps the borrow local; a call/temporary text does not.
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
@@ -3152,6 +3601,522 @@ export class RustTranspiler extends BaseTranspiler {
      *  key away, so a place named after one stays boxed. */
     rustNodeIsKeyUnsafePlace(keyText: string): boolean {
         return RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText);
+    }
+
+    // ── parameter shadows (`let x = x.as_map().unwrap_or(&__x_empty)`) ─────────
+    //
+    // A `Dict`/`List` parameter holds the container or `Value::Null`, and
+
+    private paramShadowCache: { src: ts.SourceFile, tables: Map<ts.Node, Map<string, RustParamShadow>> } | undefined;
+
+    /** Functions whose shadow lines were actually emitted — a read converts
+     *  only inside one of those (an arrow body prints inline and gets none). */
+    private paramShadowEmitted: { src: ts.SourceFile, fns: Set<ts.Node> } | undefined;
+
+    private rustParamShadowEmittedSet(): Set<ts.Node> {
+        const src = this.getSrc();
+        if (this.paramShadowEmitted === undefined || this.paramShadowEmitted.src !== src) {
+            this.paramShadowEmitted = { src, fns: new Set() };
+        }
+        return this.paramShadowEmitted.fns;
+    }
+
+    rustParamShadowTables(): Map<ts.Node, Map<string, RustParamShadow>> {
+        const src = this.getSrc();
+        if (this.paramShadowCache === undefined || this.paramShadowCache.src !== src) {
+            this.paramShadowCache = { src, tables: new Map() };
+        }
+        return this.paramShadowCache.tables;
+    }
+
+    /** Emitted shadow lines for a function, or '' when no parameter qualifies.
+     *  The caller must use this before printing the body statements (it both
+     *  registers the function as shadowed and computes the lines). */
+    rustParamShadowLines(fn: ts.Node, identation: number): string {
+        const table = this.rustParamShadowTable(fn);
+        if (table.size === 0) return '';
+        const idn = this.getIden(identation);
+        const lines: string[] = [];
+        for (const shadow of table.values()) {
+            const empty = `__${shadow.name}_empty`;
+            if (this.rustFunctionDeclaresName(fn, empty)) continue;
+            const map = shadow.kind === RUST_PARAM_SHADOWS.MAP;
+            const accessor = map ? 'as_map' : 'as_array';
+            lines.push(`${idn}let ${empty} = ${map ? 'indexmap::IndexMap::new()' : 'Vec::new()'};`);
+            lines.push(`${idn}let ${shadow.name} = ${shadow.name}.${accessor}().unwrap_or(&${empty});`);
+        }
+        if (lines.length === 0) return '';
+        this.rustParamShadowEmittedSet().add(fn);
+        return lines.join('\n') + '\n';
+    }
+
+    private rustParamShadowTable(fn: ts.Node): Map<string, RustParamShadow> {
+        const tables = this.rustParamShadowTables();
+        let table = tables.get(fn);
+        if (table === undefined) {
+            try {
+                table = this.collectRustParamShadows(fn);
+            } catch (e) {
+                table = new Map(); // no proof -> every read keeps its helper
+            }
+            tables.set(fn, table);
+        }
+        return table;
+    }
+
+    /** The shadow a read receiver resolves to, or undefined (no proof → helper). */
+    rustParamShadowOf(node: ts.Node): RustParamShadow | undefined {
+        if (node === undefined) return undefined;
+        let current: any = node;
+        while (current !== undefined && (ts.isParenthesizedExpression(current) ||
+            ts.isAsExpression(current) || ts.isNonNullExpression(current))) {
+            current = current.expression;
+        }
+        if (current === undefined || !ts.isIdentifier(current)) return undefined;
+        const name = String(current.escapedText);
+        const declaration = this.rustDeclarationOfIdentifier(current);
+        if (declaration === undefined || !ts.isParameter(declaration)) return undefined;
+        const emitted = this.rustParamShadowEmittedSet();
+        let scope: any = current.parent;
+        while (scope !== undefined) {
+            if (ts.isFunctionLike(scope)) {
+                const entry = emitted.has(scope) ? this.rustParamShadowTable(scope).get(name) : undefined;
+                if (entry !== undefined && entry.declaration === declaration) return entry;
+            }
+            scope = scope.parent;
+        }
+        return undefined;
+    }
+
+    /** True when the enclosing function already binds this name somewhere. */
+    private rustFunctionDeclaresName(fn: ts.Node, name: string): boolean {
+        let found = false;
+        const visit = (node: ts.Node) => {
+            if (found) return;
+            if (node !== fn && ts.isFunctionLike(node)) return; // nested closure: own scope
+            if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) {
+                found = true;
+                return;
+            }
+            if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.name.text === name) {
+                found = true;
+                return;
+            }
+            ts.forEachChild(node, visit);
+        };
+        ts.forEachChild(fn, visit);
+        return found;
+    }
+
+    private collectRustParamShadows(fn: ts.Node): Map<string, RustParamShadow> {
+        const table = new Map<string, RustParamShadow>();
+        const parameters: any[] = (fn as any).parameters ?? [];
+        const body: any = (fn as any).body;
+        if (body === undefined) return table;
+        for (const param of parameters) {
+            if (!ts.isParameter(param) || !ts.isIdentifier(param.name)) continue;
+            const name = String(param.name.escapedText);
+            if (name === 'optional_args') continue;
+            if (param.type === undefined) continue;
+            const type = this.getCheckedTypeOf(param.type);
+            if (type === undefined) continue;
+            let kind: RustParamShadowKind | undefined;
+            if (this.isProvenMapType(type)) {
+                kind = RUST_PARAM_SHADOWS.MAP;
+            } else if (this.isProvenShadowListType(type)) {
+                kind = RUST_PARAM_SHADOWS.LIST;
+            }
+            if (kind === undefined) continue;
+            if (this.rustParameterIsClientHandle(param)) continue;
+            if (this.rustParamShadowUseCensus(fn, param, kind) === undefined) continue;
+            table.set(name, { kind, name, declaration: param });
+        }
+        return table;
+    }
+
+    /** A checker-proven array parameter type (`Vec<Value>` on the rust side);
+     *  tuples are excluded (their printed shape is not a plain `Vec`). */
+    isProvenShadowListType(type: ts.Type): boolean {
+        if (type === undefined) return false;
+        if (!(type.flags & ts.TypeFlags.Object)) return false;
+        const objectFlags = ((type as any).objectFlags ?? 0) | (((type as any).target?.objectFlags) ?? 0);
+        if (objectFlags & ts.ObjectFlags.Tuple) return false;
+        if (this.hasCallableShape(type)) return false;
+        if (this.isClassInstanceType(type)) return false;
+        const name = (this.typeSymbolOf(type) as any)?.getName?.();
+        if (name === 'Array' || name === 'ReadonlyArray') return true;
+        const targetName = (this.typeSymbolOf((type as any).target) as any)?.getName?.();
+        return targetName === 'Array' || targetName === 'ReadonlyArray';
+    }
+
+    /** Every reference to the parameter must be a printable read, and at least
+     *  one must exist; anything else (a write, a `Value` pass-through, a Null
+     *  comparison, a marker key) answers undefined and the parameter keeps its
+     *  box. */
+    private rustParamShadowUseCensus(fn: ts.Node, param: ts.ParameterDeclaration, kind: RustParamShadowKind): { reads: number } | undefined {
+        const name = String((param.name as ts.Identifier).escapedText);
+        const paramSymbol = this.rustSymbolOf(param.name as ts.Identifier);
+        if (paramSymbol === undefined) return undefined;
+        let reads = 0;
+        let ok = true;
+        const visit = (node: ts.Node) => {
+            if (!ok) return;
+            if (ts.isIdentifier(node) && node.text === name && node !== param.name) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !this.rustParamUseIsRead(node, kind)) {
+                    ok = false;
+                    return;
+                }
+                reads++;
+            }
+            ts.forEachChild(node, visit);
+        };
+        ts.forEachChild((fn as any).body, visit);
+        return ok && reads > 0 ? { reads } : undefined;
+    }
+
+    /** One reference of a shadow candidate: true only for a read the shadow can
+     *  print exactly (same proofs the emitted forms re-check). */
+    private rustParamUseIsRead(id: ts.Identifier, kind: RustParamShadowKind): boolean {
+        const parent: any = id.parent;
+        if (parent === undefined) return false;
+        // `x[k]` — element read. Writes (`x[k] = v`, `x[k].push(..)`) and the
+        // post-pass write-back binds keep the box.
+        if (ts.isElementAccessExpression(parent) && parent.expression === id) {
+            if (this.isNativeWriteTargetBase(id)) return false;
+            if (!this.isNativeAccessPositionSafe(id)) return false;
+            if (this.isWriteBackBindRead(parent)) return false;
+            return this.rustShadowKeyIsReadable(parent.argumentExpression, kind);
+        }
+        // `x.length` — array length read.
+        if (ts.isPropertyAccessExpression(parent) && parent.expression === id) {
+            return kind === RUST_PARAM_SHADOWS.LIST && String(parent.name.escapedText) === 'length';
+        }
+        // `'k' in x` / `k in x`.
+        if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword && parent.right === id) {
+            if (kind !== RUST_PARAM_SHADOWS.MAP) return false;
+            return this.rustShadowKeyIsReadable(parent.left, RUST_PARAM_SHADOWS.MAP);
+        }
+        // `this.safe<Type>(x, 'k'[, default])` — the read families the shadow
+        // inlines (literal keys only). Any other call keeps the box.
+        if (ts.isCallExpression(parent) && kind === RUST_PARAM_SHADOWS.MAP) {
+            if (this.rustShadowSafeCallee(parent) === undefined) return false;
+            const args: ts.NodeArray<ts.Expression> = parent.arguments;
+            if (args[0] !== id || args.length < 2 || args.length > 3) return false;
+            return this.rustShadowKeyIsLiteral(args[1]);
+        }
+        return false;
+    }
+
+    /** A key a shadow read can print: dicts take a bare string literal or a
+     *  proven-string place, lists a literal non-negative index; the `safe_*`
+     *  inline takes the literal key form only. Marker-route key names and keys
+     *  whose text needs escaping are excluded. */
+    private rustShadowKeyIsReadable(key: any, kind: RustParamShadowKind): boolean {
+        if (key === undefined) return false;
+        if (kind === RUST_PARAM_SHADOWS.MAP) {
+            if (ts.isStringLiteralLike(key)) return this.rustShadowKeyIsLiteral(key);
+            if (ts.isIdentifier(key)) {
+                return this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText));
+            }
+            return false;
+        }
+        if (ts.isNumericLiteral(key)) {
+            const index = Number(key.text);
+            return Number.isInteger(index) && index >= 0;
+        }
+        return false;
+    }
+
+    private rustShadowKeyIsLiteral(key: any): boolean {
+        if (key === undefined || !ts.isStringLiteralLike(key)) return false;
+        const text = String(key.text);
+        return this.rustShadowKeyLiteral(text) && !this.rustNodeIsKeyUnsafePlace(text);
+    }
+
+    /** Keys whose text is safe to inline into a rust string literal. */
+    private rustShadowKeyLiteral(text: string): boolean {
+        return /^[A-Za-z0-9_./-]*$/.test(text) && text.length > 0;
+    }
+
+    /** `this.safeString`-style callee of a call, or undefined. */
+    private rustShadowSafeCallee(node: ts.CallExpression): string | undefined {
+        const callee: any = (node as any).expression;
+        if (callee === undefined || !ts.isPropertyAccessExpression(callee)) return undefined;
+        if (callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = String(callee.name.escapedText);
+        return RUST_PARAM_SHADOWS.SAFE_READS.has(name) ? name : undefined;
+    }
+
+    /** `x['k']` / `x[i]` / `'k' in x` on a shadowed parameter: the native read,
+     *  or undefined to keep the helper (the census guarantees it never happens
+     *  for an emitted shadow). */
+    printShadowContainerRead(shadow: RustParamShadow, keyNode: ts.Node): string | undefined {
+        const key: any = keyNode;
+        if (shadow.kind === RUST_PARAM_SHADOWS.MAP) {
+            if (ts.isStringLiteralLike(key)) {
+                const text = String(key.text);
+                if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
+                return `${shadow.name}.get("${text}").cloned().unwrap_or(Value::Null)`;
+            }
+            if (ts.isIdentifier(key) && this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) {
+                const keyText = this.printNode(key, 0).trim();
+                if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
+                return `${keyText}.as_str().and_then(|__k| ${shadow.name}.get(__k)).cloned().unwrap_or(Value::Null)`;
+            }
+            return undefined;
+        }
+        if (ts.isNumericLiteral(key)) {
+            const index = Number(key.text);
+            if (!Number.isInteger(index) || index < 0) return undefined;
+            return `${shadow.name}.get(${index}).cloned().unwrap_or(Value::Null)`;
+        }
+        return undefined;
+    }
+
+    /** `'k' in x` on a shadowed dict parameter. */
+    printShadowInOperator(shadow: RustParamShadow, keyNode: ts.Node): string | undefined {
+        const key: any = keyNode;
+        if (shadow.kind !== RUST_PARAM_SHADOWS.MAP) return undefined;
+        if (ts.isStringLiteralLike(key)) {
+            const text = String(key.text);
+            if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
+            return `Value::Bool(${shadow.name}.contains_key("${text}"))`;
+        }
+        if (ts.isIdentifier(key) && this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) {
+            const keyText = this.printNode(key, 0).trim();
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
+            return `Value::Bool(${keyText}.as_str().map(|__k| ${shadow.name}.contains_key(__k)).unwrap_or(false))`;
+        }
+        return undefined;
+    }
+
+    /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
+    printShadowLength(shadow: RustParamShadow): string | undefined {
+        if (shadow.kind !== RUST_PARAM_SHADOWS.LIST) return undefined;
+        return `Value::Int(${shadow.name}.len() as i64)`;
+    }
+
+    /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
+     *  runtime helper's exact semantics over `.get(..)`. */
+    printShadowSafeReadCall(node: ts.CallExpression): string | undefined {
+        const callee = this.rustShadowSafeCallee(node);
+        if (callee === undefined) return undefined;
+        const args: any[] = (node as any).arguments ?? [];
+        if (args.length < 2 || args.length > 3) return undefined;
+        const shadow = this.rustParamShadowOf(args[0]);
+        if (shadow === undefined || shadow.kind !== RUST_PARAM_SHADOWS.MAP) return undefined;
+        const key: any = args[1];
+        if (!ts.isStringLiteralLike(key)) return undefined;
+        const text = String(key.text);
+        if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
+        const fallback = args.length === 3 ? this.printNode(args[2], 0).trim() : 'Value::Null';
+        const get = `${shadow.name}.get("${text}")`;
+        // The ccxt post-pass strips the `;` of a statement ending in `};`
+        // (`[/\};(\s*\n)/g, '}$1']`), so the match — like the printer's other
+        // block-valued expressions — is parenthesized.
+        const wrap = (text: string) => `(${text})`;
+        switch (callee) {
+        case 'safeValue':
+            return wrap(`match ${get} { Some(__v) if !matches!(__v, Value::Null) && !matches!(__v, Value::Str(__s) if __s.is_empty()) => __v.clone(), _ => ${fallback} }`);
+        case 'safeString':
+            return wrap(`match ${get} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s.clone()), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${fallback} }`);
+        case 'safeInteger':
+            return wrap(`match ${get} { Some(Value::Int(__n)) => Value::Int(*__n), Some(Value::Float(__f)) => Value::Int(*__f as i64), Some(Value::Str(__s)) => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => ${fallback} } }, _ => ${fallback} }`);
+        case 'safeNumber':
+            return wrap(`match ${get} { Some(Value::Float(__f)) => Value::Float(*__f), Some(Value::Int(__n)) => Value::Float(*__n as f64), Some(Value::Str(__s)) => match __s.parse::<f64>() { Ok(__n) => Value::Float(__n), Err(_) => ${fallback} }, _ => ${fallback} }`);
+        case 'safeBool':
+            return wrap(`match ${get} { Some(Value::Bool(__b)) => Value::Bool(*__b), _ => ${fallback} }`);
+        case 'safeDict':
+            return wrap(`match ${get} { Some(__v) if matches!(__v, Value::Dict(_)) => __v.clone(), _ => ${fallback} }`);
+        case 'safeList':
+            return wrap(`match ${get} { Some(__v) if matches!(__v, Value::Arr(_)) => __v.clone(), _ => ${fallback} }`);
+        }
+        return undefined;
+    }
+
+    // ── pro-tier WS handler `message` shadow (D-27) ───────────────────────────
+    // `handle_x (client: Client, message: Dict)` is dispatched by NAME with
+    // `Value` args, so the printed signature keeps `Value`; the annotation still
+
+    /** The borrowed view bound by the shadow. */
+    private static readonly PRO_HANDLER_SHADOW_NAME = '__pro_message';
+
+    /** TS helper name -> emitted match kind. */
+    private static readonly PRO_HANDLER_SHADOW_SAFE_READS: Record<string, string> = {
+        'safeValue': 'value',
+        'safeString': 'string',
+        'safeInteger': 'integer',
+        'safeNumber': 'float',
+        'safeFloat': 'float',
+        'safeDict': 'dict',
+        'safeList': 'list',
+        'safeBool': 'bool',
+    };
+
+    /** The `message: Dict` parameter of a WS handler method (2nd param of a
+     *  `handle*` method), undefined when unproven or written (D2). */
+    rustProHandlerMessageParam(node: ts.Node): ts.ParameterDeclaration | undefined {
+        if (node === undefined || !ts.isMethodDeclaration(node) || node.body === undefined) return undefined;
+        const params: any[] = (node.parameters ?? []) as any;
+        if (params.length < 2) return undefined;
+        const methodName: any = node.name;
+        if (methodName === undefined || !/^handle[A-Z]/.test(String(methodName.escapedText ?? ''))) return undefined;
+        const param: any = params[1];
+        if (param === undefined || !ts.isIdentifier(param.name) || param.type === undefined) return undefined;
+        // The ws-handler shape `handle_x (client: Client, message: Dict)`: the
+        // message is a required parameter and the first one is the Client
+        // class handle. (Base helpers like `handleMarginModeAndParams
+        if (param.initializer !== undefined || param.questionToken !== undefined) return undefined;
+        const clientParam: any = params[0];
+        if (clientParam === undefined || clientParam.type === undefined) return undefined;
+        const clientType = this.getCheckedTypeOf(clientParam.type);
+        if (clientType === undefined || !this.isClassInstanceType(clientType)) return undefined;
+        const type = this.getCheckedTypeOf(param.type);
+        if (type === undefined || !this.isProvenMapType(type)) return undefined;
+        const name = String(param.name.escapedText);
+        return this.rustProHandlerParamIsWritten(param, name) ? undefined : param;
+    }
+
+    /** D2: a write rooted at the parameter (reassignment, element/property
+     *  write, a merge/splice onto it) can reshape the dict after the shadow is
+     *  taken — the shadow is skipped and every read keeps the helper. */
+    rustProHandlerParamIsWritten(param: ts.ParameterDeclaration, name: string): boolean {
+        if (this.rustLocalIsReassigned(param, name)) return true;
+        const scope = this.rustEnclosingFunction(param);
+        if (scope === undefined) return true;
+        const merging = ['deepExtend', 'extend', 'addElementToObject', 'remove'];
+        let written = false;
+        const visit = (n: ts.Node) => {
+            if (written) return;
+            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) &&
+                this.rootPlaceText(n.left) === name) {
+                written = true;
+                return;
+            }
+            if (ts.isCallExpression(n) && n.arguments.length > 0 && ts.isIdentifier(n.arguments[0]) &&
+                (n.arguments[0] as any).escapedText === name) {
+                const callee: any = n.expression;
+                const calleeName = ts.isPropertyAccessExpression(callee) ? String(callee.name?.escapedText ?? '') :
+                    ts.isIdentifier(callee) ? String(callee.escapedText ?? '') : '';
+                if (merging.includes(calleeName)) {
+                    written = true;
+                    return;
+                }
+            }
+            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
+                n.expression.name?.text === 'push' && this.rootPlaceText(n.expression.expression) === name) {
+                written = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return written;
+    }
+
+    /** Shadow plan for a handler: the parameter plus the two binding lines,
+     *  present only when some body read actually turns native (no dead shed). */
+    rustProHandlerShadowPlan(node: ts.Node, identation: number): { param: ts.ParameterDeclaration, lines: string } | undefined {
+        const param = this.rustProHandlerMessageParam(node);
+        if (param === undefined) return undefined;
+        // a D-25 parameter shadow already rebinds the name to the borrowed map; its reads are native
+        if (this.rustParamShadowTable(node).has(String((param.name as any).escapedText))) return undefined;
+        const saved = this.rustProHandlerShadowParam;
+        this.rustProHandlerShadowParam = param;
+        let hasRead = false;
+        const scope = this.rustEnclosingFunction(param);
+        const visit = (n: ts.Node) => {
+            if (hasRead) return;
+            if (ts.isCallExpression(n) && this.printProHandlerShadowRead(n, true) !== undefined) {
+                hasRead = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        this.rustProHandlerShadowParam = saved;
+        if (!hasRead) return undefined;
+        const name = String((param.name as any).escapedText);
+        const view = RustTranspiler.PRO_HANDLER_SHADOW_NAME;
+        const arc = `${view}_arc`;
+        const map = 'indexmap::IndexMap<String, Value>';
+        const ind = this.getIden(identation + 2);
+        const lines =
+            `${ind}let ${arc}: std::sync::Arc<${map}> = (match &${name} { Value::Dict(__d) => __d.clone(), _ => std::sync::Arc::new(indexmap::IndexMap::new()) });\n` +
+            `${ind}let ${view}: &${map} = &${arc};\n`;
+        return { param, lines };
+    }
+
+    /** The `safe_*` call on the shadowed parameter prints as a native
+     *  `.get("k")` match, or undefined when the call is not one. In `probe`
+     *  mode the shape is checked without printing (the pre-scan must not print
+     *  a node twice). */
+    printProHandlerShadowRead(node: ts.Node, probe = false): string | undefined {
+        const param = this.rustProHandlerShadowParam;
+        if (param === undefined || node === undefined || !ts.isCallExpression(node)) return undefined;
+        const callee: any = node.expression;
+        if (callee === undefined || !ts.isPropertyAccessExpression(callee)) return undefined;
+        if (callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const kind = RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS[String(callee.name?.escapedText ?? '')];
+        if (kind === undefined) return undefined;
+        const args: any[] = (node.arguments ?? []) as any;
+        if (args.length < 2 || args.length > 3) return undefined;
+        const receiver: any = args[0];
+        if (receiver === undefined || receiver.kind !== SyntaxKind.Identifier) return undefined;
+        if (this.rustDeclarationOfIdentifier(receiver) !== param) return undefined;
+        const key: any = args[1];
+        if (key === undefined || !ts.isStringLiteral(key)) return undefined;
+        const keyText = key.text;
+        if (keyText === '' || RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText)) return undefined;
+        if (args.length === 3 && !this.rustProHandlerShadowDefaultShape(args[2])) return undefined;
+        if (probe) return 'native';
+        const dflt = args.length === 3 ? this.rustProHandlerShadowDefault(args[2]) : 'Value::Null';
+        if (dflt === undefined) return undefined;
+        return this.rustProHandlerShadowReadText(kind, this.escapeRustStringLiteral(keyText), dflt);
+    }
+
+    /** A miss-arm default the match can hold: absent (`Value::Null`) or a
+     *  literal; a computed default keeps the helper (its Value is not
+     *  re-printable inside an arm without re-evaluating it twice). */
+    rustProHandlerShadowDefaultShape(node: ts.Node): boolean {
+        return node.kind === SyntaxKind.StringLiteral || node.kind === SyntaxKind.NumericLiteral ||
+            node.kind === SyntaxKind.TrueKeyword || node.kind === SyntaxKind.FalseKeyword ||
+            node.kind === SyntaxKind.NullKeyword || node.kind === SyntaxKind.ArrayLiteralExpression ||
+            node.kind === SyntaxKind.ObjectLiteralExpression ||
+            (ts.isIdentifier(node) && (node as any).escapedText === 'undefined');
+    }
+
+    rustProHandlerShadowDefault(node: ts.Node): string | undefined {
+        if (!this.rustProHandlerShadowDefaultShape(node)) return undefined;
+        const text = this.printNode(node, 0).trim();
+        return text === '' ? undefined : text;
+    }
+
+    /** Exact native form of the runtime `_k` helper: same value kinds, same
+     *  empty-string-is-missing rule, same default (verified against
+     *  `exchange_stubs.rs`). `.cloned()` keeps the emitted line clone-free for
+     *  the ccxt clone-pruning passes; the parenthesised `match` keeps the
+     *  driver's `};` trailing-block replacement off the statement's `;`. */
+    rustProHandlerShadowReadText(kind: string, key: string, dflt: string): string {
+        const m = RustTranspiler.PRO_HANDLER_SHADOW_NAME;
+        const at = `${m}.get("${key}").cloned()`;
+        switch (kind) {
+        case 'value':
+            return `(match ${at} { Some(Value::Str(__s)) if __s.is_empty() => ${dflt}, Some(__v) => __v, None => ${dflt} })`;
+        case 'string':
+            return `(match ${at} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${dflt} })`;
+        case 'integer':
+            return `(match ${at} { Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => ${dflt} } }, _ => ${dflt} })`;
+        case 'float':
+            return `(match ${at} { Some(Value::Float(__f)) => Value::Float(__f), Some(Value::Int(__n)) => Value::Float(__n as f64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<f64>() { Ok(__f) => Value::Float(__f), Err(_) => ${dflt} }, _ => ${dflt} })`;
+        case 'dict':
+            return `(match ${at} { Some(__v) if matches!(__v, Value::Dict(_)) => __v, _ => ${dflt} })`;
+        case 'list':
+            return `(match ${at} { Some(__v) if matches!(__v, Value::Arr(_)) => __v, _ => ${dflt} })`;
+        case 'bool':
+            return `(match ${at} { Some(__v) if matches!(__v, Value::Bool(_)) => __v, _ => ${dflt} })`;
+        }
+        return undefined;
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined {
@@ -3395,9 +4360,12 @@ export class RustTranspiler extends BaseTranspiler {
                 const callee = current.expression;
                 // Same-place receiver (`x.push(x[0])`) is rewritten to `&mut x` args.
                 if (root !== undefined && this.rootPlaceText(callee.expression) === root) return false;
-                // `&mut self.<method>(...)` arg lists are hoisted by the ccxt pass.
+                // `&mut self.<method>(...)` arg lists are hoisted by the ccxt
+                // pass because a `&self` reborrow conflicts with the outer
+                // `&mut self`. A read of a local or a parameter performs no
                 if (callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
-                    RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText)))) return false;
+                    RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))) &&
+                    (root === undefined || root === 'this' || root.startsWith('this.'))) return false;
             }
             current = current.parent;
         }
@@ -3437,6 +4405,11 @@ export class RustTranspiler extends BaseTranspiler {
         // generated file matches the pinned baseline for non-length accesses.
         const leftExpr = this.printNode(node.expression, 0);
         if (rightSide === 'length') {
+            const shadow = this.rustParamShadowOf(node.expression);
+            if (shadow !== undefined) {
+                const native = this.printShadowLength(shadow);
+                if (native !== undefined) return native;
+            }
             return this.printArrayLength(node, 0, leftExpr);
         }
         return undefined;
@@ -4125,6 +5098,19 @@ export class RustTranspiler extends BaseTranspiler {
         const exp = node.expression;
         if (!exp) {
             return `${this.getIden(identation)}return;`;
+        }
+        // `return X;` inside a native-`Option<String>` method: the printed
+        // expression is still the `Value` box, so convert it back to the
+        // native payload (a nullish literal is the `None` arm).
+        const fn: any = ts.findAncestor(node.parent, ts.isFunctionLike);
+        if (this.rustNativeStrReturnKind(fn) === 'str' && this.rustStrReturnValueConverts(exp)) {
+            const inner = this.unwrapParensNode(exp);
+            if (this.literalKindOfNode(inner) === 'null') {
+                return `${this.getIden(identation)}return None;`;
+            }
+            const text = this.printNode(exp, 0).trim();
+            const suffix = this.rustStrNativeExpression(exp) ? '' : '.as_str().map(str::to_owned)';
+            return `${this.getIden(identation)}return ${text}${suffix};`;
         }
         const rightPart = this.printNode(exp, 0).trim();
         return `${this.getIden(identation)}return ${rightPart};`;

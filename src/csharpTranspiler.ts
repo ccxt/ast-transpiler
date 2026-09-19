@@ -392,6 +392,15 @@ function csharpParseFloatLiteralArgument(arg) {
 // read rule leaves them to that family and covers every other declared-collection local
 const CSHARP_MARKET_RECEIVER_NAMES = [ 'market', 'currency' ];
 
+// Parameters of a method whose override chain the ts/src census cleared: every declaration (base
+// member + every override) maps to the same spelling AND every call site in the generated tree
+// passes a compatible argument, so the whole-language build stays green. The three surviving
+const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string } } = {
+    ethRpc: { 2: 'IList<object>' },
+    parsePredictionOpenInterest: { 0: 'IDictionary<string, object>' },
+    signEvmTransaction: { 0: 'IDictionary<string, object>' },
+};
+
 
 // a leading cast of the printed expression: `(IList<object>)(x)` names the receiver's static type
 const CSHARP_LENGTH_CAST = /^\(([A-Za-z_][\w.]*(?:<[^<>]*(?:<[^<>]*>)?[^<>]*>)?)\)/;
@@ -424,6 +433,16 @@ export class CSharpTranspiler extends BaseTranspiler {
     // prefix is final, so every later read of the local is statically that type and its
     // members may replace inOp/getArrayLength
     csharpTypedLocals = new WeakMap<ts.Node, string>();
+    // ws handler `message` parameter -> the typed signature this printer prints for it (D-19)
+    csharpHandlerMessageTypes = new WeakMap<ts.Node, string | undefined>();
+    // method declaration -> a static call reference exists (a call binds its arguments)
+    csharpHandlerCalled = new WeakMap<ts.Node, boolean>();
+    // class declaration -> the class routes the raw message through a list test
+    csharpListRouteClasses = new WeakMap<ts.Node, boolean>();
+    // source file -> method symbol -> a static call reference exists (built once per file: a
+    // sticky batch program is shared by every file of the stage, so a program-keyed index
+    // would answer for another venue's class)
+    csharpHandlerCallIndex = new WeakMap<ts.Node, Map<ts.Symbol, boolean>>();
     // parameter node -> the type the printed signature gives it (printParameterType, e.g.
     // `Dict` -> Dictionary<string, object>), recorded as the signature is printed. Read-only:
     // no printer rule consults it, see csharpPrintedParamType
@@ -1366,6 +1385,195 @@ export class CSharpTranspiler extends BaseTranspiler {
         return rewritten;
     }
 
+    // ===== ws handler `message` parameter (batch D, D-19) =====
+    // A ws handler `handleX (client: Client, message: Dict)` is reached at runtime either
+    // through a dispatch-table entry (`{ "k", this.handleX }` -> DynamicInvoker) or a direct
+    csharpHandlerMessageType(param): string | undefined {
+        if (this.csharpHandlerMessageTypes.has(param)) {
+            return this.csharpHandlerMessageTypes.get(param);
+        }
+        let result: string | undefined = undefined;
+        const method: any = param?.parent;
+        if (ts.isMethodDeclaration(method) && (method.parameters.length >= 2) && (method.parameters[1] === param)) {
+            if ((this.csharpCheckerTypeName(method.parameters[0]) === 'Client') &&
+                (this.csharpCheckerTypeName(param) === 'Dict') &&
+                (this.getMethodOverride(method) === undefined) &&
+                !this.csharpReceiverIsRewritten(method, param.name) &&
+                !this.csharpHandlerIsCalled(method) &&
+                !this.csharpClassHasListRoute(method)) {
+                result = this.ArgTypeReplacements['Dict'] ?? 'Dictionary<string, object>';
+            }
+        }
+        this.csharpHandlerMessageTypes.set(param, result);
+        return result;
+    }
+
+    // the type name the checker prints for a node's type, or undefined in an in-memory
+    // program (no checker answer: the printer keeps its own)
+    csharpCheckerTypeName(node): string | undefined {
+        if (node === undefined) {
+            return undefined;
+        }
+        try {
+            const checker = this.getChecker();
+            const type = checker.getTypeAtLocation(node);
+            return (type === undefined) ? undefined : checker.typeToString(type);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    csharpEnclosingClass(node): any | undefined {
+        let current: any = node?.parent;
+        while (current !== undefined) {
+            if (ts.isClassDeclaration(current) || ts.isClassExpression(current)) {
+                return current;
+            }
+            current = current.parent;
+        }
+        return undefined;
+    }
+
+    // the identifier is the raw `message` parameter of a handler-shaped method (a `Client`
+    // first parameter, so `handleMessage` with its `any` annotation included): the class can
+    // route that same value through its list arm
+    csharpIsHandlerMessageIdentifier(node): boolean {
+        if (!ts.isIdentifier(node)) {
+            return false;
+        }
+        try {
+            const declaration: any = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+            if ((declaration === undefined) || !ts.isParameter(declaration)) {
+                return false;
+            }
+            const owner: any = declaration.parent;
+            return ts.isMethodDeclaration(owner) && (owner.parameters.length >= 2) &&
+                (owner.parameters[1] === declaration) && (this.csharpCheckerTypeName(owner.parameters[0]) === 'Client');
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // a class that tests the message (or another dict parameter) for a list can hand the
+    // array itself to a dispatch-table entry (binance `'x@arr'`), so its handlers keep the
+    // box; a class testing unrelated lists (an array-typed `symbols` parameter, a field of
+    csharpClassHasListRoute(method): boolean {
+        const cls = this.csharpEnclosingClass(method);
+        if (cls === undefined) {
+            return true; // no class, no proof
+        }
+        const cached = this.csharpListRouteClasses.get(cls);
+        if (cached !== undefined) {
+            return cached;
+        }
+        let found = false;
+        const walk = (n: any) => {
+            if (found) {
+                return;
+            }
+            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
+                ((n.expression as any).expression?.escapedText === 'Array') && ((n.expression as any).name?.escapedText === 'isArray')) {
+                const argument: any = n.arguments[0];
+                if (this.csharpIsHandlerMessageIdentifier(argument)) {
+                    found = true;
+                    return;
+                }
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(cls);
+        this.csharpListRouteClasses.set(cls, found);
+        return found;
+    }
+
+    // a static call reference (`this.handleX (…)`) binds the argument to the printed
+    // signature; a method-group value (a dispatch-table entry) does not
+    csharpHandlerIsCalled(method): boolean {
+        const cached = this.csharpHandlerCalled.get(method);
+        if (cached !== undefined) {
+            return cached;
+        }
+        let called = true; // no symbol answer: keep the box
+        const cls = this.csharpEnclosingClass(method);
+        let file: any;
+        try {
+            file = method.getSourceFile();
+        } catch (e) {
+            file = undefined;
+        }
+        if ((cls !== undefined) && (file !== undefined)) {
+            try {
+                const symbol = this.getChecker().getSymbolAtLocation(method.name);
+                if (symbol !== undefined) {
+                    called = this.csharpHandlerCallIndexFor(file).get(symbol) === true;
+                }
+            } catch (e) {
+                called = true;
+            }
+        }
+        this.csharpHandlerCalled.set(method, called);
+        return called;
+    }
+
+    // every identifier of the FILE that resolves to one of its classes' own method names,
+    // recorded as a call when it is the callee of a call expression; keyed by symbol, so a
+    // same-named method of another class never marks this one
+    csharpHandlerCallIndexFor(file): Map<ts.Symbol, boolean> {
+        const cached = this.csharpHandlerCallIndex.get(file);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const names = new Set<string>();
+        const collect = (n: any) => {
+            if (ts.isClassDeclaration(n) || ts.isClassExpression(n)) {
+                for (const member of n.members) {
+                    const name: any = (member as any).name?.escapedText;
+                    if (ts.isMethodDeclaration(member) && (name !== undefined)) {
+                        names.add(name);
+                    }
+                }
+            }
+            ts.forEachChild(n, collect);
+        };
+        collect(file);
+        const index = new Map<ts.Symbol, boolean>();
+        if (names.size > 0) {
+            let checker;
+            try {
+                checker = this.getChecker();
+            } catch (e) {
+                checker = undefined;
+            }
+            if (checker !== undefined) {
+                const walk = (n: any) => {
+                    if (ts.isIdentifier(n) && names.has(n.escapedText as string)) {
+                        let symbol;
+                        try {
+                            symbol = checker.getSymbolAtLocation(n);
+                        } catch (e) {
+                            symbol = undefined;
+                        }
+                        if (symbol !== undefined) {
+                            const parent: any = n.parent;
+                            const isCall = (ts.isPropertyAccessExpression(parent) && (parent.name === n) &&
+                                ts.isCallExpression(parent.parent) && (parent.parent.expression === parent)) ||
+                                (ts.isCallExpression(parent) && (parent.expression === n));
+                            if (isCall) {
+                                index.set(symbol, true);
+                            } else if (index.get(symbol) === undefined) {
+                                index.set(symbol, false);
+                            }
+                        }
+                    }
+                    ts.forEachChild(n, walk);
+                };
+                walk(file);
+            }
+        }
+        this.csharpHandlerCallIndex.set(file, index);
+        return index;
+    }
+
     csharpHasKeyRemoval(func, expression, key): boolean {
         const text = expression.getText();
         let removed = false;
@@ -2096,9 +2304,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             leftType = this.csharpDeclaredReadEqualityType(left, leftType);
             rightType = this.csharpDeclaredReadEqualityType(right, rightType);
         }
-        if ((leftType === undefined) || (rightType === undefined)) {
-            return undefined;
-        }
+        // D-21: an operand the printer could not name (or only named `object`) is not a
+        // rejection by itself -- the value branch below re-reads its DECLARED scalar type
         if (leftType === 'null') {
             if (!this.csharpIsNullComparableType(rightType) || !this.csharpOperandIsNullComparable(right)) {
                 return undefined;
@@ -2111,22 +2318,41 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             return this.csharpNullComparison(leftText, isEquality);
         }
+        // D-21: a read the printer's own tables could only call `object` still has the C# type
+        // its emitted DECLARATION carries -- a parameter the build layer's typing pass narrowed,
+        // a local retyped to the type of a typed return. The declared-read arm below names it.
         const leftKind = this.csharpValueEqualityKind(leftType);
         const rightKind = this.csharpValueEqualityKind(rightType);
-        if ((leftKind === undefined) || (rightKind === undefined)) {
+        const leftReadKind = (leftKind !== undefined) ? leftKind : this.csharpDeclaredReadEqualityKind(left, leftType);
+        const rightReadKind = (rightKind !== undefined) ? rightKind : this.csharpDeclaredReadEqualityKind(right, rightType);
+        if ((leftReadKind === undefined) || (rightReadKind === undefined)) {
             return undefined;
         }
         // mixed numeric kinds are not equal in isEqual: `int` vs `double` takes the
         // `(int)a == (int)b` branch and throws on the boxed double, so only a numeric
         // literal may meet a different numeric type
         const numericKinds = [ 'double', 'Int64', 'int' ];
-        const sameKind = (leftKind === rightKind);
-        const literalVsNumeric = ((leftKind === 'number') && (numericKinds.indexOf(rightKind) >= 0))
-            || ((rightKind === 'number') && (numericKinds.indexOf(leftKind) >= 0));
+        const sameKind = (leftReadKind === rightReadKind);
+        const literalVsNumeric = ((leftReadKind === 'number') && (numericKinds.indexOf(rightReadKind) >= 0))
+            || ((rightReadKind === 'number') && (numericKinds.indexOf(leftReadKind) >= 0));
         if (!sameKind && !literalVsNumeric) {
             return undefined;
         }
         return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+
+    // the value kind of an operand the printer could only call `object`: the type the read's
+    // declaration was PRINTED with (printer table -> build layer's read-type oracle -> the
+    // declared-type registry for the declarations its own passes retyped). A collection/class
+    csharpDeclaredReadEqualityKind(node, operandType: string | undefined): string | undefined {
+        if ((operandType !== undefined) && (operandType !== '') && (operandType !== 'object')) {
+            return undefined; // the printer named a non-value C# type: never a value comparison
+        }
+        if ((node?.kind !== ts.SyntaxKind.Identifier) || (node.escapedText === 'undefined')) {
+            return undefined; // parameters of a written body / accesses / calls are other units
+        }
+        const declared = this.csharpDeclaredReadType(node) ?? this.csharpDeclaredLocalResolverType(node);
+        return (declared === undefined) ? undefined : this.csharpValueEqualityKind(declared);
     }
 
     csharpNullComparison(text: string, isEquality: boolean) {
@@ -3676,11 +3902,77 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.printNode(node.expression, identation);
     }
 
+    // A parameter of a method that participates in an override relation prints the spelling its
+    // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES; D8): C# is
+    // invariant on override parameter types, so a half-retyped name is CS0115, while a name the
+    printParameterType(node) {
+        if (node === undefined || node.kind !== ts.SyntaxKind.Parameter) {
+            return super.printParameterType(node);
+        }
+        const method = ts.findAncestor(node, (n) => ts.isMethodDeclaration(n));
+        const name = method === undefined || method.name === undefined ? undefined : method.name.getText().trim();
+        const row = name === undefined ? undefined : CSHARP_OVERRIDE_PARAM_TYPES[name as string];
+        const wanted = row === undefined ? undefined : row[method.parameters.indexOf(node)];
+        if (wanted === undefined || this.csharpOverrideParamSpelling(node) !== wanted) {
+            return super.printParameterType(node);
+        }
+        return wanted;
+    }
+
+    // checker spelling of a parameter the override table covers: a dictionary-shaped type (string
+    // index signature, never a class instance or a callable) or an array of any/dictionary cells
+    csharpOverrideParamSpelling(node): string | undefined {
+        const type = this.getChecker().getTypeAtLocation(node);
+        const rest = (type === undefined || !type.isUnion())
+            ? type
+            : type.types.filter((m) => !(m.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)))[0];
+        return this.csharpOverrideParamSpellingOfType(rest, type !== undefined && type.isUnion()
+            ? type.types.filter((m) => !(m.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null))).length
+            : 1);
+    }
+
+    csharpOverrideParamSpellingOfType(type, unionArms = 1): string | undefined {
+        if (type === undefined || unionArms !== 1) {
+            return undefined;
+        }
+        if (type.flags & (ts.TypeFlags.TypeParameter | ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.EnumLike)) {
+            return undefined;
+        }
+        const checker = this.getChecker();
+        if (checker.isArrayType(type) || checker.isTupleType(type)) {
+            const el = (checker.getTypeArguments(type) || [])[0];
+            if (el === undefined) {
+                return undefined;
+            }
+            if (el.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
+                return 'IList<object>';
+            }
+            return this.csharpOverrideParamSpellingOfType(el) === 'IDictionary<string, object>' ? 'IList<object>' : undefined;
+        }
+        if (checker.getIndexTypeOfType(type, ts.IndexKind.String) === undefined) {
+            return undefined;
+        }
+        const declarations = type.symbol && type.symbol.declarations ? type.symbol.declarations : [];
+        if (declarations.some((d) => d.kind === ts.SyntaxKind.ClassDeclaration)) {
+            return undefined;   // a class instance is not a JSON dictionary
+        }
+        if (type.getCallSignatures && type.getCallSignatures().length > 0) {
+            return undefined;   // a callable is not a JSON dictionary
+        }
+        return 'IDictionary<string, object>';
+    }
+
     printParameter(node, defaultValue = true) {
         const name = this.printNode(node.name, 0);
         const initializer = node.initializer;
 
-        let type = this.printParameterType(node);
+        const handlerType = this.csharpHandlerMessageType(node);
+        if (handlerType !== undefined) {
+            // the printed declaration is final, so every read of the parameter is that
+            // dictionary and the member reads replace getValue/getArrayLength/inOp
+            this.csharpTypedLocals.set(node, handlerType);
+        }
+        let type = handlerType !== undefined ? handlerType : this.printParameterType(node);
         type = type ? type : "";
         this.csharpParamTypes.set(node, type); // see csharpPrintedParamType
 
@@ -4704,10 +4996,46 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (value?.kind === ts.SyntaxKind.ParenthesizedExpression) {
             value = value.expression;
         }
-        if (value?.kind !== ts.SyntaxKind.Identifier || this.csharpDeclaredLocalType(value) !== 'bool?') {
+        if (value?.kind === ts.SyntaxKind.Identifier) {
+            if (this.csharpDeclaredLocalType(value) === 'bool?') {
+                return `(${this.printNode(value, 0)} == true)`;
+            }
+            // a declaration the embedding build layer retyped itself — the parameter/override
+            // signatures the typed-param units print: the recorded type IS the emitted
+            // declaration's, so a `bool?` parameter is no C# condition either
+            if (this.csharpDeclaredLocalResolverType(value) === 'bool?') {
+                return `(${this.printNode(value, 0)} == true)`;
+            }
             return undefined;
         }
-        return `(${this.printNode(value, 0)} == true)`;
+        if ((value?.kind === ts.SyntaxKind.CallExpression) && this.csharpCallPrintsNullableBool(value)) {
+            return `(${this.printNode(value, 0)} == true)`;
+        }
+        return undefined;
+    }
+
+    // a call whose printed C# signature is `bool?`: the `bool? safeBool(...)` family of the
+    // hand-written base (CSHARP_THIS_RETURN_TYPES, which names that signature), and a
+    // `this.<name>(...)` whose TS declaration the generator itself prints — definition and call
+    csharpCallPrintsNullableBool(node): boolean {
+        if (this.csharpCallReturnType(node) === 'bool?') {
+            return true;
+        }
+        const callee = this.csharpCalleeName_Native(node);
+        if (callee === undefined || callee.indexOf('this.') !== 0) {
+            return false;
+        }
+        if (CSHARP_HANDWRITTEN_CALLEES_NATIVE.indexOf(callee.substring('this.'.length)) > -1) {
+            return false;
+        }
+        if (!this.csharpCalleeResolves(node)) {
+            return false;
+        }
+        const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        if (declaration?.kind !== ts.SyntaxKind.MethodDeclaration || declaration.body === undefined) {
+            return false;
+        }
+        return this.csharpBooleanReturnType(declaration) === 'bool?';
     }
 
     // same emission as the base implementation except for the bare-bool branch: the node is
