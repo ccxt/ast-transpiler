@@ -2645,14 +2645,17 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain('GetValue(m, "a")');
     });
-    test('GetValue stays for an array index: nil slice and out-of-range read as nil', () => {
+    test('an array index on a declared []any prints the guarded read: nil slice and out-of-range read as nil', () => {
         const input =
         "function f() {\n" +
         "    const a = [1, 2, 3];\n" +
         "    return a[0];\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain('GetValue(a, 0)');
+        // D-06: the guarded native index answers the same nil GetValue answered for an
+        // out-of-range index (and for a nil slice), where a bare subscript would panic
+        expect(output).toContain('if 0 >= 0 && 0 < len(a) {\n\t\t\treturn DerefScalar(a[0])\n\t\t}\n\t\treturn nil\n\t}()');
+        expect(output).not.toContain('GetValue(a, 0)');
     });
     test('a typed map assignment target assigns through the same native index', () => {
         const input =
@@ -5403,5 +5406,162 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(nodepath.join(src, 'ex.ts')).content;
         expect(output).toContain('func (this *ex) ParseData(data any) any {');
         nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+    });
+});
+||||||| 73052b6
+
+// D-06: an element read on a receiver whose printed Go declaration is a `[]any` slice
+// (a slice literal, a `[]any`-returning accessor, the SafeList unbox) prints the guarded
+// native index instead of GetValue(x, key) — the guard reproduces the helper's answer for
+// an absent index (nil) while the native index cannot panic.
+describe('go GetValue(x, key) -> guarded native index on a declared []any', () => {
+    const squash = (output: string) => output.replace(/[\t\n ]+/g, ' ');
+    const transpile = (ts: string) => squash(transpiler.transpileGo(ts).content);
+
+    test('a loop read on a local declared []any prints the guarded native index', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        for (let i = 0; i < list.length; i++) {\n" +
+        "            const v = list[i];\n" +
+        "            a += v;\n" +
+        "        }\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('var list []any = []any{}');
+        expect(output).toContain('for i := 0; i < len(list); i++');
+        expect(output).toContain('if i >= 0 && i < len(list) { return DerefScalar(list[i]) } return nil }()');
+        expect(output).not.toContain('GetValue(list');
+    });
+
+    test('a literal index on a local declared []any prints the guarded native index', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        return list[0];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('if 0 >= 0 && 0 < len(list) { return DerefScalar(list[0]) } return nil }()');
+        expect(output).not.toContain('GetValue(list');
+    });
+
+    test('an int arithmetic key prints the guarded native index', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const v = list[i + 1];\n" +
+        "            a += v;\n" +
+        "        }\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('if i+1 >= 0 && i+1 < len(list) { return DerefScalar(list[i+1]) } return nil }()');
+        expect(output).not.toContain('GetValue(list');
+    });
+
+    test('only the first step of a nested read goes native; the rest keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        for (let i = 0; i < list.length; i++) {\n" +
+        "            const v = list[i]['k'];\n" +
+        "            a += v;\n" +
+        "        }\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('GetValue(func() any { if i >= 0 && i < len(list) { return DerefScalar(list[i]) } return nil }(), "k")');
+    });
+
+    test('a key the printer cannot prove an int keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        const k = 'x';\n" +
+        "        return list[k];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('GetValue(list, k)');
+        expect(output).not.toContain('DerefScalar(list[');
+    });
+
+    test('a call key keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    g (a: any) { return 1; }\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        return list[this.g(a)];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('GetValue(list, this.G(a))');
+        expect(output).not.toContain('DerefScalar(list[');
+    });
+
+    test('an any box keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const box = this.safeValue(a, 'k');\n" +
+        "        return box[0];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('GetValue(box, 0)');
+    });
+
+    test('a non-[]any slice keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const parts = a.split(',');\n" +
+        "        return parts[0];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('GetValue(parts, 0)');
+    });
+
+    test('a local written a value of another printed type is declared any and keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        let list = [];\n" +
+        "        list = a;\n" +
+        "        return list[0];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('var list any = []any{}');
+        expect(output).toContain('GetValue(list, 0)');
+    });
+
+    test('an element write on a []any local keeps the helper write', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const list = [];\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            list[i] = a;\n" +
+        "        }\n" +
+        "        return list;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpile(ts);
+        expect(output).toContain('AddElementToObject(list, i, a)');
+        expect(output).not.toContain('DerefScalar(list[');
     });
 });

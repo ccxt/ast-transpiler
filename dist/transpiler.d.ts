@@ -1164,6 +1164,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goIntIndexExpression(node: any): boolean;
     goIntOperandIdentifier(node: any): boolean;
     goSafeListUnboxIdentifier(node: any): boolean;
+    goDeclaredListIdentifier(node: any): boolean;
     goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: ts.Node): boolean;
