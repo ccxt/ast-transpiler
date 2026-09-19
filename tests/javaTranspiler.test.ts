@@ -6869,3 +6869,83 @@ describe('objectKeys on a declared map local', () => {
         expect(output).toContain('Helpers.objectKeys(this.options)');
     });
 });
+// D-09: internal (non-override) generated methods print the native Java type named by the
+// TS annotation (Map<String, Object> for dict-shaped types, String for Str, Boolean for
+// Bool) when EVERY return statement of the body already prints that type. A method a base
+// class declares (D8), an async method and any body whose returns are not provable keep the
+// boxed `Object` signature. The fixtures mirror the repository layout because the rule is
+// gated on the declaration living in a generated tier file (ts/src/<name>.ts).
+describe('java native return types of internal methods (d09)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-javad09');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuefake.ts');
+    const TYPES_SOURCE =
+        "export type Dict = Record<string, any>;\n" +
+        "export type Str = string | undefined;\n" +
+        "export type Bool = boolean | undefined;\n";
+    const VENUE_SOURCE =
+        "import { Dict, Str, Bool } from './base/types';\n" +
+        "interface Row { [key: string]: any }\n" +
+        "class BaseFake {\n" +
+        "    parseOrder (order: Dict): any { return order; }\n" +
+        "    safeValue (x: any, k: any, d: any = undefined): any { return x; }\n" +
+        "}\n" +
+        "export default class venuefake extends BaseFake {\n" +
+        "    parseRow (data: Dict): Row { return { 'a': data }; }\n" +
+        "    parseEcho (data: Dict): Row { return data; }\n" +
+        "    parseChoice (data: Dict, flag: boolean): Dict { return flag ? { 'x': data } : data; }\n" +
+        "    parseName (s: Str): Str { return s; }\n" +
+        "    parseFlag (a: any): Bool { return a === 1; }\n" +
+        "    parseOrder (order: Dict): Dict { return order; }\n" +
+        "    parseUnproven (data: Dict): Dict { return this.safeValue (data, 'k'); }\n" +
+        "    async parseAsync (data: Dict): Promise<Dict> { return data; }\n" +
+        "}\n";
+
+    let output: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, TYPES_SOURCE);
+        fs.writeFileSync(VENUE_FIXTURE, VENUE_SOURCE);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a dict-shaped return whose every return prints a map is native', () => {
+        expect(output).toContain('public java.util.Map<String, Object> parseRow(');
+        expect(output).not.toContain('public Object parseRow(');
+    });
+
+    test('a return of a parameter the printer declares a map is native', () => {
+        expect(output).toContain('public java.util.Map<String, Object> parseEcho(');
+    });
+
+    test('a ternary with both arms provable is native', () => {
+        expect(output).toContain('public java.util.Map<String, Object> parseChoice(');
+    });
+
+    test('a Str return is native String', () => {
+        expect(output).toContain('public String parseName(');
+    });
+
+    test('a Bool return over a comparison is native Boolean', () => {
+        expect(output).toContain('public Boolean parseFlag(');
+    });
+
+    test('an override keeps the boxed signature (D8)', () => {
+        expect(output).toContain('public Object parseOrder(');
+        expect(output).not.toContain('public java.util.Map<String, Object> parseOrder(');
+    });
+
+    test('an unprovable return keeps the boxed signature', () => {
+        expect(output).toContain('public Object parseUnproven(');
+    });
+
+    test('an async method keeps the future signature', () => {
+        expect(output).toContain('public java.util.concurrent.CompletableFuture<Object> parseAsync(');
+    });
+});

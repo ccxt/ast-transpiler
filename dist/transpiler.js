@@ -13019,7 +13019,25 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
 };
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
-var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
+var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads[^/]*)?\.ts$/;
+var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
+var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
+  "safeString",
+  "safeString2",
+  "safeStringN",
+  "safeStringUpper",
+  "safeStringUpper2",
+  "safeStringUpperN",
+  "safeStringLower",
+  "safeStringLower2",
+  "safeStringLowerN",
+  "decimalToPrecision",
+  "numberToString",
+  "formatNumber",
+  "implodeParams",
+  "implodeHostname"
+]);
+var JAVA_STRING_RETURN_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](?:functions[\\/](?:type|time)\.ts|Exchange(\.nooverloads[^/]*)?\.ts)$/;
 var JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void | ts6.TypeFlags.Never | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Enum | ts6.TypeFlags.EnumLiteral;
 var JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS = ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void;
 var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
@@ -13071,6 +13089,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
     // by method node; a plain assignment is handled by javaParameterAssignmentCast
     this.javaMethodAssignedNames = /* @__PURE__ */ new WeakMap();
+    // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
+    this.javaReturnTypeCache = /* @__PURE__ */ new WeakMap();
+    this.javaReturnTypeInProgress = /* @__PURE__ */ new Set();
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -14494,6 +14515,219 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `${leftText} = ${this.printNode(right, identation)}`;
     }
     return `${leftText} = (${native}) (${this.printNode(right, identation)})`;
+  }
+  // ===== native return types (D-09) =====
+  //
+  // The native Java return a generated method declaration prints with, when its TS
+  // annotation names a carriable type and EVERY return statement of its body already
+  // prints that same Java type (see the constants above). undefined keeps the boxed
+  // `Object` signature.
+  javaNativeReturnType(node) {
+    if (node === void 0 || node.kind !== ts6.SyntaxKind.MethodDeclaration || node.name === void 0 || node.type === void 0 || node.body === void 0 || !ts6.isClassDeclaration(node.parent)) {
+      return void 0;
+    }
+    if (this.javaReturnTypeInProgress.has(node)) {
+      return void 0;
+    }
+    if (this.javaReturnTypeCache.has(node)) {
+      return this.javaReturnTypeCache.get(node);
+    }
+    this.javaReturnTypeInProgress.add(node);
+    let result;
+    try {
+      result = this.javaNativeReturnTypeUncached(node);
+    } finally {
+      this.javaReturnTypeInProgress.delete(node);
+    }
+    this.javaReturnTypeCache.set(node, result);
+    return result;
+  }
+  javaNativeReturnTypeUncached(node) {
+    if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
+      return void 0;
+    }
+    if (this.isAsyncFunction(node)) {
+      return void 0;
+    }
+    if (this.getMethodOverride(node) !== void 0) {
+      return void 0;
+    }
+    const target = this.javaNativeReturnTypeTarget(node);
+    if (target === void 0) {
+      return void 0;
+    }
+    if (!this.javaReturnSitesPrintType(node, target)) {
+      return void 0;
+    }
+    return target;
+  }
+  javaNativeReturnTypeTarget(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node.type);
+    } catch (e) {
+      return void 0;
+    }
+    if (type === void 0) {
+      return void 0;
+    }
+    const aliasSymbol = type.aliasSymbol;
+    if (aliasSymbol !== void 0) {
+      const name = aliasSymbol.name;
+      const fileName = aliasSymbol.declarations?.[0]?.getSourceFile?.()?.fileName;
+      if (fileName !== void 0 && JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName)) {
+        if (name === "Str") {
+          return "String";
+        }
+        if (name === "Bool") {
+          return "Boolean";
+        }
+      }
+    }
+    if (type.flags === ts6.TypeFlags.String) {
+      return "String";
+    }
+    if (type.flags === ts6.TypeFlags.Boolean) {
+      return "Boolean";
+    }
+    return this.isJavaMapStructureType(type) ? JAVA_NATIVE_RETURN_MAP_TYPE : void 0;
+  }
+  // every `return` of the method body (nested functions are separate scopes) prints the
+  // target Java type
+  javaReturnSitesPrintType(method, target) {
+    const returns = [];
+    const collect = (n) => {
+      if (n === void 0) {
+        return;
+      }
+      if (n !== method && ts6.isFunctionLike(n)) {
+        return;
+      }
+      if (ts6.isReturnStatement(n)) {
+        returns.push(n);
+      }
+      ts6.forEachChild(n, collect);
+    };
+    collect(method.body);
+    if (returns.length === 0) {
+      return false;
+    }
+    return returns.every((r) => r.expression !== void 0 && this.javaExpressionPrintsType(r.expression, target));
+  }
+  javaExpressionPrintsType(expression, target) {
+    const node = this.javaUnwrapReturnExpression(expression);
+    if (node === void 0) {
+      return false;
+    }
+    if (node.kind === ts6.SyntaxKind.NullKeyword) {
+      return true;
+    }
+    if (ts6.isIdentifier(node) && node.escapedText === "undefined") {
+      return true;
+    }
+    if (node.kind === ts6.SyntaxKind.ConditionalExpression) {
+      return this.javaExpressionPrintsType(node.whenTrue, target) && this.javaExpressionPrintsType(node.whenFalse, target);
+    }
+    if (target === JAVA_NATIVE_RETURN_MAP_TYPE) {
+      if (ts6.isObjectLiteralExpression(node)) {
+        return true;
+      }
+      if (this.javaReturnedParameterType(node) === target) {
+        return true;
+      }
+      return this.javaReturnedCallType(node) === target;
+    }
+    if (target === "String") {
+      if (ts6.isStringLiteralLike(node)) {
+        return true;
+      }
+      if (this.javaReturnedParameterType(node) === target) {
+        return true;
+      }
+      if (this.javaReturnedCallType(node) === target) {
+        return true;
+      }
+      return this.javaStringCallReturn(node);
+    }
+    if (target === "Boolean") {
+      if (this.javaPrintsBooleanValue(node, /* @__PURE__ */ new Set(), 0)) {
+        return true;
+      }
+      if (this.javaReturnedParameterType(node) === target) {
+        return true;
+      }
+      return this.javaReturnedCallType(node) === target;
+    }
+    return false;
+  }
+  javaUnwrapReturnExpression(expression) {
+    if (expression === void 0) {
+      return void 0;
+    }
+    let node = expression;
+    while (node !== void 0 && (ts6.isParenthesizedExpression(node) || ts6.isAsExpression(node) || ts6.isNonNullExpression(node) || ts6.isTypeAssertionExpression(node) || node.kind === ts6.SyntaxKind.SatisfiesExpression)) {
+      node = node.expression;
+    }
+    return node;
+  }
+  // an identifier bound to a parameter the printer itself declares with the target Java
+  // type (javaNativeParameterType: Dict/Market/Currency/Str/Bool annotations)
+  javaReturnedParameterType(node) {
+    if (!ts6.isIdentifier(node)) {
+      return void 0;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(node);
+    if (declaration === void 0 || !ts6.isParameter(declaration)) {
+      return void 0;
+    }
+    return this.javaNativeParameterType(declaration);
+  }
+  // a `this.<name> (...)` / `super.<name> (...)` return is the callee's native return type
+  // (fixpoint over javaNativeReturnType)
+  javaReturnedCallType(node) {
+    if (!ts6.isCallExpression(node)) {
+      return void 0;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee) || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword && !(ts6.isIdentifier(callee.expression) && callee.expression.escapedText === "super")) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration === void 0 || declaration.kind !== ts6.SyntaxKind.MethodDeclaration) {
+      return void 0;
+    }
+    return this.javaNativeReturnType(declaration);
+  }
+  // a `this.<name> (...)` return of a hand-written base String producer: the resolved
+  // signature must still live in the base tier (a venue override prints its own boxed
+  // Object signature)
+  javaStringCallReturn(node) {
+    if (!ts6.isCallExpression(node)) {
+      return false;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee) || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    if (!JAVA_STRING_RETURN_BASE_METHODS.has(callee.name.escapedText)) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0) {
+      return false;
+    }
+    const fileName = declaration.getSourceFile?.()?.fileName;
+    return fileName !== void 0 && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
   }
   // the annotation proof alone, without the heritage check
   javaNativeParameterTypeOf(node) {
@@ -16781,6 +17015,12 @@ var JavaTranspiler = class extends BaseTranspiler {
     let returnType = this.printFunctionType(node);
     if (returnType === "java.util.concurrent.CompletableFuture") {
       returnType = "java.util.concurrent.CompletableFuture<Object>";
+    }
+    if (returnType === this.DEFAULT_RETURN_TYPE) {
+      const native = this.javaNativeReturnType(node);
+      if (native !== void 0) {
+        returnType = native;
+      }
     }
     const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " " : "";
     const modifiers = defaultAccess;
