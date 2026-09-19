@@ -231,6 +231,29 @@ const JAVA_LIST_BACKED_TS_CLASSES: Set<string> = new Set([
 // looks a key up when it is a String, and a String-typed operand is one on every path
 const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
 
+// TS parameter annotations (`Dict`, `Market`, `Currency`, `Str`, `Bool`) print the native
+// Java type on the declaring method (javaNativeParameterType). `Int`/`Num` stay `Object`:
+// a TS `number` is an Integer, Long or Double box in the generated code, so neither a
+// `Long`/`Double` parameter nor a casting call site can be proven to match.
+const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = {
+    'Dict': 'java.util.Map<String, Object>',
+    'Market': 'java.util.Map<String, Object>',
+    'Currency': 'java.util.Map<String, Object>',
+    'Str': 'String',
+    'Bool': 'Boolean',
+};
+
+// the aliases above have to come from the shared ts/src/base/types.ts declaration
+const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
+
+// only the generated tiers carry the annotation: a method declared in ts/src/base/** has a
+// hand-written java counterpart (BaseExchange/Exchange/Helpers/Precise) that keeps `Object`
+const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
+
+// the base tier itself keeps `Object` parameters: the hand-written java/lib/.../Exchange.java
+// extends the generated BaseExchange.java and overrides it with `Object` boxes
+const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
+
 const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
     ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Undefined | ts.TypeFlags.Null
     | ts.TypeFlags.Void | ts.TypeFlags.Never | ts.TypeFlags.TypeParameter | ts.TypeFlags.Conditional
@@ -293,7 +316,62 @@ export class JavaTranspiler extends BaseTranspiler {
                 args = args.slice(0, -1);
             }
         }
-        return args.map((a) => this.printNode(a, identation).trim()).join(", ");
+        return this.javaPrintCallArguments(args, node, identation);
+    }
+
+    // a call into a method whose fixed parameter prints a native type hands it the caller's
+    // own expression: the generated locals are `Object`, so the argument carries the same
+    // checkcast the printer already puts in front of its native map/string reads. The
+    // checker proved the argument's TypeScript type assignable to the parameter's, so the
+    // declared type describes the value the parameter really receives.
+    javaPrintCallArguments(args, node, identation) {
+        const parameterTypes = this.javaNativeCallParameterTypes(node);
+        return args.map((a, i) => {
+            const parsedArg = this.printNode(a, identation).trim();
+            const type = parameterTypes[i];
+            if (type === undefined || this.javaNativeArgumentAlreadyTyped(a, type)) {
+                return parsedArg;
+            }
+            return `(${type}) ${parsedArg}`;
+        }).join(", ");
+    }
+
+    // the argument is a literal (or a String the embedding build layer's resolver proves)
+    // and the parameter declares exactly that type, so no cast is needed. Every other
+    // argument prints from a local the printer declares `Object`, and needs the checkcast.
+    javaNativeArgumentAlreadyTyped(arg, type: string) {
+        if (arg.kind === ts.SyntaxKind.NullKeyword) {
+            return true;
+        }
+        if (type !== 'String') {
+            return false;
+        }
+        if (ts.isStringLiteralLike(arg)) {
+            return true;
+        }
+        return this.javaProvableString(arg);
+    }
+
+    // the native printed type of each argument position of a call, when the resolved
+    // signature declares that parameter natively
+    javaNativeCallParameterTypes(node): (string | undefined)[] {
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return [];
+        }
+        const parameters = (declaration as any)?.parameters;
+        if (parameters === undefined) {
+            return [];
+        }
+        return (node.arguments ?? []).map((a, i) => {
+            const param = parameters[i];
+            if (param === undefined || !ts.isParameter(param)) {
+                return undefined;
+            }
+            return this.javaNativeParameterType(param);
+        });
     }
 
     binaryExpressionsWrappers;
@@ -1690,16 +1768,99 @@ export class JavaTranspiler extends BaseTranspiler {
     // the helper.
     // the declared Java type of an identifier, when a consumer installed the table
     javaDeclaredTypeOf(expression): string | undefined {
-        const resolver = this.javaDeclaredLocalTypeResolver;
-        if (resolver === undefined || expression === undefined || !ts.isIdentifier(expression)) {
+        if (expression === undefined || !ts.isIdentifier(expression)) {
             return undefined;
         }
         const declaration = this.javaDeclarationOfIdentifier(expression);
         if (declaration === undefined || expression.escapedText !== declaration.name?.escapedText) {
             return undefined;
         }
-        const type = resolver(declaration);
-        return typeof type === 'string' ? type.trim() : undefined;
+        return this.javaDeclaredTypeOfDeclaration(declaration);
+    }
+
+    // the declared Java type of a declaration: the embedding build layer names the
+    // declarations it retypes itself, and a parameter the printer retypes
+    // (javaNativeParameterType) answers for itself, so its element reads go native too
+    javaDeclaredTypeOfDeclaration(declaration): string | undefined {
+        const resolver = this.javaDeclaredLocalTypeResolver;
+        if (resolver !== undefined) {
+            let type;
+            try {
+                type = resolver(declaration);
+            } catch (e) {
+                type = undefined;
+            }
+            if (typeof type === 'string' && type.trim().length > 0) {
+                return type.trim();
+            }
+        }
+        if (ts.isParameter(declaration)) {
+            return this.javaNativeParameterType(declaration);
+        }
+        return undefined;
+    }
+
+    // The native Java type a parameter declaration prints with, when its TypeScript
+    // annotation names one of the base/types.ts aliases the Java port can carry
+    // (JAVA_NATIVE_PARAMETER_TYPES). Fixed parameters of a generated-tier method only, and
+    // every declaration of the method up the heritage chain must print the same native
+    // type: Java overrides are invariant on parameter types, and the base tier is
+    // overridden by the hand-written java surface with its own `Object` parameters.
+    javaNativeParameterType(node): string | undefined {
+        const type = this.javaNativeParameterTypeOf(node);
+        if (type === undefined) {
+            return undefined;
+        }
+        try {
+            const method = node.parent;
+            const index = method.parameters.indexOf(node);
+            let override = this.getMethodOverride(method);
+            while (override !== undefined) {
+                const baseParam = (override as any).parameters?.[index];
+                if (baseParam === undefined || this.javaNativeParameterTypeOf(baseParam) !== type) {
+                    return undefined;
+                }
+                override = this.getMethodOverride(override);
+            }
+        } catch (e) {
+            return undefined; // an unresolvable heritage keeps the box
+        }
+        return type;
+    }
+
+    // the annotation proof alone, without the heritage check
+    javaNativeParameterTypeOf(node): string | undefined {
+        if (node === undefined || !ts.isParameter(node)
+            || node.initializer !== undefined || node.dotDotDotToken !== undefined) {
+            return undefined;
+        }
+        const method = node.parent;
+        if (method === undefined || !ts.isMethodDeclaration(method) || !ts.isClassDeclaration(method.parent)) {
+            return undefined;
+        }
+        if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName)) {
+            return undefined;
+        }
+        if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
+            return undefined; // a hand-written java class declares this method, not the printer
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        if (type === undefined) {
+            return undefined;
+        }
+        const symbol = (type as any).aliasSymbol ?? (type as any).symbol;
+        const name = symbol?.name;
+        if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES[name] === undefined) {
+            return undefined;
+        }
+        const declaration = symbol?.declarations?.[0];
+        const fileName = declaration?.getSourceFile?.()?.fileName;
+        return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? JAVA_NATIVE_PARAMETER_TYPES[name] : undefined;
     }
 
     // `k` where the consumer declares k as a Java String: the helper's String branch (the
@@ -2040,8 +2201,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // element or null, exactly what the helper's Map branch returns, and the declaration
     // already carries the type, so no cast is needed.
     javaDeclaredMapReceiver(expression) {
-        const resolver = this.javaDeclaredLocalTypeResolver;
-        if (resolver === undefined) {
+        if (expression === undefined) {
             return false;
         }
         const declaration = this.javaDeclarationOfIdentifier(expression);
@@ -2051,16 +2211,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (expression.escapedText !== declaration.name?.escapedText) {
             return false; // a capture rename prints `final Object finalX = x` (Object)
         }
-        let type;
-        try {
-            type = resolver(declaration);
-        } catch (e) {
+        const type = this.javaDeclaredTypeOfDeclaration(declaration);
+        if (type === undefined) {
             return false;
         }
-        if (typeof type !== 'string') {
-            return false;
-        }
-        return JAVA_DECLARED_MAP_TYPES.test(type.trim());
+        return JAVA_DECLARED_MAP_TYPES.test(type);
     }
 
     // `x[k]` reads: emit the native container accessor when the checker proves the Java
@@ -4101,6 +4256,16 @@ export class JavaTranspiler extends BaseTranspiler {
         }
 
         return this.printNode(node.expression, identation);
+    }
+
+    // every Java parameter is `Object` (base printParameterType), except the ones whose TS
+    // annotation names a native-carriable alias (javaNativeParameterType)
+    printParameterType(node) {
+        const native = this.javaNativeParameterType(node);
+        if (native !== undefined) {
+            return native;
+        }
+        return super.printParameterType(node);
     }
 
     printParameter(node, defaultValue = true) {

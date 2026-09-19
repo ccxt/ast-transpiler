@@ -6109,3 +6109,113 @@ describe('java helper removal: mod / Math.pow residual families', () => {
         expect(output).toContain("Helpers.mod(i, 2)");
     });
 });
+
+// b-09: the TS parameter annotations `Dict`/`Market`/`Currency`/`Str` reach the Java
+// declaration of an INTERNAL method (a generated venue tier method that does not override a
+// hand-written base signature), and the declared-type table answers for the parameter, so
+// its element reads print the native accessor. The fixtures mirror the repository layout
+// (ts/src/<venue>.ts + ts/src/base/{types,Exchange}.ts), because both the base-tier policy
+// and the alias declarations are file-anchored.
+describe('java typed parameters (b-09)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-b09-params');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n" +
+            "export type Num = number | undefined;\n" +
+            "export type Int = number | undefined;\n" +
+            "export type Bool = boolean | undefined;\n" +
+            "export interface MarketInterface {\n    id: string;\n    symbol: string;\n}\n" +
+            "export type Market = MarketInterface | undefined;\n" +
+            "export interface CurrencyInterface {\n    code: string;\n}\n" +
+            "export type Currency = CurrencyInterface | undefined;\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict, Str } from './types';\n" +
+            "export default class Exchange {\n" +
+            "    parseX (data: Dict, status: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str, Num, Int, Market, Currency } from './base/types';\n" +
+            "import Exchange from './base/Exchange';\n" +
+            "class Venue extends Exchange {\n" +
+            "    parseX (data: Dict, status: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseZ (data: Dict, status: Str, market: Market, cur: Currency): void {\n" +
+            "        const id = data['id'];\n" +
+            "        const sym = market['symbol'];\n" +
+            "        const code = cur['code'];\n" +
+            "    }\n" +
+            "    parseOpt (data: Dict = {}, status: Str = undefined): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseNum (amount: Num, count: Int): void {\n" +
+            "        const x = amount;\n" +
+            "    }\n" +
+            "}\n" +
+            "class Sub extends Venue {\n" +
+            "    parseZ (data: Dict, status: Str, market: Market, cur: Currency): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n" +
+            "class Caller {\n" +
+            "    go (raw: any, data: Dict): void {\n" +
+            "        const v = new Venue ();\n" +
+            "        v.parseZ (data, raw, data, data);\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('Dict/Market/Currency/Str parameters print the native Java type', () => {
+        expect(venueOutput).toContain('public void parseZ(java.util.Map<String, Object> data, String status, java.util.Map<String, Object> market, java.util.Map<String, Object> cur)');
+    });
+
+    test('a retyped Dict parameter keeps its element reads native', () => {
+        expect(venueOutput).toContain('((java.util.Map<String, Object>)data).get("id")');
+        expect(venueOutput).not.toContain('Helpers.GetValue(data, "id")');
+    });
+
+    test('Market and Currency parameters read natively through the declared type', () => {
+        expect(venueOutput).toContain('market.get("symbol")');
+        expect(venueOutput).toContain('cur.get("code")');
+        expect(venueOutput).not.toContain('Helpers.GetValue(market');
+    });
+
+    test('a method overriding a hand-written base signature keeps Object parameters', () => {
+        expect(venueOutput).toContain('public void parseX(Object data, Object status)');
+    });
+
+    test('an override of a generated method moves with its base declaration', () => {
+        const native = 'public void parseZ(java.util.Map<String, Object> data, String status, java.util.Map<String, Object> market, java.util.Map<String, Object> cur)';
+        expect(venueOutput.split(native).length - 1).toBe(2);
+    });
+
+    test('call sites cast the argument to the declared parameter type', () => {
+        expect(venueOutput).toContain('v.parseZ((java.util.Map<String, Object>) data, (String) raw, (java.util.Map<String, Object>) data, (java.util.Map<String, Object>) data)');
+    });
+
+    test('Int/Num stay Object (an Integer/Long/Double box is not a provable Long/Double)', () => {
+        expect(venueOutput).toContain('public void parseNum(Object amount, Object count)');
+    });
+
+    test('an optional parameter keeps its optionalArgs prologue and type', () => {
+        expect(venueOutput).toContain('public void parseOpt(Object... optionalArgs)');
+        expect(venueOutput).toContain('Object data = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>()');
+    });
+});
