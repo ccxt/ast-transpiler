@@ -1295,3 +1295,36 @@ func setDefaults(p any) {
 func Error(message any) error {
 	return errors.New(ToString(message))
 }
+
+// DerefScalar mirrors ccxt go/v4: a typed-slice element read returns the pointed-to scalar,
+// nil for a nil pointer, and any non-pointer value unchanged.
+func DerefScalar(v any) any {
+	switch p := v.(type) {
+	case *string:
+		if p == nil {
+			return nil
+		}
+		return *p
+	case *int64:
+		if p == nil {
+			return nil
+		}
+		return *p
+	case *float64:
+		if p == nil {
+			return nil
+		}
+		return *p
+	case *bool:
+		if p == nil {
+			return nil
+		}
+		return *p
+	case *int:
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	return v
+}
