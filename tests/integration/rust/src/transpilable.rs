@@ -62,23 +62,23 @@ impl Test {
                 m.insert("b".to_string(), self.getValue(self.getValue(self.getValue(Value::Int(2)))));
             m
         });
-        println_val(&get_value(&newObject, &Value::Str("a".into()))); // should print 5
-        println_val(&get_value(&newObject, &Value::Str("b".into()))); // should print 2
+        println_val(&newObject.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null)); // should print 5
+        println_val(&newObject.as_map().and_then(|__m| __m.get("b")).cloned().unwrap_or(Value::Null)); // should print 2
 }
 
     pub fn test(&self) {
         let mut a: Value = Value::Int(1);
         let mut b: Value = Value::Int(2);
-        let mut c: Value = add(&a, &b);
+        let mut c: Value = (match (&(a), &(b)) { (Value::Int(x), Value::Int(y)) => Value::Int(x + y), (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 + *y), (Value::Float(x), Value::Int(y)) => Value::Float(*x + *y as f64), (Value::Float(x), Value::Float(y)) => Value::Float(x + y), _ => Value::Null });
         println_val(&c); // should print 3
         let mut s1: Value = Value::Str("a".into());
         let mut s2: Value = Value::Str("b".into());
-        let mut s3: Value = add(&s1, &s2);
+        let mut s3: Value = Value::Str(format!("{}{}", s1, s2).into());
         let mut stringVar: Value = Value::Null;
         stringVar = Value::Str("hello".into());
         println_val(&stringVar); // should print "hello"
         println_val(&s3); // should print "ab"
-        let mut x: Value = Value::Bool(false);
+        let mut x: bool = false;
         if is_true(&x) {
             println_val(&Value::Str("x is true".into()));
         }  else {
@@ -90,28 +90,28 @@ impl Test {
         if (instance.myBoolProp.as_bool() == Some(false)) {
             println_val(&Value::Str("myBoolProp is false".into())); // should print "myBoolProp is false"
         }
-        let mut arr: Value = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
-        println_val(&get_array_length(&arr)); // should print 4
-        let mut first: Value = get_value(&arr, &Value::Int(0));
+        let mut arr: Value = Value::from(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        println_val(&Value::Int(arr.len() as i64)); // should print 4
+        let mut first: Value = arr.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null);
         println_val(&first); // should print 1
         let mut dict: Value = Value::Map({
             let mut m = std::collections::HashMap::new();
                 m.insert("a".to_string(), Value::Str("b".into()));
             m
         });
-        println_val(&get_value(&dict, &Value::Str("a".into()))); // should print "b"
+        println_val(&dict.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null)); // should print "b"
         let mut i: Value = Value::Int(0);
         {
                         let mut w: Value = Value::Int(0);
             let mut __for_first_0: bool = true;
-            while { if !__for_first_0 { w = add(&w, &Value::Int(1)); } __for_first_0 = false; is_less_than(&w, &Value::Int(10)) } {
-            i = add(&i, &Value::Int(1));
+            while { if !__for_first_0 { w = (match (&(w), &(Value::Int(1))) { (Value::Int(x), Value::Int(y)) => Value::Int(x + y), (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 + *y), (Value::Float(x), Value::Int(y)) => Value::Float(*x + *y as f64), (Value::Float(x), Value::Float(y)) => Value::Float(x + y), _ => Value::Null }); } __for_first_0 = false; w.as_f64().unwrap_or(f64::NAN) < Value::Int(10).as_f64().unwrap_or(f64::NAN) } {
+            i = (match (&(i), &(Value::Int(1))) { (Value::Int(x), Value::Int(y)) => Value::Int(x + y), (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 + *y), (Value::Float(x), Value::Int(y)) => Value::Float(*x + *y as f64), (Value::Float(x), Value::Float(y)) => Value::Float(x + y), _ => Value::Null });
         }
         }
         println_val(&to_string_val(&i)); // should print 10
-        let mut list2: Value = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4), Value::Int(5)]);
+        let mut list2: Value = Value::from(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4), Value::Int(5)]);
         list2 = reverse(list2.clone());
-        println_val(&get_value(&list2, &Value::Int(0))); // should print 5
+        println_val(&list2.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)); // should print 5
         //should delete key from dict
         let mut dict2: Value = Value::Map({
             let mut m = std::collections::HashMap::new();
@@ -121,40 +121,40 @@ impl Test {
         });
         remove(&mut dict2, &Value::Str("a".into()));
         let mut dictKeys: Value = object_keys(&dict2);
-        println_val(&get_array_length(&dictKeys)); // should print 1
-        println_val(&get_value(&dictKeys, &Value::Int(0))); // should print "b"
-        let mut firstConcat: Value = Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]);
-        let mut secondConcat: Value = Value::List(vec![Value::Str("c".into()), Value::Str("d".into())]);
+        println_val(&Value::Int(dictKeys.len() as i64)); // should print 1
+        println_val(&dictKeys.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)); // should print "b"
+        let mut firstConcat: Value = Value::from(vec![Value::Str("a".into()), Value::Str("b".into())]);
+        let mut secondConcat: Value = Value::from(vec![Value::Str("c".into()), Value::Str("d".into())]);
         let mut both: Value = concat(firstConcat.clone(), secondConcat.clone());
-        println_val(&get_array_length(&both)); // should print 4
-        println_val(&get_value(&both, &Value::Int(2))); // should print "c"
+        println_val(&Value::Int(both.len() as i64)); // should print 4
+        println_val(&both.as_array().and_then(|__arr| __arr.get(2)).cloned().unwrap_or(Value::Null)); // should print "c"
         let mut baseString: Value = Value::Str("aabba".into());
         let mut replacedAllString: Value = replace_all_str(&baseString, &Value::Str("a".into()), &Value::Str("".into()));
         println_val(&replacedAllString); // should print "bb"
         self.functionWithOptionals(Value::Str("hello".into()), &[]);
         self.functionWithOptionals(Value::Str("hello".into()), &[Value::Int(5)]);
         self.functionWithOptionals(Value::Str("hello".into()), &[Value::Int(5), Value::Int(1)]);
-        let mut list3: Value = Value::List(vec![Value::Str("empty".into())]);
+        let mut list3: Value = Value::from(vec![Value::Str("empty".into())]);
         add_element_to_object(&mut list3, &Value::Int(0), Value::Str("first".into()));
-        println_val(&get_value(&list3, &Value::Int(0))); // should print "first"
+        println_val(&list3.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)); // should print "first"
         let mut dict3: Value = Value::Map({
             let mut m = std::collections::HashMap::new();
             m
         });
-        add_element_to_object(&mut dict3, &Value::Str("key".into()), Value::Str("value".into()));
-        println_val(&get_value(&dict3, &Value::Str("key".into()))); // should print "value"
+        if let Value::Dict(__d) = &mut dict3 { std::sync::Arc::make_mut(__d).insert("key".to_string(), Value::Str("value".into())); };
+        println_val(&dict3.as_map().and_then(|__m| __m.get("key")).cloned().unwrap_or(Value::Null)); // should print "value"
         self.testJavaScope();
         let mut first1second1Variable = self.handleOptionAndParamsTest();
-        let mut first1: Value = get_value(&first1second1Variable, &Value::Int(0));
-        let mut second1: Value = get_value(&first1second1Variable, &Value::Int(1));
+        let mut first1: Value = first1second1Variable.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null);
+        let mut second1: Value = first1second1Variable.as_array().and_then(|__arr| __arr.get(1)).cloned().unwrap_or(Value::Null);
         println_val(&first1); // should print 1
         println_val(&second1); // should print "a"
         let mut first2: Value = Value::Null;
         let mut second2: Value = Value::Null;
-        { let __destr_tmp = self.handleOptionAndParamsTest(); first2 = get_value(&__destr_tmp, &Value::Int(0)); second2 = get_value(&__destr_tmp, &Value::Int(1)); };
+        { let __destr_tmp = self.handleOptionAndParamsTest(); first2 = __destr_tmp.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null); second2 = __destr_tmp.as_array().and_then(|__arr| __arr.get(1)).cloned().unwrap_or(Value::Null); };
         println_val(&first2); // should print 1
         println_val(&second2); // should print "a"
-        self.funcWithParams(&[Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]), Value::Map({
+        self.funcWithParams(&[Value::from(vec![Value::Int(1), Value::Int(2), Value::Int(3)]), Value::Map({
     let mut m = std::collections::HashMap::new();
         m.insert("a".to_string(), Value::Str("value of a".into()));
     m
@@ -171,7 +171,7 @@ impl Test {
 }
 
     pub fn handleOptionAndParamsTest(&self) -> Value {
-        return Value::List(vec![Value::Int(1), Value::Str("a".into())]);
+        return Value::from(vec![Value::Int(1), Value::Str("a".into())]);
 }
 
     pub fn funcWithParams(&self, optional_args: &[Value]) {
@@ -180,11 +180,11 @@ impl Test {
     let mut m = std::collections::HashMap::new();
     m
 }));
-        if is_true(&Value::Bool(is_array(&a))) {
+        if (matches!(&a, Value::Arr(_))) {
             println_val(&get_array_length(&a));
         }
-        if is_true(&Value::Bool(in_op(&params, &Value::Str("a".into())))) {
-            println_val(&get_value(&params, &Value::Str("a".into())));
+        if (matches!(&params, Value::Dict(__d) if __d.contains_key("a"))) {
+            println_val(&params.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null));
         }
 }
 
@@ -200,17 +200,17 @@ impl Test {
         let mut endsWithWorld: Value = Value::Bool(ends_with(&str_val, &Value::Str("world".into())));
         println_val(&self.boolToString(endsWithWorld)); // should print true
         let mut stringParts: Value = split(&str_val, &Value::Str(" ".into()));
-        println_val(&get_array_length(&stringParts)); // should print 2
-        println_val(&get_value(&stringParts, &Value::Int(0))); // should print "hello"
-        println_val(&get_value(&stringParts, &Value::Int(1))); // should print "world"
-        let mut indexOfResult: Value = get_index_of(&str_val, &Value::Str("o".into()));
+        println_val(&Value::Int(stringParts.len() as i64)); // should print 2
+        println_val(&stringParts.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)); // should print "hello"
+        println_val(&stringParts.as_array().and_then(|__arr| __arr.get(1)).cloned().unwrap_or(Value::Null)); // should print "world"
+        let mut indexOfResult: Value = Value::Int(str_val.as_str().and_then(|__s| __s.find("o")).map(|__i| __i as i64).unwrap_or(-1));
         println_val(&indexOfResult); // should print 4
         let mut strReplaced: Value = replace_all_str(&str_val, &Value::Str("l".into()), &Value::Str("x".into()));
         println_val(&strReplaced); // should print "hexxo worxd"
         // concatenation test
         let mut a: Value = Value::Str("a".into());
         let mut b: Value = Value::Str("b".into());
-        let mut c: Value = add(&a, &b);
+        let mut c: Value = Value::Str(format!("{}{}", a, b).into());
         println_val(&c); // should print "ab"
 }
 

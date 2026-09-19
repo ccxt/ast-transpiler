@@ -8,8 +8,79 @@ pub enum Value {
     Str(String),
     Bool(bool),
     List(Vec<Value>),
-    Map(HashMap<String, Value>),
+    Dict(HashMap<String, Value>),
     Null,
+}
+
+/// Payload accessors used by the natively-lowered comparisons the Rust printer
+/// emits: each returns `Some` only for the matching variant, so a mismatched
+/// variant compares unequal instead of panicking.
+#[allow(dead_code)]
+impl Value {
+    /// Element/entry count, mirroring the ccxt base: strings count chars and
+    /// scalars are length 0 rather than an error.
+    pub fn len(&self) -> usize {
+        match self {
+            Value::List(l) => l.len(),
+            Value::Dict(m) => m.len(),
+            Value::Str(s) => s.chars().count(),
+            _ => 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Construction shim matching the printer's `Value::Map({..})` emission
+    /// shape. An associated fn, not a variant — patterns use `Dict`.
+    #[allow(non_snake_case)]
+    pub fn Map(m: HashMap<String, Value>) -> Value {
+        Value::Dict(m)
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Value::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Int(n) => Some(*n as f64),
+            Value::Float(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        match self {
+            Value::List(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    pub fn as_map(&self) -> Option<&HashMap<String, Value>> {
+        match self {
+            Value::Dict(m) => Some(m),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Value {
@@ -29,7 +100,7 @@ impl fmt::Display for Value {
                 let items: Vec<String> = l.iter().map(|v| format!("{}", v)).collect();
                 write!(f, "[{}]", items.join(", "))
             }
-            Value::Map(m) => {
+            Value::Dict(m) => {
                 let items: Vec<String> =
                     m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
                 write!(f, "{{{}}}", items.join(", "))
@@ -43,16 +114,40 @@ pub fn println_val(v: &Value) {
     println!("{}", v);
 }
 
-pub fn is_true(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Int(n) => *n != 0,
-        Value::Float(n) => *n != 0.0,
-        Value::Str(s) => !s.is_empty(),
-        Value::List(l) => !l.is_empty(),
-        Value::Map(m) => !m.is_empty(),
+/// Truthiness is generic so the printer may pass either a `Value` or a native
+/// `bool` local, which it emits when the checker proves the type.
+pub trait IsTruthy {
+    fn truthy(&self) -> bool;
+}
+
+impl IsTruthy for Value {
+    fn truthy(&self) -> bool {
+        match self {
+            Value::Null => false,
+            Value::Bool(b) => *b,
+            Value::Int(n) => *n != 0,
+            Value::Float(n) => *n != 0.0,
+            Value::Str(s) => !s.is_empty(),
+            Value::List(l) => !l.is_empty(),
+            Value::Dict(m) => !m.is_empty(),
+        }
     }
+}
+
+impl IsTruthy for bool {
+    fn truthy(&self) -> bool {
+        *self
+    }
+}
+
+impl<T: IsTruthy + ?Sized> IsTruthy for &T {
+    fn truthy(&self) -> bool {
+        (**self).truthy()
+    }
+}
+
+pub fn is_true<T: IsTruthy + ?Sized>(v: &T) -> bool {
+    v.truthy()
 }
 
 pub fn is_equal(a: &Value, b: &Value) -> bool {
@@ -157,7 +252,7 @@ pub fn get_value(container: &Value, key: &Value) -> Value {
             let idx = *i as usize;
             l.get(idx).cloned().unwrap_or(Value::Null)
         }
-        (Value::Map(m), Value::Str(k)) => m.get(k).cloned().unwrap_or(Value::Null),
+        (Value::Dict(m), Value::Str(k)) => m.get(k).cloned().unwrap_or(Value::Null),
         (Value::Str(s), Value::Int(i)) => {
             let idx = *i as usize;
             s.chars().nth(idx).map(|c| Value::Str(c.to_string())).unwrap_or(Value::Null)
@@ -179,7 +274,7 @@ pub fn add_element_to_object(container: &mut Value, key: &Value, val: Value) {
                 l.push(val);
             }
         }
-        (Value::Map(m), Value::Str(k)) => {
+        (Value::Dict(m), Value::Str(k)) => {
             m.insert(k.clone(), val);
         }
         _ => {}
@@ -190,14 +285,14 @@ pub fn get_array_length(v: &Value) -> Value {
     match v {
         Value::List(l) => Value::Int(l.len() as i64),
         Value::Str(s) => Value::Int(s.len() as i64),
-        Value::Map(m) => Value::Int(m.len() as i64),
+        Value::Dict(m) => Value::Int(m.len() as i64),
         _ => Value::Int(0),
     }
 }
 
 pub fn object_keys(v: &Value) -> Value {
     match v {
-        Value::Map(m) => {
+        Value::Dict(m) => {
             let mut keys: Vec<String> = m.keys().cloned().collect();
             keys.sort(); // deterministic order
             Value::List(keys.into_iter().map(Value::Str).collect())
@@ -208,7 +303,7 @@ pub fn object_keys(v: &Value) -> Value {
 
 pub fn object_values(v: &Value) -> Value {
     match v {
-        Value::Map(m) => {
+        Value::Dict(m) => {
             let mut pairs: Vec<(String, Value)> = m.clone().into_iter().collect();
             pairs.sort_by_key(|(k, _)| k.clone());
             Value::List(pairs.into_iter().map(|(_, v)| v).collect())
@@ -234,7 +329,7 @@ pub fn is_bool(v: &Value) -> bool {
 }
 
 pub fn is_object(v: &Value) -> bool {
-    matches!(v, Value::Map(_))
+    matches!(v, Value::Dict(_))
 }
 
 pub fn is_function(_v: &Value) -> bool {
@@ -247,7 +342,7 @@ pub fn is_integer(v: &Value) -> bool {
 
 pub fn in_op(container: &Value, key: &Value) -> bool {
     match (container, key) {
-        (Value::Map(m), Value::Str(k)) => m.contains_key(k),
+        (Value::Dict(m), Value::Str(k)) => m.contains_key(k),
         (Value::List(l), _) => l.iter().any(|v| is_equal(v, key)),
         _ => false,
     }
@@ -284,7 +379,7 @@ pub fn reverse(v: Value) -> Value {
 
 pub fn remove(v: &mut Value, key: &Value) {
     match (v, key) {
-        (Value::Map(m), Value::Str(k)) => {
+        (Value::Dict(m), Value::Str(k)) => {
             m.remove(k);
         }
         (Value::List(l), Value::Int(i)) => {

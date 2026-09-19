@@ -9,7 +9,8 @@ import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext, ITranspileProgramCache } from './types.js';
 import { GoTranspiler, alignGoTrailingComments } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
-import { RustTranspiler, RUST_DECLARED_DICT_LOCALS, RustDeclaredDictLocalEntry } from './rustTranspiler.js';
+import { RustTranspiler, RUST_DECLARED_DICT_LOCALS } from './rustTranspiler.js';
+import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
 
 const __dirname_mock = currentPath;
@@ -664,5 +665,5 @@ export {
     // the rust declared-Dict locals vocabulary + entry shape (rust-25), so the
     // helper-removal consumers can import them from the package entry
     RUST_DECLARED_DICT_LOCALS,
-    RustDeclaredDictLocalEntry,
 };
+export type { RustDeclaredDictLocalEntry };
