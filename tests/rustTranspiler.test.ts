@@ -3551,3 +3551,98 @@ describe('rust parameter shadows (D-25)', () => {
         expect(output).toContain('data.as_map().and_then(|__m| __m.get("subscriptions"))');
     });
 });
+||||||| 73052b6
+
+describe('rust native Option<String> returns for `: Str` methods', () => {
+    // An internal, non-override, non-async method declared `: Str` returns a
+    // native `Option<String>` when every `return` in its own body converts
+    // (`X.as_str().map(str::to_owned)`, or `None` for a nullish literal); a
+    // call site that still needs a `Value` boxes the result back with the exact
+    // inverse, and a local whose uses are all native sinks binds the
+    // `Option<String>` directly.
+    const HEAD = "type Str = string | undefined;\n";
+
+    test('a proven `: Str` method returns Option<String> with the conversion', () => {
+        const ts = HEAD + "class E {\n    parseStatus (status: any): Str {\n        return 'open';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
+        expect(output).toContain('return Value::Str("open".into()).as_str().map(str::to_owned);');
+    });
+
+    test('a nullish return becomes the None arm', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str {\n" +
+            "        if (status === undefined) { return undefined; }\n" +
+            "        return 'open';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
+        expect(output).toContain('return None;');
+    });
+
+    test('a body whose last statement is not a return keeps -> Value', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str {\n" +
+            "        if (status === undefined) { return undefined; }\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Value');
+        expect(output).not.toContain('Option<String>');
+    });
+
+    test('a return the checker cannot prove is a string keeps -> Value', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str {\n" +
+            "        return this.safeValue (status);\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Value');
+        expect(output).not.toContain('Option<String>');
+    });
+
+    test('an override keeps the boxed signature', () => {
+        const ts = HEAD +
+            "class A {\n    parseStatus (status: any): Str { return 'x'; }\n}\n" +
+            "class E extends A {\n    override parseStatus (status: any): Str { return 'y'; }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        const overridden = output.split('class E')[1] ?? output;
+        expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
+        expect(output.match(/pub fn parseStatus\(&self, status: Value\) -> Value \{/g)?.length).toBe(1);
+        expect(overridden.length).toBeGreaterThan(0);
+    });
+
+    test('a Value-position call site boxes the native return back', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        const m: any = {};\n" +
+            "        m['status'] = this.parseStatus (status);\n        return m;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut m, &Value::Str("status".into()), self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null));');
+    });
+
+    test('an assignment of a native return boxes', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        let x: any = undefined;\n" +
+            "        x = this.parseStatus (status);\n        return x;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('x = self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null);');
+    });
+
+    test('a declaration whose uses are not all native sinks stays a Value box', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        const x = this.parseStatus (status);\n" +
+            "        const m: any = {};\n        m['status'] = x;\n        return m;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut x: Value = self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null);');
+    });
+
+    test('a caller whose uses are all native sinks binds Option<String>', () => {
+        const ts = HEAD +
+            "class E {\n    parseStatus (status: any): Str { return 'open'; }\n" +
+            "    f (status: any) {\n        const x = this.parseStatus (status);\n" +
+            "        if (x === undefined) { return 'a'; }\n" +
+            "        if (x === 'open') { return 'b'; }\n        return 'c';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut x: Option<String> = self.parseStatus(status);');
+        expect(output).not.toContain('let mut x: Value = self.parseStatus(status)');
+    });
+});

@@ -18902,6 +18902,21 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig6, config["parser"] ?? {});
     super(config);
     this.rustStringLocalDecisions = /* @__PURE__ */ new Map();
+    // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
+    //
+    // An internal, non-override, non-async method declared `: Str`
+    // (`string | undefined`) returns a native `Option<String>` when every
+    // `return` in its own body converts exactly. `Str` admits only
+    // `Value::Str(payload)` and `Value::Null` at run time, and
+    // `X.as_str().map(str::to_owned)` maps those to `Some(payload)` / `None`
+    // unchanged (the checker's primitive kind proves each returned
+    // expression's box). Call sites that still need a `Value` box the result
+    // back with the exact inverse; a local whose uses are all native sinks
+    // binds the `Option<String>` directly (the `safeString`-local whitelist,
+    // extended to this initializer shape). Override declarations keep the
+    // boxed signature (D8): the trait copies (`DerivedExchange` forwarder,
+    // base declaration) print `-> Value`.
+    this.rustNativeStrReturnDecisions = /* @__PURE__ */ new WeakMap();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -20372,7 +20387,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
     }
     if (this.rustSafeStringLocalIsTyped(declaration)) {
-      return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}.as_str().map(str::to_owned)`;
+      const suffix = this.rustNativeStrCalleeKind(declaration.initializer) === "str" ? "" : ".as_str().map(str::to_owned)";
+      return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}${suffix}`;
+    }
+    if (this.rustNativeStrCalleeKind(declaration.initializer) === "str") {
+      return `${this.getIden(identation)}let mut ${varName}: Value = ${this.rustNativeStrValueBox(parsedValue)}`;
     }
     return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
   }
@@ -20593,11 +20612,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     ts7.forEachChild(scope, visit);
     return safe;
   }
-  // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer.
+  // `let x = this.safeString(..)` / `safeString(..)` — the whole initializer;
+  // a call whose callee already returns `Option<String>` (a native-`Str`
+  // method) is the same payload without the unwrap.
   rustSafeStringLocalInitializer(declaration) {
     const initializer = declaration.initializer;
     if (declaration.name?.kind !== SyntaxKind4.Identifier || initializer?.kind !== SyntaxKind4.CallExpression) {
       return false;
+    }
+    if (this.rustNativeStrCalleeKind(initializer) === "str") {
+      return true;
     }
     const callee = initializer.expression;
     if (callee?.kind === SyntaxKind4.PropertyAccessExpression) {
@@ -20728,6 +20752,166 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     }
     return peeled !== void 0 ? peeled : inner;
+  }
+  /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
+  rustNativeStrReturnKind(node) {
+    if (node === void 0 || node.kind !== SyntaxKind4.MethodDeclaration) {
+      return void 0;
+    }
+    const cached = this.rustNativeStrReturnDecisions.get(node);
+    if (cached !== void 0) {
+      return cached ? "str" : void 0;
+    }
+    this.rustNativeStrReturnDecisions.set(node, false);
+    const decision = this.rustNativeStrReturnDecisionUncached(node);
+    this.rustNativeStrReturnDecisions.set(node, decision);
+    return decision ? "str" : void 0;
+  }
+  rustNativeStrReturnDecisionUncached(node) {
+    if (node.type === void 0 || this.isAsyncFunction(node)) {
+      return false;
+    }
+    if (this.getMethodOverride(node) !== void 0) {
+      return false;
+    }
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
+      return false;
+    }
+    let type;
+    try {
+      type = this.getChecker().getTypeFromTypeNode(node.type);
+    } catch (e) {
+      return false;
+    }
+    if (this.primitiveKindOfType(type) !== "string") {
+      return false;
+    }
+    return this.rustStrReturnPathsConvert(node.body);
+  }
+  /** Every `return` of the method's own body converts, and the body's last
+   *  statement is one of them (so Rust sees no `()`-valued tail the
+   *  `-> Value` post-passes would have patched with `Value::Null`). */
+  rustStrReturnPathsConvert(body) {
+    if (body === void 0) {
+      return false;
+    }
+    const statements = body.statements;
+    const last = statements[statements.length - 1];
+    if (last === void 0 || !ts7.isReturnStatement(last)) {
+      return false;
+    }
+    let ok = true;
+    const visit = (n) => {
+      if (!ok) {
+        return;
+      }
+      if (n !== body && ts7.isFunctionLike(n)) {
+        return;
+      }
+      if (ts7.isReturnStatement(n) && !this.rustStrReturnValueConverts(n.expression)) {
+        ok = false;
+        return;
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(body, visit);
+    return ok;
+  }
+  /** A `return` value of a native-`Str` method: a nullish literal, an
+   *  expression already printing an `Option<String>` (a nested retyped call
+   *  or a typed string local), or a `Value`-printing expression the checker
+   *  types `string | undefined`. */
+  rustStrReturnValueConverts(expression) {
+    const inner = this.unwrapParensNode(expression);
+    if (inner === void 0) {
+      return false;
+    }
+    if (this.literalKindOfNode(inner) === "null") {
+      return true;
+    }
+    if (this.rustStrNativeExpression(inner)) {
+      return true;
+    }
+    if (!this.printsValueExpression(inner)) {
+      return false;
+    }
+    return this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === "string";
+  }
+  /** An expression that already prints an `Option<String>` in a `: Str`
+   *  method's return position. */
+  rustStrNativeExpression(expression) {
+    const inner = this.unwrapParensNode(expression);
+    if (inner === void 0) {
+      return false;
+    }
+    if (ts7.isCallExpression(inner)) {
+      return this.rustNativeStrCalleeKind(inner) === "str";
+    }
+    if (ts7.isIdentifier(inner)) {
+      return this.rustStringLocalIdentifierIsTyped(inner);
+    }
+    return false;
+  }
+  unwrapParensNode(node) {
+    let current = node;
+    while (current !== void 0 && ts7.isParenthesizedExpression(current)) {
+      current = current.expression;
+    }
+    return current;
+  }
+  /** The callee declaration behind `self.<method>(..)` when it is emitted
+   *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+  rustNativeStrCalleeKind(node) {
+    if (node === void 0 || node.kind !== SyntaxKind4.CallExpression) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration === void 0 || declaration.kind !== SyntaxKind4.MethodDeclaration) {
+      return void 0;
+    }
+    return this.rustNativeStrReturnKind(declaration);
+  }
+  /** `Option<String>` → `Value` (exact inverse of the return conversion). */
+  rustNativeStrValueBox(text) {
+    return `${text}.map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
+  }
+  /** True when a call to a native-`Str` callee must be boxed back to a
+   *  `Value` at this position; the declaration and return printers run the
+   *  conversion themselves. */
+  rustNativeStrCallNeedsBox(node) {
+    let current = node;
+    let parent = current.parent;
+    while (parent !== void 0 && ts7.isParenthesizedExpression(parent) && parent.expression === current) {
+      current = parent;
+      parent = parent.parent;
+    }
+    if (parent === void 0) {
+      return true;
+    }
+    if (ts7.isVariableDeclaration(parent) && parent.initializer === current && ts7.isIdentifier(parent.name)) {
+      return false;
+    }
+    if (ts7.isReturnStatement(parent) && parent.expression === current) {
+      const fn = ts7.findAncestor(parent.parent, ts7.isFunctionLike);
+      return this.rustNativeStrReturnKind(fn) !== "str";
+    }
+    return true;
+  }
+  /** Wrap a call text when the callee returns a native `Option<String>`
+   *  and the position still needs a `Value`. */
+  rustBoxNativeStrCallIfNeeded(node, text) {
+    if (this.rustNativeStrCalleeKind(node) !== "str") {
+      return text;
+    }
+    if (!this.rustNativeStrCallNeedsBox(node)) {
+      return text;
+    }
+    return this.rustNativeStrValueBox(text);
   }
   /** All `let x: Value = <dict-proven initialiser>` declarations of the current
    *  source file, keyed by local name in declaration order. */
@@ -21093,6 +21277,9 @@ ${classMethods}
     return `${this.getIden(identation + 1)}pub fn ${name}(${parsedArgs})${retStr}`;
   }
   printRustFunctionType(node) {
+    if (this.rustNativeStrReturnKind(node) === "str") {
+      return "Option<String>";
+    }
     try {
       const type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
       if (type.flags === ts7.TypeFlags.Void) {
@@ -21181,8 +21368,9 @@ ${classMethods}
       }
     }
     const outOfOrder = this.printOutOfOrderCallExpressionIfAny(node, identation);
-    if (outOfOrder)
-      return outOfOrder;
+    if (outOfOrder) {
+      return this.rustBoxNativeStrCallIfNeeded(node, outOfOrder);
+    }
     const nativeParse = this.printNativeParseCall(node);
     if (nativeParse !== void 0)
       return nativeParse;
@@ -21193,7 +21381,7 @@ ${classMethods}
         return `json_stringify(${this.ensureRef(withoutClone)})`;
       }
     }
-    return super.printCallExpression(node, identation);
+    return this.rustBoxNativeStrCallIfNeeded(node, super.printCallExpression(node, identation));
   }
   printThisKeyword(node, identation) {
     return "self";
@@ -22800,6 +22988,16 @@ ${iden}}`;
     if (!exp) {
       return `${this.getIden(identation)}return;`;
     }
+    const fn = ts7.findAncestor(node.parent, ts7.isFunctionLike);
+    if (this.rustNativeStrReturnKind(fn) === "str" && this.rustStrReturnValueConverts(exp)) {
+      const inner = this.unwrapParensNode(exp);
+      if (this.literalKindOfNode(inner) === "null") {
+        return `${this.getIden(identation)}return None;`;
+      }
+      const text = this.printNode(exp, 0).trim();
+      const suffix = this.rustStrNativeExpression(exp) ? "" : ".as_str().map(str::to_owned)";
+      return `${this.getIden(identation)}return ${text}${suffix};`;
+    }
     const rightPart = this.printNode(exp, 0).trim();
     return `${this.getIden(identation)}return ${rightPart};`;
   }
@@ -22994,6 +23192,9 @@ _RustTranspiler.RUST_STRING_LOCAL_HELPERS = /* @__PURE__ */ new Set([
   "safeStringUpper2",
   "safeStringUpperN"
 ]);
+// `ts/src/base/**` — the shared `Exchange` / `PredictionExchange` classes
+// (the transpiler synthesises variants like `.__ExchangeNoOverloads.ts`).
+_RustTranspiler.RUST_BASE_TIER_FILE = /ts[\\/]src[\\/]base[\\/]/;
 // ── native string args to the runtime error constructors ────────────────
 // Audited against rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl
 // ToErrorMessage` (`&str`/`String`/`Value` all yield the same string) and
