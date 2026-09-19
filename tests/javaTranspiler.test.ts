@@ -3474,7 +3474,7 @@ describe('java string-concat chains anchored by a declared String', () => {
         "}"
         expect(withStrings({ 'a': 'Long' }, input)).toContain('Object x = Helpers.add(a, b);');
     });
-    test('the checker gate still wins: a nullable alias leaf keeps the helper', () => {
+    test('a nullable alias leaf chains natively off a declared String anchor (B-13)', () => {
         const input =
         "class T {\n" +
         "    f(a: Str, b: string): void {\n" +
@@ -3482,7 +3482,8 @@ describe('java string-concat chains anchored by a declared String', () => {
         "    }\n" +
         "}"
         const output = withStrings({ 'a': 'String', 'b': 'String' }, input);
-        expect(output).toContain('Object x = Helpers.add(a, b);');
+        expect(output).toContain('Object x = (a + b);');
+        expect(output).not.toContain('Helpers.add(');
     });
     test('a declared String local chains with a call operand natively', () => {
         const input =
@@ -3494,6 +3495,139 @@ describe('java string-concat chains anchored by a declared String', () => {
         "}"
         const output = withStrings({ 'name': 'String' }, input);
         expect(output).toContain('String x = (name + this.tag());');
+        expect(output).not.toContain('Helpers.add(');
+    });
+});
+
+describe('java literal-anchored concat (`a + "lit"` whatever the other operand is)', () => {
+    const withStrings = (strings, input) => {
+        transpiler.javaTranspiler.javaExpressionTypeResolver = (node) => strings[node?.escapedText];
+        try {
+            return transpiler.transpileJava(input).content;
+        } finally {
+            transpiler.javaTranspiler.javaExpressionTypeResolver = undefined;
+        }
+    };
+
+    test('a nullable alias operand concatenates natively against a literal', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    f(a: Str): void {\n" +
+        "        const x = a + \"lit\";\n" +
+        "        const y = \"pre\" + a;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (a + "lit");');
+        expect(output).toContain('Object y = ("pre" + a);');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('a string-literal-union element read concatenates natively against a literal', () => {
+        const input =
+        "class T {\n" +
+        "    f(m: { t: 'a' | 'b' }): void {\n" +
+        "        const x = m['t'] + \" orders\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('+ " orders");');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('an any-valued dict read keeps the helper (the value can be a Double)', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    f(d: Dict): void {\n" +
+        "        const x = d[\"type\"] + \" orders\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.add(');
+    });
+
+    test('a boolean operand concatenates natively against a literal', () => {
+        const input =
+        "class T {\n" +
+        "    f(b: boolean): void {\n" +
+        "        const x = b + \"!\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Object x = (b + "!");');
+    });
+
+    test('an integer-literal operand concatenates natively', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const x = 2 + \" items\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('a number operand keeps the helper (a boxed Double is added, not concatenated)', () => {
+        const input =
+        "class T {\n" +
+        "    f(n: number, a: any): void {\n" +
+        "        const x = n + \"s\";\n" +
+        "        const y = a + \"s\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.add(n, "s")');
+        expect(output).toContain('Helpers.add(a, "s")');
+    });
+
+    test('a ternary operand keeps the helper (the `+` would re-parse inside it)', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: Str, c: boolean): void {\n" +
+        "        const x = (c ? a : \"b\") + \"s\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.add(');
+    });
+
+    test('an optional-chain operand keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f(d: any): void {\n" +
+        "        const x = d?.type + \"s\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.add(');
+    });
+
+    test('+= against a literal on a nullable alias prints the native concat assignment', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    f(a: Str): void {\n" +
+        "        let s: Str = undefined;\n" +
+        "        s += \"lit\";\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('s = (s + "lit");');
+        expect(output).not.toContain('Helpers.add(');
+    });
+
+    test('a declared String anchor concatenates a nullable alias operand natively', () => {
+        const input =
+        "class T {\n" +
+        "    f(a: Str, b: string): void {\n" +
+        "        const x = a + b;\n" +
+        "    }\n" +
+        "}"
+        const output = withStrings({ 'a': 'String' }, input);
+        expect(output).toContain('Object x = (a + b);');
         expect(output).not.toContain('Helpers.add(');
     });
 });
