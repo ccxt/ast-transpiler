@@ -1635,6 +1635,16 @@ declare class RustTranspiler extends BaseTranspiler {
      *  `Int` index by value (a negative or out-of-range index misses), a
      *  numeric string by parse, anything else a miss. */
     printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
+    /** True when the receiver local is declared from `this.safeList(…)` — the
+     *  ccxt-side `typeSafeListLocals` retype family. */
+    rustReceiverIsSafeListLocal(node: ts.Node): boolean;
+    /** True when this read initialises a local that the very next statement in
+     *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
+     *  `x.push(v)` -> `append_to_array(&mut x…)`). */
+    isWriteBackBindRead(read: ts.Node): boolean;
+    /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
+     *  `x.push(v)`). */
+    rustStatementMutatesLocal(node: ts.Node, name: string): boolean;
     /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric
      *  literal>` declaration of the same function (the C-style loop counter).
      *  Any other shape keeps the helper — the printed local could be a native

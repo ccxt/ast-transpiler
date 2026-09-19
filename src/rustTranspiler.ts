@@ -2798,10 +2798,69 @@ export class RustTranspiler extends BaseTranspiler {
     printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
         if (!this.isProvenListExpression(receiverNode)) return undefined;
         if (!this.isRustValueIndexKey(keyNode)) return undefined;
+        // A `safe_list` local belongs to the ccxt pass that retypes it to
+        // `Vec<Value>` and rewrites its reads natively; the printer leaves the
+        // helper text that pass matches (a native read would block the retype).
+        if (this.rustReceiverIsSafeListLocal(receiverNode)) return undefined;
+        // The ccxt `writeBackIndexedMutations` pass matches the
+        // `let x = get_value(&C, &K)` text to write a mutated `x` back into
+        // `C[K]`; the native text is invisible to it, so a bind the next
+        // statement mutates keeps the helper.
+        if (this.isWriteBackBindRead(keyNode.parent)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();
         // A text that already carries the post-pass `&` is not a place.
         if (!keyText || keyText.startsWith('&')) return undefined;
         return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** True when the receiver local is declared from `this.safeList(…)` — the
+     *  ccxt-side `typeSafeListLocals` retype family. */
+    rustReceiverIsSafeListLocal(node: ts.Node): boolean {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return false;
+        const initializer: any = declaration.initializer;
+        if (initializer === undefined || !ts.isCallExpression(initializer)) return false;
+        const callee: any = initializer.expression;
+        return ts.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword &&
+            String(callee.name.escapedText) === 'safeList';
+    }
+
+    /** True when this read initialises a local that the very next statement in
+     *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
+     *  `x.push(v)` -> `append_to_array(&mut x…)`). */
+    isWriteBackBindRead(read: ts.Node): boolean {
+        const declaration: any = read === undefined ? undefined : read.parent;
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.initializer !== read) return false;
+        if (!ts.isIdentifier(declaration.name)) return false;
+        const name = String(declaration.name.escapedText);
+        let statement: any = declaration;
+        while (statement !== undefined && !ts.isStatement(statement)) statement = statement.parent;
+        const siblings: any[] = statement?.parent?.statements ?? [];
+        const at = siblings.indexOf(statement);
+        if (at < 0 || at + 1 >= siblings.length) return false;
+        return this.rustStatementMutatesLocal(siblings[at + 1], name);
+    }
+
+    /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
+     *  `x.push(v)`). */
+    rustStatementMutatesLocal(node: ts.Node, name: string): boolean {
+        let mutated = false;
+        const visit = (n: ts.Node) => {
+            if (mutated) return;
+            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) &&
+                this.rootPlaceText(n.left) === name) {
+                mutated = true;
+                return;
+            }
+            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
+                n.expression.name.text === 'push' && this.rootPlaceText(n.expression.expression) === name) {
+                mutated = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(node, visit);
+        return mutated;
     }
 
     /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric

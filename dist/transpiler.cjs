@@ -18220,10 +18220,65 @@ ${classMethods}
       return void 0;
     if (!this.isRustValueIndexKey(keyNode))
       return void 0;
+    if (this.rustReceiverIsSafeListLocal(receiverNode))
+      return void 0;
+    if (this.isWriteBackBindRead(keyNode.parent))
+      return void 0;
     const keyText = this.printNode(keyNode, 0).trim();
     if (!keyText || keyText.startsWith("&"))
       return void 0;
     return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
+  }
+  /** True when the receiver local is declared from `this.safeList(…)` — the
+   *  ccxt-side `typeSafeListLocals` retype family. */
+  rustReceiverIsSafeListLocal(node) {
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || !_typescript2.default.isVariableDeclaration(declaration))
+      return false;
+    const initializer = declaration.initializer;
+    if (initializer === void 0 || !_typescript2.default.isCallExpression(initializer))
+      return false;
+    const callee = initializer.expression;
+    return _typescript2.default.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind4.ThisKeyword && String(callee.name.escapedText) === "safeList";
+  }
+  /** True when this read initialises a local that the very next statement in
+   *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
+   *  `x.push(v)` -> `append_to_array(&mut x…)`). */
+  isWriteBackBindRead(read) {
+    const declaration = read === void 0 ? void 0 : read.parent;
+    if (declaration === void 0 || !_typescript2.default.isVariableDeclaration(declaration) || declaration.initializer !== read)
+      return false;
+    if (!_typescript2.default.isIdentifier(declaration.name))
+      return false;
+    const name = String(declaration.name.escapedText);
+    let statement = declaration;
+    while (statement !== void 0 && !_typescript2.default.isStatement(statement))
+      statement = statement.parent;
+    const siblings = _nullishCoalesce(_optionalChain([statement, 'optionalAccess', _1151 => _1151.parent, 'optionalAccess', _1152 => _1152.statements]), () => ( []));
+    const at = siblings.indexOf(statement);
+    if (at < 0 || at + 1 >= siblings.length)
+      return false;
+    return this.rustStatementMutatesLocal(siblings[at + 1], name);
+  }
+  /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
+   *  `x.push(v)`). */
+  rustStatementMutatesLocal(node, name) {
+    let mutated = false;
+    const visit = (n) => {
+      if (mutated)
+        return;
+      if (_typescript2.default.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && this.rootPlaceText(n.left) === name) {
+        mutated = true;
+        return;
+      }
+      if (_typescript2.default.isCallExpression(n) && _typescript2.default.isPropertyAccessExpression(n.expression) && n.expression.name.text === "push" && this.rootPlaceText(n.expression.expression) === name) {
+        mutated = true;
+        return;
+      }
+      _typescript2.default.forEachChild(n, visit);
+    };
+    _typescript2.default.forEachChild(node, visit);
+    return mutated;
   }
   /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric
    *  literal>` declaration of the same function (the C-style loop counter).
@@ -18265,7 +18320,7 @@ ${classMethods}
       return void 0;
     try {
       const symbol = this.getChecker().getSymbolAtLocation(node);
-      return _optionalChain([symbol, 'optionalAccess', _1151 => _1151.valueDeclaration]);
+      return _optionalChain([symbol, 'optionalAccess', _1153 => _1153.valueDeclaration]);
     } catch (e) {
       return void 0;
     }
@@ -18342,7 +18397,7 @@ ${classMethods}
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0)
       return false;
-    const name = _optionalChain([declaration, 'access', _1152 => _1152.name, 'optionalAccess', _1153 => _1153.text]);
+    const name = _optionalChain([declaration, 'access', _1154 => _1154.name, 'optionalAccess', _1155 => _1155.text]);
     if (typeof name !== "string")
       return false;
     if (_typescript2.default.isParameter(declaration)) {
@@ -18370,7 +18425,7 @@ ${classMethods}
       if (type2 === void 0)
         return false;
       const symbol = this.typeSymbolOf(type2);
-      const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1154 => _1154.declarations]), () => ( []));
+      const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1156 => _1156.declarations]), () => ( []));
       return declarations.some((d) => {
         if (!_typescript2.default.isClassDeclaration(d) || d.name === void 0 || d.name.text !== "Client")
           return false;
@@ -18381,7 +18436,7 @@ ${classMethods}
     const type = this.getCheckedTypeOf(declaration.name);
     if (named(type))
       return true;
-    return (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _1155 => _1155.types]), () => ( []))).some((member) => named(member));
+    return (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _1157 => _1157.types]), () => ( []))).some((member) => named(member));
   }
   /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
    *  `str::parse` would; undefined when the fold is not obviously exact. */
@@ -18770,9 +18825,9 @@ ${idn}}`;
       ifComplete = `${this.getIden(identation)}if ${ifComplete}`;
     }
     const elseStatement = node.elseStatement;
-    if (_optionalChain([elseStatement, 'optionalAccess', _1156 => _1156.kind]) === SyntaxKind4.Block) {
+    if (_optionalChain([elseStatement, 'optionalAccess', _1158 => _1158.kind]) === SyntaxKind4.Block) {
       ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
-    } else if (_optionalChain([elseStatement, 'optionalAccess', _1157 => _1157.kind]) === SyntaxKind4.IfStatement) {
+    } else if (_optionalChain([elseStatement, 'optionalAccess', _1159 => _1159.kind]) === SyntaxKind4.IfStatement) {
       ifComplete += " " + this.printIfStatement(elseStatement, identation);
     }
     return this.printNodeCommentsIfAny(node, identation, ifComplete);
@@ -18911,7 +18966,7 @@ ${this.getIden(identation)}})`;
   }
   // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
-    const native = this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1158 => _1158.arguments, 'optionalAccess', _1159 => _1159[0]]), parsedArg);
+    const native = this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1160 => _1160.arguments, 'optionalAccess', _1161 => _1161[0]]), parsedArg);
     if (native !== void 0) {
       return `Value::Bool(${native})`;
     }
@@ -18953,7 +19008,7 @@ ${this.getIden(identation)}})`;
     return `append_to_array(&mut ${name}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
-    const pRef = _optionalChain([parsedArg, 'optionalAccess', _1160 => _1160.startsWith, 'call', _1161 => _1161("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
+    const pRef = _optionalChain([parsedArg, 'optionalAccess', _1162 => _1162.startsWith, 'call', _1163 => _1163("Value::")]) ? `&${parsedArg}` : `&${parsedArg}`;
     return `Value::Bool(contains(&${name}, ${pRef}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
@@ -19023,7 +19078,7 @@ ${this.getIden(identation)}})`;
   printTryStatement(node, identation) {
     const tryBody = node.tryBlock.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
     const catchBody = node.catchClause.block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-    const rawName = _optionalChain([node, 'access', _1162 => _1162.catchClause, 'optionalAccess', _1163 => _1163.variableDeclaration, 'optionalAccess', _1164 => _1164.name, 'optionalAccess', _1165 => _1165.escapedText]);
+    const rawName = _optionalChain([node, 'access', _1164 => _1164.catchClause, 'optionalAccess', _1165 => _1165.variableDeclaration, 'optionalAccess', _1166 => _1166.name, 'optionalAccess', _1167 => _1167.escapedText]);
     const errorName = rawName ? `_${rawName}` : "_e";
     const iden = this.getIden(identation);
     return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -19497,7 +19552,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _1166 => _1166.body, 'optionalAccess', _1167 => _1167.statements, 'access', _1168 => _1168.forEach, 'call', _1169 => _1169((statement) => {
+    _optionalChain([node, 'access', _1168 => _1168.body, 'optionalAccess', _1169 => _1169.statements, 'access', _1170 => _1170.forEach, 'call', _1171 => _1171((statement) => {
       if (_typescript2.default.isExpressionStatement(statement)) {
         const expression = statement.expression;
         if (_typescript2.default.isCallExpression(expression)) {
@@ -19658,7 +19713,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _1170 => _1170.name, 'access', _1171 => _1171.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _1172 => _1172.name, 'access', _1173 => _1173.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -19911,14 +19966,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1172 => _1172.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1174 => _1174.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1173 => _1173.getChecker, 'call', _1174 => _1174(), 'access', _1175 => _1175.getDeclaredTypeOfSymbol, 'call', _1176 => _1176(symbol), 'access', _1177 => _1177.symbol, 'optionalAccess', _1178 => _1178.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1175 => _1175.getChecker, 'call', _1176 => _1176(), 'access', _1177 => _1177.getDeclaredTypeOfSymbol, 'call', _1178 => _1178(symbol), 'access', _1179 => _1179.symbol, 'optionalAccess', _1180 => _1180.declarations]), () => ( []));
           const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -20053,7 +20108,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
     options,
     rootNames: [inMemoryFilePath, globalsShimPath],
     host,
-    oldProgram: _optionalChain([cache, 'optionalAccess', _1179 => _1179.memoryOldProgram])
+    oldProgram: _optionalChain([cache, 'optionalAccess', _1181 => _1181.memoryOldProgram])
   });
   if (cache !== void 0) {
     cache.memoryOldProgram = program;

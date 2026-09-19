@@ -2900,4 +2900,52 @@ describe('rust native container reads (B-28)', () => {
         expect(output).not.toContain('get_value(&client, &Value::Str("url"');
         expect(output).toContain('let mut s: Value = client.subscriptions;');
     });
+
+    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+        const ts =
+            'class T {\n' +
+            '    m(data: any[]) {\n' +
+            '        for (let i = 0; i < data.length; i++) {\n' +
+            '            const entry = data[i];\n' +
+            "            entry['page'] = 1;\n" +
+            '            return entry;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut entry: Value = get_value(&data, &i);');
+        expect(output).not.toContain(DYNAMIC);
+    });
+
+    test('a bind whose next statement does not mutate reads natively', () => {
+        const ts =
+            'class T {\n' +
+            '    m(data: any[]) {\n' +
+            '        for (let i = 0; i < data.length; i++) {\n' +
+            '            const entry = data[i];\n' +
+            '            const other = data[i];\n' +
+            '            return entry;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut entry: Value = data.as_array().and_then(|__arr| match &i');
+        expect(output).not.toContain('let mut entry: Value = get_value(&data, &i);');
+    });
+
+    test('a safe_list local keeps the helper for the ccxt Vec retype pass', () => {
+        const ts =
+            'class T {\n' +
+            '    m(message) {\n' +
+            "        const data = this.safeList(message, 'data', []);\n" +
+            '        for (let i = 0; i < data.length; i++) {\n' +
+            '            const row = data[i];\n' +
+            '            return row;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut row: Value = get_value(&data, &i);');
+        expect(output).not.toContain(DYNAMIC);
+    });
 });
