@@ -21776,11 +21776,46 @@ ${classMethods}
     }
     return strings > 0;
   }
+  /** The local/parameter proof of a dynamic-key map read: a parameter whose
+   *  annotation proves a plain dict (B-25), or any local whose checker type
+   *  proves a plain map and which nothing in the enclosing function
+   *  re-assigns (D2). Returns the proven declaration. */
+  rustProvenDynamicMapReceiver(node) {
+    const parameter = this.rustProvenDictParameter(node);
+    if (parameter !== void 0)
+      return parameter;
+    if (!ts7.isIdentifier(node))
+      return void 0;
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || !ts7.isVariableDeclaration(declaration))
+      return void 0;
+    if (declaration.initializer === void 0)
+      return void 0;
+    if (!this.isProvenMapExpression(node))
+      return void 0;
+    if (this.rustLocalIsReassigned(declaration, String(node.escapedText)))
+      return void 0;
+    return declaration;
+  }
+  /** The element-access read a key node belongs to (`x[k]`, `x[(k)]`). */
+  rustElementReadOfKey(keyNode) {
+    let current = keyNode;
+    while (current !== void 0 && (ts7.isParenthesizedExpression(current) || ts7.isAsExpression(current) || ts7.isNonNullExpression(current))) {
+      current = current.parent;
+    }
+    const parent = current === void 0 ? void 0 : current.parent;
+    if (parent === void 0 || !ts7.isElementAccessExpression(parent) || parent.argumentExpression !== current)
+      return void 0;
+    return parent;
+  }
   /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
   printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) {
-    if (this.rustProvenDictParameter(receiverNode) === void 0)
+    if (this.rustProvenDynamicMapReceiver(receiverNode) === void 0)
       return void 0;
     if (!this.rustKeyIsProvenString(keyNode))
+      return void 0;
+    const read = this.rustElementReadOfKey(keyNode);
+    if (read !== void 0 && this.isWriteBackBindRead(read))
       return void 0;
     const keyText = this.printNode(keyNode, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
@@ -22372,7 +22407,7 @@ ${classMethods}
         const callee = current.expression;
         if (root !== void 0 && this.rootPlaceText(callee.expression) === root)
           return false;
-        if (callee.expression.kind === ts7.SyntaxKind.ThisKeyword && _RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))))
+        if (callee.expression.kind === ts7.SyntaxKind.ThisKeyword && _RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))) && (root === void 0 || root === "this" || root.startsWith("this.")))
           return false;
       }
       current = current.parent;

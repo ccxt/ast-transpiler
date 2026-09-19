@@ -3631,10 +3631,43 @@ export class RustTranspiler extends BaseTranspiler {
         return strings > 0;
     }
 
+    /** The local/parameter proof of a dynamic-key map read: a parameter whose
+     *  annotation proves a plain dict (B-25), or any local whose checker type
+     *  proves a plain map and which nothing in the enclosing function
+     *  re-assigns (D2). Returns the proven declaration. */
+    rustProvenDynamicMapReceiver(node: ts.Node): ts.Declaration | undefined {
+        const parameter = this.rustProvenDictParameter(node);
+        if (parameter !== undefined) return parameter;
+        if (!ts.isIdentifier(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) return undefined;
+        if (declaration.initializer === undefined) return undefined;
+        if (!this.isProvenMapExpression(node)) return undefined;
+        if (this.rustLocalIsReassigned(declaration, String(node.escapedText))) return undefined;
+        return declaration;
+    }
+
+    /** The element-access read a key node belongs to (`x[k]`, `x[(k)]`). */
+    rustElementReadOfKey(keyNode: ts.Node): ts.Node | undefined {
+        let current: any = keyNode;
+        while (current !== undefined && (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current))) {
+            current = current.parent;
+        }
+        const parent: any = current === undefined ? undefined : current.parent;
+        if (parent === undefined || !ts.isElementAccessExpression(parent) || parent.argumentExpression !== current) return undefined;
+        return parent;
+    }
+
     /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
     printNativeDynamicMapAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
-        if (this.rustProvenDictParameter(receiverNode) === undefined) return undefined;
+        if (this.rustProvenDynamicMapReceiver(receiverNode) === undefined) return undefined;
         if (!this.rustKeyIsProvenString(keyNode)) return undefined;
+        // The ccxt `writeBackIndexedMutations` pass matches the
+        // `let x = get_value(&C, &K)` text to write a mutated `x` back into
+        // `C[K]`; the native text is invisible to it, so a bind the next
+        // statement mutates keeps the helper.
+        const read = this.rustElementReadOfKey(keyNode);
+        if (read !== undefined && this.isWriteBackBindRead(read)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();
         // A plain place keeps the borrow local; a call/temporary text does not.
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
@@ -4235,9 +4268,14 @@ export class RustTranspiler extends BaseTranspiler {
                 const callee = current.expression;
                 // Same-place receiver (`x.push(x[0])`) is rewritten to `&mut x` args.
                 if (root !== undefined && this.rootPlaceText(callee.expression) === root) return false;
-                // `&mut self.<method>(...)` arg lists are hoisted by the ccxt pass.
+                // `&mut self.<method>(...)` arg lists are hoisted by the ccxt
+                // pass because a `&self` reborrow conflicts with the outer
+                // `&mut self`. A read of a local or a parameter performs no
+                // self borrow, so only a `this`-rooted read keeps the helper;
+                // an unresolvable root stays conservative.
                 if (callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
-                    RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText)))) return false;
+                    RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))) &&
+                    (root === undefined || root === 'this' || root.startsWith('this.'))) return false;
             }
             current = current.parent;
         }
