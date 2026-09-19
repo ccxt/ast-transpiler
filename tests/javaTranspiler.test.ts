@@ -6705,8 +6705,12 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).not.toContain('Helpers.GetValue(market');
     });
 
-    test('a method overriding a hand-written base signature keeps Object parameters', () => {
-        expect(venueOutput).toContain('public void parseX(Object data, Object status)');
+    // d-10: the base tier prints its annotated parameters too, and every declaration of
+    // the method up and down the chain prints the same native type - the override moves
+    // with the base declaration (Java overrides are invariant on parameter types), and a
+    // fixed parameter with no annotation of its own takes the inherited type.
+    test('the base declaration and its override print the same typed signature (d-10)', () => {
+        expect(venueOutput).toContain('public void parseX(java.util.Map<String, Object> data, String status)');
     });
 
     test('an override of a generated method moves with its base declaration', () => {
@@ -6736,6 +6740,91 @@ describe('java typed parameters (b-09)', () => {
     test('an optional parameter keeps its optionalArgs prologue and type', () => {
         expect(venueOutput).toContain('public void parseOpt(Object... optionalArgs)');
         expect(venueOutput).toContain('Object data = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>()');
+    });
+});
+
+// d-10: override parameters/returns move with the base declaration. A declaration whose
+// parameter carries no native annotation of its own still prints the type its base prints
+// (otherwise the override would stop overriding the typed base method in Java), and a
+// declaration whose own annotation disagrees with the base keeps the boxed signature.
+describe('java override parameters move with the base declaration (d-10)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-d10-overrides');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venue10.ts');
+
+    let output: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n" +
+            "export interface MarketInterface {\n    id: string;\n}\n" +
+            "export type Market = MarketInterface | undefined;\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict, Str, Market } from './types';\n" +
+            "export default class Exchange {\n" +
+            "    parseTyped (data: Dict, market: Market = undefined): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseForced (data: Dict, status: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseLoose (data, status): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseConflict (data: Dict): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str, Market } from './base/types';\n" +
+            "import Exchange from './base/Exchange';\n" +
+            "class Venue extends Exchange {\n" +
+            "    parseTyped (data: Dict, market: Market = undefined): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseForced (data, status): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseLoose (data: Dict, status: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseConflict (data: Str): void {\n" +
+            "        const id = data['id'];\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('an override of a typed base declaration prints the same typed signature', () => {
+        // the venue output carries the Venue declaration; the base declaration prints the
+        // same signature in Exchange.ts (checked by the b-09 parseX case above)
+        expect(output).toContain('public void parseTyped(java.util.Map<String, Object> data, Object... optionalArgs)');
+        expect(output).not.toContain('parseTyped(Object data');
+    });
+
+    test('a fixed override parameter with no annotation takes the base declaration type', () => {
+        expect(output).toContain('public void parseForced(java.util.Map<String, Object> data, String status)');
+        expect(output).not.toContain('parseForced(Object data');
+    });
+
+    test('an unannotated base declaration boxes the whole chain', () => {
+        expect(output).toContain('public void parseLoose(Object data, Object status)');
+        expect(output).not.toContain('parseLoose(java.util.Map<String, Object> data');
+    });
+
+    test('an override annotation that disagrees with the base keeps the boxed signature', () => {
+        // D8: the base declaration prints its own Dict type, the disagreeing override keeps
+        // the box (no site in ts/src disagrees today)
+        expect(output).toContain('public void parseConflict(Object data)');
     });
 });
 

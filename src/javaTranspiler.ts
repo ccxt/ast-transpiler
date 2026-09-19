@@ -271,12 +271,23 @@ const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = {
 // the aliases above have to come from the shared ts/src/base/types.ts declaration
 const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 
+// Parameter positions whose Java signature hand-written code fills with a different
+// generic instantiation, so the native type would not compile where the printer cannot
+// cast: BaseExchange.fetch() passes its `Map<String, String> responseHeaders` into
+// handleErrors, and `Map<String, Object>` is inconvertible from it. Java overrides are
+// invariant, so the exclusion boxes every declaration of the name at once.
+const JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
+    'handleErrors': [ 4 ],
+};
+
 // only the generated tiers carry the annotation: a method declared in ts/src/base/** has a
 // hand-written java counterpart (BaseExchange/Exchange/Helpers/Precise) that keeps `Object`
 const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 
-// the base tier itself keeps `Object` parameters: the hand-written java/lib/.../Exchange.java
-// extends the generated BaseExchange.java and overrides it with `Object` boxes
+// the base tier is generated too: the transpiled `BaseExchange` body of
+// ts/src/base/Exchange.ts is spliced into java/lib/.../BaseExchange.java (the hand-written
+// java surface around it is not a class of its own), so its declarations print the
+// annotated type like any other generated tier and an override can move with them
 const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
 
 const JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS: number =
@@ -1908,14 +1919,21 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // The native Java type a parameter declaration prints with, when its TypeScript
-    // annotation names one of the base/types.ts aliases the Java port can carry
-    // (JAVA_NATIVE_PARAMETER_TYPES). Fixed parameters of a generated-tier method only, and
-    // every declaration of the method up the heritage chain must print the same native
-    // type: Java overrides are invariant on parameter types, and the base tier is
-    // overridden by the hand-written java surface with its own `Object` parameters.
+    // The native Java type a parameter declaration prints with. A parameter whose own
+    // annotation names one of the base/types.ts aliases prints it whenever every
+    // declaration of the method up the heritage chain prints the same type: Java overrides
+    // are invariant on parameter types, so a declaration whose base prints `Object` (an
+    // unannotated base, a hand-written java class) keeps the box. A fixed parameter that
+    // carries no native annotation of its own MOVES with the declaration it overrides
+    // (D-10: base+override agree) - without that the override would print `Object` against
+    // a typed base and silently stop overriding it.
     javaNativeParameterType(node): string | undefined {
-        const type = this.javaNativeParameterTypeOf(node);
+        if (node === undefined || !ts.isParameter(node)
+            || node.initializer !== undefined || node.dotDotDotToken !== undefined) {
+            return undefined;
+        }
+        const own = this.javaNativeParameterTypeOf(node);
+        const type = own !== undefined ? own : this.javaInheritedParameterType(node);
         if (type === undefined) {
             return undefined;
         }
@@ -1932,7 +1950,7 @@ export class JavaTranspiler extends BaseTranspiler {
             let override = this.getMethodOverride(method);
             while (override !== undefined) {
                 const baseParam = (override as any).parameters?.[index];
-                if (baseParam === undefined || this.javaNativeParameterTypeOf(baseParam) !== type) {
+                if (!this.javaParameterPrintsType(baseParam, type)) {
                     return undefined;
                 }
                 override = this.getMethodOverride(override);
@@ -1941,6 +1959,41 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined; // an unresolvable heritage keeps the box
         }
         return type;
+    }
+
+    // the same parameter position of an ancestor declaration prints this native type: its
+    // own annotation names it, or - with no annotation of its own - it inherits the same
+    // type from a declaration above it, exactly like this one does
+    javaParameterPrintsType(baseParam, type: string): boolean {
+        if (baseParam === undefined || !ts.isParameter(baseParam)
+            || baseParam.initializer !== undefined || baseParam.dotDotDotToken !== undefined) {
+            return false;
+        }
+        const own = this.javaNativeParameterTypeOf(baseParam);
+        const printed = own !== undefined ? own : this.javaInheritedParameterType(baseParam);
+        return printed === type;
+    }
+
+    // the type a fixed parameter with no annotation of its own inherits: the nearest
+    // declaration of the method up the heritage chain that prints a native type. An
+    // unannotated root declaration prints `Object`, so nothing is inherited and the whole
+    // chain keeps the box.
+    javaInheritedParameterType(node): string | undefined {
+        const method = node.parent;
+        const index = method?.parameters?.indexOf(node);
+        if (method === undefined || index === undefined || index < 0) {
+            return undefined;
+        }
+        let override = this.getMethodOverride(method);
+        while (override !== undefined) {
+            const baseParam = (override as any).parameters?.[index];
+            const type = baseParam === undefined ? undefined : this.javaNativeParameterTypeOf(baseParam);
+            if (type !== undefined) {
+                return type;
+            }
+            override = this.getMethodOverride(override);
+        }
+        return undefined;
     }
 
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
@@ -2007,10 +2060,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (method === undefined || !ts.isMethodDeclaration(method) || !ts.isClassDeclaration(method.parent)) {
             return undefined;
         }
-        if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName)) {
-            return undefined;
-        }
-        if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
+        if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName)
+            && !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
             return undefined; // a hand-written java class declares this method, not the printer
         }
         let type;
@@ -2025,6 +2076,10 @@ export class JavaTranspiler extends BaseTranspiler {
         const symbol = (type as any).aliasSymbol ?? (type as any).symbol;
         const name = symbol?.name;
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES[name] === undefined) {
+            return undefined;
+        }
+        const excluded = JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS[(method.name as any)?.escapedText];
+        if (excluded !== undefined && excluded.includes(method.parameters.indexOf(node))) {
             return undefined;
         }
         const declaration = symbol?.declarations?.[0];

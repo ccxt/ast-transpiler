@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -12700,6 +12700,9 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
   "Bool": "Boolean"
 };
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
+var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
+  "handleErrors": [4]
+};
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void | ts6.TypeFlags.Never | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Enum | ts6.TypeFlags.EnumLiteral;
@@ -14102,14 +14105,20 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // The native Java type a parameter declaration prints with, when its TypeScript
-  // annotation names one of the base/types.ts aliases the Java port can carry
-  // (JAVA_NATIVE_PARAMETER_TYPES). Fixed parameters of a generated-tier method only, and
-  // every declaration of the method up the heritage chain must print the same native
-  // type: Java overrides are invariant on parameter types, and the base tier is
-  // overridden by the hand-written java surface with its own `Object` parameters.
+  // The native Java type a parameter declaration prints with. A parameter whose own
+  // annotation names one of the base/types.ts aliases prints it whenever every
+  // declaration of the method up the heritage chain prints the same type: Java overrides
+  // are invariant on parameter types, so a declaration whose base prints `Object` (an
+  // unannotated base, a hand-written java class) keeps the box. A fixed parameter that
+  // carries no native annotation of its own MOVES with the declaration it overrides
+  // (D-10: base+override agree) - without that the override would print `Object` against
+  // a typed base and silently stop overriding it.
   javaNativeParameterType(node) {
-    const type = this.javaNativeParameterTypeOf(node);
+    if (node === void 0 || !ts6.isParameter(node) || node.initializer !== void 0 || node.dotDotDotToken !== void 0) {
+      return void 0;
+    }
+    const own = this.javaNativeParameterTypeOf(node);
+    const type = own !== void 0 ? own : this.javaInheritedParameterType(node);
     if (type === void 0) {
       return void 0;
     }
@@ -14122,7 +14131,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       let override = this.getMethodOverride(method);
       while (override !== void 0) {
         const baseParam = override.parameters?.[index];
-        if (baseParam === void 0 || this.javaNativeParameterTypeOf(baseParam) !== type) {
+        if (!this.javaParameterPrintsType(baseParam, type)) {
           return void 0;
         }
         override = this.getMethodOverride(override);
@@ -14131,6 +14140,38 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     return type;
+  }
+  // the same parameter position of an ancestor declaration prints this native type: its
+  // own annotation names it, or - with no annotation of its own - it inherits the same
+  // type from a declaration above it, exactly like this one does
+  javaParameterPrintsType(baseParam, type) {
+    if (baseParam === void 0 || !ts6.isParameter(baseParam) || baseParam.initializer !== void 0 || baseParam.dotDotDotToken !== void 0) {
+      return false;
+    }
+    const own = this.javaNativeParameterTypeOf(baseParam);
+    const printed = own !== void 0 ? own : this.javaInheritedParameterType(baseParam);
+    return printed === type;
+  }
+  // the type a fixed parameter with no annotation of its own inherits: the nearest
+  // declaration of the method up the heritage chain that prints a native type. An
+  // unannotated root declaration prints `Object`, so nothing is inherited and the whole
+  // chain keeps the box.
+  javaInheritedParameterType(node) {
+    const method = node.parent;
+    const index = method?.parameters?.indexOf(node);
+    if (method === void 0 || index === void 0 || index < 0) {
+      return void 0;
+    }
+    let override = this.getMethodOverride(method);
+    while (override !== void 0) {
+      const baseParam = override.parameters?.[index];
+      const type = baseParam === void 0 ? void 0 : this.javaNativeParameterTypeOf(baseParam);
+      if (type !== void 0) {
+        return type;
+      }
+      override = this.getMethodOverride(override);
+    }
+    return void 0;
   }
   javaParameterIsCompoundAssigned(node) {
     const method = node.parent;
@@ -14186,10 +14227,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (method === void 0 || !ts6.isMethodDeclaration(method) || !ts6.isClassDeclaration(method.parent)) {
       return void 0;
     }
-    if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName)) {
-      return void 0;
-    }
-    if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
+    if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName) && !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
       return void 0;
     }
     let type;
@@ -14204,6 +14242,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     const symbol = type.aliasSymbol ?? type.symbol;
     const name = symbol?.name;
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES[name] === void 0) {
+      return void 0;
+    }
+    const excluded = JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS[method.name?.escapedText];
+    if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(node))) {
       return void 0;
     }
     const declaration = symbol?.declarations?.[0];
