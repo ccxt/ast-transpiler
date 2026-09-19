@@ -1183,6 +1183,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
+    javaSpawnCallParameterTypes(node: any): (string | undefined)[] | undefined;
     javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
     binaryExpressionsWrappers: any;

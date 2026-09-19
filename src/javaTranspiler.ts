@@ -406,7 +406,8 @@ export class JavaTranspiler extends BaseTranspiler {
     // checker proved the argument's TypeScript type assignable to the parameter's, so the
     // declared type describes the value the parameter really receives.
     javaPrintCallArguments(args, node, identation) {
-        const parameterTypes = this.javaNativeCallParameterTypes(node);
+        const spawnTypes = this.javaSpawnCallParameterTypes(node);
+        const parameterTypes = spawnTypes !== undefined ? spawnTypes : this.javaNativeCallParameterTypes(node);
         return args.map((a, i) => {
             const parsedArg = this.printNode(a, identation).trim();
             const type = parameterTypes[i];
@@ -417,6 +418,46 @@ export class JavaTranspiler extends BaseTranspiler {
             // condition, not the whole argument
             return `(${type}) (${parsedArg})`;
         }).join(", ");
+    }
+
+    // `this.spawn(this.someMethod, args...)`: the spawned work executes `this.someMethod(args)`
+    // (the ccxt post-pass rewrites the reference into a lambda), so the arguments belong to the
+    // referenced method's signature, not to spawn's `...args` - each one carries the checkcast
+    // its parameter demands, or the Object local would not convert to the printed native type.
+    javaSpawnCallParameterTypes(node): (string | undefined)[] | undefined {
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword
+            || callee.name?.escapedText !== 'spawn') {
+            return undefined;
+        }
+        const reference = (node.arguments ?? [])[0];
+        if (reference?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || reference.expression?.kind !== ts.SyntaxKind.ThisKeyword
+            || reference.name?.escapedText === undefined) {
+            return undefined;
+        }
+        let declaration;
+        try {
+            const symbol = this.getChecker().getSymbolAtLocation(reference.name);
+            declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        } catch (e) {
+            return undefined;
+        }
+        const parameters = (declaration as any)?.parameters;
+        if (parameters === undefined) {
+            return undefined;
+        }
+        return (node.arguments ?? []).map((a, i) => {
+            if (i === 0) {
+                return undefined;
+            }
+            const param = parameters[i - 1];
+            if (param === undefined || !ts.isParameter(param)) {
+                return undefined;
+            }
+            return this.javaNativeParameterType(param);
+        });
     }
 
     // the argument is a literal (or a String the embedding build layer's resolver proves)
