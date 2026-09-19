@@ -1,5 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { BinaryExpression, CallExpression, TypeChecker } from 'typescript';
+import * as fs from "fs";
+import * as path from "path";
 
 const SyntaxKind = ts.SyntaxKind;
 
@@ -548,6 +550,77 @@ function alignGoTrailingComments (content: string): string {
         }
     }
     return lines.join ('\n');
+}
+
+// the TypeScript accessors whose Go signature this printer already knows to be
+// `*string` (GO_HELPER_RETURN_TYPES, plus the coerced SafeCurrencyCode/SafeSymbol).
+// The textual call-site proof below uses them for the sibling files of the ts/src
+// tree, which a scoped run does not carry in its program.
+const GO_TS_SRC_STRING_PRODUCERS = [
+    /^this\s*\.\s*safeString\s*\(/,
+    /^this\s*\.\s*safeString2\s*\(/,
+    /^this\s*\.\s*safeString3\s*\(/,
+    /^this\s*\.\s*safeStringN\s*\(/,
+    /^this\s*\.\s*safeStringLower\s*\(/,
+    /^this\s*\.\s*safeStringLower2\s*\(/,
+    /^this\s*\.\s*safeStringUpper\s*\(/,
+    /^this\s*\.\s*safeStringUpper2\s*\(/,
+    /^this\s*\.\s*safeCurrencyCode\s*\(/,
+    /^this\s*\.\s*safeSymbol\s*\(/,
+];
+
+// the argument texts of a call whose opening parenthesis sits at `open`, or undefined
+// when the parentheses do not balance — an unproven call site must never pass the proof
+function goBalancedCallArgs (text: string, open: number): string[] | undefined {
+    const args: string[] = [];
+    let depth = 0;
+    let current = '';
+    let quote: string | undefined;
+    for (let i = open; i < text.length; i++) {
+        const ch = text[i];
+        if (quote !== undefined) {
+            current += ch;
+            if (ch === '\\') {
+                current += text[i + 1] ?? '';
+                i++;
+                continue;
+            }
+            if (ch === quote) {
+                quote = undefined;
+            }
+            continue;
+        }
+        if ((ch === '"') || (ch === "'") || (ch === '`')) {
+            quote = ch;
+            current += ch;
+            continue;
+        }
+        if ((ch === '/') && (text[i + 1] === '/')) {
+            while ((i < text.length) && (text[i] !== '\n')) { i++; }
+            continue;
+        }
+        if (ch === '(') {
+            depth++;
+            if (depth > 1) { current += ch; }
+            continue;
+        }
+        if (ch === ')') {
+            depth--;
+            if (depth === 0) {
+                if (current.trim().length > 0) { args.push (current.trim ()); }
+                return args;
+            }
+            current += ch;
+            continue;
+        }
+        if ((ch === ',') && (depth === 1)) {
+            args.push (current.trim ());
+            current = '';
+            continue;
+        }
+        current += ch;
+    }
+    return undefined;
 }
 
 export {
@@ -1131,6 +1204,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     printParameterType(node) {
+        // B-02: an internal method's parameter that the call-site proof types prints
+        // its native Go type; every other parameter keeps the `any` box
+        const nativeType = this.goNativeParameterType(node);
+        if (nativeType !== undefined) {
+            return nativeType;
+        }
         const typeText = this.getType(node);
         // // if (typeText === this.BOOLEAN_KEYWORD) {
         // //     return typeText;
@@ -3322,11 +3401,341 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
+    // ---- B-02: native parameter types on internal parse*/helper methods --------
+    //
+    // A parameter declared with a nullable ccxt alias (`Str` = string | undefined) can
+    // be printed with the native Go type the printer already uses for that value
+    // (`*string`), but only when
+    //   * the method is internal — not async, not an override, and no member of that
+    //     name exists on the class it extends: the generated base classes and the
+    //     hand-written IDerivedExchange interface compile against the base signature,
+    //   * every call site of the method passes exactly that Go type — the checker
+    //     proves the ones in this file; the sibling files of the same ts/src tree
+    //     (pro/ and the derived exchanges, absent from a scoped run's program) are
+    //     proven textually, and an unprovable call site keeps the box,
+    //   * the body never writes the parameter another printed type (D2).
+    // Each qualifying parameter is also registered in goDeclaredTypeOfIdentifier, so
+    // the readers that consult it (pointer-aware equality, element access) go native.
+    goNativeParameterTypeCache = new Map<any, string | undefined>();
+    goSameFileCallCache = new Map<any, Map<string, Array<any>>>();
+    goTsSrcTreeCache = new Map<string, any>();
+
+    goNativeParameterType(param): string | undefined {
+        if (param?.kind !== ts.SyntaxKind.Parameter) {
+            return undefined;
+        }
+        if (this.goNativeParameterTypeCache.has(param)) {
+            return this.goNativeParameterTypeCache.get(param);
+        }
+        // the call-site proof prints argument expressions, which can land back here
+        this.goNativeParameterTypeCache.set(param, undefined);
+        const result = this.goNativeParameterTypeOf(param);
+        this.goNativeParameterTypeCache.set(param, result);
+        return result;
+    }
+
+    goNativeParameterTypeOf(param): string | undefined {
+        if ((param.initializer !== undefined) || (param.dotDotDotToken !== undefined)) {
+            return undefined; // optional/variadic parameters keep the optionalArgs ABI
+        }
+        if (param.name?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const fn: any = param.parent;
+        if ((fn?.kind !== ts.SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== ts.SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        if (!fn.name.escapedText.startsWith('parse')) {
+            return undefined; // internal parseX helpers only: the unified API is public surface
+        }
+        if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
+            return undefined;
+        }
+        const index = fn.parameters.indexOf(param);
+        for (const goType of this.goNativeParameterTypeCandidates(param)) {
+            if (this.goParameterCallSitesPassType(fn, index, goType)
+                && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)) {
+                return goType;
+            }
+        }
+        return undefined;
+    }
+
+    // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
+    // have no call-site proof yet (the corpus passes `any` locals) and keep the box.
+    goNativeParameterTypeCandidates(param): string[] {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(param);
+        } catch (e) {
+            return [];
+        }
+        if (type === undefined) {
+            return [];
+        }
+        let parts = ((typeof type.isUnion === 'function') && type.isUnion()) ? type.types.slice() : [type];
+        parts = parts.filter(p => !(p.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)));
+        if (parts.length !== 1) {
+            return [];
+        }
+        const inner: any = parts[0];
+        if (inner.flags & ts.TypeFlags.String) {
+            return ['*string'];
+        }
+        return [];
+    }
+
+    // true when the method overrides (or shadows) a member of the class it extends, or
+    // carries an explicit `override`: those print the base signature so the generated
+    // base classes and IDerivedExchange keep compiling against it. The abstract base
+    // itself (ts/src/base/**, or any root class) is public surface and never retyped.
+    goMethodKeepsBaseSignature(fn): boolean {
+        if ((fn.modifiers ?? []).some(m => m.kind === ts.SyntaxKind.OverrideKeyword)) {
+            return true;
+        }
+        if (fn.getSourceFile().fileName.includes('/ts/src/base/')) {
+            return true;
+        }
+        const name = fn.name.escapedText;
+        let cls = fn.parent;
+        while ((cls !== undefined) && (cls.kind !== ts.SyntaxKind.ClassDeclaration) && (cls.kind !== ts.SyntaxKind.ClassExpression)) {
+            cls = cls.parent;
+        }
+        if (cls === undefined) {
+            return true;
+        }
+        const clauses = cls.heritageClauses ?? [];
+        if (!clauses.some(clause => clause.token === ts.SyntaxKind.ExtendsKeyword)) {
+            return true; // a root class: the abstract base of the generated tree
+        }
+        for (const clause of clauses) {
+            if (clause.token !== ts.SyntaxKind.ExtendsKeyword) {
+                continue;
+            }
+            for (const expr of (clause.types ?? [])) {
+                let baseType;
+                try {
+                    baseType = this.getChecker().getTypeAtLocation(expr);
+                } catch (e) {
+                    baseType = undefined;
+                }
+                if (baseType?.getProperty?.(name) !== undefined) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // every call site of `fn` in the whole tree must pass exactly `goType` at `index`
+    goParameterCallSitesPassType(fn, index: number, goType: string): boolean {
+        const name = fn.name.escapedText;
+        for (const call of this.goSameFileCallsOf(fn, name)) {
+            const arg = call.arguments?.[index];
+            if ((arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) {
+                return false;
+            }
+            if (this.goPrintedArgType(arg) !== goType) {
+                return false;
+            }
+        }
+        const tree = this.goTsSrcTree(fn.getSourceFile());
+        if (tree !== undefined) {
+            const myClass = this.goEnclosingClassName(fn);
+            const myFile = tree.relativeOf.get(fn.getSourceFile().fileName);
+            for (const site of (tree.callIndex.get(name) ?? [])) {
+                if (site.file === myFile) {
+                    continue; // proven above off the checker
+                }
+                if (!this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
+                    continue; // a same-named method of another exchange
+                }
+                const arg = site.args[index];
+                if ((arg === undefined) || !this.goTextArgMatchesType(arg, goType, site.file, tree)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    goEnclosingClassName(fn): string | undefined {
+        let cls = fn.parent;
+        while ((cls !== undefined) && (cls.kind !== ts.SyntaxKind.ClassDeclaration) && (cls.kind !== ts.SyntaxKind.ClassExpression)) {
+            cls = cls.parent;
+        }
+        return (cls?.name?.kind === ts.SyntaxKind.Identifier) ? cls.name.escapedText : undefined;
+    }
+
+    // the printed Go type of a call-site argument, or undefined when the printer
+    // cannot name it (then the call site does not prove anything)
+    goPrintedArgType(arg): string | undefined {
+        if (arg.kind === ts.SyntaxKind.Identifier) {
+            return this.goDeclaredTypeOfIdentifier(arg);
+        }
+        return this.goTypeOfInitializer(arg, this.printNode(arg, 0));
+    }
+
+    // every `this.<name>(...)` of this file whose resolved signature is `fn`
+    goSameFileCallsOf(fn, name: string): Array<any> {
+        const file = fn.getSourceFile();
+        let index = this.goSameFileCallCache.get(file);
+        if (index === undefined) {
+            index = new Map<string, Array<any>>();
+            const visit = (node) => {
+                if (node.kind === ts.SyntaxKind.CallExpression) {
+                    const callee: any = node.expression;
+                    const calleeName = (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) ? callee.name?.escapedText : undefined;
+                    if (typeof calleeName === 'string') {
+                        const list = index.get(calleeName) ?? [];
+                        list.push(node);
+                        index.set(calleeName, list);
+                    }
+                }
+                ts.forEachChild(node, visit);
+            };
+            visit(file);
+            this.goSameFileCallCache.set(file, index);
+        }
+        const checker = this.getChecker();
+        const result = [];
+        for (const call of (index.get(name) ?? [])) {
+            let declaration;
+            try {
+                declaration = checker.getResolvedSignature(call)?.declaration;
+            } catch (e) {
+                declaration = undefined;
+            }
+            if (declaration === fn) {
+                result.push(call);
+            }
+        }
+        return result;
+    }
+
+    // Lazily read the ts/src tree this file belongs to: the call sites of every
+    // `this.x(...)`, each file's text and its class -> base map. A scoped run's
+    // program holds one exchange, so the sibling files are only provable textually.
+    goTsSrcTree(file): any {
+        const fileName: string = file.fileName;
+        const marker = '/ts/src/';
+        const at = fileName.lastIndexOf(marker);
+        if (at < 0) {
+            return undefined; // in-memory source (tests): no sibling files to prove
+        }
+        const root = fileName.substring(0, at + marker.length - 1);
+        if (!this.goTsSrcTreeCache.has(root)) {
+            this.goTsSrcTreeCache.set(root, this.goTsSrcTreeBuild(root));
+        }
+        return this.goTsSrcTreeCache.get(root);
+    }
+
+    goTsSrcTreeBuild(root: string) {
+        const callIndex = new Map<string, Array<any>>();
+        const fileText = new Map<string, string>();
+        const classBases = new Map<string, string>();
+        const relativeOf = new Map<string, string>();
+        const walk = (dir: string, rel: string) => {
+            let entries;
+            try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch (e) {
+                return;
+            }
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    if (entry.name !== 'node_modules') {
+                        walk(path.join(dir, entry.name), rel + entry.name + '/');
+                    }
+                    continue;
+                }
+                if (!entry.name.endsWith('.ts') || entry.name.endsWith('.d.ts')) {
+                    continue;
+                }
+                const relPath = rel + entry.name;
+                let text;
+                try {
+                    text = fs.readFileSync(path.join(dir, entry.name), 'utf8');
+                } catch (e) {
+                    continue;
+                }
+                fileText.set(relPath, text);
+                relativeOf.set(path.join(dir, entry.name), relPath);
+                const classRe = /\bclass\s+([A-Za-z_$][\w$]*)\s+extends\s+([A-Za-z_$][\w$]*)/g;
+                let match;
+                while ((match = classRe.exec(text)) !== null) {
+                    classBases.set(match[1], match[2]);
+                }
+                const callRe = /this\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/g;
+                while ((match = callRe.exec(text)) !== null) {
+                    const args = goBalancedCallArgs(text, callRe.lastIndex - 1);
+                    if (args === undefined) {
+                        continue;
+                    }
+                    const list = callIndex.get(match[1]) ?? [];
+                    list.push({ file: relPath, args });
+                    callIndex.set(match[1], list);
+                }
+            }
+        };
+        walk(root, '');
+        return { callIndex, fileText, classBases, relativeOf };
+    }
+
+    goTsSrcFileDerivesFrom(tree, file: string, className: string | undefined): boolean {
+        if (className === undefined) {
+            return true; // unknown owner: keep the reference inside the proof
+        }
+        const text = tree.fileText.get(file);
+        if (text === undefined) {
+            return true;
+        }
+        const classRe = /\bclass\s+([A-Za-z_$][\w$]*)/g;
+        let match;
+        while ((match = classRe.exec(text)) !== null) {
+            let current: string | undefined = match[1];
+            for (let hops = 0; (hops < 12) && (current !== undefined); hops++) {
+                if (current === className) {
+                    return true;
+                }
+                current = tree.classBases.get(current);
+            }
+        }
+        return false;
+    }
+
+    // the textual call-site proof. `*string` is the only native parameter type the
+    // corpus proves today: the argument is either one of the accessors whose Go
+    // signature is a `*string` or a local assigned from one in that same file.
+    goTextArgMatchesType(argText: string, goType: string, file: string, tree): boolean {
+        let text = (argText ?? '').trim();
+        while (text.startsWith('(') && text.endsWith(')')) {
+            text = text.substring(1, text.length - 1).trim();
+        }
+        const isStringProducer = (candidate: string) => GO_TS_SRC_STRING_PRODUCERS.some(rx => rx.test(candidate));
+        if (goType === '*string') {
+            if (isStringProducer(text)) {
+                return true;
+            }
+            const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
+            if (identifier !== null) {
+                const fileText = tree.fileText.get(file) ?? '';
+                const declRe = new RegExp('(?:const|let|var)\\s+' + identifier[1] + '\\s*(?::[^=]*)?=\\s*([^;\\n]+)');
+                const match = declRe.exec(fileText);
+                if (match !== null) {
+                    return isStringProducer(match[1].trim());
+                }
+            }
+        }
+        return false;
+    }
+
     // the Go type this identifier is actually *declared* with, or undefined when it
     // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
     // declaration the reject filters demoted back to `any` is reported as `any` here
     // too — otherwise we would emit `*x` against an `any` box.
-    // Parameters stay `any` today, so they never resolve to a concrete type.
+    // A parameter resolves to its declared Go type only when goNativeParameterType
+    // proved it (see the B-02 block above); everything else stays `any`.
     //
     // getGoLocalType re-prints every reassignment's right-hand side, and printing a
     // ternary re-enters printCondition, which lands back here: `x = (x === 'a') ? …`
@@ -3347,7 +3756,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const decl = symbol?.valueDeclaration;
-        if (decl === undefined || decl.kind !== ts.SyntaxKind.VariableDeclaration) {
+        if (decl === undefined) {
+            return undefined;
+        }
+        if (decl.kind === ts.SyntaxKind.Parameter) {
+            // B-02: a parameter the call-site proof typed prints its native Go type
+            return this.goNativeParameterType(decl);
+        }
+        if (decl.kind !== ts.SyntaxKind.VariableDeclaration) {
             return undefined;
         }
         if (decl.initializer === undefined || decl.name?.kind !== ts.SyntaxKind.Identifier) {
