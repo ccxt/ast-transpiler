@@ -1146,7 +1146,10 @@ declare class GoTranspiler extends BaseTranspiler {
 declare class JavaTranspiler extends BaseTranspiler {
     javaExpressionTypeResolver?: (node: any) => string | undefined;
     countRequiredParameters(declaration: any): number;
-    printArgsForCallExpression(node: any, identation: any): string;
+    printArgsForCallExpression(node: any, identation: any): any;
+    javaPrintCallArguments(args: any, node: any, identation: any): any;
+    javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
+    javaNativeCallParameterTypes(node: any): (string | undefined)[];
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
     javaBooleanOperators: ts.SyntaxKind[];
@@ -1219,6 +1222,12 @@ declare class JavaTranspiler extends BaseTranspiler {
     isJavaNullableMapType(type: any): boolean;
     javaRepeatableOperand(node: any): any;
     javaDeclaredTypeOf(expression: any): string | undefined;
+    javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
+    javaNativeParameterType(node: any): string | undefined;
+    javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
+    javaParameterIsCompoundAssigned(node: any): boolean;
+    javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
+    javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     isJavaMapStructureType(type: any): boolean;
@@ -1311,6 +1320,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printInstanceOfExpression(node: any, identation: any): string;
     printAwaitExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
+    printParameterType(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printMethodParameters(node: any): any;
     printArrayLiteralExpression(node: any): string;
