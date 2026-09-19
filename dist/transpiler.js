@@ -6482,6 +6482,11 @@ var GO_PURE_STRING_ACCESSORS = [
   "this.NumberToString",
   "this.SafeCurrencyCode"
 ];
+var GO_PURE_BOOL_ACCESSORS = [
+  "this.SafeBool",
+  "this.SafeBool2",
+  "this.SafeBoolN"
+];
 var GO_NIL_EQUIVALENT_POINTER_TYPES_Native = /* @__PURE__ */ new Set([
   "*sync.Map",
   "*string",
@@ -10347,13 +10352,67 @@ ${this.getIden(level)}}()`;
     }
     return void 0;
   }
+  // an `any` box the checker proves can only hold a bool or nil — a `boolean`
+  // local whose Go declaration stayed `any` (a later write the printer cannot
+  // type, e.g. a tuple read) — is what `EvalTruthy` reduces to: nil and `false`
+  // are both falsy, `true` is truthy, so the predicate is `x == true`. A
+  // `boolean` parameter qualifies through the same GetArg binding the nil rules
+  // use: GetArg derefs a pointer argument, so the box holds the plain value or
+  // the default. Boxes that may hold a `*bool` accessor result (a
+  // `this.SafeBool(…)` write) are excluded — a pointer is never `== true`,
+  // while the helper dereferences it.
+  printInlineBoolBoxTruthy(node) {
+    if (this.goScalarFamilyWithNil(node) !== "bool") {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration?.kind !== ts5.SyntaxKind.VariableDeclaration && !this.goGetArgBoundParameter(node)) {
+      return void 0;
+    }
+    const text = this.printNode(node, 0);
+    if (!this.goIsAnyBoxExpression(node, text)) {
+      return void 0;
+    }
+    return `(${text} == true)`;
+  }
+  // `EvalTruthy(this.SafeBool(…))`: the accessor's Go signature returns a `*bool`,
+  // nil for an absent flag and the flag otherwise — exactly the two states
+  // `derefScalar` hands the helper — so the predicate is `x != nil && *x`.
+  printInlineBoolPointerTruthy(node, printedText) {
+    if (node?.kind !== ts5.SyntaxKind.CallExpression) {
+      return void 0;
+    }
+    if (GO_PURE_BOOL_ACCESSORS.indexOf(this.goPrintedCallee(printedText)) < 0) {
+      return void 0;
+    }
+    if (!node.arguments.every((argument) => this.goIsRepeatSafePointerArgument(argument))) {
+      return void 0;
+    }
+    return `(${printedText} != nil && *${printedText})`;
+  }
+  // an argument the two halves of a pointer deref may read twice: a plain
+  // identifier/literal read, or a `this.<field>` read of the exchange instance
+  goIsRepeatSafePointerArgument(node) {
+    while (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    if (this.goIsReadOnlyCallArgument(node)) {
+      return true;
+    }
+    return node?.kind === ts5.SyntaxKind.PropertyAccessExpression && node.expression?.kind === ts5.SyntaxKind.ThisKeyword && node.name?.kind === ts5.SyntaxKind.Identifier;
+  }
   // the native Go text for a condition operand the printer can type, or undefined
   // when the operand has to go through the truthiness helper. `(x)` is decided on
   // its operand and keeps the source parentheses, so the surrounding operator still
   // parses exactly the same way.
   goNativeCondition(node) {
     if (node?.kind === ts5.SyntaxKind.Identifier) {
-      return this.printInlineTruthy(node);
+      return this.printInlineTruthy(node) ?? this.printInlineBoolBoxTruthy(node);
     }
     if (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
       const inner = this.goNativeCondition(node.expression);
@@ -10363,6 +10422,10 @@ ${this.getIden(level)}}()`;
       return inner.startsWith("(") && this.isWholePrintedCall(inner, 0) ? inner : `(${inner})`;
     }
     const printed = this.printNode(node, 0);
+    const pointerTruthy = this.printInlineBoolPointerTruthy(node, printed);
+    if (pointerTruthy !== void 0) {
+      return pointerTruthy;
+    }
     if (this.goTypeOfInitializer(node, printed) === "bool") {
       return printed;
     }

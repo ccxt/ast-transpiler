@@ -1563,6 +1563,99 @@ describe('go inline equality', () => {
         expect(output).toContain("if !(s != nil && *s != \"\") {");
         expect(output).not.toContain("EvalTruthy(s)");
     });
+    test('a bool-typed box drops the truthiness helper for a plain comparison', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "class T {\n" +
+        "    safeBool (a, b) { return a; }\n" +
+        "    f (params: any) {\n" +
+        "        let paginate: Bool = undefined;\n" +
+        "        paginate = params['paginate'];\n" +
+        "        const both = paginate && this.safeBool (params, 'k');\n" +
+        "        if (paginate) { return 1; }\n" +
+        "        return both;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the local stays an `any` box (a write the printer cannot type), but the
+        // checker proves it holds a bool or nil: nil and `false` are both falsy
+        expect(output).toContain("var paginate any = nil");
+        expect(output).toContain("if paginate == true {");
+        expect(output).toContain("(paginate == true) && (this.SafeBool(params, \"k\") != nil && *this.SafeBool(params, \"k\"))");
+        expect(output).not.toContain("EvalTruthy(paginate)");
+    });
+    test('a box a SafeBool write can reach keeps the truthiness helper', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "class T {\n" +
+        "    safeBool (a, b, c?) { return a; }\n" +
+        "    f (params: any) {\n" +
+        "        let flag: Bool = undefined;\n" +
+        "        flag = params['flag'];\n" +
+        "        flag = this.safeBool (params, 'flag');\n" +
+        "        if (flag) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the `*bool` write puts a pointer in the box, which the helper dereferences
+        // and `x == true` never matches
+        expect(output).toContain("if EvalTruthy(flag) {");
+    });
+    test('a bool parameter without a default keeps the box and the helper', () => {
+        const input =
+        "class T {\n" +
+        "    f (enable: boolean) {\n" +
+        "        if (enable) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("func (this *T) F(enable any)");
+        expect(output).toContain("if EvalTruthy(enable) {");
+    });
+    test('a defaulted bool parameter rides the GetArg binding', () => {
+        const input =
+        "class T {\n" +
+        "    f (params: any, force: boolean = false) {\n" +
+        "        if (force) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // GetArg derefs a pointer argument, so the box holds a plain bool or the default
+        expect(output).toContain("force := GetArg(optionalArgs, 0, false)");
+        expect(output).toContain("if force == true {");
+        expect(output).not.toContain("EvalTruthy(force)");
+    });
+    test('a direct SafeBool call derefs instead of boxing', () => {
+        const input =
+        "class T {\n" +
+        "    safeBool (a, b, c?) { return a; }\n" +
+        "    f (params: any) {\n" +
+        "        if (this.safeBool (params, 'flag')) { return 1; }\n" +
+        "        if (!this.safeBool (this.options, 'flag', true)) { return 2; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("if this.SafeBool(params, \"flag\") != nil && *this.SafeBool(params, \"flag\") {");
+        expect(output).toContain("if !(this.SafeBool(this.Options, \"flag\", true) != nil && *this.SafeBool(this.Options, \"flag\", true)) {");
+        expect(output).not.toContain("EvalTruthy(this.SafeBool");
+    });
+    test('a SafeBool call the deref arm cannot repeat keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    safeBool (a, b, c?) { return a; }\n" +
+        "    f (params: any) {\n" +
+        "        if (this.safeBool (this.parseFlags (), 'flag')) { return 1; }\n" +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a non-repeatable argument (a call) keeps the single-evaluation helper
+        expect(output).toContain("EvalTruthy(this.SafeBool(callDynamically(\"parseFlags\", ), \"flag\"))");
+    });
     test('a direct Safe* call compared to a literal collapses to a nil-safe deref', () => {
         const input =
         "class T {\n" +
@@ -1831,9 +1924,9 @@ describe('go inline equality', () => {
         expect(output).toContain("if !this.IsEmpty(symbols) {");
         expect(output).toContain("if this.IsJsonEncodedObject(msg) {");
         expect(output).toContain("if this.IsBinaryMessage(msg) {");
-        // an any-returning method keeps the helper, and so does the *bool accessor
+        // an any-returning method keeps the helper; the *bool accessor derefs instead
         expect(output).toContain("if EvalTruthy(this.HasOutcome(msg)) {");
-        expect(output).toContain("if EvalTruthy(this.SafeBool(msg, \"k\")) {");
+        expect(output).toContain("if this.SafeBool(msg, \"k\") != nil && *this.SafeBool(msg, \"k\") {");
     });
 });
 

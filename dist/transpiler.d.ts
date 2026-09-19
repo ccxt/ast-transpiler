@@ -979,6 +979,9 @@ declare class GoTranspiler extends BaseTranspiler {
     comparisonHelpers: string[];
     printInlineOpNeg(node: any, printedText: string): string | undefined;
     printInlineTruthy(node: any): string | undefined;
+    printInlineBoolBoxTruthy(node: any): string | undefined;
+    printInlineBoolPointerTruthy(node: any, printedText: string): string | undefined;
+    goIsRepeatSafePointerArgument(node: any): boolean;
     goNativeCondition(node: any): string | undefined;
     goControlClauseParens(node: any, expression: string): string;
     goEnclosedExpression(text: string): string | undefined;
