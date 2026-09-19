@@ -1641,6 +1641,25 @@ declare class RustTranspiler extends BaseTranspiler {
     isProvenMapType(type: ts.Type): boolean;
     isProvenMapExpression(node: ts.Node): boolean;
     isProvenListExpression(node: ts.Node): boolean;
+    /** RHS of a generator destructure that provably holds a `Value::Arr`: the
+     *  checker-proven list, or a call whose callee returns an array literal on
+     *  every path. */
+    rustNativeListSource(node: ts.Node): boolean;
+    /** `x.split(sep)` → the runtime `split`, which yields an array on every
+     *  path (a non-string receiver gives the empty array, never a dict). */
+    rustCallPrintsRuntimeSplit(node: ts.Node): boolean;
+    /** True when the call's value is always a runtime array: the `handle*AndParams`
+     *  family and its exchange overrides declare `any`, so the checker cannot
+     *  prove the `[T, Dict]` tuple the body always builds — walk the resolved
+     *  callee instead. */
+    rustCallReturnsProvenList(node: ts.Node): boolean;
+    private rustProvenListCall;
+    /** Implementation of a `x.y(..)` call, when the checker resolves one. */
+    private rustCalleeDeclaration;
+    /** Every `return` in the function's own body builds an array literal, or
+     *  delegates to a call that does. `throw` and fall-through (the printer's
+     *  `Value::Null`) read the same through both forms. */
+    private rustFunctionReturnsArrayLiteral;
     /** Native list-index read of a generator temp (`__destr_tmp.as_array()…`). */
     printNativeListIndex(receiverText: string, index: number): string;
     /** Native read for one chain level, or undefined to keep `get_value`. */
