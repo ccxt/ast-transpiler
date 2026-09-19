@@ -13235,6 +13235,18 @@ var JavaTranspiler = class extends BaseTranspiler {
   javaFieldMapRead(node) {
     return this.javaFieldMapReadText(node.expression, node.argumentExpression);
   }
+  // the read stands only where no exchange-specific override claims the site and the node
+  // is not a write target
+  javaFieldMapReadIfAllowed(node) {
+    const read = this.javaFieldMapRead(node);
+    if (read === void 0) {
+      return void 0;
+    }
+    if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0 || this.isLeftSideOfAssignment(node)) {
+      return void 0;
+    }
+    return read;
+  }
   // `x[k]` reads: emit the native container accessor when the checker proves the Java
   // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
   printCheckerTypedElementAccessRead(node) {
@@ -13242,13 +13254,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const isStringKey = _typescript2.default.isStringLiteralLike(key);
     const isNumberKey = _typescript2.default.isNumericLiteral(key);
     if (!isStringKey && !isNumberKey) {
-      const fieldRead = this.javaFieldMapRead(node);
-      if (fieldRead !== void 0) {
-        if (this.printElementAccessExpressionExceptionIfAny(node) === void 0 && !this.isLeftSideOfAssignment(node)) {
-          return fieldRead;
-        }
-      }
-      return void 0;
+      return this.javaFieldMapReadIfAllowed(node);
     }
     if (this.printElementAccessExpressionExceptionIfAny(node) !== void 0) {
       return void 0;
@@ -13260,7 +13266,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (isStringKey) {
       if (!this.isJavaMapStructureType(type)) {
         if (!this.javaDeclaredMapReceiver(node.expression)) {
-          return void 0;
+          return this.javaFieldMapReadIfAllowed(node);
         }
         return `${this.printNode(node.expression, 0)}.get(${this.printNode(key, 0)})`;
       }

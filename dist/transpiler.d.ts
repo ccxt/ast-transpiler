@@ -1199,6 +1199,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredMapReceiver(expression: any): boolean;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
     javaFieldMapRead(node: any): string | undefined;
+    javaFieldMapReadIfAllowed(node: any): string | undefined;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
     javaScalarFamily(node: any): string | undefined;

@@ -3190,7 +3190,7 @@ describe('hand-written base map fields: Helpers.GetValue(this.<field>, k) -> nat
         "class T {\n" +
         "    ohlcvs: D = {};\n" +
         "    orderbooks: D = {};\n" +
-        "    balance: D = {};\n" +
+        "    balance: any = {};\n" +
         "    options: D = {};\n" +
         "    markets: D | undefined = undefined;\n" +
         "    other: any = {};\n";
@@ -3255,6 +3255,19 @@ describe('hand-written base map fields: Helpers.GetValue(this.<field>, k) -> nat
         "}";
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.GetValue(this.other, symbol)");
+    });
+
+    test('a literal key on a field the checker does not type still reads natively', () => {
+        const input = fields +
+        "    test(): void {\n" +
+        "        const a = this.balance['cash'];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(this.balance == null ? null : ((java.util.Map<?, ?>)this.balance).get(\"cash\"))");
+        expect(output).not.toContain("Helpers.GetValue(this.balance,");
     });
 
     test('the bottom read of a chained write goes native, the steps above it keep the helper', () => {

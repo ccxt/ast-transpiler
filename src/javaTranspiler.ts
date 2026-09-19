@@ -2128,6 +2128,19 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaFieldMapReadText(node.expression, node.argumentExpression);
     }
 
+    // the read stands only where no exchange-specific override claims the site and the node
+    // is not a write target
+    javaFieldMapReadIfAllowed(node): string | undefined {
+        const read = this.javaFieldMapRead(node);
+        if (read === undefined) {
+            return undefined;
+        }
+        if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined || this.isLeftSideOfAssignment(node)) {
+            return undefined;
+        }
+        return read;
+    }
+
     // `x[k]` reads: emit the native container accessor when the checker proves the Java
     // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
     printCheckerTypedElementAccessRead(node) {
@@ -2137,13 +2150,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!isStringKey && !isNumberKey) {
             // a `this.<field>` map read carries its own Java proof (JAVA_FIELD_TYPES): the
             // field declaration the printer cannot see is what makes `k` bind natively
-            const fieldRead = this.javaFieldMapRead(node);
-            if (fieldRead !== undefined) {
-                if (this.printElementAccessExpressionExceptionIfAny(node) === undefined && !this.isLeftSideOfAssignment(node)) {
-                    return fieldRead;
-                }
-            }
-            return undefined;
+            return this.javaFieldMapReadIfAllowed(node);
         }
         if (this.printElementAccessExpressionExceptionIfAny(node) !== undefined) {
             return undefined; // an exchange-specific override wins, the base prints it
@@ -2155,7 +2162,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (isStringKey) {
             if (!this.isJavaMapStructureType(type)) {
                 if (!this.javaDeclaredMapReceiver(node.expression)) {
-                    return undefined;
+                    // a literal key on a table field the checker does not type (balance is
+                    // `any`) still has the field table's Java proof
+                    return this.javaFieldMapReadIfAllowed(node);
                 }
                 // the declared local is already a map: the accessor binds with no cast
                 return `${this.printNode(node.expression, 0)}.get(${this.printNode(key, 0)})`;
