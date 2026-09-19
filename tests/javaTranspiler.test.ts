@@ -2780,6 +2780,128 @@ ${body}
     });
 });
 
+describe('java nullable-boolean locals (Bool) drop the Helpers.isTrue wrapper (b14)', () => {
+    // a `let x: boolean | undefined` local whose every write is a Java boolean value or a
+    // proven Boolean-or-null box prints `Boolean.TRUE.equals(x)`: on such a box that is
+    // exactly the helper's answer (null/FALSE test false, TRUE tests true)
+    const inputOf = (body: string) => `
+class T {
+    safeBool(d: any, k: any, defaultValue: boolean | undefined = undefined): boolean | undefined { return true; }
+    safeBoolN(d: any, k: any): boolean | undefined { return true; }
+    handleParamBool(params: object, name: string, defaultValue: boolean | undefined = undefined): [boolean | undefined, object] { return [ undefined, params ]; }
+    handleOptionAndParams(params: object, name: string, option: string, defaultValue: any = undefined): [any, object] { return [ undefined, params ]; }
+    safeString(d: any, k: any, defaultValue: any = undefined): string | undefined { return undefined; }
+    other(x: any): any { return x; }
+    test(params: object): void {
+${body}
+    }
+}
+`;
+    const outputOf = (body: string) => transpiler.transpileJava(inputOf(body)).content;
+
+    test('a nullable local written only booleans prints Boolean.TRUE.equals', () => {
+        const output = outputOf("let x: boolean | undefined = undefined;\n        x = false;\n        if (x) { return; }");
+        expect(output).toContain('if (Boolean.TRUE.equals(x))');
+        expect(output).not.toContain('Helpers.isTrue(x)');
+    });
+
+    test('a safeBool-family initializer is a Boolean-or-null box', () => {
+        expect(outputOf("let x: boolean | undefined = this.safeBool(params, 'x');\n        if (x) { return; }"))
+            .toContain('if (Boolean.TRUE.equals(x))');
+        expect(outputOf("let x: boolean | undefined = this.safeBoolN(params, 'x');\n        if (x) { return; }"))
+            .toContain('if (Boolean.TRUE.equals(x))');
+    });
+
+    test('a handle*Bool tuple element is a Boolean-or-null box', () => {
+        const output = outputOf("let x: boolean | undefined = undefined;\n        [ x, params ] = this.handleParamBool(params, 'x', false);\n        if (x) { return; }");
+        expect(output).toContain('if (Boolean.TRUE.equals(x))');
+        expect(output).not.toContain('Helpers.isTrue(x)');
+    });
+
+    test('a handleOptionAndParams element keeps the helper (raw dictionary member)', () => {
+        // handleOptionAndParams returns the raw param value, so the box may be a Long/String
+        // the helper tests with its runtime truthiness
+        const output = outputOf("let x: boolean | undefined = undefined;\n        [ x, params ] = this.handleOptionAndParams(params, 'm', 'x', false);\n        if (x) { return; }");
+        expect(output).toContain('if (Helpers.isTrue(x))');
+    });
+
+    test('non-boolean writes keep the helper', () => {
+        expect(outputOf("let x: boolean | undefined = undefined;\n        x = this.safeString(params, 'k');\n        if (x) { return; }"))
+            .toContain('if (Helpers.isTrue(x))');
+        expect(outputOf("let x: boolean | undefined = this.other(params);\n        if (x) { return; }"))
+            .toContain('if (Helpers.isTrue(x))');
+        // an await write resolves to a box the printer cannot prove boolean
+        expect(outputOf("let x: boolean | undefined = undefined;\n        x = await this.other(params);\n        if (x) { return; }").replace(/\s+/g, ' '))
+            .toContain('Helpers.isTrue(x)');
+    });
+
+    test('the declared local type from the ccxt chain is consumed', () => {
+        // javaDeclaredLocalTypeResolver is installed by build/java-local-types.js: `Boolean`
+        // prints the nullable box, `boolean` the primitive the condition already is
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => {
+                const name = declaration?.name?.escapedText;
+                if (name === 'boxed') { return 'Boolean'; }
+                if (name === 'primitive') { return 'boolean'; }
+                return undefined;
+            };
+            const body = "let boxed: boolean | undefined = undefined;\n        if (boxed) { return; }\n        let primitive = false;\n        if (primitive) { return; }";
+            const output = transpiler.transpileJava(inputOf(body)).content;
+            expect(output).toContain('if (Boolean.TRUE.equals(boxed))');
+            expect(output).toContain('if (primitive)');
+            expect(output).not.toContain('Helpers.isTrue(boxed)');
+            expect(output).not.toContain('Helpers.isTrue(primitive)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    });
+});
+
+describe('java boolean-returning generated methods: isTrue -> Boolean.TRUE.equals (b14)', () => {
+    // a `this.<name>(...)` whose resolved body returns a boolean value on every path hands back
+    // a Boolean-or-null box, so the wrapper becomes the null-safe TRUE test - the same proof the
+    // hand-written base table (JAVA_THIS_BOOLEAN_METHODS) gives its own methods
+    const inputOf = (body: string, methods = '') => `
+class T {
+    isBool(): boolean { return true; }
+    isCompared(a: any): boolean { return (a === 1) || !!(a > 2); }
+    isFromLocal(a: any): boolean { return a; }
+    isFromString(a: any): string { return ''; }
+    isNullable(a: any): boolean | undefined { return undefined; }
+${methods}
+    test(a: any): void {
+${body}
+    }
+}
+`;
+    const outputOf = (body: string, methods = '') => transpiler.transpileJava(inputOf(body, methods)).content;
+
+    test('a method whose body returns booleans prints Boolean.TRUE.equals', () => {
+        const output = outputOf('if (this.isBool()) { return; }');
+        expect(output).toContain('if (Boolean.TRUE.equals(this.isBool()))');
+        expect(output).not.toContain('Helpers.isTrue(this.isBool())');
+        expect(outputOf('if (this.isCompared(a)) { return; }'))
+            .toContain('if (Boolean.TRUE.equals(this.isCompared(a)))');
+        expect(outputOf('if (!this.isBool()) { return; }')).toContain('if (!Boolean.TRUE.equals(this.isBool()))');
+    });
+
+    test('a body returning an unproven value keeps the helper', () => {
+        // a local of unproven box (a parameter here) could hold a Long/String the helper tests
+        expect(outputOf('if (this.isFromLocal(a)) { return; }'))
+            .toContain('Helpers.isTrue(this.isFromLocal(a))');
+        // a non-boolean TS return type
+        expect(outputOf('if (this.isFromString(a)) { return; }'))
+            .toContain('Helpers.isTrue(this.isFromString(a))');
+    });
+
+    test('a foreign class receiver keeps the helper', () => {
+        expect(outputOf('if (Other.isBool()) { return; }').replace(/\s+/g, ' '))
+            .toContain('Helpers.isTrue(');
+    });
+});
+
 describe('java native equality (Helpers.isEqual -> Objects.equals)', () => {
     test('string operands compare with java.util.Objects.equals, negation keeps the !', () => {
         const input =

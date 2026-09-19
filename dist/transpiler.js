@@ -11663,6 +11663,11 @@ var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|\/)ts\/src\/base\/Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void | ts6.TypeFlags.Never | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Enum | ts6.TypeFlags.EnumLiteral;
+var JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS = ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void;
+var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
+  "handleParamBool",
+  "handleParamBool2"
+]);
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
@@ -15966,7 +15971,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // literals, `!`, the logical / comparison / `in` operators, `Array.isArray(x)` (printed
   // Helpers.isArray, declared `public static boolean`) and the hand-written `public boolean`
   // base methods. `seen` breaks the identifier cycle of `a = b; b = a;` style writes.
-  javaPrintsBooleanValue(node, seen) {
+  javaPrintsBooleanValue(node, seen, depth = 0) {
     if (node === void 0) {
       return false;
     }
@@ -15977,9 +15982,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       case ts6.SyntaxKind.ParenthesizedExpression:
       case ts6.SyntaxKind.AsExpression:
       case ts6.SyntaxKind.NonNullExpression:
-        return this.javaPrintsBooleanValue(node.expression, seen);
+        return this.javaPrintsBooleanValue(node.expression, seen, depth);
       case ts6.SyntaxKind.PrefixUnaryExpression:
-        return node.operator === ts6.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen);
+        return node.operator === ts6.SyntaxKind.ExclamationToken && this.javaPrintsBooleanValue(node.operand, seen, depth);
       case ts6.SyntaxKind.BinaryExpression:
         return JAVA_BOOLEAN_OPERATOR_KINDS.has(node.operatorToken.kind);
       case ts6.SyntaxKind.CallExpression:
@@ -15990,6 +15995,59 @@ var JavaTranspiler = class extends BaseTranspiler {
         return this.javaBooleanBoxIdentifier(node, seen) !== void 0;
     }
     return false;
+  }
+  // the Java box of a `this.<name>(...)` call whose generated body returns a boolean value on
+  // every path: the TS return type is a boolean family and every `return` in the resolved
+  // declaration (nested functions excluded) prints a Java boolean or a proven Boolean-or-null
+  // box. That is the same value the hand-written base table covers for its own methods, one
+  // level deeper for the generated ones. `depth` and `seen` bound the recursion.
+  javaCallReturnsBooleanBox(node, seen, depth) {
+    if (node?.kind !== ts6.SyntaxKind.CallExpression || depth > 2) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || declaration.kind !== ts6.SyntaxKind.MethodDeclaration || declaration.body === void 0 || seen.has(declaration)) {
+      return false;
+    }
+    if (this.javaBooleanValueKind(node) === void 0) {
+      return false;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee) || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    const name = String(callee.name.escapedText);
+    if (JAVA_THIS_BOOLEAN_METHODS.has(name) || JAVA_THIS_BOOLEAN_BOX_METHODS[name] !== void 0) {
+      return false;
+    }
+    const next = new Set(seen);
+    next.add(declaration);
+    let returns = 0;
+    let ok = true;
+    const scan = (current) => {
+      if (!ok) {
+        return;
+      }
+      if (current !== declaration && ts6.isFunctionLike(current)) {
+        return;
+      }
+      if (ts6.isReturnStatement(current)) {
+        returns++;
+        const expression = current.expression;
+        if (expression === void 0 || !this.javaPrintsBooleanValue(expression, next, depth + 1)) {
+          ok = false;
+          return;
+        }
+      }
+      ts6.forEachChild(current, scan);
+    };
+    scan(declaration.body);
+    return ok && returns > 0;
   }
   // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and the
   // hand-written `public boolean` base methods print a primitive boolean. Everything else -
@@ -16117,6 +16175,196 @@ var JavaTranspiler = class extends BaseTranspiler {
     scan(fn);
     return ok;
   }
+  // the declared Java type the ccxt-side declaration chain gave this local/param, from the
+  // javaDeclaredLocalTypeResolver hook (build/java-local-types.js records every declaration it
+  // rewrote): `boolean` prints as the primitive, so the identifier IS the condition; `Boolean`
+  // prints as the nullable box, where `Helpers.isTrue(x)` is `Boolean.TRUE.equals(x)`
+  javaDeclaredBooleanKind(node) {
+    const resolver = this.javaDeclaredLocalTypeResolver;
+    if (resolver === void 0) {
+      return void 0;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(node);
+    if (declaration === void 0 || node.escapedText !== declaration.name?.escapedText) {
+      return void 0;
+    }
+    let declared;
+    try {
+      declared = resolver(declaration);
+    } catch (e) {
+      return void 0;
+    }
+    return declared === "boolean" || declared === "Boolean" ? declared : void 0;
+  }
+  // the DECLARED type of the local is a nullable boolean: `Bool` (`boolean | undefined`) or an
+  // equivalent union. Every member must be boolean or nullish - an `Int`/`Str`/`any` member can
+  // hold a box the isTrue helper tests with its runtime truthiness, so the helper must stay.
+  javaNullableBooleanDeclaration(declaration) {
+    if (declaration?.kind !== ts6.SyntaxKind.VariableDeclaration) {
+      return false;
+    }
+    const type = this.javaTypeOfDeclaration(declaration);
+    if (type === void 0) {
+      return false;
+    }
+    const flags = type.flags ?? 0;
+    if ((flags & (ts6.TypeFlags.Any | ts6.TypeFlags.Unknown)) !== 0) {
+      return false;
+    }
+    if ((flags & ts6.TypeFlags.Boolean) !== 0) {
+      return false;
+    }
+    if ((flags & ts6.TypeFlags.Union) === 0) {
+      return false;
+    }
+    const members = type.types ?? [];
+    if (members.length === 0) {
+      return false;
+    }
+    const booleanish = (member) => ((member?.flags ?? 0) & JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS) !== 0;
+    const hasBoolean = members.some((member) => ((member?.flags ?? 0) & (ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral)) !== 0);
+    return hasBoolean && members.every(booleanish);
+  }
+  // a value the nullable-boolean write scan accepts: a Java boolean value this printer already
+  // proves, a nullish literal, or a safeBool-family accessor call whose other paths hand back
+  // the caller's default (a Boolean or null). Nothing else - a Long/Int/String/List box would
+  // change what the isTrue helper answers for it.
+  javaPrintsBooleanBoxValue(node, seen) {
+    if (node === void 0) {
+      return false;
+    }
+    if (node.kind === ts6.SyntaxKind.ParenthesizedExpression || node.kind === ts6.SyntaxKind.AsExpression || node.kind === ts6.SyntaxKind.NonNullExpression) {
+      return this.javaPrintsBooleanBoxValue(node.expression, seen);
+    }
+    if (node.kind === ts6.SyntaxKind.NullKeyword) {
+      return true;
+    }
+    if (node.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined") {
+      return true;
+    }
+    if (this.javaPrintsBooleanValue(node, seen)) {
+      return true;
+    }
+    if (node.kind === ts6.SyntaxKind.CallExpression) {
+      return this.javaCallBooleanKind(node) !== void 0;
+    }
+    return false;
+  }
+  // element `index` of a `[ x, params ] = this.handle*Bool (...)` destructure prints a
+  // Boolean-or-null box: those accessors return a safeBool result, which never hands back the
+  // raw dictionary member when it is not a Boolean. The handleOptionAndParams family returns
+  // the raw member (Long/String/List included) and is deliberately not a box proof.
+  javaBooleanBoxTupleElement(node, index) {
+    if (node?.kind !== ts6.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee) || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    const name = String(callee.name.escapedText);
+    if (!JAVA_BOOLEAN_BOX_TUPLE_METHODS.has(name)) {
+      return false;
+    }
+    const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    if (declaration?.name?.escapedText !== name) {
+      return false;
+    }
+    return index === 0;
+  }
+  // the D2 scan over a nullable boolean local: every write prints a Java boolean value or a
+  // proven Boolean-or-null box, so no path can leave a truthy non-boolean box in it
+  javaBooleanNullableWritesAreBoxed(symbol, declaration, node, seen) {
+    const next = new Set(seen);
+    next.add(node);
+    let fn = declaration.parent;
+    while (fn !== void 0 && !ts6.isFunctionLike(fn)) {
+      fn = fn.parent;
+    }
+    if (fn === void 0) {
+      return false;
+    }
+    if (declaration.initializer !== void 0 && !this.javaPrintsBooleanBoxValue(declaration.initializer, next)) {
+      return false;
+    }
+    let ok = true;
+    const scan = (current) => {
+      if (!ok) {
+        return;
+      }
+      if ((ts6.isForOfStatement(current) || ts6.isForInStatement(current)) && ts6.isIdentifier(current.initializer)) {
+        let loop;
+        try {
+          loop = this.getChecker().getSymbolAtLocation(current.initializer);
+        } catch (e) {
+          loop = void 0;
+        }
+        if (loop === symbol) {
+          ok = false;
+          return;
+        }
+      }
+      if (ts6.isBinaryExpression(current) && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(current.operatorToken.kind)) {
+        if (ts6.isIdentifier(current.left)) {
+          let left;
+          try {
+            left = this.getChecker().getSymbolAtLocation(current.left);
+          } catch (e) {
+            left = void 0;
+          }
+          if (left === symbol && !this.javaPrintsBooleanBoxValue(current.right, next)) {
+            ok = false;
+            return;
+          }
+        } else if (ts6.isArrayLiteralExpression(current.left)) {
+          const index = current.left.elements.findIndex((element) => {
+            if (!ts6.isIdentifier(element)) {
+              return false;
+            }
+            let elementSymbol;
+            try {
+              elementSymbol = this.getChecker().getSymbolAtLocation(element);
+            } catch (e) {
+              elementSymbol = void 0;
+            }
+            return elementSymbol === symbol;
+          });
+          if (index !== -1 && !this.javaBooleanBoxTupleElement(current.right, index)) {
+            ok = false;
+            return;
+          }
+        }
+      }
+      ts6.forEachChild(current, scan);
+    };
+    scan(fn);
+    return ok;
+  }
+  // `Helpers.isTrue(x)` where the DECLARED type of x is a nullable boolean and every write is a
+  // proven Boolean-or-null box: `Boolean.TRUE.equals(x)` is exactly what the helper answers on
+  // such a box (null and FALSE test false, TRUE tests true)
+  javaNullableBooleanBoxIdentifier(node) {
+    if (node?.kind !== ts6.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    const declaration = symbol?.valueDeclaration;
+    if (declaration === void 0 || declaration.name?.escapedText !== node.escapedText) {
+      return void 0;
+    }
+    if (!this.javaNullableBooleanDeclaration(declaration)) {
+      return void 0;
+    }
+    if (!this.javaBooleanNullableWritesAreBoxed(symbol, declaration, node, /* @__PURE__ */ new Set())) {
+      return void 0;
+    }
+    return this.printNode(node, 0);
+  }
   // the native Java a falsy wrapper around this condition prints, or undefined to keep
   // `Helpers.isTrue(...)`: a read of a hand-written boolean field prints bare;
   // `Array.isArray(x)` prints `Helpers.isArray(x)`, whose result is exactly
@@ -16136,9 +16384,25 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (field !== void 0) {
       return field;
     }
+    if (node.kind === ts6.SyntaxKind.CallExpression && this.javaCallBooleanKind(node) === void 0 && this.javaCallReturnsBooleanBox(node, /* @__PURE__ */ new Set(), 0)) {
+      return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
+    }
+    if (node.kind === ts6.SyntaxKind.Identifier) {
+      const declared = this.javaDeclaredBooleanKind(node);
+      if (declared === "boolean") {
+        return this.printNode(node, 0);
+      }
+      if (declared === "Boolean") {
+        return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
+      }
+    }
     const identifier = this.javaBooleanBoxIdentifier(node, /* @__PURE__ */ new Set());
     if (identifier !== void 0) {
       return `Boolean.TRUE.equals(${identifier})`;
+    }
+    const nullableBox = this.javaNullableBooleanBoxIdentifier(node);
+    if (nullableBox !== void 0) {
+      return `Boolean.TRUE.equals(${nullableBox})`;
     }
     return void 0;
   }
