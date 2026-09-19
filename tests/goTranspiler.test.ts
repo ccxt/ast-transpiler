@@ -1392,9 +1392,28 @@ describe('go inline equality', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // the call must not be repeated, and `*string == \"normal\"` must not be emitted
-        expect(output).toContain("var a bool = IsEqual(this.SafeString(raw, \"status\", \"\"), \"normal\")");
+        // the *string result derefs under a nil guard (a bare `*x == "normal"` would
+        // panic on a missing key); the accessor is re-read, its arguments are plain
+        // identifiers/literals so both reads return the same pointer target
+        expect(output).toContain("var a bool = (this.SafeString(raw, \"status\", \"\") != nil && *this.SafeString(raw, \"status\", \"\") == \"normal\")");
         expect(output).toContain("var b bool = IsEqual(this.SafeInteger(raw, \"success\", 0), 1)");
+    });
+    test('a direct Safe* call comparison with a call argument keeps IsEqual', () => {
+        const input =
+        "class T {\n" +
+        "    safeString (a, b, c?) { return a; }\n" +
+        "    parseStatus (a) { return a; }\n" +
+        "    f (raw: any) {\n" +
+        "        const a = this.safeString (this.parseStatus (raw), 'status') === 'normal';\n" +
+        "        const b = this.safeString (raw, 'status') !== 'normal';\n" +
+        "        return [ a, b ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // an argument that is itself a call must not be re-evaluated by the deref
+        expect(output).toContain("var a bool = IsEqual(this.SafeString(this.ParseStatus(raw), \"status\"), \"normal\")");
+        // the negated form is the mirrored nil guard
+        expect(output).toContain("var b bool = (this.SafeString(raw, \"status\") == nil || *this.SafeString(raw, \"status\") != \"normal\")");
     });
     test('a direct Safe* call compared to undefined tests the pointer for nil', () => {
         const input =

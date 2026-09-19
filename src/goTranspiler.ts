@@ -237,6 +237,16 @@ const GO_ANY_BOX_CALLS = [
     'SafeNumber', 'this.SafeNumber',
 ];
 
+// read-only string accessors whose printed Go result is a `*string`. Each one reads
+// its arguments and returns a fresh pointer, so repeating the call in the two halves
+// of a deref comparison returns the same value when every argument is a plain read.
+const GO_PURE_STRING_ACCESSORS = [
+    'this.SafeString', 'this.SafeString2', 'this.SafeStringN',
+    'this.SafeStringLower', 'this.SafeStringLower2', 'this.SafeStringLowerN',
+    'this.SafeStringUpper', 'this.SafeStringUpper2', 'this.SafeStringUpperN',
+    'this.NumberToString', 'this.SafeCurrencyCode',
+];
+
 // Pointer types the Go nil test of the runtime helpers reproduces exactly: derefScalar
 // unwraps them to an untyped nil, IsEqual has its own *sync.Map case. Other pointers
 // (*sync.Mutex), map/slice fields and `any` fields flip meaning, so they keep the helper.
@@ -4686,13 +4696,74 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (node.kind === ts.SyntaxKind.StringLiteral) || (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral);
     }
 
+    // the deref arms print their operand twice, so the operand must read the same
+    // value both times: an identifier is a plain read, and a string accessor call
+    // whose arguments are all identifiers/literals re-reads those arguments (no
+    // statement can run between the two evaluations of one expression)
+    goDerefRepeatableOperand(node, printedText: string): boolean {
+        if (node?.kind === ts.SyntaxKind.Identifier) {
+            return true;
+        }
+        if (node?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        if (GO_PURE_STRING_ACCESSORS.indexOf(this.goPrintedCallee(printedText) as string) < 0) {
+            return false;
+        }
+        return node.arguments.every((argument) => this.goIsReadOnlyCallArgument(argument));
+    }
+
+    // an argument whose evaluation is a plain read: a value the printer already
+    // holds, never a call that could observe or cause a change
+    goIsReadOnlyCallArgument(node): boolean {
+        while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        switch (node?.kind) {
+        case ts.SyntaxKind.Identifier:
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+        case ts.SyntaxKind.NumericLiteral:
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+        case ts.SyntaxKind.NullKeyword:
+            return true;
+        }
+        return false;
+    }
+
+    // true when the Go value of this operand is a bare `string`: a local the printer
+    // declared `string`, or a parameter its own signature printer emits as `string`.
+    // A Go string can hold neither nil nor a pointer, so `x == "lit"` is exactly
+    // IsEqual(x, "lit") — the pointer arms above never see a value of this type.
+    goIsBareStringOperand(node): boolean {
+        if (this.goDeclaredTypeOfIdentifier(node) === 'string') {
+            return true;
+        }
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const declaration = symbol?.valueDeclaration;
+        if (declaration?.kind !== ts.SyntaxKind.Parameter) {
+            return false;
+        }
+        return this.printParameterType(declaration) === 'string';
+    }
+
     printInlineEquality(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined {
         const lPtr = this.goPointerTypeOfExpression(left, leftText) !== undefined;
         const rPtr = this.goPointerTypeOfExpression(right, rightText) !== undefined;
         // the branches below that deref repeat the operand, so they may only be used
-        // on an identifier; a `this.SafeString(...)` call would be evaluated twice
-        const lRepeatable = (left?.kind === ts.SyntaxKind.Identifier);
-        const rRepeatable = (right?.kind === ts.SyntaxKind.Identifier);
+        // on an identifier or on one of the read-only string accessors (whose
+        // arguments are plain reads); a call that does anything else stays IsEqual
+        const lRepeatable = this.goDerefRepeatableOperand(left, leftText);
+        const rRepeatable = this.goDerefRepeatableOperand(right, rightText);
         const lFam = this.goScalarFamily(left);
         const rFam = this.goScalarFamily(right);
         if (lFam === 'nil' && rPtr) {
@@ -4735,18 +4806,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
-        // the printer's own declared-local table names `string` for this identifier:
-        // the emitted Go value is a plain string (a `var x string` local can hold
-        // neither a pointer nor nil), so a string-literal comparison is the same
-        // predicate as the helper whatever the TS type of the initializer says.
+        // the printer's own declared-local table names `string` for this identifier
+        // (or its signature printer emits the parameter as `string`): the Go value is
+        // a plain string (a `var x string` cannot hold a pointer or nil), so a
+        // string-literal comparison is the same predicate as the helper whatever the
+        // TS type of the initializer says.
         // The table runs the same later-write scan the declaration print uses, so a
         // local that is ever written another type is reported as `any` and lands in
         // the box arms below instead.
         if (!lPtr && !rPtr) {
-            if ((this.goDeclaredTypeOfIdentifier(left) === 'string') && this.goIsStringLiteralNode(right)) {
+            if (this.goIsBareStringOperand(left) && this.goIsStringLiteralNode(right)) {
                 return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
             }
-            if ((this.goDeclaredTypeOfIdentifier(right) === 'string') && this.goIsStringLiteralNode(left)) {
+            if (this.goIsBareStringOperand(right) && this.goIsStringLiteralNode(left)) {
                 return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
             }
         }
