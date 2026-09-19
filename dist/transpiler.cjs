@@ -9448,23 +9448,54 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (_optionalChain([fn, 'optionalAccess', _639 => _639.kind]) !== _typescript2.default.SyntaxKind.MethodDeclaration || fn.body === void 0 || _optionalChain([fn, 'access', _640 => _640.name, 'optionalAccess', _641 => _641.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
       return void 0;
     }
-    if (!fn.name.escapedText.startsWith("parse")) {
+    const parseParam = fn.name.escapedText.startsWith("parse");
+    const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
+    if (!parseParam && !handlerParam) {
       return void 0;
     }
     if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
       return void 0;
     }
     const index = fn.parameters.indexOf(param);
-    for (const goType of this.goNativeParameterTypeCandidates(param)) {
+    for (const goType of this.goNativeParameterTypeCandidates(param, handlerParam)) {
       if (this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)) {
         return goType;
       }
     }
     return void 0;
   }
-  // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
-  // have no call-site proof yet (the corpus passes `any` locals) and keep the box.
-  goNativeParameterTypeCandidates(param) {
+  // ---- D-03: pro handler frame parameters ------------------------------------
+  // A `handle*` method of a pro exchange class receives the raw frame from the WS
+  // client. When the checker types that parameter as `Dict`, and every call site
+  // passes a proven `map[string]any` (the shared call-site proof), it prints
+  // `map[string]any` and its reads go native. `handleMessage` itself is an override
+  // of the base stub, so it and every handler it calls with its own boxed parameter
+  // keep the box: the generated base class and the hand-written IDerivedExchange
+  // interface compile against the boxed base signature (D8).
+  goIsProHandlerMethod(fn) {
+    const fileName = String(_nullishCoalesce(fn.getSourceFile().fileName, () => ( "")));
+    if (!/(^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(fileName)) {
+      return false;
+    }
+    const name = fn.name.escapedText;
+    return name.length > 6 && name.startsWith("handle") && name[6] === name[6].toUpperCase();
+  }
+  // `Dict` is the checker's structural `{[key: string]: any}`: a string index
+  // signature is the proof. Class instances (OrderBook, ArrayCache*, Client, Future),
+  // named-member interfaces (Market, Order, Ticker) and arrays carry none of them, so
+  // they never qualify — those are exactly the values a Go map cannot hold.
+  goParameterTypeIsDict(type) {
+    try {
+      return typeof type.getStringIndexType === "function" && type.getStringIndexType() !== void 0;
+    } catch (e) {
+      return false;
+    }
+  }
+  // the Go types the declared TypeScript type can carry. `Dict` is a Go
+  // `map[string]any` — the corpus passes the frame through pointers/dispatch, and the
+  // call-site proof decides per handler; `Market`/`Currency`/`List` have no proof yet
+  // (the corpus passes `any` locals) and keep the box.
+  goNativeParameterTypeCandidates(param, isHandler = false) {
     let type;
     try {
       type = this.getChecker().getTypeAtLocation(param);
@@ -9481,7 +9512,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     const inner = parts[0];
     if (inner.flags & _typescript2.default.TypeFlags.String) {
-      return ["*string"];
+      return isHandler ? [] : ["*string"];
+    }
+    if (isHandler && this.goParameterTypeIsDict(inner)) {
+      return ["map[string]any"];
     }
     return [];
   }
