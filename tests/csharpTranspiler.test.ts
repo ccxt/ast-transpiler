@@ -2361,6 +2361,135 @@ describe('csharp equality of two reads the embedding build layer typed', () => {
     });
 });
 
+describe('csharp equality on a declared scalar read: literals and the parameter registry', () => {
+    // D-21: a read the printer's own tables can only call `object` still compares by value
+    // when its emitted DECLARATION carries a scalar type -- the build layer's read oracle
+    // (locals it retyped) or its declared-type registry (parameters its typing pass narrowed).
+    const p = () => transpiler.csharpTranspiler;
+    const withResolver = (resolver, input) => {
+        p().csharpExpressionTypeResolver = resolver;
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            p().csharpExpressionTypeResolver = undefined;
+        }
+    };
+    const withRegistry = (resolver, input) => {
+        p().csharpDeclaredLocalTypeResolver = resolver;
+        try {
+            return transpiler.transpileCSharp(input).content;
+        } finally {
+            p().csharpDeclaredLocalTypeResolver = undefined;
+        }
+    };
+    const boolRead =
+        "function f () {\n" +
+        "    const v = this.safeValue({}, 'v');\n" +
+        "    const yes = v === true;\n" +
+        "    const no = v !== false;\n" +
+        "    return [yes, no];\n" +
+        "}";
+    test('a bool? read against a bool literal prints the operator', () => {
+        const output = withResolver((node) => (node?.escapedText === 'v') ? 'bool?' : undefined, boolRead);
+        expect(output).toContain("bool yes = (v == true);");
+        expect(output).toContain("bool no = (v != false);");
+        expect(output).not.toContain("isEqual(v, true)");
+    });
+    test('an Int64? read against an integer literal prints the operator', () => {
+        const input =
+        "function f () {\n" +
+        "    const n = this.safeValue({}, 'n');\n" +
+        "    const isOne = n === 1;\n" +
+        "    return isOne;\n" +
+        "}";
+        const output = withResolver((node) => (node?.escapedText === 'n') ? 'Int64?' : undefined, input);
+        expect(output).toContain("bool isOne = (n == 1);");
+        expect(output).not.toContain("isEqual(n, 1)");
+    });
+    test('a parameter the declared-type registry types compares to a literal and to a read', () => {
+        const input =
+        "class T {\n" +
+        "    f(x: string, y: string): boolean {\n" +
+        "        const isA = x === 'a';\n" +
+        "        const same = x === y;\n" +
+        "        return isA || same;\n" +
+        "    }\n" +
+        "}";
+        const output = withRegistry((declaration) => (declaration?.name?.escapedText === 'x' || declaration?.name?.escapedText === 'y') ? 'string' : undefined, input);
+        expect(output).toContain("bool isA = (x == \"a\");");
+        expect(output).toContain("bool same = (x == y);");
+        expect(output).not.toContain("isEqual(x");
+    });
+    test('a registry-typed Int64? parameter against a numeric literal prints the operator', () => {
+        const input =
+        "class T {\n" +
+        "    f(x: number): boolean {\n" +
+        "        return x === 3;\n" +
+        "    }\n" +
+        "}";
+        const output = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, input);
+        expect(output).toContain("(x == 3)");
+        expect(output).not.toContain("isEqual(x, 3)");
+    });
+    test('a string read against a number stays on the helper in every spelling', () => {
+        const literal =
+        "function f () {\n" +
+        "    const s = this.safeValue({}, 's');\n" +
+        "    const isOne = s === 1;\n" +
+        "    return isOne;\n" +
+        "}";
+        expect(withResolver((node) => (node?.escapedText === 's') ? 'string?' : undefined, literal)).toContain("isEqual(s, 1)");
+        const pair =
+        "class T {\n" +
+        "    f(x: string, n: number): boolean {\n" +
+        "        return x === n;\n" +
+        "    }\n" +
+        "}";
+        const kinds = { x: 'string', n: 'Int64?' };
+        const output = withRegistry((declaration) => kinds[declaration?.name?.escapedText], pair);
+        expect(output).toContain("isEqual(x, n)");
+    });
+    test('a mixed numeric pair and a collection still keep the helper', () => {
+        const mixed =
+        "class T {\n" +
+        "    f(a: number, b: number): boolean {\n" +
+        "        return a === b;\n" +
+        "    }\n" +
+        "}";
+        const kinds = { a: 'double?', b: 'Int64?' };
+        expect(withRegistry((declaration) => kinds[declaration?.name?.escapedText], mixed)).toContain("isEqual(a, b)");
+        const collections =
+        "class T {\n" +
+        "    f(rows, other): boolean {\n" +
+        "        return rows === other;\n" +
+        "    }\n" +
+        "}";
+        const rowKinds = { rows: 'List<object>', other: 'List<object>' };
+        expect(withRegistry((declaration) => rowKinds[declaration?.name?.escapedText], collections)).toContain("isEqual(rows, other)");
+    });
+    test('a registered read against null keeps the null branch decision', () => {
+        // a required numeric parameter keeps B-18's answer (the helper): the registry spelling
+        // must not turn the null branch into a native comparison; an optional one is
+        // null-comparable and keeps printing `== null`
+        const required =
+        "class T {\n" +
+        "    f(x: number): boolean {\n" +
+        "        return x === undefined;\n" +
+        "    }\n" +
+        "}";
+        const requiredOutput = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, required);
+        expect(requiredOutput).toContain("isEqual(x, null)");
+        const optional =
+        "class T {\n" +
+        "    f(x?: number): boolean {\n" +
+        "        return x === undefined;\n" +
+        "    }\n" +
+        "}";
+        const optionalOutput = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, optional);
+        expect(optionalOutput).toContain("(x == null)");
+    });
+});
+
 describe('csharp native numeric comparisons', () => {
     // the printer names the C# kind of int-range literals, `.length` and a few call results
     // itself; locals it leaves `object` (or that the embedding build layer retypes) come back
