@@ -3115,7 +3115,7 @@ describe('rust native container reads (B-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_value(&client, &Value::Str("subscriptions".to_string()))');
+        expect(output).toContain('get_value(&client, &Value::Str("subscriptions".into()))');
         expect(output).not.toContain('__m.get("subscriptions")');
     });
 
@@ -3142,7 +3142,7 @@ describe('rust native container reads (B-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add_element_to_object(get_value_mut(&mut client, &Value::Str("subscriptions".to_string())), &Value::Str("hash".to_string()), Value::Int(1));');
+        expect(output).toContain('add_element_to_object(get_value_mut(&mut client, &Value::Str("subscriptions".into())), &Value::Str("hash".into()), Value::Int(1));');
         expect(output).not.toContain('get_value(&client.as_map()');
     });
 

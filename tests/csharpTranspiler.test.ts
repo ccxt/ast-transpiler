@@ -4183,9 +4183,10 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
         try {
             const output = transpiler.transpileCSharp(input).content;
-            // a list box has no dictionary key read; `currency` belongs to the market-row family
+            // a list box has no dictionary key read; `currency` is a market-row receiver whose
+            // proven dictionary type reads natively (B-19), with the helper's missing-key null
             expect(output).toContain('object a = getValue(rows, "x");');
-            expect(output).toContain('object b = getValue(currency, "code");');
+            expect(output).toContain('object b = (currency.ContainsKey("code") ? currency["code"] : null);');
             // a numeric key is not a dictionary key
             expect(output).toContain('object c = getValue(ticker, 0);');
         } finally {

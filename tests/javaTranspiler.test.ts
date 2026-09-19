@@ -6725,7 +6725,8 @@ describe('java typed parameters (b-09)', () => {
 
     test('a compound write to a parameter keeps the whole parameter boxed', () => {
         expect(venueOutput).toContain('public void parseAppend(Object url, String status)');
-        expect(venueOutput).toContain('url = Helpers.add(url, "/path");');
+        // the box stays; the concat itself is native because the right operand is a string literal
+        expect(venueOutput).toContain('url = (url + "/path");');
     });
 
     test('Int/Num stay Object (an Integer/Long/Double box is not a provable Long/Double)', () => {
