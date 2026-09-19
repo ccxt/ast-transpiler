@@ -5565,3 +5565,170 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         expect(output).not.toContain('DerefScalar(list[');
     });
 });
+||||||| 73052b6
+
+describe('pro handler frame parameters (D-03)', () => {
+    // the declaring method must live in a pro-tree file, and the fixture needs a real
+    // ts/src tree: transpileGoByPath registers the path the ws stage uses (ts/src/pro/x.ts)
+    const BASE_FIXTURE =
+        "export class Exchange {\n" +
+        "    safeDict (a, b, c?) { return undefined; }\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    handleMessage (client, message) {}\n" +
+        "}\n";
+    const CLIENT_FIXTURE =
+        "export class Client { receive () { return undefined; } }\n";
+    const TYPES_FIXTURE =
+        "export type Dict = {[key: string]: any};\n";
+    const PRO_HEADER =
+        "import { Exchange } from '../base/Exchange';\n" +
+        "import { Client } from '../base/ws/Client';\n" +
+        "import type { Dict } from '../base/types';\n";
+
+    const treeFor = (name: string, pro: string, sibling?: string, base = true) => {
+        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(src, 'base', 'ws'), { recursive: true });
+        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'ws', 'Client.ts'), CLIENT_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'types.ts'), TYPES_FIXTURE);
+        if (base) {
+            nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'), PRO_HEADER + pro);
+        } else {
+            nodefs.writeFileSync(nodepath.join(src, 'ex.ts'), pro);
+        }
+        if (sibling !== undefined) {
+            nodefs.writeFileSync(nodepath.join(src, 'pro', 'derived.ts'), sibling);
+        }
+        return base ? nodepath.join(src, 'pro', 'ex.ts') : nodepath.join(src, 'ex.ts');
+    };
+
+    afterAll(() => {
+        const files = nodefs.readdirSync(nodepath.join(__dirname, 'files'));
+        for (const entry of files) {
+            if (entry.startsWith('tmp-d03-')) {
+                nodefs.rmSync(nodepath.join(__dirname, 'files', entry), { recursive: true, force: true });
+            }
+        }
+    });
+
+    test('a pro handler frame parameter prints map[string]any and its reads go native', () => {
+        const file = treeFor('tmp-d03-pro-tree',
+            "export class ex extends Exchange {\n" +
+            "    handleTicker (client: Client, message: Dict) {\n" +
+            "        const data = message['data'];\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleTicker(client any, message map[string]any) any {');
+        expect(output).toContain('var data any = message["data"]');
+    });
+
+    test('a handler called by a typed handler is typed too', () => {
+        const file = treeFor('tmp-d03-pro-tree-chain',
+            "export class ex extends Exchange {\n" +
+            "    handleOrder (client: Client, message: Dict) {\n" +
+            "        return this.safeValue (message, 'order');\n" +
+            "    }\n" +
+            "    handleBook (client: Client, message: Dict) {\n" +
+            "        this.handleOrder (client, message);\n" +
+            "        return undefined;\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleBook(client any, message map[string]any) any {');
+        expect(output).toContain('func (this *ex) HandleOrder(client any, message map[string]any) any {');
+    });
+
+    test('a handler called with a boxed frame keeps the box', () => {
+        const file = treeFor('tmp-d03-pro-tree-boxed',
+            "export class ex extends Exchange {\n" +
+            "    handleTicker (client: Client, message: Dict) {\n" +
+            "        return this.safeValue (message, 'data');\n" +
+            "    }\n" +
+            "    handleMeta (client: Client, message: any) {\n" +
+            "        this.handleTicker (client, message);\n" +
+            "        return undefined;\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleMeta(client any, message any) any {');
+        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+    });
+
+    test('the base stub override keeps the box (D8)', () => {
+        const file = treeFor('tmp-d03-pro-tree-override',
+            "export class ex extends Exchange {\n" +
+            "    override handleMessage (client: Client, message: Dict) {\n" +
+            "        return this.safeValue (message, 'event');\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleMessage(client any, message any) any {');
+    });
+
+    test('a non-handler pro method keeps the box', () => {
+        const file = treeFor('tmp-d03-pro-tree-nonhandler',
+            "export class ex extends Exchange {\n" +
+            "    normalizeFrame (message: Dict) {\n" +
+            "        return this.safeValue (message, 'event');\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) NormalizeFrame(message any) any {');
+    });
+
+    test('a handle* method outside the pro tree keeps the box', () => {
+        const file = treeFor('tmp-d03-rest-tree',
+            "export class ex extends Exchange {\n" +
+            "    handleTicker (client: any, message: any) {\n" +
+            "        return this.safeValue (message, 'data');\n" +
+            "    }\n" +
+            "}\n", undefined, false);
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+    });
+
+    test('a class-typed parameter keeps the box', () => {
+        const file = treeFor('tmp-d03-pro-tree-class',
+            "export class ex extends Exchange {\n" +
+            "    handleConnection (client: Client, subscriber: Client) {\n" +
+            "        return subscriber.receive ();\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleConnection(client any, subscriber any) any {');
+    });
+
+    test('a body that writes the frame another printed type keeps the box (D2)', () => {
+        const file = treeFor('tmp-d03-pro-tree-write',
+            "export class ex extends Exchange {\n" +
+            "    handleTicker (client: Client, message: Dict) {\n" +
+            "        message = this.safeValue (message, 'data');\n" +
+            "        return message;\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+    });
+
+    test('a sibling pro file passing a boxed frame keeps the box', () => {
+        const file = treeFor('tmp-d03-pro-tree-sibling',
+            "export class ex extends Exchange {\n" +
+            "    handleTicker (client: Client, message: Dict) {\n" +
+            "        return this.safeValue (message, 'data');\n" +
+            "    }\n" +
+            "}\n",
+            PRO_HEADER +
+            "import { ex } from './ex';\n" +
+            "export class derived extends ex {\n" +
+            "    use (client: Client, message: any) {\n" +
+            "        this.handleTicker (client, message);\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+    });
+});
