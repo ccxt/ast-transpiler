@@ -7615,3 +7615,60 @@ describe('java spawn method references (d-12)', () => {
         expect(venueOutput).toContain('this.handlePing(client, (java.util.Map<String, Object>) (message));');
     });
 });
+||||||| 73052b6
+
+// D-16: a prediction venue (ts/src/prediction/<id>.ts) extends its abstract class ->
+// PredictionExchange -> BaseExchange, a chain that never reaches the `Exchange` class of
+// ts/src/base/Exchange.ts. The venue's method still overrides the Exchange-tier body
+// javaTranspiler.ts injects into the generated PredictionExchange.java, and those declarations
+// keep `Object` parameters (the base tier is a JAVA_NATIVE_PARAMETER_BASE_FILE) - so the venue
+// parameter prints `Object` too, whatever alias its own annotation names.
+describe('java prediction venue Exchange-tier parameter boxing (D-16)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-d16');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const PREDICTION_BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'PredictionExchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'prediction', 'kalshi.ts');
+
+    let venueOutput: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(PREDICTION_BASE_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export type Str = string | undefined;\n" +
+            "export type Dict = { [key: string]: any } | undefined;\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Str, Dict } from './types.js';\n" +
+            "export class BaseExchange {}\n" +
+            "export default class Exchange extends BaseExchange {\n" +
+            "    async fetchOrder (id: string, symbol: Str = undefined, params: Dict = {}): Promise<any> { return null; }\n" +
+            "}\n");
+        fs.writeFileSync(PREDICTION_BASE_FIXTURE,
+            "import { BaseExchange } from './Exchange.js';\n" +
+            "export default class PredictionExchange extends BaseExchange {}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import Exchange from '../base/PredictionExchange.js';\n" +
+            "import type { Str, Dict } from '../base/types.js';\n" +
+            "export default class kalshi extends Exchange {\n" +
+            "    async fetchOrder (id: Str, outcome: Str = undefined, params: Dict = {}): Promise<any> { return null; }\n" +
+            "    async fetchEvents (query: Str, params: Dict = {}): Promise<any> { return null; }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        venueOutput = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a venue method named after the injected Exchange tier prints Object parameters', () => {
+        expect(venueOutput).toContain('fetchOrder(Object id');
+        expect(venueOutput).not.toContain('fetchOrder(String id');
+    });
+
+    test('a venue-local method keeps its native parameter', () => {
+        expect(venueOutput).toContain('fetchEvents(String query');
+    });
+});

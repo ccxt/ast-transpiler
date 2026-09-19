@@ -1261,6 +1261,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredTypeOf(expression: any): string | undefined;
     javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
     javaNativeParameterType(node: any): string | undefined;
+    private _exchangeTierMethodNames;
+    exchangeTierMethodNames(): Set<string>;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
