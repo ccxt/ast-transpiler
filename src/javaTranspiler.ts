@@ -3165,40 +3165,84 @@ export class JavaTranspiler extends BaseTranspiler {
         if (node.kind === ts.SyntaxKind.Identifier) {
             return allowDeclaredLocals ? this.javaDeclaredNumericLocalKind(node) : undefined;
         }
+        if (node.kind === ts.SyntaxKind.CallExpression) {
+            // hand-written base accessors that box a primitive (`Long milliseconds()`,
+            // `int parseTimeframe(..)`) - never null, so they anchor the native arithmetic
+            if (this.javaBaseTimeLongCall(node)) {
+                return 'long';
+            }
+            return this.javaBaseIntCall(node) ? 'int' : undefined;
+        }
         if (node.kind === ts.SyntaxKind.BinaryExpression) {
             return this.javaNativeArithmeticKind(node, allowDeclaredLocals);
         }
         return undefined;
     }
 
-    // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed
-    // numeric, but a null box would NPE where the helpers return null, so the checker must
-    // see a plain non-nullable number here (the nullable aliases and `any` are excluded; a
-    // narrowed use that still reads a `number` is a real guard in the printed Java).
+    // a bare identifier whose printed Java declaration carries a numeric type the helper
+    // family normalizes (Long/Double/Integer/int) prints as that Java value, so the native
+    // operator reproduces the helper's box on every path. A null box would NPE where the
+    // helpers return null, and an Integer/int would wrap at int width where they normalize
+    // to Long first, so the checker must see a plain non-nullable number here (the nullable
+    // aliases and `any` are excluded; a narrowed use that still reads a `number` is a real
+    // guard in the printed Java).
     javaDeclaredNumericLocalKind(node): string | undefined {
-        const resolver = this.javaExpressionTypeResolver;
-        if (typeof resolver !== 'function') {
-            return undefined;
-        }
         if (!this.javaOperandIsNonNullNumber(node)) {
             return undefined;
         }
         if (!this.javaIdentifierKeepsDeclaredName(node)) {
             return undefined;
         }
-        let javaType;
-        try {
-            javaType = resolver(node);
-        } catch (e) {
+        if (!this.javaIdentifierPrintsDeclaredName(node)) {
             return undefined;
         }
-        if (javaType === 'Long') {
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        let javaType;
+        if (declaration !== undefined) {
+            try {
+                javaType = this.javaDeclaredTypeOfDeclaration(declaration);
+            } catch (e) {
+                javaType = undefined;
+            }
+        }
+        if (javaType === undefined && typeof this.javaExpressionTypeResolver === 'function') {
+            try {
+                javaType = this.javaExpressionTypeResolver(node);
+            } catch (e) {
+                javaType = undefined;
+            }
+        }
+        return this.javaDeclaredNumericTypeKind(javaType);
+    }
+
+    // the numeric kind a printed Java declaration type names, or undefined for every other
+    // type (`Object`, `String`, a boxed collection)
+    javaDeclaredNumericTypeKind(javaType): string | undefined {
+        if (javaType === undefined) {
+            return undefined;
+        }
+        const type = String(javaType).replace(/^final\s+/, '').trim();
+        if (type === 'Long' || type === 'long') {
             return 'long';
         }
-        if (javaType === 'Double') {
+        if (type === 'Double' || type === 'double') {
             return 'double';
         }
+        if (type === 'Integer' || type === 'int') {
+            return 'int';
+        }
         return undefined;
+    }
+
+    // the use prints the declaration's own name: a local or parameter the printer renamed
+    // (the `finalX` object-literal capture, the async parameter wrapper) prints against a
+    // different declaration, whose recorded type does not describe it
+    javaIdentifierPrintsDeclaredName(node): boolean {
+        try {
+            return this.printNode(node, 0) === String(node.escapedText);
+        } catch (e) {
+            return false;
+        }
     }
 
     // a use the printer rewrote to its `finalX` anonymous-class capture prints against its
@@ -3211,14 +3255,15 @@ export class JavaTranspiler extends BaseTranspiler {
         } catch (e) {
             return false;
         }
-        if (declaration === undefined || declaration.kind !== ts.SyntaxKind.VariableDeclaration) {
+        if (declaration === undefined || (declaration.kind !== ts.SyntaxKind.VariableDeclaration
+            && !ts.isParameter(declaration))) {
             return false;
         }
         return String(node.escapedText) === String(declaration.name?.escapedText);
     }
 
-    // the checker type is the plain non-nullable `number` (TypeFlags.Number, no alias):
-    // `Int`/`Num`/`any` and unions hold undefined at runtime, which the helpers absorb
+    // the checker type is the plain non-nullable `number` (TypeFlags.Number/NumberLiteral, no
+    // alias): `Int`/`Num`/`any` and unions hold undefined at runtime, which the helpers absorb
     javaOperandIsNonNullNumber(node): boolean {
         let type;
         try {
@@ -3226,7 +3271,8 @@ export class JavaTranspiler extends BaseTranspiler {
         } catch (e) {
             return false;
         }
-        return type !== undefined && type.aliasSymbol === undefined && type.flags === ts.TypeFlags.Number;
+        return type !== undefined && type.aliasSymbol === undefined
+            && (type.flags === ts.TypeFlags.Number || type.flags === ts.TypeFlags.NumberLiteral);
     }
 
     // the kind of the native arithmetic this rule prints for `+ - * /`, or undefined when
@@ -3315,6 +3361,35 @@ export class JavaTranspiler extends BaseTranspiler {
         // in that same base file.
         return /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]time\.ts$/.test(fileName)
             || /(^|[\\/])lib\.[^\\/]*\.d\.ts$/.test(fileName);
+    }
+
+    // `this.parseTimeframe(..)`: the hand-written java BaseExchange declares `public int
+    // parseTimeframe(Object)` (java/lib/.../BaseExchange.java:1513) over the primitive-int
+    // ts/src/base/functions/misc.ts arrow, so the call is a never-null Java int. A venue's
+    // own parseTimeframe resolves elsewhere and keeps the helper.
+    javaBaseIntCall(node) {
+        if (node?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        if (callee.name?.escapedText !== 'parseTimeframe') {
+            return false;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            declaration = undefined;
+        }
+        if (declaration === undefined) {
+            return false;
+        }
+        const fileName = declaration.getSourceFile?.()?.fileName ?? '';
+        return /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]misc\.ts$/.test(fileName);
     }
 
     // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the emitted
@@ -3409,11 +3484,20 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaBaseTimeLongCall(node)) {
             return 'long';
         }
+        if (this.javaBaseIntCall(node)) {
+            return 'int';
+        }
         if (this.javaIntForCounter(node)) {
             return 'int';
         }
         if (this.javaLengthIntRead(node)) {
             return 'int';
+        }
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            // a declared numeric local/parameter (the embedding layer's declaration table,
+            // or a native parameter type): an Integer declares as integral, and the helper
+            // normalized it to Long anyway
+            return this.javaDeclaredNumericLocalKind(node);
         }
         if (node.kind === ts.SyntaxKind.BinaryExpression && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
             return this.javaWidenedAddKind(node);
@@ -3647,7 +3731,19 @@ export class JavaTranspiler extends BaseTranspiler {
             return `(((double) ${leftText}) / ((double) ${rightText}))`;
         }
         const operator = isPlus ? '+' : (isMinus ? '-' : '*');
-        return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
+        const widenedLeft = this.javaPrintArithmeticOperand(leftKind, left, leftText);
+        const widenedRight = this.javaPrintArithmeticOperand(rightKind, right, rightText);
+        return `(${widenedLeft} ${operator} ${widenedRight})`;
+    }
+
+    // an Integer/int operand is widened to long before the operator: Helpers normalizes an
+    // Integer to Long first, so the native long arithmetic reproduces both the value (no
+    // int-width wrap) and the Long box the helper hands back
+    javaPrintArithmeticOperand(kind, node, text) {
+        if (kind === 'int') {
+            return `((long) ${text})`;
+        }
+        return this.javaPrintOperandAsLong(node, text);
     }
 
     // Helpers.mathMin/mathMax take Object, tolerate null and hand the ORIGINAL operand
