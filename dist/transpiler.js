@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -11601,6 +11601,8 @@ var JAVA_THIS_BOOLEAN_BOX_METHODS = {
   "safeBoolN": 2
 };
 var JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
+var JAVA_DECLARED_NUMERIC_TYPES = /* @__PURE__ */ new Set(["Integer", "Long", "Double", "int", "long", "double"]);
+var JAVA_BOXED_NUMERIC_TYPES = /* @__PURE__ */ new Set(["Integer", "Long", "Double"]);
 var JAVA_SPLIT_RECEIVER_KINDS = /* @__PURE__ */ new Set([
   ts6.SyntaxKind.Identifier,
   ts6.SyntaxKind.PropertyAccessExpression,
@@ -12150,7 +12152,13 @@ var JavaTranspiler = class extends BaseTranspiler {
   // Java double. TypeScript normalizes the literal text (`1e3` -> `1000`, `0x10` ->
   // `16`, `100.0` -> `100`), so node.text is exactly what prints.
   javaEqualityLiteralKind(node) {
-    if (!node || !ts6.isNumericLiteral(node)) {
+    if (!node) {
+      return void 0;
+    }
+    if (node.kind === ts6.SyntaxKind.PrefixUnaryExpression && node.operator === ts6.SyntaxKind.MinusToken) {
+      return this.javaIntegerLiteralKind(node.operand) === "int" ? "int" : void 0;
+    }
+    if (!ts6.isNumericLiteral(node)) {
       return void 0;
     }
     return /[.eE]/.test(node.text) ? "double" : this.javaIntegerLiteralKind(node);
@@ -12326,6 +12334,13 @@ var JavaTranspiler = class extends BaseTranspiler {
       const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
       return negated ? `!${equalCall}` : equalCall;
     }
+    if (this.javaDeclaredStringType(node.left) || this.javaDeclaredStringType(node.right)) {
+      const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
+      return negated ? `!${equalCall}` : equalCall;
+    }
+    if (this.javaOperandPrintsPrimitiveNumber(node.left) && this.javaOperandPrintsPrimitiveNumber(node.right)) {
+      return `(${leftText} ${negated ? "!=" : "=="} ${rightText})`;
+    }
     const leftKind = this.javaEqualityNumberKind(node.left);
     const rightKind = this.javaEqualityNumberKind(node.right);
     if (leftKind !== void 0 && leftKind === rightKind) {
@@ -12337,13 +12352,44 @@ var JavaTranspiler = class extends BaseTranspiler {
         return negated ? `!${equalCall}` : equalCall;
       }
     }
+    const leftDeclared = this.javaDeclaredNumericFamily(node.left);
+    const rightDeclared = this.javaDeclaredNumericFamily(node.right);
+    if (leftDeclared !== void 0 || rightDeclared !== void 0) {
+      const leftOk = leftDeclared !== void 0 || this.javaOperandPrintsPrimitiveNumber(node.left);
+      const rightOk = rightDeclared !== void 0 || this.javaOperandPrintsPrimitiveNumber(node.right);
+      if (leftOk && rightOk) {
+        const boxes = [];
+        if (leftDeclared !== void 0 && JAVA_BOXED_NUMERIC_TYPES.has(leftDeclared)) {
+          boxes.push(leftText);
+        }
+        if (rightDeclared !== void 0 && JAVA_BOXED_NUMERIC_TYPES.has(rightDeclared)) {
+          boxes.push(rightText);
+        }
+        const compare = `${leftText} ${negated ? "!=" : "=="} ${rightText}`;
+        if (boxes.length === 0) {
+          return `(${compare})`;
+        }
+        return negated ? `(${boxes.map((box) => `${box} == null`).join(" || ")} || ${compare})` : `(${boxes.map((box) => `${box} != null`).join(" && ")} && ${compare})`;
+      }
+    }
     return void 0;
   }
   // true when the printer prints the operand as a Java primitive (a decimal literal, a
   // native .length/.size(), a for counter or a nested native arithmetic node) rather
   // than as the Object-declared box every other local gets
   javaOperandPrintsPrimitiveNumber(node) {
-    return this.javaEqualityLiteralKind(node) !== void 0 || this.javaNativeLengthKind(node) !== void 0 || this.isJavaPrimitiveCounterReference(node) || this.javaNativeArithmeticKind(node) !== void 0;
+    return this.javaEqualityLiteralKind(node) !== void 0 || this.javaNativeLengthKind(node) !== void 0 || this.isJavaPrimitiveCounterReference(node) || this.javaNativeArithmeticKind(node) !== void 0 || this.javaPrimitiveOperandKind(node) !== void 0;
+  }
+  // the numeric family the pass declared for a local (`Long`/`Double`/`Integer` boxed,
+  // `int`/`long`/`double` primitive), undefined when nothing was declared or the declared
+  // type is not numeric
+  javaDeclaredNumericFamily(expression) {
+    const type = this.javaDeclaredTypeOf(expression);
+    if (type === void 0) {
+      return void 0;
+    }
+    const trimmed = type.trim();
+    return JAVA_DECLARED_NUMERIC_TYPES.has(trimmed) ? trimmed : void 0;
   }
   // `x[k] = v` prints the runtime helper by default. Helpers.addElementToObject
   // exists for receivers the printer cannot type (Lists, arbitrary objects via
@@ -12992,6 +13038,18 @@ var JavaTranspiler = class extends BaseTranspiler {
         }
         if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
           return `(${objText} != null && ((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
+        }
+      }
+      if (this.javaSideEffectFreeReference(left) && !this.javaOperandPrintsPrimitiveNumber(left) && !this.isNullishLiteral(left) && left.kind !== ts6.SyntaxKind.TrueKeyword && left.kind !== ts6.SyntaxKind.FalseKeyword) {
+        const guarded = `${keyText} != null && `;
+        if (this.javaDeclaredMapReceiver(right)) {
+          return `(${guarded}${objText}.containsKey(${keyText}))`;
+        }
+        if (this.isJavaMapType(objectType)) {
+          return `(${guarded}((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
+        }
+        if (this.isJavaNullableMapType(objectType) && this.javaRepeatableOperand(right)) {
+          return `(${objText} != null && ${guarded}((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
         }
       }
       return `Helpers.inOp(${objText}, ${keyText})`;
@@ -15056,6 +15114,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     const argument = node?.arguments?.[0];
     if (argument === void 0 || ts6.isPropertyAccessExpression(argument)) {
       return void 0;
+    }
+    if (this.javaDeclaredMapReceiver(argument)) {
+      return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.keySet())`;
     }
     let type;
     try {
