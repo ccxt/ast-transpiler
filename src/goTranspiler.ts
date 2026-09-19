@@ -290,15 +290,33 @@ const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
 // interface the local used to hold
 const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDictionary' ];
 
-// `var market any = this.Market(symbol)` / `this.SafeMarket(…)`: the generated method's Go
-// signature returns `any`, but its TypeScript return type is the `MarketInterface` interface, so
-// the box always holds the market dictionary. The runtime MapTyped hands that same map back (nil
-// for a value that is not a map, the absent case the boxed nil used to answer), so the local can
-// be declared `map[string]any` and its element reads print natively. The refinement is only
-// emitted while every later use of the local READS it as a dictionary — the same use scan the
-// SafeDict family runs, because a value position, a nil comparison or a write into the map would
-// observe the typed nil a boxed local hides.
+// `var market any = this.Market(symbol)` / `this.SafeMarket(…)` / `this.Currency(code)` /
+// `this.SafeCurrency(…)`: the generated method's Go signature returns `any`, but its TypeScript
+// return type is the `MarketInterface` / `CurrencyInterface` dictionary interface, so the box
+// always holds that dictionary. The runtime MapTyped hands the same map back (nil for a value
+// that is not a map, the absent case the boxed nil used to answer), so the local can be declared
+// `map[string]any` and its element reads print natively. The refinement is only emitted while
+// every later use of the local READS it as a dictionary — the same use scan the SafeDict family
+// runs, plus the element this local compares (below), because a value position, a nil comparison
+// or a write into the map would observe the typed nil a boxed local hides.
 const GO_MARKET_LOCAL_TYPE = 'map[string]any';
+
+// the binary operators under which a market/currency local's element read is a pure READ: the
+// element is derefed by the GetValue the element-read printer keeps for these operands
+// (goMarketComparisonElementRead), so `market['swap'] === true` keeps answering exactly what the
+// boxed local answered — including a `*bool` element a parseMarket stored.
+const GO_MARKET_READ_COMPARISON_OPERATORS = [
+    ts.SyntaxKind.EqualsEqualsToken,
+    ts.SyntaxKind.ExclamationEqualsToken,
+    ts.SyntaxKind.EqualsEqualsEqualsToken,
+    ts.SyntaxKind.ExclamationEqualsEqualsToken,
+    ts.SyntaxKind.LessThanToken,
+    ts.SyntaxKind.GreaterThanToken,
+    ts.SyntaxKind.LessThanEqualsToken,
+    ts.SyntaxKind.GreaterThanEqualsToken,
+    ts.SyntaxKind.AmpersandAmpersandToken,
+    ts.SyntaxKind.BarBarToken,
+];
 
 // `var x any = this.SafeList(container, key)` may carry the slice type for the same reason: the
 // accessor returns `any`, so SafeListTyped reads the same member and hands back a []any with the
@@ -2109,10 +2127,13 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return `SafeMapTyped(${container}, ${key})`;
     }
 
-    // the TypeScript return type of the initializer proves the boxed value is the market
-    // dictionary: the checker reports the `MarketInterface` interface for `this.Market(...)` /
-    // `this.SafeMarket(...)` (the `Market` alias is the same interface unioned with undefined).
-    // Read from the checker, never from a printed name.
+    // the TypeScript return type of the initializer proves the boxed value is a dictionary
+    // interface: the checker reports `MarketInterface` for `this.Market(...)` / `this.SafeMarket(...)`
+    // and `CurrencyInterface` for `this.Currency(...)` / `this.SafeCurrency(...)` (both are the
+    // dictionary interfaces a parseMarket / parseCurrency builds). Any other accessor the checker
+    // types as one of the two — `this.SafeMarketStructure(...)`, an override's `this.ParseCurrency(...)`,
+    // `this.GetMarketFromSymbols(...)` — qualifies the same way. Read from the checker, never from a
+    // printed name.
     goMarketCallReturnsDict(initializer): boolean {
         if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
             return false;
@@ -2122,7 +2143,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const name = callee.name?.escapedText;
-        if ((name !== 'market') && (name !== 'safeMarket')) {
+        if (name === undefined) {
             return false;
         }
         const receiver: any = callee.expression;
@@ -2144,7 +2165,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const isMarketInterface = (t) => {
             const names = [ t?.symbol?.getName?.() ?? t?.symbol?.escapedName, t?.aliasSymbol?.getName?.() ];
-            return names.indexOf('MarketInterface') >= 0;
+            return (names.indexOf('MarketInterface') >= 0) || (names.indexOf('CurrencyInterface') >= 0);
         };
         if (isMarketInterface(type)) {
             return true;
@@ -2203,15 +2224,31 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // one later use of the market local: the dictionary read shapes the SafeDict family already
     // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
     // instead of answering an absent value — a plain argument position, because Go re-boxes the
-    // declared map into the callee's `any` parameter exactly as the local's own box did.
+    // declared map into the callee's `any` parameter exactly as the local's own box did. An
+    // element this local COMPARES is a read too: the element-read printer keeps the GetValue
+    // helper for these operands (goMarketComparisonElementRead), which derefs a boxed element
+    // exactly as the boxed local's own read did.
     goMarketUseReadsTheValue(node, throwingAccessor: boolean): boolean {
         if (this.goSafeDictUseReadsTheMap(node)) {
             return true;
         }
+        const parent: any = node.parent;
+        if ((parent?.kind === ts.SyntaxKind.ElementAccessExpression) && (parent.expression === node)) {
+            let operand: any = parent;
+            let above: any = parent.parent;
+            while (above?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+                operand = above;
+                above = above.parent;
+            }
+            if ((above?.kind === ts.SyntaxKind.BinaryExpression)
+                && ((above.left === operand) || (above.right === operand))
+                && (GO_MARKET_READ_COMPARISON_OPERATORS.indexOf(above.operatorToken?.kind) >= 0)) {
+                return true;
+            }
+        }
         if (!throwingAccessor) {
             return false;
         }
-        const parent: any = node.parent;
         return (parent?.kind === ts.SyntaxKind.CallExpression)
             && (parent.expression !== node) && (parent.arguments.indexOf(node) >= 0);
     }
@@ -2220,11 +2257,13 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!this.goMarketCallReturnsDict(declaration.initializer)) {
             return undefined;
         }
-        // the throwing accessor (`this.market`) never answers an absent value — it panics — so the
-        // boxed result is always a dictionary; handing the local to a call therefore re-boxes the
-        // same map into the callee's `any` parameter, the identical interface value. SafeMarket may
-        // answer its own optional argument, so those locals only take the read shapes below.
-        const throwingAccessor = (declaration.initializer.expression?.name?.escapedText === 'market');
+        // the throwing accessors (`this.market`, `this.currency`) never answer an absent value —
+        // they panic — so the boxed result is always a dictionary; handing the local to a call
+        // therefore re-boxes the same map into the callee's `any` parameter, the identical
+        // interface value. The Safe* accessors may answer their own optional argument, so those
+        // locals only take the read shapes below.
+        const accessorName = declaration.initializer.expression?.name?.escapedText;
+        const throwingAccessor = (accessorName === 'market') || (accessorName === 'currency');
         const sourceName = declaration.name.escapedText as string;
         const scope: any = this.goEnclosingFunction(declaration);
         if (scope === undefined) {
@@ -2269,6 +2308,45 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         return `MapTyped(${parsedValue.trimStart()})`;
+    }
+
+    // the variable declaration an identifier binds to, through the checker (undefined for every
+    // other shape) — the market rule resolves its own locals this way, never by printed name
+    goDeclarationOfIdentifier(node): any {
+        try {
+            const symbol = this.getChecker().getSymbolAtLocation(node);
+            const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+            if (declaration?.kind === ts.SyntaxKind.VariableDeclaration) {
+                return declaration;
+            }
+        } catch (e) {
+            return undefined;
+        }
+        return undefined;
+    }
+
+    // a compared element of a market/currency local keeps the GetValue helper: its deref is what
+    // the boxed local's read used to apply, and a parseMarket may have stored a `*bool`/`*string`
+    // under the key. Only the operands the use scan admits this way are affected; every other
+    // element read of the local prints the native index.
+    goMarketComparisonElementRead(node): boolean {
+        const base: any = node?.expression;
+        if (base?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const declaration = this.goDeclarationOfIdentifier(base);
+        if ((declaration === undefined) || (this.goMarketLocalUnbox(declaration) !== GO_MARKET_LOCAL_TYPE)) {
+            return false;
+        }
+        let operand: any = node;
+        let above: any = node.parent;
+        while (above?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            operand = above;
+            above = above.parent;
+        }
+        return (above?.kind === ts.SyntaxKind.BinaryExpression)
+            && ((above.left === operand) || (above.right === operand))
+            && (GO_MARKET_READ_COMPARISON_OPERATORS.indexOf(above.operatorToken?.kind) >= 0);
     }
 
     // the container/key argument nodes of a whole `this.SafeList(container, key)` call, or
@@ -7295,7 +7373,8 @@ ${tryBodyBlock}
         // and a nil element both come back as the `any` nil, so the native index
         // yields the identical value without the helper call
         if (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') {
-            if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)) {
+            if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)
+                && !this.goMarketComparisonElementRead(node)) {
                 return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
             }
             // a Safe*-boxed string key holds a nilable `*string`, so the read needs the
