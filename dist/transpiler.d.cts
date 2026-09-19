@@ -1248,6 +1248,10 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaProvableString(node: any): boolean;
     javaResolvedString(node: any): boolean;
     javaNativeConcat(node: any): boolean;
+    javaStringConcatIsProvable(left: any, right: any, leftFamily: any, rightFamily: any): boolean;
+    javaConcatOtherOperandIsSafe(node: any): boolean;
+    javaConcatOperandPrintsAsValue(node: any): any;
+    javaConcatOperandCanBeDouble(node: any): boolean;
     javaThisCallNumericKind(node: any): string | undefined;
     javaProvableNumericKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaDeclaredNumericLocalKind(node: any): string | undefined;

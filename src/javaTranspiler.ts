@@ -2488,6 +2488,99 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableString(node.left) || this.javaProvableString(node.right);
     }
 
+    // B-13: the `+` / `+=` concat drops the helper when one side's printed Java is
+    // provably a String and the other side is an operand Helpers.add's String branch
+    // converts exactly like javac's `+` does
+    javaStringConcatIsProvable(left, right, leftFamily, rightFamily) {
+        const leftProvable = this.javaProvableString(left);
+        const rightProvable = this.javaProvableString(right);
+        if (leftFamily === 'string' && rightFamily === 'string' && (leftProvable || rightProvable)) {
+            return true;
+        }
+        return (leftProvable && this.javaConcatOtherOperandIsSafe(right))
+            || (rightProvable && this.javaConcatOtherOperandIsSafe(left));
+    }
+
+    // the non-anchor operand of a concat: a value java.lang.StringBuilder.append and
+    // Helpers.add's `String.valueOf` branch turn into the same text. Inlined when it is
+    // a printed String itself, when the checker proves the plain non-nullable `string`
+    // contract, or when the type cannot be a boxed Double (see the operand predicates)
+    javaConcatOtherOperandIsSafe(node) {
+        if (node === undefined) {
+            return false;
+        }
+        if (this.javaProvableString(node)) {
+            return true;
+        }
+        if (this.javaScalarFamily(node) === 'string') {
+            return true;
+        }
+        return this.javaConcatOperandPrintsAsValue(node) && !this.javaConcatOperandCanBeDouble(node);
+    }
+
+    // a bare value an infix operator can take without extra parentheses: a ternary,
+    // assignment or comma expression printed here would re-parse (`(x + c ? a : b)`),
+    // and an optional-chain call prints a guarded shape that is not an operand
+    javaConcatOperandPrintsAsValue(node) {
+        if (node === undefined) {
+            return false;
+        }
+        if (ts.isParenthesizedExpression(node)) {
+            return this.javaConcatOperandPrintsAsValue(node.expression);
+        }
+        switch (node.kind) {
+        case ts.SyntaxKind.Identifier:
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+        case ts.SyntaxKind.NumericLiteral:
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+        case ts.SyntaxKind.NullKeyword:
+        case ts.SyntaxKind.ThisKeyword:
+        case ts.SyntaxKind.NewExpression:
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return true;
+        case ts.SyntaxKind.PropertyAccessExpression:
+        case ts.SyntaxKind.ElementAccessExpression:
+        case ts.SyntaxKind.CallExpression:
+            return node.questionDotToken === undefined;
+        }
+        return false;
+    }
+
+    // a Double operand makes Helpers.add take its `instanceof Double` branch (toDouble
+    // on BOTH sides) and hand back a NUMBER, while javac's `+` concatenates it, so an
+    // operand whose runtime value can be a boxed Double keeps the helper. Only types
+    // that can never hold a number are accepted, plus the literals that print as a Java
+    // `long` (an integer literal normalizes to Long before the helper's branches).
+    javaConcatOperandCanBeDouble(node) {
+        if (this.javaProvableNumericKind(node) === 'long') {
+            return false;
+        }
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return true;
+        }
+        if (type === undefined) {
+            return true;
+        }
+        const notNumber = ts.TypeFlags.String | ts.TypeFlags.StringLiteral | ts.TypeFlags.TemplateLiteral
+            | ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Object | ts.TypeFlags.Null
+            | ts.TypeFlags.Undefined | ts.TypeFlags.Void | ts.TypeFlags.Never;
+        const notNumeric = (t) => {
+            if (t === undefined || t.flags === 0) {
+                return false;
+            }
+            if (t.isUnion?.()) {
+                return t.types.every(notNumeric);
+            }
+            return (t.flags & ~notNumber) === 0;
+        };
+        return !notNumeric(type);
+    }
+
     // the Java kind a `this.<name>(...)` call provably prints with (a hand-written base
     // declaration from JAVA_THIS_RETURN_TYPES), or undefined to keep the helper. The
     // signature must resolve to the base tier or to the Date.now lib signature the
@@ -2982,10 +3075,7 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const leftFamily = this.javaScalarFamily(left);
         const rightFamily = this.javaScalarFamily(right);
-        if (isPlus && leftFamily === 'string' && rightFamily === 'string') {
-            if (!(this.javaProvableString(left) || this.javaProvableString(right))) {
-                return undefined;
-            }
+        if (isPlus && this.javaStringConcatIsProvable(left, right, leftFamily, rightFamily)) {
             const concat = `(${leftText} + ${rightText})`;
             return op === ts.SyntaxKind.PlusEqualsToken ? `${leftText} = ${concat}` : concat;
         }
