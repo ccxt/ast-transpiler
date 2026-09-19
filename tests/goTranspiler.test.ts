@@ -3899,6 +3899,83 @@ describe('go string concat operands -> declared Go string', () => {
     });
 });
 
+// helper-family removal: the hand-written SafeString-family methods (go/v4/exchange_safe.go)
+// return a fresh non-nil *string whenever the call passes a non-nil default (the value
+// branch takes the found string's address, the default branch ToString(default)'s), so a
+// local every write of which is such a call may be deref'd where the checker offers no
+// narrowing. Any other write, a missing default or a non-literal default keeps Add.
+describe('go string concat operands -> defaulted SafeString locals', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    const local = (input: string) =>
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string, c: any): string | undefined { return a; }\n" +
+        "    safeString2 (a: any, b: string, c: string, d: any): string | undefined { return a; }\n" +
+        "    main (item: any, other: any) {\n" + input +
+        "    }\n" +
+        "}\n";
+    test('a literal default makes the local derefable', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        const fromId = this.safeString (item, 'from', 'x');\n" +
+            "        return fromId + '_' + 'ok';\n")).content);
+        expect(output).toContain('var fromId *string = this.SafeString(item, "from", "x")');
+        expect(output).toContain('return *fromId + "_" + "ok"');
+        expect(output).not.toContain('Add(');
+    });
+    test('a missing default keeps the helper call', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        const fromId = this.safeString (item, 'from');\n" +
+            "        return fromId + '_' + 'ok';\n")).content);
+        expect(output).toContain('return Add(Add(fromId, "_"), "ok")');
+    });
+    test('the default has to be a literal: an argument operand keeps the helper', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        const fromId = this.safeString (item, 'from', other);\n" +
+            "        return fromId + '_' + 'ok';\n")).content);
+        expect(output).toContain('return Add(Add(fromId, "_"), "ok")');
+    });
+    test('the default has to fit the arity: a three-argument safeString2 keeps the helper', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        const fromId = this.safeString2 (item, 'from', 'x');\n" +
+            "        return fromId + '_' + 'ok';\n")).content);
+        expect(output).toContain('return Add(Add(fromId, "_"), "ok")');
+    });
+    test('a reassignment to a non-defaulted call keeps the helper call', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        let fromId = this.safeString (item, 'from', 'x');\n" +
+            "        fromId = this.safeString (item, 'other');\n" +
+            "        return fromId + '_' + 'ok';\n")).content);
+        expect(output).toContain('fromId = this.SafeString(item, "other")');
+        expect(output).toContain('return Add(Add(fromId, "_"), "ok")');
+    });
+    test('a reassignment to another defaulted call stays derefable', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        let fromId = this.safeString (item, 'from', 'x');\n" +
+            "        fromId = this.safeString (item, 'other', 'y');\n" +
+            "        return fromId + '_' + 'ok';\n")).content);
+        expect(output).toContain('return *fromId + "_" + "ok"');
+        expect(output).not.toContain('Add(');
+    });
+    test('two defaulted locals deref on both sides of the operator', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        const first = this.safeString (item, 'a', 'x');\n" +
+            "        const second = this.safeString (other, 'b', 'y');\n" +
+            "        return first + ':' + second;\n")).content);
+        expect(output).toContain('return *first + ":" + *second');
+        expect(output).not.toContain('Add(');
+    });
+    test('a defaulted call inline in the expression is derefable too', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        return this.safeString (item, 'from', 'x') + '_' + 'ok';\n")).content);
+        expect(output).toContain('return *this.SafeString(item, "from", "x") + "_" + "ok"');
+        expect(output).not.toContain('Add(');
+    });
+    test('an undefaulted call inline keeps the helper call', () => {
+        const output = squash(transpiler.transpileGo(local(
+            "        return this.safeString (item, 'from') + '_' + 'ok';\n")).content);
+        expect(output).toContain('return Add(Add(this.SafeString(item, "from"), "_"), "ok")');
+    });
+});
+
 describe('go ternary func literal typing', () => {
     // Ternary(c, a, b) prints as the lazy func literal; when both arms print as one and
     // the same Go scalar the literal names it (`func() string`), so the value leaves the
@@ -4552,6 +4629,22 @@ describe('go native arithmetic result rows (Divide/Multiply/Subtract/Mod)', () =
             .toContain("return this.Milliseconds() - 1000");
         expect(body(main("        return this.milliseconds() % 1000;\n")))
             .toContain("return this.Milliseconds() % 1000");
+    });
+    test('two float64 operands take the operator: the helper float path is float64 arithmetic', () => {
+        expect(body(main("        const a = Math.floor(value);\n        const b = Math.floor(other);\n        return a + b;\n")))
+            .toContain("var a float64 = MathFloor(value) var b float64 = MathFloor(other) return a + b");
+    });
+    test('a float64 operand next to a float literal uses the float operator', () => {
+        expect(body(main("        const a = Math.floor(value);\n        return a + 0.5;\n")))
+            .toContain("return a + 0.5");
+    });
+    test('an int literal next to a float64 operand keeps the helper (frontend int path)', () => {
+        expect(body(main("        const a = Math.floor(value);\n        return a + 1;\n")))
+            .toContain("return Add(a, 1)");
+    });
+    test('two float literals keep the helper: Go folds them exactly, the helper rounds', () => {
+        expect(body(main("        return { 'a': 2.5 + 1.5 };\n")))
+            .toContain("\"a\": Add(2.5, 1.5)");
     });
 });
 
