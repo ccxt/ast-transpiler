@@ -3756,6 +3756,70 @@ describe('declared-list element reads: Helpers.GetValue(x, i) -> x.get(i)', () =
         });
     });
 
+    // the param is declared `Object` in the Java signature: the checker proof carries the
+    // wildcard cast, which a `List<String>` declaration would not accept
+    test('a checker-proven array parameter reads natively behind the wildcard cast and the guard', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: string[]): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            const a = xs[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('(xs == null || i < 0 || i >= ((java.util.List<?>)xs).size() ? null : ((java.util.List<?>)xs).get(i))');
+        expect(output).not.toContain('Helpers.GetValue(xs, i)');
+    });
+
+    test('the same parameter without a `var` counter index keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(xs: string[], i: number): void {\n" +
+        "        const a = xs[i];\n" +
+        "        this.something(a);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(xs, i)');
+        expect(output).not.toContain('((java.util.List<?>)xs).get(i)');
+    });
+
+    test('a call receiver keeps the helper (the guards would evaluate it twice)', () => {
+        const input =
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const a = this.list()[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    list(): any[] { return []; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(this.list(), i)');
+    });
+
+    test('a varargs receiver keeps the helper (a Java array, not a List)', () => {
+        const input =
+        "class T {\n" +
+        "    test(...args: any[]): void {\n" +
+        "        for (let i = 0; i < args.length; i++) {\n" +
+        "            const a = args[i];\n" +
+        "            this.something(a);\n" +
+        "        }\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.GetValue(args, i)');
+        expect(output).not.toContain('((java.util.List<?>)args).get(i)');
+    });
+
     test('a counter captured as finalI keeps the helper (finalI is a boxed Object)', () => {
         const input =
         "class T {\n" +
@@ -4967,6 +5031,81 @@ describe('helper removal: native comparison / containsKey / size', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("Helpers.getArrayLength(args)");
+    });
+
+    // a local the embedding pass declared a java.util.List (a typed list return bound to a
+    // local, a split/list-producer local, a list parameter the pass retyped): the `.length`
+    // read is the same int the helper computes, and the null arm keeps its 0
+    test('a declared List receiver prints x.size() behind the helper\'s zero-for-null guard', () => {
+        const input =
+        "class T {\n" +
+        "    f(): void {\n" +
+        "        const xs = this.getList();\n" +
+        "        const n = xs.length;\n" +
+        "        this.something(n);\n" +
+        "    }\n" +
+        "    getList(): any { return []; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.List<Object>';
+        try {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('(xs == null ? 0 : xs.size())');
+            expect(output).not.toContain('Helpers.getArrayLength(xs)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+        // without a consumer the read keeps the helper
+        const baseline = transpiler.transpileJava(input).content;
+        expect(baseline).toContain('Helpers.getArrayLength(xs)');
+    });
+
+    test('a declared List<Object> parameter prints the size without a cast', () => {
+        const input =
+        "class T {\n" +
+        "    f(xs: any): void {\n" +
+        "        for (let i = 0; i < xs.length; i++) {\n" +
+        "            return;\n" +
+        "        }\n" +
+        "    }\n" +
+        "}";
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.List<Object>';
+        try {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('for (var i = 0; i < (xs == null ? 0 : xs.size()); i++)');
+            expect(output).not.toContain('Helpers.getArrayLength(xs)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+
+    test('a declared non-List type keeps the length helper', () => {
+        for (const type of [ 'java.util.Map<String, Object>', 'String', 'Long', 'var' ]) {
+            const input =
+            "class T {\n" +
+            "    f(): void {\n" +
+            "        const xs = this.getList();\n" +
+            "        const n = xs.length;\n" +
+            "        this.something(n);\n" +
+            "    }\n" +
+            "    getList(): any { return []; }\n" +
+            "    something(...args: any[]): void {}\n" +
+            "}";
+            const printer: any = (transpiler as any).javaTranspiler;
+            const previous = printer.javaDeclaredLocalTypeResolver;
+            printer.javaDeclaredLocalTypeResolver = () => type;
+            try {
+                const output = transpiler.transpileJava(input).content;
+                expect(output).toContain('Helpers.getArrayLength(xs)');
+                expect(output).not.toContain('xs.size()');
+            } finally {
+                printer.javaDeclaredLocalTypeResolver = previous;
+            }
+        }
     });
 
     test('for-loop counter with an integer-literal initializer compares natively', () => {

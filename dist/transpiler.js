@@ -14191,6 +14191,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (kind === "ListOrNull") {
       return `(${leftSide} == null ? 0 : ((java.util.List<?>)${leftSide}).size())`;
     }
+    const declared = this.javaDeclaredTypeOf(expression);
+    if (declared !== void 0 && JAVA_DECLARED_LIST_TYPES.test(declared)) {
+      return `(${leftSide} == null ? 0 : ${leftSide}.size())`;
+    }
     return `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
   }
   // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the
@@ -15082,13 +15086,34 @@ var JavaTranspiler = class extends BaseTranspiler {
   // throws on both, so the emission carries the same tests. `||` short-circuits and both
   // operands are identifiers, so nothing is evaluated twice and nothing is re-evaluated
   // between the size test and the get.
+  // A receiver the checker proves a java.util.List value (a TS array/tuple parameter, a
+  // ReadonlyArray or an Array-derived class) reads natively too when it is a bare
+  // reference: its Java declaration may still print `Object`, so that emission carries the
+  // wildcard cast — `java.util.List<?>`, never `List<Object>`, which a `List<String>`
+  // declaration would not convert to. A varargs array (a real Java array, not a List) and
+  // a receiver that is not side-effect free (a call: the guards print it twice) keep the
+  // helper.
   javaDeclaredListElementRead(node, isCounter) {
     if (node.parent?.kind === ts6.SyntaxKind.ExpressionStatement) {
       return void 0;
     }
-    const declared = this.javaDeclaredTypeOf(node.expression);
-    if (declared === void 0 || !JAVA_DECLARED_LIST_TYPES.test(declared)) {
+    if (node.parent?.kind === ts6.SyntaxKind.VariableDeclaration && node.parent.initializer === node && node.parent.name?.escapedText === "client") {
       return void 0;
+    }
+    const declared = this.javaDeclaredTypeOf(node.expression);
+    const declaredList = declared !== void 0 && JAVA_DECLARED_LIST_TYPES.test(declared);
+    let target;
+    let list;
+    if (declaredList) {
+      target = this.printNode(node.expression, 0);
+      list = target;
+    } else {
+      const type = this.getChecker().getTypeAtLocation(node.expression);
+      if (!this.isJavaListValueType(type) || this.isVarargsArrayReference(node.expression) || !this.javaSideEffectFreeReference(node.expression)) {
+        return void 0;
+      }
+      target = this.printNode(node.expression, 0);
+      list = `((java.util.List<?>)${target})`;
     }
     if (!isCounter && Number(node.argumentExpression.text) > 2147483647) {
       return void 0;
@@ -15096,10 +15121,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaStringElementsReceiver(node.expression)) {
       return void 0;
     }
-    const target = this.printNode(node.expression, 0);
     const indexText = this.printNode(node.argumentExpression, 0);
     const lowerBound = isCounter ? `${indexText} < 0 || ` : "";
-    return `(${target} == null || ${lowerBound}${indexText} >= ${target}.size() ? null : ${target}.get(${indexText}))`;
+    return `(${target} == null || ${lowerBound}${indexText} >= ${list}.size() ? null : ${list}.get(${indexText}))`;
   }
   // `x[k]` where a consumer declares x a java Map and the key is not a literal: the
   // helper's Map branch is the map accessor behind its own tests — a null receiver, a

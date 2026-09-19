@@ -1677,6 +1677,14 @@ export class JavaTranspiler extends BaseTranspiler {
         if (kind === 'ListOrNull') {
             return `(${leftSide} == null ? 0 : ((java.util.List<?>)${leftSide}).size())`;
         }
+        // a receiver the embedding pass declared a java.util.List (`List<Object> response =
+        // (this.someRequest(..)).join()` — a typed list return bound to a local, or a list
+        // parameter the pass retyped): the declaration carries the type, so `x.size()` needs
+        // no cast, and the null arm keeps getArrayLength's answer for a null receiver.
+        const declared = this.javaDeclaredTypeOf(expression);
+        if (declared !== undefined && JAVA_DECLARED_LIST_TYPES.test(declared)) {
+            return `(${leftSide} == null ? 0 : ${leftSide}.size())`;
+        }
         return `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
     }
 
@@ -2721,13 +2729,41 @@ export class JavaTranspiler extends BaseTranspiler {
     // throws on both, so the emission carries the same tests. `||` short-circuits and both
     // operands are identifiers, so nothing is evaluated twice and nothing is re-evaluated
     // between the size test and the get.
+    // A receiver the checker proves a java.util.List value (a TS array/tuple parameter, a
+    // ReadonlyArray or an Array-derived class) reads natively too when it is a bare
+    // reference: its Java declaration may still print `Object`, so that emission carries the
+    // wildcard cast — `java.util.List<?>`, never `List<Object>`, which a `List<String>`
+    // declaration would not convert to. A varargs array (a real Java array, not a List) and
+    // a receiver that is not side-effect free (a call: the guards print it twice) keep the
+    // helper.
     javaDeclaredListElementRead(node, isCounter) {
         if (node.parent?.kind === ts.SyntaxKind.ExpressionStatement) {
             return undefined; // a bare conditional expression is not a Java statement
         }
-        const declared = this.javaDeclaredTypeOf(node.expression);
-        if (declared === undefined || !JAVA_DECLARED_LIST_TYPES.test(declared)) {
+        // the ws-tier post-pass types `Object client = Helpers.GetValue(..)` by that exact
+        // printed text (build/javaTranspiler.ts postProcessWsJava: `Client client =
+        // (Client)Helpers.GetValue(..)`). A native read drops the shape and the checkcast
+        // with it, so a `client` initializer keeps the helper.
+        if (node.parent?.kind === ts.SyntaxKind.VariableDeclaration
+            && (node.parent as any).initializer === node
+            && ((node.parent as any).name?.escapedText === 'client')) {
             return undefined;
+        }
+        const declared = this.javaDeclaredTypeOf(node.expression);
+        const declaredList = declared !== undefined && JAVA_DECLARED_LIST_TYPES.test(declared);
+        let target;
+        let list;
+        if (declaredList) {
+            target = this.printNode(node.expression, 0);
+            list = target;
+        } else {
+            const type = this.getChecker().getTypeAtLocation(node.expression);
+            if (!this.isJavaListValueType(type) || this.isVarargsArrayReference(node.expression)
+                || !this.javaSideEffectFreeReference(node.expression)) {
+                return undefined;
+            }
+            target = this.printNode(node.expression, 0);
+            list = `((java.util.List<?>)${target})`;
         }
         if (!isCounter && Number(node.argumentExpression.text) > 2147483647) {
             return undefined; // printNumericLiteral would add an `L` suffix List.get cannot take
@@ -2735,10 +2771,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaStringElementsReceiver(node.expression)) {
             return undefined; // its String consumers are typed from the `Helpers.GetValue(` prefix
         }
-        const target = this.printNode(node.expression, 0);
         const indexText = this.printNode(node.argumentExpression, 0);
         const lowerBound = isCounter ? `${indexText} < 0 || ` : '';
-        return `(${target} == null || ${lowerBound}${indexText} >= ${target}.size() ? null : ${target}.get(${indexText}))`;
+        return `(${target} == null || ${lowerBound}${indexText} >= ${list}.size() ? null : ${list}.get(${indexText}))`;
     }
 
     // `x[k]` where a consumer declares x a java Map and the key is not a literal: the
