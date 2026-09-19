@@ -2062,36 +2062,37 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return result;
     }
 
-    goSafeDictLocalUnboxUncached(declaration): string | undefined {
-        if (this.goSafeDictLocalArgs(declaration.initializer) === undefined) {
-            return undefined;
-        }
+    // every read of `declaration`'s name inside its function must keep the boxed value's
+    // meaning for the local to take a named Go type: a rebinding of the same name mixes two
+    // values, and a use `readsTheValue` rejects re-boxes the local. `skipUse` drops the nodes
+    // that are not references at all (a property name, another binding's identifier).
+    goDeclaredLocalTypeIfSafe(declaration, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined {
         const sourceName = declaration.name.escapedText as string;
         const scope: any = this.goEnclosingFunction(declaration);
         if (scope === undefined) {
             return undefined;
         }
-        let safe = true;
-        const visit = (n) => {
-            if (!safe) { return; }
+        const unsafe = this.hasNodeWhere(scope, (n: any) => {
             if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter)
                 && (n !== declaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.escapedText === sourceName)) {
-                safe = false; // a shadowing binding would mix two values under one name
-                return;
+                return true; // a shadowing binding would mix two values under one name
             }
-            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === sourceName) && (n !== declaration.name)) {
-                if (!this.goSafeDictUseReadsTheMap(n)) {
-                    safe = false;
-                    return;
-                }
+            if ((n.kind !== ts.SyntaxKind.Identifier) || (n.escapedText !== sourceName) || (n === declaration.name)) {
+                return false;
             }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
-        if (!safe || this.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)) {
+            return (skipUse !== undefined && skipUse(n)) ? false : !readsTheValue(n);
+        });
+        if (unsafe || this.goTypeNameIsShadowed(scope, goType)) {
             return undefined;
         }
-        return GO_SAFE_DICT_LOCAL_TYPE;
+        return goType;
+    }
+
+    goSafeDictLocalUnboxUncached(declaration): string | undefined {
+        if (this.goSafeDictLocalArgs(declaration.initializer) === undefined) {
+            return undefined;
+        }
+        return this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n) => this.goSafeDictUseReadsTheMap(n));
     }
 
     // the initializer a typed dict local is declared with: the accessor call is replaced by the
@@ -2220,41 +2221,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         // same map into the callee's `any` parameter, the identical interface value. SafeMarket may
         // answer its own optional argument, so those locals only take the read shapes below.
         const throwingAccessor = (declaration.initializer.expression?.name?.escapedText === 'market');
-        const sourceName = declaration.name.escapedText as string;
-        const scope: any = this.goEnclosingFunction(declaration);
-        if (scope === undefined) {
-            return undefined;
-        }
-        let safe = true;
-        const visit = (n) => {
-            if (!safe) { return; }
-            if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter)
-                && (n !== declaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.escapedText === sourceName)) {
-                safe = false; // a shadowing binding would mix two values under one name
-                return;
-            }
-            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === sourceName) && (n !== declaration.name)) {
-                // `this.market(…)` carries the same name as the local: a property/method name is
-                // not a reference, and neither is a different binding of the same name
-                const parent: any = n.parent;
-                if ((parent?.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
-                    return;
-                }
-                if (!this.goIdentifierRefersToDeclaration(n, declaration)) {
-                    return;
-                }
-                if (!this.goMarketUseReadsTheValue(n, throwingAccessor)) {
-                    safe = false;
-                    return;
-                }
-            }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
-        if (!safe || this.goTypeNameIsShadowed(scope, GO_MARKET_LOCAL_TYPE)) {
-            return undefined;
-        }
-        return GO_MARKET_LOCAL_TYPE;
+        // `this.market(…)` carries the same name as the local: a property/method name is not
+        // a reference, and neither is a different binding of the same name
+        return this.goDeclaredLocalTypeIfSafe(declaration, GO_MARKET_LOCAL_TYPE,
+            (n) => this.goMarketUseReadsTheValue(n, throwingAccessor),
+            (n) => ((n.parent?.kind === ts.SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                || !this.goIdentifierRefersToDeclaration(n, declaration));
     }
 
     // the initializer a typed market local is declared with: the same call, its boxed result
@@ -2367,32 +2339,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goSafeListLocalArgs(declaration.initializer) === undefined) {
             return undefined;
         }
-        const sourceName = declaration.name.escapedText as string;
-        const scope: any = this.goEnclosingFunction(declaration);
-        if (scope === undefined) {
-            return undefined;
-        }
-        let safe = true;
-        const visit = (n) => {
-            if (!safe) { return; }
-            if ((n.kind === ts.SyntaxKind.VariableDeclaration || n.kind === ts.SyntaxKind.Parameter)
-                && (n !== declaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.escapedText === sourceName)) {
-                safe = false; // a shadowing binding would mix two values under one name
-                return;
-            }
-            if ((n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === sourceName) && (n !== declaration.name)) {
-                if (!this.goSafeListUseReadsTheList(n)) {
-                    safe = false;
-                    return;
-                }
-            }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
-        if (!safe || this.goTypeNameIsShadowed(scope, GO_SAFE_LIST_LOCAL_TYPE)) {
-            return undefined;
-        }
-        return GO_SAFE_LIST_LOCAL_TYPE;
+        return this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goSafeListUseReadsTheList(n));
     }
 
     // the initializer a typed list local is declared with: the accessor call is replaced by the
