@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../root/ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../root/ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -3808,12 +3808,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // ===== ws handler `message` parameter (batch D, D-19) =====
   // A ws handler `handleX (client: Client, message: Dict)` is reached at runtime either
   // through a dispatch-table entry (`{ "k", this.handleX }` -> DynamicInvoker) or a direct
-  // call. The typed `Dictionary<string, object>` signature is printed only when the
-  // checker annotates the parameter `Dict`, no reference in the program CALLS the method
-  // (a call binds the boxed argument, CS1503), the body never writes the parameter (D2),
-  // the method is no override (the hand-written ws bridge prints `object messageContent`),
-  // and the class holds no list route (a venue that tests the message for a list hands the
-  // array itself to a table entry).
   csharpHandlerMessageType(param) {
     if (this.csharpHandlerMessageTypes.has(param)) {
       return this.csharpHandlerMessageTypes.get(param);
@@ -3873,7 +3867,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // a class that tests the message (or another dict parameter) for a list can hand the
   // array itself to a dispatch-table entry (binance `'x@arr'`), so its handlers keep the
   // box; a class testing unrelated lists (an array-typed `symbols` parameter, a field of
-  // the message) never routes the raw message through the list arm
   csharpClassHasListRoute(method) {
     const cls = this.csharpEnclosingClass(method);
     if (cls === void 0) {
@@ -4672,7 +4665,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // the value kind of an operand the printer could only call `object`: the type the read's
   // declaration was PRINTED with (printer table -> build layer's read-type oracle -> the
   // declared-type registry for the declarations its own passes retyped). A collection/class
-  // declaration and every non-identifier operand answer undefined and keep the helper.
   csharpDeclaredReadEqualityKind(node, operandType) {
     if (operandType !== void 0 && operandType !== "" && operandType !== "object") {
       return void 0;
@@ -5997,8 +5989,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // A parameter of a method that participates in an override relation prints the spelling its
   // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES; D8): C# is
   // invariant on override parameter types, so a half-retyped name is CS0115, while a name the
-  // census cleared can print the same type on the base declaration and every override. The
-  // checker re-derives the shape here, so a stale table row degrades to `object`.
   printParameterType(node) {
     if (node === void 0 || node.kind !== _typescript2.default.SyntaxKind.Parameter) {
       return super.printParameterType(node);
@@ -6919,11 +6909,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpCallPrintsBool(node) {
     return this.csharpIsCheckedBoolean(node) && (this.csharpCallReturnType(node) === "bool" || this.csharpBoolCall_Native(node));
   }
-  // `isTrue(x)` boxes x and answers false for a null box, which is exactly what the lifted
-  // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only values
-  // whose PRINTED declaration is that `bool?` qualify: a local the embedding build layer
-  // retyped (its resolver names the emitted type) and a call whose printed return type is
-  // `bool?`. Every other shape keeps the helper.
+  // The declared type of an identifier read: build layer's proof first, then this printer's table;
+  // `var`/`object` mean "no type". `isTrue (x)` answers false for a null box, exactly the lifted
+  // `x == true` on a `bool?`. Only reads declared `bool?` qualify; every other shape keeps helper.
   csharpNullableBoolCondition(node) {
     let value = node;
     while (_optionalChain([value, 'optionalAccess', _422 => _422.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
@@ -6946,11 +6934,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // a call whose printed C# signature is `bool?`: the `bool? safeBool(...)` family of the
   // hand-written base (CSHARP_THIS_RETURN_TYPES, which names that signature), and a
   // `this.<name>(...)` whose TS declaration the generator itself prints — definition and call
-  // site are spelled by the same csharpBooleanReturnType, so they cannot disagree. A bodiless
-  // overload stub states only that overload's type (safeBool's `boolean` stub above a
-  // `boolean | undefined` implementation would claim a `bool` the C# `bool?` does not have),
-  // so the declaration must carry the body; unresolvable callees print `callDynamically`
-  // (object) and stay out.
   csharpCallPrintsNullableBool(node) {
     if (this.csharpCallReturnType(node) === "bool?") {
       return true;
@@ -7865,26 +7848,9 @@ var GoTranspiler = class extends BaseTranspiler {
     // box holds a container, a scalar or nil, so IsEqual(x, nil) is exactly `x == nil`.
     // A write of any other shape in the enclosing function (D2 scan) keeps the helper
     this.goAnyLocalHoldsNonPointerCache = /* @__PURE__ */ new Map();
-    // ---- B-02/D-01: native parameter types on internal parse*/helper methods ----
-    //
-    // A parameter declared with a nullable ccxt alias (`Str` = string | undefined) can
-    // be printed with the native Go type the printer already uses for that value
-    // (`*string`), and a `Dict`/`List`/`Market`-shaped object/array parameter with the
-    // Go map/slice the printer builds those values from (`map[string]any` / `[]any`),
-    // but only when
-    //   * the method is internal — not async, not an override, and no member of that
-    //     name exists on the class it extends: the generated base classes and the
-    //     hand-written IDerivedExchange interface compile against the base signature,
-    //   * every call site of the method passes exactly that Go type — the checker
-    //     proves the ones in this file; the sibling files of the same ts/src tree
-    //     (pro/ and the derived exchanges, absent from a scoped run's program) are
-    //     proven textually, and an unprovable call site keeps the box,
-    //   * the body never writes the parameter another printed type (D2) and never
-    //     nil-compares it, which the boxed parameter prints natively and the typed one
-    //     would not (see goParameterKeepsNilCompareNative).
-    // Each qualifying parameter is also registered in goDeclaredTypeOfIdentifier, so
-    // the readers that consult it (pointer-aware equality, element access, slice
-    // length) go native.
+    // B-02: a parameter of a nullable ccxt alias (`Str`) prints as the native Go type (`*string`) only
+    // when the method is internal (not async/override, no inherited member), every call site passes
+    // that type (checker here, textual for siblings), and the body never writes another type (D2).
     this.goNativeParameterTypeCache = /* @__PURE__ */ new Map();
     this.goSameFileCallCache = /* @__PURE__ */ new Map();
     this.goTsSrcTreeCache = /* @__PURE__ */ new Map();
@@ -8661,7 +8627,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // a `*string` local every write of which is a SafeString-family call with a literal
   // default: that Go method can only return a fresh non-nil pointer, so the local may
   // be deref'd even where the checker offers no narrowing. One write of any other
-  // shape (or a compound/increment write) re-opens Add's nil branch.
   goDefaultedSafeStringLocal(node) {
     if (_optionalChain([node, 'optionalAccess', _489 => _489.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
       return false;
@@ -9241,13 +9206,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const key = this.printNode(args.key, 0);
     return `SafeMapTyped(${container}, ${key})`;
   }
-  // the TypeScript return type of the initializer proves the boxed value is a dictionary
-  // interface: the checker reports `MarketInterface` for `this.Market(...)` / `this.SafeMarket(...)`
-  // and `CurrencyInterface` for `this.Currency(...)` / `this.SafeCurrency(...)` (both are the
-  // dictionary interfaces a parseMarket / parseCurrency builds). Any other accessor the checker
-  // types as one of the two — `this.SafeMarketStructure(...)`, an override's `this.ParseCurrency(...)`,
-  // `this.GetMarketFromSymbols(...)` — qualifies the same way. Read from the checker, never from a
-  // printed name.
+  // the TypeScript return type proves the boxed value is the market dictionary: the checker reports
+  // the `MarketInterface` interface for `this.Market(...)` / `this.SafeMarket(...)` (the `Market`
+  // alias is the same interface unioned with undefined). Read from the checker, never a printed name.
   goMarketCallReturnsDict(initializer) {
     if (_optionalChain([initializer, 'optionalAccess', _579 => _579.kind]) !== _typescript2.default.SyntaxKind.CallExpression) {
       return false;
@@ -9320,13 +9281,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const valueDeclaration = _nullishCoalesce(symbol.valueDeclaration, () => ( _optionalChain([symbol, 'access', _603 => _603.declarations, 'optionalAccess', _604 => _604[0]])));
     return valueDeclaration === void 0 || valueDeclaration === declaration;
   }
-  // one later use of the market local: the dictionary read shapes the SafeDict family already
-  // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
-  // instead of answering an absent value — a plain argument position, because Go re-boxes the
-  // declared map into the callee's `any` parameter exactly as the local's own box did. An
-  // element this local COMPARES is a read too: the element-read printer keeps the GetValue
-  // helper for these operands (goMarketComparisonElementRead), which derefs a boxed element
-  // exactly as the boxed local's own read did.
+  // one later use of the market local: the dictionary read shapes SafeDict proves (element read,
+  // `in`, read-helper argument), plus — only when the accessor throws rather than answers absent —
+  // a plain argument position, since Go re-boxes the map into the callee's `any` as the box did.
   goMarketUseReadsTheValue(node, throwingAccessor) {
     if (this.goSafeDictUseReadsTheMap(node)) {
       return true;
@@ -9386,7 +9343,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // a compared element of a market/currency local keeps the GetValue helper: its deref is what
   // the boxed local's read used to apply, and a parseMarket may have stored a `*bool`/`*string`
   // under the key. Only the operands the use scan admits this way are affected; every other
-  // element read of the local prints the native index.
   goMarketComparisonElementRead(node) {
     const base = _optionalChain([node, 'optionalAccess', _621 => _621.expression]);
     if (_optionalChain([base, 'optionalAccess', _622 => _622.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
@@ -9407,7 +9363,6 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // the container/key argument nodes of a whole `this.SafeList(container, key)` call, or
   // undefined when the initializer is another shape. A third argument is only droppable when
   // it is the empty array literal the TS call sites pass (`safeList(x, k, [])`): the typed
-  // reader answers nil for the absent case, which is what the empty slice gave those reads.
   goSafeListLocalArgs(initializer) {
     if (_optionalChain([initializer, 'optionalAccess', _627 => _627.kind]) !== _typescript2.default.SyntaxKind.CallExpression) {
       return void 0;
@@ -10544,9 +10499,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // The boxed object parameter prints `x === undefined` as a native `x == nil`
   // (goObjectBoxParameter); a parameter the printer typed as a Go map/slice would fall
   // through to IsEqual(x, nil) instead. Both predicates answer false for every value a
-  // proven call site can pass, but the retype would turn a native test into a helper
-  // call, so such a parameter keeps its box. *string is exempt: its typed arm prints the
-  // same `x == nil` the boxed arm does.
   goParameterKeepsNilCompareNative(body, param, goType) {
     if (goType === "*string") {
       return true;
@@ -10584,11 +10536,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // ---- D-03: pro handler frame parameters ------------------------------------
   // A `handle*` method of a pro exchange class receives the raw frame from the WS
   // client. When the checker types that parameter as `Dict`, and every call site
-  // passes a proven `map[string]any` (the shared call-site proof), it prints
-  // `map[string]any` and its reads go native. `handleMessage` itself is an override
-  // of the base stub, so it and every handler it calls with its own boxed parameter
-  // keep the box: the generated base class and the hand-written IDerivedExchange
-  // interface compile against the boxed base signature (D8).
   goIsProHandlerMethod(fn) {
     const fileName = String(_nullishCoalesce(fn.getSourceFile().fileName, () => ( "")));
     if (!/(^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(fileName)) {
@@ -10600,7 +10547,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // `Dict` is the checker's structural `{[key: string]: any}`: a string index
   // signature is the proof. Class instances (OrderBook, ArrayCache*, Client, Future),
   // named-member interfaces (Market, Order, Ticker) and arrays carry none of them, so
-  // they never qualify — those are exactly the values a Go map cannot hold.
   goParameterTypeIsDict(type) {
     try {
       return typeof type.getStringIndexType === "function" && type.getStringIndexType() !== void 0;
@@ -10611,7 +10557,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
   // and the other dict-shaped object types print as the `map[string]any` the Go side
   // builds them from, `List` (= any[]) as its `[]any`; pro `handle*` frames (isHandler)
-  // admit only the structural Dict. The call-site proof decides whether the retype compiles.
   goNativeParameterTypeCandidates(param, isHandler = false) {
     const checker = this.checkerOrUndefined();
     if (checker === void 0) {
@@ -10648,12 +10593,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     return [];
   }
-  // true when the method overrides (or shadows) a member of the class it extends, or
-  // carries an explicit `override`: those print the base signature so the generated
-  // base classes and IDerivedExchange keep compiling against it. The abstract bases
-  // themselves (`ts/src/base/**`, or any root class) are public surface and never
-  // retyped; the path test accepts both the scoped run's relative source name
-  // (`ts/src/base/PredictionExchange.ts`) and a farm checkout's absolute one.
+  // true when the method overrides (or shadows) a member of the class it extends, or carries an
+  // explicit `override`: those print the base signature so the generated base classes and
+  // IDerivedExchange keep compiling. The abstract base (ts/src/base/**) is never retyped.
   goMethodKeepsBaseSignature(fn) {
     if ((_nullishCoalesce(fn.modifiers, () => ( []))).some((m) => m.kind === _typescript2.default.SyntaxKind.OverrideKeyword)) {
       return true;
@@ -10776,12 +10718,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // Lazily read the ts/src tree this file belongs to: the call sites of every
   // `this.x(...)`, each file's text and its class -> base map. A scoped run's
   // program holds one exchange, so the sibling files are only provable textually.
-  // NOTE: the tree loads only for an absolute source name; the driver's relative
-  // `ts/src/x.ts` answers undefined, which *skips* the sibling half of the proof
-  // (the same-file checker half still runs). Enabling the relative form is a
-  // whole-tree change to measure on its own: it makes the sibling proof stricter
-  // and reverts documented native emissions whose sibling argument the textual
-  // string proof cannot name (measured: Nado.ParseX18).
   goTsSrcTree(file) {
     const fileName = file.fileName;
     const marker = "/ts/src/";
@@ -10870,8 +10806,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // the textual call-site proof. `*string` is the only pointer-shaped native type
   // with siblings the printer can name from text; a map/slice parameter is proven for
   // the argument shapes whose printed Go form IS that type: the object/array literals
-  // and the printer's own map-returning helpers (GO_HELPER_RETURN_TYPES), plus a local
-  // assigned from one in that same file.
   goTextArgMatchesType(argText, goType, file, tree) {
     let text = (_nullishCoalesce(argText, () => ( ""))).trim();
     while (text.startsWith("(") && text.endsWith(")")) {
@@ -11363,12 +11297,6 @@ ${this.getIden(level)}}()`;
   // an `any` box the checker proves can only hold a bool or nil — a `boolean`
   // local whose Go declaration stayed `any` (a later write the printer cannot
   // type, e.g. a tuple read) — is what `EvalTruthy` reduces to: nil and `false`
-  // are both falsy, `true` is truthy, so the predicate is `x == true`. A
-  // `boolean` parameter qualifies through the same GetArg binding the nil rules
-  // use: GetArg derefs a pointer argument, so the box holds the plain value or
-  // the default. Boxes that may hold a `*bool` accessor result (a
-  // `this.SafeBool(…)` write) are excluded — a pointer is never `== true`,
-  // while the helper dereferences it.
   printInlineBoolBoxTruthy(node) {
     if (this.goScalarFamilyWithNil(node) !== "bool") {
       return void 0;
@@ -13586,14 +13514,12 @@ ${this.getIden(level)}}()`;
   // true when the identifier's printed Go declaration is a `[]any` slice: the SafeList family
   // above, or any other local/param the declared-type table proved a slice (a slice literal,
   // a `[]any`-returning accessor, a slice param the typed-param family registers). All of them
-  // read identically through GetValue, so all of them carry the guarded native element read.
   goDeclaredListIdentifier(node) {
     return this.goDeclaredTypeOfIdentifier(node) === GO_SAFE_LIST_LOCAL_TYPE || this.goSafeListUnboxIdentifier(node);
   }
   // `x[k]` on a local the printer declared []any is a slice index: GetValue answered nil for an
   // absent index (negative or out of range) and derefs a pointer element, so the native read is
   // the same index behind that guard. Only a key printed as an `int` carries it; every other
-  // key keeps the helper, which reads a []any with the identical answer.
   goNativeListElementRead(node, containerStr, keyNode, keyStr) {
     if (containerStr.includes("\n") || keyStr.includes("\n")) {
       return void 0;
@@ -14072,7 +13998,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `this.spawn(this.someMethod, args...)`: the spawned work executes `this.someMethod(args)`
   // (the ccxt post-pass rewrites the reference into a lambda), so the arguments belong to the
   // referenced method's signature, not to spawn's `...args` - each one carries the checkcast
-  // its parameter demands, or the Object local would not convert to the printed native type.
   javaSpawnCallParameterTypes(node) {
     const callee = node.expression;
     if (_optionalChain([callee, 'optionalAccess', _992 => _992.kind]) !== _typescript2.default.SyntaxKind.PropertyAccessExpression || _optionalChain([callee, 'access', _993 => _993.expression, 'optionalAccess', _994 => _994.kind]) !== _typescript2.default.SyntaxKind.ThisKeyword || _optionalChain([callee, 'access', _995 => _995.name, 'optionalAccess', _996 => _996.escapedText]) !== "spawn") {
@@ -15371,14 +15296,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // The native Java type a parameter declaration prints with. A parameter whose own
-  // annotation names one of the base/types.ts aliases prints it whenever every
-  // declaration of the method up the heritage chain prints the same type: Java overrides
-  // are invariant on parameter types, so a declaration whose base prints `Object` (an
-  // unannotated base, a hand-written java class) keeps the box. A fixed parameter that
-  // carries no native annotation of its own MOVES with the declaration it overrides
-  // (D-10: base+override agree) - without that the override would print `Object` against
-  // a typed base and silently stop overriding it.
+  // The native Java type a parameter prints with when its TS annotation is a base/types.ts alias in
+  // JAVA_NATIVE_PARAMETER_TYPES. Fixed parameters of generated-tier methods only, and every
+  // declaration up the heritage chain must print the same type: Java overrides are invariant.
   javaNativeParameterType(node) {
     if (node === void 0 || !_typescript2.default.isParameter(node) || node.initializer !== void 0 || node.dotDotDotToken !== void 0) {
       return void 0;
@@ -15449,7 +15369,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // the type a fixed parameter with no annotation of its own inherits: the nearest
   // declaration of the method up the heritage chain that prints a native type. An
   // unannotated root declaration prints `Object`, so nothing is inherited and the whole
-  // chain keeps the box.
   javaInheritedParameterType(node) {
     const method = node.parent;
     const index = _optionalChain([method, 'optionalAccess', _1120 => _1120.parameters, 'optionalAccess', _1121 => _1121.indexOf, 'call', _1122 => _1122(node)]);
@@ -15514,9 +15433,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // ===== native return types (D-09) =====
   //
   // The native Java return a generated method declaration prints with, when its TS
-  // annotation names a carriable type and EVERY return statement of its body already
-  // prints that same Java type (see the constants above). undefined keeps the boxed
-  // `Object` signature.
   javaNativeReturnType(node) {
     if (node === void 0 || node.kind !== _typescript2.default.SyntaxKind.MethodDeclaration || node.name === void 0 || node.type === void 0 || node.body === void 0 || !_typescript2.default.isClassDeclaration(node.parent)) {
       return void 0;
@@ -16069,19 +15985,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return JAVA_DECLARED_MAP_TYPES.test(type);
   }
-  // `x[i]` where a consumer declares x a java List and the index is the primitive int
-  // counter of `for (var i = <int literal>; …; i++)`: the native element read. GetValue
-  // answers null for a null receiver and for an index outside [0, size) while List.get
-  // throws on both, so the emission carries the same tests. `||` short-circuits and both
-  // operands are identifiers, so nothing is evaluated twice and nothing is re-evaluated
-  // between the size test and the get.
-  // A receiver the checker proves a java.util.List value (a TS array/tuple parameter, a
-  // ReadonlyArray or an Array-derived class) reads natively too when it is a bare
-  // reference: its Java declaration may still print `Object`, so that emission carries the
-  // wildcard cast — `java.util.List<?>`, never `List<Object>`, which a `List<String>`
-  // declaration would not convert to. A varargs array (a real Java array, not a List) and
-  // a receiver that is not side-effect free (a call: the guards print it twice) keep the
-  // helper.
+  // `x[i]` where x is a declared java List and i is the int counter of `for (var i = <int literal>`:
+  // GetValue answers null for a null receiver or index outside [0, size) while List.get throws, so
+  // the emission carries the same tests. `||` short-circuits over identifiers, so nothing runs twice.
   javaDeclaredListElementRead(node, isCounter) {
     if (_optionalChain([node, 'access', _1178 => _1178.parent, 'optionalAccess', _1179 => _1179.kind]) === _typescript2.default.SyntaxKind.ExpressionStatement) {
       return void 0;
@@ -16117,9 +16023,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `x[k]` where a consumer declares x a java Map and the key is not a literal: the
   // helper's Map branch is the map accessor behind its own tests — a null receiver, a
   // null key and a key that is not a String all answer null, and a String-keyed map's
-  // accessor answers the same value for every String key. The guard prints the receiver
-  // and the key twice, so both must be side-effect-free reads, and `instanceof` needs a
-  // key that prints as a box.
   javaDeclaredMapElementRead(node) {
     if (_optionalChain([node, 'access', _1185 => _1185.parent, 'optionalAccess', _1186 => _1186.kind]) === _typescript2.default.SyntaxKind.ExpressionStatement) {
       return void 0;
@@ -16497,13 +16400,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  // a bare identifier whose printed Java declaration carries a numeric type the helper
-  // family normalizes (Long/Double/Integer/int) prints as that Java value, so the native
-  // operator reproduces the helper's box on every path. A null box would NPE where the
-  // helpers return null, and an Integer/int would wrap at int width where they normalize
-  // to Long first, so the checker must see a plain non-nullable number here (the nullable
-  // aliases and `any` are excluded; a narrowed use that still reads a `number` is a real
-  // guard in the printed Java).
+  // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed numeric, but a
+  // null box would NPE where the helpers return null, so the checker must see a plain non-nullable
+  // number here (nullable aliases and `any` excluded; a narrowed `number` is a real guard in Java).
   javaDeclaredNumericLocalKind(node) {
     if (!this.javaOperandIsNonNullNumber(node)) {
       return void 0;
@@ -16658,7 +16557,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `this.parseTimeframe(..)`: the hand-written java BaseExchange declares `public int
   // parseTimeframe(Object)` (java/lib/.../BaseExchange.java:1513) over the primitive-int
   // ts/src/base/functions/misc.ts arrow, so the call is a never-null Java int. A venue's
-  // own parseTimeframe resolves elsewhere and keeps the helper.
   javaBaseIntCall(node) {
     if (_optionalChain([node, 'optionalAccess', _1226 => _1226.kind]) !== _typescript2.default.SyntaxKind.CallExpression) {
       return false;
@@ -16685,7 +16583,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the emitted
   // `Object i = 0` initializer to `var i = 0`, so javac types the counter int. The
   // counter is widened explicitly by javaPrintWidenedOperand, and no `=`/compound
-  // assignment may write it (that value would be a box / a widened long).
   javaIntForCounter(node) {
     if (_optionalChain([node, 'optionalAccess', _1238 => _1238.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
       return false;
@@ -18788,9 +18685,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return false;
   }
-  // every `return` of the resolved declaration's body prints a Java boolean value: the
-  // hand-written base table covers its own methods, this covers the generated ones. Nested
-  // functions' returns are not the method's; `seen` and `depth` bound the recursion.
+  // the Java box of a `this.<name>(...)` call whose generated body returns a boolean on every path:
+  // the TS return type is a boolean family and every `return` in the resolved declaration prints a
+  // Java boolean or a proven Boolean-or-null box. `depth` and `seen` bound the recursion.
   javaCallReturnsBooleanBox(node, seen, depth) {
     if (_optionalChain([node, 'optionalAccess', _1408 => _1408.kind]) !== _typescript2.default.SyntaxKind.CallExpression || depth > 2) {
       return false;
@@ -18841,8 +18738,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`), the relational
   // Precise statics print `public static boolean` and the hand-written `public boolean` base
   // methods print a primitive boolean. Everything else - including the generated
-  // boolean-returning methods, which print `public Object` - is proven one level deeper by
-  // javaCallReturnsBooleanBox (every return of the resolved body prints a boolean value).
   javaPrintsBooleanCall(node, seen = /* @__PURE__ */ new Set(), depth = 0) {
     if (this.isArrayIsArrayCall(node)) {
       return true;
@@ -18965,12 +18860,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     scan(fn);
     return ok;
   }
-  // the declared Java type the ccxt-side declaration chain gave this local/param, from the
-  // javaDeclaredLocalTypeResolver hook (build/java-local-types.js records every declaration it
-  // rewrote) or, for a parameter, the printer's own native signature type
-  // (javaNativeParameterType): `boolean` prints as the primitive, so the identifier IS the
-  // condition; `Boolean` prints as the nullable box, where `Helpers.isTrue(x)` is
-  // `Boolean.TRUE.equals(x)` — a Java `Boolean` can only hold a Boolean or null
+  // the declared Java type the ccxt-side declaration chain gave this local/param, via the
+  // javaDeclaredLocalTypeResolver hook (build/java-local-types.js): `boolean` prints as the
+  // primitive, so the identifier IS the condition; `Boolean` is the nullable box (isTrue = equals).
   javaDeclaredBooleanKind(node) {
     const declaration = this.javaDeclarationOfIdentifier(node);
     if (declaration === void 0 || node.escapedText !== _optionalChain([declaration, 'access', _1419 => _1419.name, 'optionalAccess', _1420 => _1420.escapedText])) {
@@ -19466,17 +19358,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
     //
     // An internal, non-override, non-async method declared `: Str`
-    // (`string | undefined`) returns a native `Option<String>` when every
-    // `return` in its own body converts exactly. `Str` admits only
-    // `Value::Str(payload)` and `Value::Null` at run time, and
-    // `X.as_str().map(str::to_owned)` maps those to `Some(payload)` / `None`
-    // unchanged (the checker's primitive kind proves each returned
-    // expression's box). Call sites that still need a `Value` box the result
-    // back with the exact inverse; a local whose uses are all native sinks
-    // binds the `Option<String>` directly (the `safeString`-local whitelist,
-    // extended to this initializer shape). Override declarations keep the
-    // boxed signature (D8): the trait copies (`DerivedExchange` forwarder,
-    // base declaration) print `-> Value`.
     this.rustNativeStrReturnDecisions = /* @__PURE__ */ new WeakMap();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
@@ -20175,8 +20056,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // Receivers this unit may write natively: any local whose every path builds
   // a plain `Value::Map` (name-independent — rust-13's four names are the
   // batch-A subset of this proof), any parameter the checker proves is a
-  // plain dict, plus `self.<field>` on a field the hand-written base holds
-  // as a plain dict. `request` is rust-12's family.
   rustNativeInsertReceiver(expr) {
     if (_typescript2.default.isIdentifier(expr)) {
       const plain = this.rustInsertIdentifierReceiver(expr);
@@ -20442,9 +20321,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
   // a `Market`-style alias — the proof B-25's native reads use) whose every
   // write in the body keeps that shape: an object literal with no runtime tag
-  // key, the parameter itself (`headers = headers !== undefined ? headers : {}`),
-  // or `undefined`/`null`. The runtime tags a dict only on a handle its own
-  // store builds, so the helper's write-through branches stay dead.
   rustParamStaysPlainDict(declaration) {
     if (declaration.type === void 0 || _optionalChain([declaration, 'access', _1470 => _1470.name, 'optionalAccess', _1471 => _1471.kind]) !== SyntaxKind4.Identifier) {
       return false;
@@ -23987,11 +23863,6 @@ _RustTranspiler.RUST_PARSE_HELPERS = {
 // ── pro-tier WS handler `message` shadow (D-27) ───────────────────────────
 // `handle_x (client: Client, message: Dict)` is dispatched by NAME with
 // `Value` args, so the printed signature keeps `Value`; the annotation still
-// proves a plain dict, so a borrowed `&IndexMap` view is bound at fn entry
-// and the `safe_*` reads on the parameter print as native `.get("k")`
-// matches instead of `self.safe_*_k(message, "k", ..)` helper calls. The
-// view holds `Arc<IndexMap>` (an Arc bump, never a dict copy), so every
-// other use of the parameter — moves included — prints unchanged.
 /** The borrowed view bound by the shadow. */
 _RustTranspiler.PRO_HANDLER_SHADOW_NAME = "__pro_message";
 /** TS helper name -> emitted match kind. */

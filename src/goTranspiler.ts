@@ -294,21 +294,14 @@ const GO_SAFE_DICT_LOCAL_TYPE = 'map[string]any';
 // interface the local used to hold
 const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDictionary' ];
 
-// `var market any = this.Market(symbol)` / `this.SafeMarket(…)` / `this.Currency(code)` /
-// `this.SafeCurrency(…)`: the generated method's Go signature returns `any`, but its TypeScript
-// return type is the `MarketInterface` / `CurrencyInterface` dictionary interface, so the box
-// always holds that dictionary. The runtime MapTyped hands the same map back (nil for a value
-// that is not a map, the absent case the boxed nil used to answer), so the local can be declared
-// `map[string]any` and its element reads print natively. The refinement is only emitted while
-// every later use of the local READS it as a dictionary — the same use scan the SafeDict family
-// runs, plus the element this local compares (below), because a value position, a nil comparison
-// or a write into the map would observe the typed nil a boxed local hides.
+// `var market any = this.Market(symbol)` / `this.SafeMarket(…)`: the TS return type is the
+// `MarketInterface` interface, so MapTyped returns the same dictionary and the local can be
+// `map[string]any`. Emitted only while every later use READS it as a dictionary (SafeDict scan).
 const GO_MARKET_LOCAL_TYPE = 'map[string]any';
 
 // the binary operators under which a market/currency local's element read is a pure READ: the
 // element is derefed by the GetValue the element-read printer keeps for these operands
 // (goMarketComparisonElementRead), so `market['swap'] === true` keeps answering exactly what the
-// boxed local answered — including a `*bool` element a parseMarket stored.
 const GO_MARKET_READ_COMPARISON_OPERATORS = [
     ts.SyntaxKind.EqualsEqualsToken,
     ts.SyntaxKind.ExclamationEqualsToken,
@@ -325,10 +318,6 @@ const GO_MARKET_READ_COMPARISON_OPERATORS = [
 // `var x any = this.SafeList(container, key)` may carry the slice type for the same reason: the
 // accessor returns `any`, so SafeListTyped reads the same member and hands back a []any with the
 // same length and elements (every array kind IsArray admits is converted), nil when the member is
-// absent or not array-like. The typed declaration is only emitted when every later use READS the
-// value as a list: a length read, an element read and the native push all answer for a []any what
-// the accessors answered for the box, while a nil test, a truthiness test, IsArray, a rebind or
-// any value position would observe the nil slice the box's absent case used to hide.
 const GO_SAFE_LIST_LOCAL_TYPE = '[]any';
 
 
@@ -355,7 +344,6 @@ const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version', 'Url', 'Hostname', 'Use
 // the hand-written SafeString-family methods (go/v4/exchange_safe.go) return a fresh
 // non-nil pointer whenever the call passes a non-nil default: the value branch takes
 // the address of the found string, the default branch the address of ToString(def).
-// The argument count each source method needs before that default is in reach.
 const GO_DEFAULTED_SAFE_STRING_ARITY: { [name: string]: number } = {
     'safeString': 3, 'safeStringLower': 3, 'safeStringUpper': 3,
     'safeString2': 4, 'safeStringLower2': 4, 'safeStringUpper2': 4,
@@ -379,16 +367,6 @@ const GO_WRITE_OPERATOR_KINDS = [
 // hand-written BaseExchange fields (go/v4/exchange.go) declared as a container: an
 // element write on one of them is native code — a map index write, or `Store` for the
 // thread-safe ones, which is exactly what AddElementToObject does for a *sync.Map.
-// `map[string]interface{}` is the same Go type as `map[string]any` (any is an alias).
-// The fields declared `any` there (Urls, Balance, Trades, Ohlcvs, Positions, Headers,
-// FundingRates, Events, Outcomes, Orders, MyTrades, Liquidations, TriggerOrders,
-// Accounts) are absent: indexing them needs an assertion, so those keep the helper.
-// Everything else in the struct is not a container and is absent too.
-// Bidsasks is absent as well, although it is a *sync.Map: the ccxt-side ws text pass
-// (build/goTranspiler.ts, getWsRegexes) rewrites any `<...asks>.Store(` in the emitted
-// pro/prediction Go into an order-book-side assertion (`this.Bidsasks.(ccxt.IOrderBookSide).Store(`),
-// which does not compile. That pass belongs to another unit; drop the field here until
-// its pattern is anchored to a whole identifier.
 const GO_FIELD_CONTAINER_TYPES_NATIVE: { [name: string]: string } = {
     'Has': 'map[string]any',
     'Api': 'map[string]any',
@@ -644,7 +622,6 @@ const GO_TS_SRC_STRING_PRODUCERS = [
 // the TS accessors whose Go signature GO_HELPER_RETURN_TYPES already names
 // `map[string]any`, for the same textual sibling-file proof. A map argument is also
 // proven when it is an object literal (its printed Go form is exactly that map) or a
-// local assigned from one of these in that file.
 const GO_TS_SRC_MAP_PRODUCERS = [
     /^this\s*\.\s*extend\s*\(/,
     /^this\s*\.\s*deepExtend\s*\(/,
@@ -1575,7 +1552,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // a `*string` local every write of which is a SafeString-family call with a literal
     // default: that Go method can only return a fresh non-nil pointer, so the local may
     // be deref'd even where the checker offers no narrowing. One write of any other
-    // shape (or a compound/increment write) re-opens Add's nil branch.
     goDefaultedSafeStringLocal(node): boolean {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return false;
@@ -1805,7 +1781,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // the helper's float path is float64 arithmetic; its integral result boxes
             // as int64, the same normalization Subtract/Multiply/Divide already accept.
             // A constant operand must stay exactly representable: Go folds a constant
-            // expression exactly while the helper rounds the literal to float64 first.
             if (op === ts.SyntaxKind.PercentToken) {
                 return undefined; // Mod is math.Mod, no Go operator matches it
             }
@@ -2221,13 +2196,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return `SafeMapTyped(${container}, ${key})`;
     }
 
-    // the TypeScript return type of the initializer proves the boxed value is a dictionary
-    // interface: the checker reports `MarketInterface` for `this.Market(...)` / `this.SafeMarket(...)`
-    // and `CurrencyInterface` for `this.Currency(...)` / `this.SafeCurrency(...)` (both are the
-    // dictionary interfaces a parseMarket / parseCurrency builds). Any other accessor the checker
-    // types as one of the two — `this.SafeMarketStructure(...)`, an override's `this.ParseCurrency(...)`,
-    // `this.GetMarketFromSymbols(...)` — qualifies the same way. Read from the checker, never from a
-    // printed name.
+    // the TypeScript return type proves the boxed value is the market dictionary: the checker reports
+    // the `MarketInterface` interface for `this.Market(...)` / `this.SafeMarket(...)` (the `Market`
+    // alias is the same interface unioned with undefined). Read from the checker, never a printed name.
     goMarketCallReturnsDict(initializer): boolean {
         if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
             return false;
@@ -2312,13 +2283,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return (valueDeclaration === undefined) || (valueDeclaration === declaration);
     }
 
-    // one later use of the market local: the dictionary read shapes the SafeDict family already
-    // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
-    // instead of answering an absent value — a plain argument position, because Go re-boxes the
-    // declared map into the callee's `any` parameter exactly as the local's own box did. An
-    // element this local COMPARES is a read too: the element-read printer keeps the GetValue
-    // helper for these operands (goMarketComparisonElementRead), which derefs a boxed element
-    // exactly as the boxed local's own read did.
+    // one later use of the market local: the dictionary read shapes SafeDict proves (element read,
+    // `in`, read-helper argument), plus — only when the accessor throws rather than answers absent —
+    // a plain argument position, since Go re-boxes the map into the callee's `any` as the box did.
     goMarketUseReadsTheValue(node, throwingAccessor: boolean): boolean {
         if (this.goSafeDictUseReadsTheMap(node)) {
             return true;
@@ -2388,7 +2355,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // a compared element of a market/currency local keeps the GetValue helper: its deref is what
     // the boxed local's read used to apply, and a parseMarket may have stored a `*bool`/`*string`
     // under the key. Only the operands the use scan admits this way are affected; every other
-    // element read of the local prints the native index.
     goMarketComparisonElementRead(node): boolean {
         const base: any = node?.expression;
         if (base?.kind !== ts.SyntaxKind.Identifier) {
@@ -2412,7 +2378,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the container/key argument nodes of a whole `this.SafeList(container, key)` call, or
     // undefined when the initializer is another shape. A third argument is only droppable when
     // it is the empty array literal the TS call sites pass (`safeList(x, k, [])`): the typed
-    // reader answers nil for the absent case, which is what the empty slice gave those reads.
     goSafeListLocalArgs(initializer) {
         if (initializer?.kind !== ts.SyntaxKind.CallExpression) {
             return undefined;
@@ -3782,26 +3747,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return undefined;
     }
 
-    // ---- B-02/D-01: native parameter types on internal parse*/helper methods ----
-    //
-    // A parameter declared with a nullable ccxt alias (`Str` = string | undefined) can
-    // be printed with the native Go type the printer already uses for that value
-    // (`*string`), and a `Dict`/`List`/`Market`-shaped object/array parameter with the
-    // Go map/slice the printer builds those values from (`map[string]any` / `[]any`),
-    // but only when
-    //   * the method is internal — not async, not an override, and no member of that
-    //     name exists on the class it extends: the generated base classes and the
-    //     hand-written IDerivedExchange interface compile against the base signature,
-    //   * every call site of the method passes exactly that Go type — the checker
-    //     proves the ones in this file; the sibling files of the same ts/src tree
-    //     (pro/ and the derived exchanges, absent from a scoped run's program) are
-    //     proven textually, and an unprovable call site keeps the box,
-    //   * the body never writes the parameter another printed type (D2) and never
-    //     nil-compares it, which the boxed parameter prints natively and the typed one
-    //     would not (see goParameterKeepsNilCompareNative).
-    // Each qualifying parameter is also registered in goDeclaredTypeOfIdentifier, so
-    // the readers that consult it (pointer-aware equality, element access, slice
-    // length) go native.
+    // B-02: a parameter of a nullable ccxt alias (`Str`) prints as the native Go type (`*string`) only
+    // when the method is internal (not async/override, no inherited member), every call site passes
+    // that type (checker here, textual for siblings), and the body never writes another type (D2).
     goNativeParameterTypeCache = new Map<any, string | undefined>();
     goSameFileCallCache = new Map<any, Map<string, Array<any>>>();
     goTsSrcTreeCache = new Map<string, any>();
@@ -3855,9 +3803,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // The boxed object parameter prints `x === undefined` as a native `x == nil`
     // (goObjectBoxParameter); a parameter the printer typed as a Go map/slice would fall
     // through to IsEqual(x, nil) instead. Both predicates answer false for every value a
-    // proven call site can pass, but the retype would turn a native test into a helper
-    // call, so such a parameter keeps its box. *string is exempt: its typed arm prints the
-    // same `x == nil` the boxed arm does.
     goParameterKeepsNilCompareNative(body, param, goType: string): boolean {
         if (goType === '*string') {
             return true;
@@ -3899,11 +3844,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // ---- D-03: pro handler frame parameters ------------------------------------
     // A `handle*` method of a pro exchange class receives the raw frame from the WS
     // client. When the checker types that parameter as `Dict`, and every call site
-    // passes a proven `map[string]any` (the shared call-site proof), it prints
-    // `map[string]any` and its reads go native. `handleMessage` itself is an override
-    // of the base stub, so it and every handler it calls with its own boxed parameter
-    // keep the box: the generated base class and the hand-written IDerivedExchange
-    // interface compile against the boxed base signature (D8).
     goIsProHandlerMethod(fn): boolean {
         // the main-thread transpile registers the file relative to the repo root
         // (ts/src/pro/<x>.ts) while the batch registers it absolute, so accept both
@@ -3918,7 +3858,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `Dict` is the checker's structural `{[key: string]: any}`: a string index
     // signature is the proof. Class instances (OrderBook, ArrayCache*, Client, Future),
     // named-member interfaces (Market, Order, Ticker) and arrays carry none of them, so
-    // they never qualify — those are exactly the values a Go map cannot hold.
     goParameterTypeIsDict(type): boolean {
         try {
             return (typeof type.getStringIndexType === 'function') && (type.getStringIndexType() !== undefined);
@@ -3930,7 +3869,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
     // and the other dict-shaped object types print as the `map[string]any` the Go side
     // builds them from, `List` (= any[]) as its `[]any`; pro `handle*` frames (isHandler)
-    // admit only the structural Dict. The call-site proof decides whether the retype compiles.
     goNativeParameterTypeCandidates(param, isHandler = false): string[] {
         const checker: any = this.checkerOrUndefined();
         if (checker === undefined) {
@@ -3973,12 +3911,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return [];
     }
 
-    // true when the method overrides (or shadows) a member of the class it extends, or
-    // carries an explicit `override`: those print the base signature so the generated
-    // base classes and IDerivedExchange keep compiling against it. The abstract bases
-    // themselves (`ts/src/base/**`, or any root class) are public surface and never
-    // retyped; the path test accepts both the scoped run's relative source name
-    // (`ts/src/base/PredictionExchange.ts`) and a farm checkout's absolute one.
+    // true when the method overrides (or shadows) a member of the class it extends, or carries an
+    // explicit `override`: those print the base signature so the generated base classes and
+    // IDerivedExchange keep compiling. The abstract base (ts/src/base/**) is never retyped.
     goMethodKeepsBaseSignature(fn): boolean {
         if ((fn.modifiers ?? []).some(m => m.kind === ts.SyntaxKind.OverrideKeyword)) {
             return true;
@@ -4106,12 +4041,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // Lazily read the ts/src tree this file belongs to: the call sites of every
     // `this.x(...)`, each file's text and its class -> base map. A scoped run's
     // program holds one exchange, so the sibling files are only provable textually.
-    // NOTE: the tree loads only for an absolute source name; the driver's relative
-    // `ts/src/x.ts` answers undefined, which *skips* the sibling half of the proof
-    // (the same-file checker half still runs). Enabling the relative form is a
-    // whole-tree change to measure on its own: it makes the sibling proof stricter
-    // and reverts documented native emissions whose sibling argument the textual
-    // string proof cannot name (measured: Nado.ParseX18).
     goTsSrcTree(file): any {
         const fileName: string = file.fileName;
         const marker = '/ts/src/';
@@ -4203,8 +4132,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the textual call-site proof. `*string` is the only pointer-shaped native type
     // with siblings the printer can name from text; a map/slice parameter is proven for
     // the argument shapes whose printed Go form IS that type: the object/array literals
-    // and the printer's own map-returning helpers (GO_HELPER_RETURN_TYPES), plus a local
-    // assigned from one in that same file.
     goTextArgMatchesType(argText: string, goType: string, file: string, tree): boolean {
         let text = (argText ?? '').trim();
         while (text.startsWith('(') && text.endsWith(')')) {
@@ -4230,9 +4157,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // Only the argument shapes whose printed Go form IS this map/slice: the
             // matching literal and the printer's own map producers. An identifier is
             // deliberately not proven here: this proof reads one file's text, so it
-            // cannot tell which declaration of that name the call site reads (a
-            // same-named local of another prediction-tier method matched an array
-            // literal, which typed a caller that passes an `any` box).
             const isMap = goType === 'map[string]any';
             const literal = isMap ? '{' : '[';
             const producers = isMap ? GO_TS_SRC_MAP_PRODUCERS : [];
@@ -4769,12 +4693,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // an `any` box the checker proves can only hold a bool or nil — a `boolean`
     // local whose Go declaration stayed `any` (a later write the printer cannot
     // type, e.g. a tuple read) — is what `EvalTruthy` reduces to: nil and `false`
-    // are both falsy, `true` is truthy, so the predicate is `x == true`. A
-    // `boolean` parameter qualifies through the same GetArg binding the nil rules
-    // use: GetArg derefs a pointer argument, so the box holds the plain value or
-    // the default. Boxes that may hold a `*bool` accessor result (a
-    // `this.SafeBool(…)` write) are excluded — a pointer is never `== true`,
-    // while the helper dereferences it.
     printInlineBoolBoxTruthy(node): string | undefined {
         if (this.goScalarFamilyWithNil(node) !== 'bool') {
             return undefined;
@@ -7489,7 +7407,6 @@ ${tryBodyBlock}
     // true when the identifier's printed Go declaration is a `[]any` slice: the SafeList family
     // above, or any other local/param the declared-type table proved a slice (a slice literal,
     // a `[]any`-returning accessor, a slice param the typed-param family registers). All of them
-    // read identically through GetValue, so all of them carry the guarded native element read.
     goDeclaredListIdentifier(node): boolean {
         return (this.goDeclaredTypeOfIdentifier(node) === GO_SAFE_LIST_LOCAL_TYPE)
             || this.goSafeListUnboxIdentifier(node);
@@ -7498,7 +7415,6 @@ ${tryBodyBlock}
     // `x[k]` on a local the printer declared []any is a slice index: GetValue answered nil for an
     // absent index (negative or out of range) and derefs a pointer element, so the native read is
     // the same index behind that guard. Only a key printed as an `int` carries it; every other
-    // key keeps the helper, which reads a []any with the identical answer.
     goNativeListElementRead(node, containerStr: string, keyNode, keyStr: string): string | undefined {
         if (containerStr.includes('\n') || keyStr.includes('\n')) {
             return undefined;

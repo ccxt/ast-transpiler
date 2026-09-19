@@ -1060,8 +1060,6 @@ export class RustTranspiler extends BaseTranspiler {
     // Receivers this unit may write natively: any local whose every path builds
     // a plain `Value::Map` (name-independent — rust-13's four names are the
     // batch-A subset of this proof), any parameter the checker proves is a
-    // plain dict, plus `self.<field>` on a field the hand-written base holds
-    // as a plain dict. `request` is rust-12's family.
     rustNativeInsertReceiver(expr): { text: string, isField: boolean, plain: boolean, nameNode: any } | undefined {
         if (ts.isIdentifier(expr)) {
             const plain = this.rustInsertIdentifierReceiver(expr);
@@ -1106,9 +1104,6 @@ export class RustTranspiler extends BaseTranspiler {
             // A local the declared-Dict table proves holds a Dict at every use
             // (alwaysDict && stable): the helper's non-dict branches are dead,
             // so only the tag hooks and the insert remain — the key rules of
-            // `rustNativeInsertKeyArg` keep the store routes out of reach. An
-            // object-literal initializer still has to be tag-free (it may be a
-            // handle the runtime built, e.g. a `__ws_subs_url` snapshot).
             if (this.rustDeclaredLocalEntry(ident) !== undefined
                 && this.rustDeclaredInitIsTagFree(declaration as ts.VariableDeclaration)) {
                 return false;
@@ -1368,9 +1363,6 @@ export class RustTranspiler extends BaseTranspiler {
     // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
     // a `Market`-style alias — the proof B-25's native reads use) whose every
     // write in the body keeps that shape: an object literal with no runtime tag
-    // key, the parameter itself (`headers = headers !== undefined ? headers : {}`),
-    // or `undefined`/`null`. The runtime tags a dict only on a handle its own
-    // store builds, so the helper's write-through branches stay dead.
     rustParamStaysPlainDict(declaration: ts.ParameterDeclaration): boolean {
         if (declaration.type === undefined || declaration.name?.kind !== SyntaxKind.Identifier) {
             return false;
@@ -2370,17 +2362,6 @@ export class RustTranspiler extends BaseTranspiler {
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
     //
     // An internal, non-override, non-async method declared `: Str`
-    // (`string | undefined`) returns a native `Option<String>` when every
-    // `return` in its own body converts exactly. `Str` admits only
-    // `Value::Str(payload)` and `Value::Null` at run time, and
-    // `X.as_str().map(str::to_owned)` maps those to `Some(payload)` / `None`
-    // unchanged (the checker's primitive kind proves each returned
-    // expression's box). Call sites that still need a `Value` box the result
-    // back with the exact inverse; a local whose uses are all native sinks
-    // binds the `Option<String>` directly (the `safeString`-local whitelist,
-    // extended to this initializer shape). Override declarations keep the
-    // boxed signature (D8): the trait copies (`DerivedExchange` forwarder,
-    // base declaration) print `-> Value`.
 
     private rustNativeStrReturnDecisions = new WeakMap<ts.Node, boolean>();
 
@@ -2413,7 +2394,6 @@ export class RustTranspiler extends BaseTranspiler {
         // The base classes are hand-tuned across the whole tree: their methods
         // are called from ~every derived file (and the hand-written runtime),
         // where the boxed `Value` ABI is load-bearing. Only per-exchange
-        // internal methods are retyped.
         if (RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
             return false;
         }
@@ -2567,21 +2547,6 @@ export class RustTranspiler extends BaseTranspiler {
     // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
     //
     // The printer declares non-bool locals `Value`, and the checker types a
-    // `safe_dict*` result `object | undefined`, so `get_value` / `in_op` /
-    // `add_element_to_object` consumers cannot prove a Dict from the checker.
-    // This table supplies the proof from the printer side and leaves the
-    // declaration `Value`: the initialiser is a `safe_dict*` call whose
-    // `optionalArgs` default is itself Dict-proven (the helper returns that
-    // default whenever the key does not hold a Dict, so the local is a Dict on
-    // every path), or a `Value::Map(..)` object literal; and no later write in
-    // the enclosing function can change the kind (D2).
-    //
-    // Consumers ask `rustDeclaredLocalTypeResolver(node)` for the receiver of a
-    // `get_value`/`get_value_k`/`in_op`/`add_element_to_object` call. A native
-    // `HashMap<String, Value>` *declaration* is deliberately NOT emitted: it
-    // would need a runtime `Value::Dict(Arc<..>)` -> `HashMap` conversion the
-    // runtime does not have, and every use that passes the local to a `&Value`
-    // helper would stop compiling.
 
     private declaredDictLocalsCache: { src: ts.SourceFile, table: Map<string, RustDeclaredDictLocalEntry[]> } | undefined;
 
@@ -3051,16 +3016,12 @@ export class RustTranspiler extends BaseTranspiler {
         // `this.safeString(<shadowed param>, 'k')` — the read inlined against
         // the parameter shadow (D-25). Ahead of the optional-arg dispatch below,
         // which prints the call for any callee with optional parameters
-        // (`safeBool` and friends) and would leave the shadowed argument typed
-        // `Value`.
         const shadowSafeRead = this.printShadowSafeReadCall(node);
         if (shadowSafeRead !== undefined) return shadowSafeRead;
 
         // D-27: `this.safe_*(message, "k")` on a shadowed WS-handler param —
         // the native `.get("k")` match replaces the `safe_*_k` helper call.
         // Checked first: the out-of-order path would print the boxed call for
-        // any `this.<name>` a previously transpiled class registered as
-        // optional-arity.
         const shadowRead = this.printProHandlerShadowRead(node);
         if (shadowRead !== undefined) return shadowRead;
 
@@ -3626,7 +3587,6 @@ export class RustTranspiler extends BaseTranspiler {
         // The ccxt `writeBackIndexedMutations` pass matches the
         // `let x = get_value(&C, &K)` text to write a mutated `x` back into
         // `C[K]`; the native text is invisible to it, so a bind the next
-        // statement mutates keeps the helper.
         const read = this.rustElementReadOfKey(keyNode);
         if (read !== undefined && this.isWriteBackBindRead(read)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();
@@ -3646,15 +3606,6 @@ export class RustTranspiler extends BaseTranspiler {
     // ── parameter shadows (`let x = x.as_map().unwrap_or(&__x_empty)`) ─────────
     //
     // A `Dict`/`List` parameter holds the container or `Value::Null`, and
-    // `get_value`/`in_op`/`get_array_length`/`safe_*` read a `Value::Null`
-    // exactly like the empty container. Re-binding the name to the borrowed
-    // container at fn entry therefore makes every read native (`.get(..)`,
-    // `.contains_key(..)`, `.len()`, the `safe_*` coercions) with no allocation
-    // and no marker route lost (a plain-annotation receiver can never be a
-    // cache/book marker). The shadow is emitted ONLY when the use census proves
-    // every use in the enclosing function is one of those reads; any other use
-    // (write, comparison with Null, pass-through to a `Value` helper) keeps the
-    // parameter boxed and every read keeps its helper.
 
     private paramShadowCache: { src: ts.SourceFile, tables: Map<ts.Node, Map<string, RustParamShadow>> } | undefined;
 
@@ -3986,11 +3937,6 @@ export class RustTranspiler extends BaseTranspiler {
     // ── pro-tier WS handler `message` shadow (D-27) ───────────────────────────
     // `handle_x (client: Client, message: Dict)` is dispatched by NAME with
     // `Value` args, so the printed signature keeps `Value`; the annotation still
-    // proves a plain dict, so a borrowed `&IndexMap` view is bound at fn entry
-    // and the `safe_*` reads on the parameter print as native `.get("k")`
-    // matches instead of `self.safe_*_k(message, "k", ..)` helper calls. The
-    // view holds `Arc<IndexMap>` (an Arc bump, never a dict copy), so every
-    // other use of the parameter — moves included — prints unchanged.
 
     /** The borrowed view bound by the shadow. */
     private static readonly PRO_HANDLER_SHADOW_NAME = '__pro_message';
@@ -4020,7 +3966,6 @@ export class RustTranspiler extends BaseTranspiler {
         // The ws-handler shape `handle_x (client: Client, message: Dict)`: the
         // message is a required parameter and the first one is the Client
         // class handle. (Base helpers like `handleMarginModeAndParams
-        // (methodName: string, params: Dict = {})` have neither.)
         if (param.initializer !== undefined || param.questionToken !== undefined) return undefined;
         const clientParam: any = params[0];
         if (clientParam === undefined || clientParam.type === undefined) return undefined;
@@ -4418,8 +4363,6 @@ export class RustTranspiler extends BaseTranspiler {
                 // `&mut self.<method>(...)` arg lists are hoisted by the ccxt
                 // pass because a `&self` reborrow conflicts with the outer
                 // `&mut self`. A read of a local or a parameter performs no
-                // self borrow, so only a `this`-rooted read keeps the helper;
-                // an unresolvable root stays conservative.
                 if (callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
                     RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))) &&
                     (root === undefined || root === 'this' || root.startsWith('this.'))) return false;

@@ -395,10 +395,6 @@ const CSHARP_MARKET_RECEIVER_NAMES = [ 'market', 'currency' ];
 // Parameters of a method whose override chain the ts/src census cleared: every declaration (base
 // member + every override) maps to the same spelling AND every call site in the generated tree
 // passes a compatible argument, so the whole-language build stays green. The three surviving
-// names are the ones the whole-language build proved clean; the 18 dropped names all fail on
-// `object`-typed call-site arguments (`getValue(response, "data")` shape), which needs the
-// cast-insertion pass, not a signature change. The spelling is the one the generated C# locals
-// already carry, which is also what every write and call site passes.
 const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string } } = {
     ethRpc: { 2: 'IList<object>' },
     parsePredictionOpenInterest: { 0: 'IDictionary<string, object>' },
@@ -1392,12 +1388,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     // ===== ws handler `message` parameter (batch D, D-19) =====
     // A ws handler `handleX (client: Client, message: Dict)` is reached at runtime either
     // through a dispatch-table entry (`{ "k", this.handleX }` -> DynamicInvoker) or a direct
-    // call. The typed `Dictionary<string, object>` signature is printed only when the
-    // checker annotates the parameter `Dict`, no reference in the program CALLS the method
-    // (a call binds the boxed argument, CS1503), the body never writes the parameter (D2),
-    // the method is no override (the hand-written ws bridge prints `object messageContent`),
-    // and the class holds no list route (a venue that tests the message for a list hands the
-    // array itself to a table entry).
     csharpHandlerMessageType(param): string | undefined {
         if (this.csharpHandlerMessageTypes.has(param)) {
             return this.csharpHandlerMessageTypes.get(param);
@@ -1467,7 +1457,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     // a class that tests the message (or another dict parameter) for a list can hand the
     // array itself to a dispatch-table entry (binance `'x@arr'`), so its handlers keep the
     // box; a class testing unrelated lists (an array-typed `symbols` parameter, a field of
-    // the message) never routes the raw message through the list arm
     csharpClassHasListRoute(method): boolean {
         const cls = this.csharpEnclosingClass(method);
         if (cls === undefined) {
@@ -2355,7 +2344,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the value kind of an operand the printer could only call `object`: the type the read's
     // declaration was PRINTED with (printer table -> build layer's read-type oracle -> the
     // declared-type registry for the declarations its own passes retyped). A collection/class
-    // declaration and every non-identifier operand answer undefined and keep the helper.
     csharpDeclaredReadEqualityKind(node, operandType: string | undefined): string | undefined {
         if ((operandType !== undefined) && (operandType !== '') && (operandType !== 'object')) {
             return undefined; // the printer named a non-value C# type: never a value comparison
@@ -3917,8 +3905,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     // A parameter of a method that participates in an override relation prints the spelling its
     // base member and every sibling override agree on (CSHARP_OVERRIDE_PARAM_TYPES; D8): C# is
     // invariant on override parameter types, so a half-retyped name is CS0115, while a name the
-    // census cleared can print the same type on the base declaration and every override. The
-    // checker re-derives the shape here, so a stale table row degrades to `object`.
     printParameterType(node) {
         if (node === undefined || node.kind !== ts.SyntaxKind.Parameter) {
             return super.printParameterType(node);
@@ -5002,11 +4988,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpIsCheckedBoolean(node) && ((this.csharpCallReturnType(node) === 'bool') || this.csharpBoolCall_Native(node));
     }
 
-    // `isTrue(x)` boxes x and answers false for a null box, which is exactly what the lifted
-    // `x == true` does for a `bool?` — and a `bool?` is no C# condition on its own. Only values
-    // whose PRINTED declaration is that `bool?` qualify: a local the embedding build layer
-    // retyped (its resolver names the emitted type) and a call whose printed return type is
-    // `bool?`. Every other shape keeps the helper.
+    // The declared type of an identifier read: build layer's proof first, then this printer's table;
+    // `var`/`object` mean "no type". `isTrue (x)` answers false for a null box, exactly the lifted
+    // `x == true` on a `bool?`. Only reads declared `bool?` qualify; every other shape keeps helper.
     csharpNullableBoolCondition(node): string | undefined {
         let value = node;
         while (value?.kind === ts.SyntaxKind.ParenthesizedExpression) {
@@ -5033,11 +5017,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     // a call whose printed C# signature is `bool?`: the `bool? safeBool(...)` family of the
     // hand-written base (CSHARP_THIS_RETURN_TYPES, which names that signature), and a
     // `this.<name>(...)` whose TS declaration the generator itself prints — definition and call
-    // site are spelled by the same csharpBooleanReturnType, so they cannot disagree. A bodiless
-    // overload stub states only that overload's type (safeBool's `boolean` stub above a
-    // `boolean | undefined` implementation would claim a `bool` the C# `bool?` does not have),
-    // so the declaration must carry the body; unresolvable callees print `callDynamically`
-    // (object) and stay out.
     csharpCallPrintsNullableBool(node): boolean {
         if (this.csharpCallReturnType(node) === 'bool?') {
             return true;
