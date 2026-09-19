@@ -311,10 +311,9 @@ export class RustTranspiler extends BaseTranspiler {
         'orderbook',
     ]);
 
-    // Fields the hand-written base keeps as a plain dict: `rust/ccxt-base/src/
-    // exchange.rs` initialises each to `Value::Map(HashMap::new())` and never
-    // tags it, so an element write is the whole helper even though the TS
-    // declaration is `any` (no checker shape to read).
+    // Fields the hand-written base keeps as a plain dict: `rust/ccxt-base/src/exchange.rs`
+    // initialises each to `Value::Map(HashMap::new())` and never tags it, so an element write
+    // is the whole helper even though the TS declaration is `any` (no checker shape to read).
     private static readonly RUST_PLAIN_DICT_FIELDS = new Set([
         'balance',
         'orderbooks',
@@ -386,11 +385,9 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // ── native truthiness of a checker-proved boolean Value ─────────────────
-    // `is_true(&v)` computes `v.is_truthy()`, where `""`/`0`/`[]`/`{}`/Null are
-    // false. When the checker proves the operand is drawn from `bool`/`undefined`
-    // only (so the runtime value is `Value::Bool(..)` or `Value::Null`), the
-    // helper is exactly the native `matches!(v, Value::Bool(true))`.
+    // Native truthiness of a checker-proved boolean Value: `is_true(&v)` is `v.is_truthy()`
+    // (`""`/`0`/`[]`/`{}`/Null are false). When the operand is proven `bool`/`undefined` only,
+    // the runtime value is `Value::Bool(..)` or `Value::Null`, so `matches!(v, Value::Bool(true))`.
 
     /** `true` / `false` / `boolean` (a union of BooleanLiteral members too). */
     isBooleanValueType(type: ts.Type | undefined): boolean {
@@ -469,10 +466,9 @@ export class RustTranspiler extends BaseTranspiler {
         return this.isBooleanPosition(current);
     }
 
-    // B-26 extends the proof with the printer's own bool-typed sinks: a
-    // `let x: bool = …` the printer narrows (getRustBoolLocalInitializer) and a
-    // logical it boxes in `Value::Bool(…)` (printCustomBinaryExpressionIfAny)
-    // both demand a `bool` expression, so their operands may print bare too.
+    // B-26 extends the proof with the printer's own bool-typed sinks: a narrowed `let x: bool = …`
+    // (getRustBoolLocalInitializer) and a logical boxed in `Value::Bool(…)`
+    // (printCustomBinaryExpressionIfAny) both demand a `bool`, so their operands may print bare.
     rustConditionBoolSlot(node): boolean {
         if (this.isBareBoolEmissionSafe(node)) {
             return true;
@@ -614,10 +610,9 @@ export class RustTranspiler extends BaseTranspiler {
         return `${text}.0`;
     }
 
-    // The printer's own proof that a plain read prints as a Rust `Value`:
-    // `this.<field>` (every field the printer declares is `Value`) or an
-    // identifier bound to a local/param (a local it narrows to `bool` is only
-    // narrowed when every use is a condition sink — never an is_equal argument).
+    // The printer's own proof that a plain read prints as a Rust `Value`: `this.<field>` (every
+    // declared field is `Value`) or an identifier bound to a local/param (a local is narrowed to
+    // `bool` only when every use is a condition sink — never an is_equal argument).
     rustReadPrintsValue(node): boolean {
         if (node === undefined) {
             return false;
@@ -766,12 +761,9 @@ export class RustTranspiler extends BaseTranspiler {
         return `get_array_length(&${receiver})`;
     }
 
-    // ── native string search / slicing ───────────────────────────────────────
-    // `x.indexOf(y)` and `x.slice(a, b)` on a receiver the checker proves is a
-    // string print native `str` code instead of the runtime helper. The printed
-    // receiver is a `Value`, so the payload is reached through the same
-    // `as_str()` the native equality rules use; a `Value::Null` receiver takes
-    // the helper's `-1` / `Value::Null` branch through the same `Option`.
+    // Native string search / slicing: `x.indexOf(y)` and `x.slice(a, b)` on a checker-proven
+    // string receiver print native `str` code. The receiver is a `Value`, so the payload is reached
+    // via `as_str()`; a `Value::Null` receiver takes the helper's `-1` / `Value::Null` branch.
 
     /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
     rustSliceLiteralBound(node): number | undefined {
@@ -854,10 +846,9 @@ export class RustTranspiler extends BaseTranspiler {
             `.map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
     }
 
-    // ── native value predicates (`Array.isArray` / `typeof … === '…'`) ────────
-    // Every runtime predicate is a single `matches!` over the `Value` variants;
-    // when the operand is a declared `Value` place the call is replaced by that
-    // same match — no helper call, and the operand is still read exactly once.
+    // Native value predicates (`Array.isArray` / `typeof … === '…'`): each runtime predicate is a
+    // single `matches!` over the `Value` variants, so on a declared `Value` place the call is
+    // replaced by that same match — no helper call, operand still read exactly once.
 
     // `matches!` pattern of the runtime predicate, keyed by the `typeof` word.
     private static readonly RUST_TYPE_PREDICATE_PATTERNS: { [key: string]: string } = {
@@ -1015,10 +1006,9 @@ export class RustTranspiler extends BaseTranspiler {
         return insert(value);
     }
 
-    // Receivers this unit may write natively: any local whose every path builds
-    // a plain `Value::Map` (name-independent — rust-13's four names are the
-    // batch-A subset of this proof), plus `self.<field>` on a field the
-    // hand-written base holds as a plain dict. `request` is rust-12's family.
+    // Receivers this unit may write natively: any local whose every path builds a plain
+    // `Value::Map` (name-independent — rust-13's four names are the batch-A subset), plus
+    // `self.<field>` on a field the hand-written base holds as a plain dict. `request` is rust-12's.
     rustNativeInsertReceiver(expr): { text: string, isField: boolean, nameNode: any } | undefined {
         if (ts.isIdentifier(expr) && this.rustInsertIdentifierReceiver(expr)) {
             return { text: expr.text, isField: false, nameNode: expr };
@@ -1150,10 +1140,9 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration;
     }
 
-    // Dict-shape proof for a write receiver: an object type with no class, array
-    // or callable shape — `Dictionary<T>` instantiations count (they resolve to
-    // their interface target). A union keeps the proof when every member is a
-    // Dict or `undefined` (both are untaggable at runtime).
+    // Dict-shape proof for a write receiver: an object type with no class, array or callable shape
+    // — `Dictionary<T>` instantiations count (they resolve to their interface target). A union keeps
+    // the proof when every member is a Dict or `undefined` (both untaggable at runtime).
     rustWriteDictShape(type): boolean {
         if (type === undefined) {
             return false;
@@ -1179,10 +1168,9 @@ export class RustTranspiler extends BaseTranspiler {
         return type.getCallSignatures().length === 0 && type.getConstructSignatures().length === 0;
     }
 
-    // The receiver is a plain Dict on every path: its declared/initializer type
-    // is object-shaped (never a class or array handle), its initializer is not
-    // an element read (the get_value COW write-back pass keys on the helper
-    // call's `&mut <name>` text), and no write in scope assigns another shape.
+    // The receiver is a plain Dict on every path: its declared/initializer type is object-shaped
+    // (never a class or array handle), its initializer is not an element read (the get_value COW
+    // write-back pass keys on the `&mut <name>` text), and no write in scope assigns another shape.
     rustReceiverStaysDict(baseExpr, receiver): boolean {
         if (receiver.isField) {
             return this.rustFieldStaysDict(baseExpr, receiver.nameNode.text);
@@ -1232,12 +1220,9 @@ export class RustTranspiler extends BaseTranspiler {
         return safe;
     }
 
-    // `this.<field>` receivers: the field is a plain dict — its checker type is
-    // object-shaped, or the hand-written base holds it as one (the TS
-    // declaration is `any`, `balance`-style) — and no `this.<field> = …` write
-    // in the enclosing method assigns another shape. Handle fields (cache /
-    // client / subscriptions / order book) are excluded — their Values carry
-    // the runtime tags the helper routes through a store.
+    // `this.<field>` receivers: the field is a plain dict (object-shaped checker type, or held as one
+    // by the hand-written base when the TS declaration is `any`) and no `this.<field> = …` in the
+    // method assigns another shape. Handle fields (cache/client/subscriptions/order book) are excluded.
     rustFieldStaysDict(baseExpr, fieldName: string): boolean {
         if (RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(fieldName)) {
             return false;
@@ -1452,11 +1437,9 @@ export class RustTranspiler extends BaseTranspiler {
         return false;
     }
 
-    // Types whose runtime value the `add` helper stringifies exactly as
-    // `format!` does: a string, or the `undefined`/`null` the printer boxes as
-    // `Value::Null` (helper `stringify_simple(Value::Null)` is "null", and so
-    // is `Display`). `any` is deliberately absent — the helper's Precise-dict
-    // branch has no `Display` equivalent.
+    // Types whose runtime value the `add` helper stringifies exactly as `format!` does: a string,
+    // or `undefined`/`null` boxed as `Value::Null` (`stringify_simple(Value::Null)` and `Display`
+    // both give "null"). `any` is absent — the Precise-dict branch has no `Display` equivalent.
     private static readonly RUST_CONCAT_SAFE_FLAGS = new Set<number>([
         ts.TypeFlags.String,
         ts.TypeFlags.StringLiteral,
@@ -1477,11 +1460,9 @@ export class RustTranspiler extends BaseTranspiler {
         return false;
     }
 
-    // `Str` (`string | undefined`) operands are safe to concatenate natively
-    // only against an operand the checker proves is ALWAYS a string: the
-    // helper then takes its string branch, whose result `format!` reproduces.
-    // Without that anchor (`Str + Str`) the helper's both-null case returns
-    // `Value::Null` where `format!` would build "nullnull".
+    // `Str` (`string | undefined`) operands concatenate natively only against an operand proven
+    // ALWAYS a string: the helper then takes its string branch, which `format!` reproduces.
+    // Without that anchor (`Str + Str`) the both-null case yields `Value::Null`, not "nullnull".
     isNativeStringConcatPair(leftType: any, rightType: any): boolean {
         if (!this.isStringOrNullishType(leftType) || !this.isStringOrNullishType(rightType)) {
             return false;
@@ -1789,11 +1770,9 @@ export class RustTranspiler extends BaseTranspiler {
         'is_instance', 'starts_with', 'ends_with', 'in_op', 'contains',
     ]);
 
-    // Hand-written Rust fns outside `runtime.rs` whose signature is `-> bool`,
-    // keyed by the TS callee name they are transpiled from (verified in
-    // `rust/tests/src/tests_support.rs`). A call to one is already a Rust bool,
-    // so the condition printer's `is_true(&…)` wrapper is the identity
-    // (`IsTruthy for bool`) and is dropped.
+    // Hand-written Rust fns outside `runtime.rs` with a `-> bool` signature, keyed by the TS callee
+    // name (verified in `rust/tests/src/tests_support.rs`). A call is already a Rust bool, so the
+    // condition printer's `is_true(&…)` wrapper is the identity (`IsTruthy for bool`) and is dropped.
     private static readonly RUST_BOOL_RESULT_CALLEES = new Set([
         'tickerExceptionNeedsOhlcv',
     ]);
@@ -2024,18 +2003,9 @@ export class RustTranspiler extends BaseTranspiler {
         return safe;
     }
 
-    // ── typed string locals ──────────────────────────────────────────────────
-    //
-    // `let x: Value = self.safeString(..)` is declared `Option<String>` when the
-    // checker proves the local holds a string and every use in the enclosing
-    // function is a native sink: a null test (`x === undefined` prints as
-    // `x.is_none()`) or a string-literal compare (`x === "lit"` prints as
-    // `x.as_deref() == Some("lit")`). The initializer keeps the helper call and
-    // unwraps its Value with `.as_str()` — the helper already returns either
-    // `Value::Str` (never an empty one, the `_k` form maps "" to the default) or
-    // the default, so the `Option<String>` carries exactly the same payload.
-    // Every other sink (`&Value` argument, truthiness, return, write) keeps the
-    // box, as does a second binding of the name.
+    // Typed string locals: `let x: Value = self.safeString(..)` is declared `Option<String>` when
+    // the checker proves a string and every use is a native sink (`x.is_none()`, `x.as_deref() ==
+    // Some("lit")`). The helper's Value is unwrapped with `.as_str()`; any other sink keeps the box.
 
     private static readonly RUST_STRING_LOCAL_HELPERS = new Set([
         'safeString', 'safeString2', 'safeStringN',
@@ -2193,24 +2163,9 @@ export class RustTranspiler extends BaseTranspiler {
         return peeled !== undefined ? peeled : inner;
     }
 
-    // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
-    //
-    // The printer declares non-bool locals `Value`, and the checker types a
-    // `safe_dict*` result `object | undefined`, so `get_value` / `in_op` /
-    // `add_element_to_object` consumers cannot prove a Dict from the checker.
-    // This table supplies the proof from the printer side and leaves the
-    // declaration `Value`: the initialiser is a `safe_dict*` call whose
-    // `optionalArgs` default is itself Dict-proven (the helper returns that
-    // default whenever the key does not hold a Dict, so the local is a Dict on
-    // every path), or a `Value::Map(..)` object literal; and no later write in
-    // the enclosing function can change the kind (D2).
-    //
-    // Consumers ask `rustDeclaredLocalTypeResolver(node)` for the receiver of a
-    // `get_value`/`get_value_k`/`in_op`/`add_element_to_object` call. A native
-    // `HashMap<String, Value>` *declaration* is deliberately NOT emitted: it
-    // would need a runtime `Value::Dict(Arc<..>)` -> `HashMap` conversion the
-    // runtime does not have, and every use that passes the local to a `&Value`
-    // helper would stop compiling.
+    // Declared-Dict locals: the checker types `safe_dict*` results `object | undefined`, so this
+    // table proves a Dict printer-side (a `safe_dict*` call with a Dict-proven default, or a
+    // `Value::Map(..)` literal, no later kind-changing write — D2) while the declaration stays `Value`.
 
     private declaredDictLocalsCache: { src: ts.SourceFile, table: Map<string, RustDeclaredDictLocalEntry[]> } | undefined;
 
@@ -2689,12 +2644,9 @@ export class RustTranspiler extends BaseTranspiler {
         const nativeParse = this.printNativeParseCall(node);
         if (nativeParse !== undefined) return nativeParse;
 
-        // `this.json(v)` — the runtime's `Exchange::json` is exactly the free
-        // `json_stringify` over an owned `Value`; the free function takes the
-        // same value by reference, so the call sites' `.clone()` is dropped.
-        // `self.<field>` args keep the method: the post-pass hoists an inner
-        // `self.<method>(…)` out of a `&mut self` call's args, and the free
-        // function's `&self.<field>` reborrow is not on its radar.
+        // `this.json(v)`: `Exchange::json` is exactly the free `json_stringify`, which takes the value
+        // by reference, so the call sites' `.clone()` is dropped. `self.<field>` args keep the method:
+        // the post-pass hoisting `self.<method>(…)` out of `&mut self` args ignores a `&self.<field>`.
         if (expression.kind === SyntaxKind.PropertyAccessExpression &&
             expression.expression.kind === SyntaxKind.ThisKeyword &&
             expression.name.escapedText === 'json' && node.arguments.length === 1) {
@@ -2712,10 +2664,9 @@ export class RustTranspiler extends BaseTranspiler {
         return 'self';
     }
 
-    // ── native string args to the runtime error constructors ────────────────
-    // Audited against rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl
-    // ToErrorMessage` (`&str`/`String`/`Value` all yield the same string) and
-    // `create_error`'s class name is `&str` (bare literal only).
+    // Native string args to the runtime error constructors, audited against
+    // rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl ToErrorMessage` (`&str`/`String`/`Value`
+    // yield the same string) and `create_error`'s class name is `&str` (bare literal only).
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS: Record<string, ('msg' | 'str')[]> = {
         exchange_error: ['msg'],
         authentication_error: ['msg'],
@@ -2930,11 +2881,9 @@ export class RustTranspiler extends BaseTranspiler {
     isProvenMapType(type: ts.Type): boolean {
         if (type === undefined) return false;
         if (type.flags & ts.TypeFlags.Union) {
-            // `Market` / `Currency` / `Order | undefined` style aliases: the
-            // runtime value is the dict (or Null), so a map receiver is proven
-            // once every member that can carry a value is a proven map. An
-            // all-dict union without a nullish member is left to the strict
-            // path (a class member may hide behind it).
+            // `Market` / `Currency` / `Order | undefined` style aliases: the runtime value is the dict (or
+            // Null), so a map receiver is proven once every value-carrying member is a proven map. An
+            // all-dict union without a nullish member stays on the strict path (a class may hide behind it).
             const parts: ts.Type[] = (type as any).types ?? [];
             const nullish = parts.filter((p) => this.rustTypeIsNullish(p));
             const valueParts = parts.filter((p) => !this.rustTypeIsNullish(p));
@@ -3085,9 +3034,8 @@ export class RustTranspiler extends BaseTranspiler {
     printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined {
         if (!this.isProvenListExpression(receiverNode)) return undefined;
         if (!this.isRustValueIndexKey(keyNode)) return undefined;
-        // The ccxt `writeBackIndexedMutations` pass matches the
-        // `let x = get_value(&C, &K)` text to write a mutated `x` back into
-        // `C[K]`; the native text is invisible to it, so a bind the next
+        // The ccxt `writeBackIndexedMutations` pass matches the `let x = get_value(&C, &K)` text to
+        // write a mutated `x` back into `C[K]`; native text is invisible to it, so a bind the next
         // statement mutates keeps the helper.
         if (this.isWriteBackBindRead(keyNode.parent)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();
@@ -3155,17 +3103,9 @@ export class RustTranspiler extends BaseTranspiler {
         return ts.isNumericLiteral(initializer);
     }
 
-    // ── typed-parameter dict reads ────────────────────────────────────────────
-    //
-    // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
-    // a `Market`-style alias) holds the dict or `Value::Null`, so `get_value`'s
-    // marker routes (`__cacheKind` / `__sideKind` / book id / `__live_id`)
-    // cannot fire on it: the runtime read is `m.get(k)` (or a miss). That makes
-    // the dynamic-key read native, which `get_value`'s literal-key proof cannot
-    // reach (`get_value(&balance, &code)` — 45+ whole-language).
-    //
-    // The key must be a proven string box (`Str`): every non-string key kind
-    // misses in the runtime's dict branch, so `.as_str()` reproduces it.
+    // Typed-parameter dict reads: a checker-proven plain dict param (`Dict`, `Dictionary<T>`,
+    // `Market`-style alias) holds the dict or `Value::Null`, so `get_value`'s marker routes cannot
+    // fire and the read is `m.get(k)`. The key must be a proven `Str` box so `.as_str()` reproduces it.
 
     /** The parameter declaration behind a receiver when its *annotation* proves
      *  a plain dict; undefined otherwise (no proof → keep the helper). */
@@ -3225,13 +3165,9 @@ export class RustTranspiler extends BaseTranspiler {
         return `${receiverText}.as_map().and_then(|__m| __m.get("${key}")).cloned().unwrap_or(Value::Null)`;
     }
 
-    // ── declared-Dict locals ──────────────────────────────────────────────────
-    // The TS checker types many dict-holding locals `any` (an element read off
-    // a `Dictionary<T>`, a default-valued bag, a reader whose return type is
-    // `any`), which costs them the proof above. The declaration still proves a
-    // plain dict: object literal, `getArg(.., {})` bag, `this.safeDict`, an
-    // `extend` onto one of those, or an element of a container whose declared
-    // element type is a map. Such a local holds a `Value::Dict` at every read.
+    // Declared-Dict locals: the checker types many dict-holding locals `any`, losing the proof
+    // above, but the declaration still proves a plain dict (object literal, `getArg(.., {})` bag,
+    // `this.safeDict`, `extend` onto those, or an element of a map-typed container) at every read.
 
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes
@@ -3329,10 +3265,9 @@ export class RustTranspiler extends BaseTranspiler {
         const name = declaration.name?.text;
         if (typeof name !== 'string') return false;
         if (ts.isParameter(declaration)) {
-            // A `Client`-typed parameter is the WS handle the driver passes to
-            // `handle_message`/`handle*` (`ws_client::client_value`): a
-            // `Value::Dict{url, subscriptions, futures}` in the port, not the TS
-            // class. Its fields are plain map reads.
+            // A `Client`-typed parameter is the WS handle passed to `handle_message`/`handle*`
+            // (`ws_client::client_value`): a `Value::Dict{url, subscriptions, futures}` in the port, not
+            // the TS class. Its fields are plain map reads.
             if (!this.rustParameterIsClientHandle(declaration)) {
                 const fallback = declaration.initializer;
                 if (fallback === undefined || !this.rustDictProducingInitializer(fallback, new Set())) return false;
@@ -3707,18 +3642,9 @@ export class RustTranspiler extends BaseTranspiler {
         return `${this.getIden(identation)}is_true(&${this.printTruthyArgument(expression)})`;
     }
 
-    // ── B-26: `is_true(&(…)` on an operand that is already a Rust `bool` ─────
-    // The condition printer's last resort wraps an operand none of the branches
-    // above claimed. When the printer's own emission of that operand is already
-    // a native Rust `bool` — the payload compares (`x != Value::Null`,
-    // `x.as_str() == Some("lit")`, `x.as_bool() == Some(true)`, `as_f64()`
-    // compares), `matches!` predicates, `&&`/`||` of those — the wrapper is the
-    // identity (`IsTruthy for bool`) and only costs a call.
-    //
-    // Native text carries no helper token for the ccxt post-passes, so it is
-    // only emitted where the whole enclosing boolean expression already sits in
-    // a real bool slot (`isBareBoolEmissionSafe`): if/while/ternary conditions,
-    // a `!` operand, or an operand of a logical expression in such a slot.
+    // B-26: `is_true(&(…)` on an operand the printer already emits as a native Rust `bool` (payload
+    // compares, `matches!` predicates, `&&`/`||` of those) is the identity (`IsTruthy for bool`);
+    // native text has no helper token, so it is emitted only in a bool slot (`isBareBoolEmissionSafe`).
 
     /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
     printNativeParenthesizedCondition(node): string | undefined {
@@ -3757,11 +3683,9 @@ export class RustTranspiler extends BaseTranspiler {
         return native === undefined ? undefined : `(${native})`;
     }
 
-    // The argument of a `is_true(&…)` sink, with the printer's `Value::Bool(…)`
-    // box peeled when it spans the whole argument: `IsTruthy for Value` unboxes
-    // `Value::Bool(b)` back to `b`, so the sink is the identity on the bool the
-    // box wraps. `is_true` is the one sink that takes a native `bool`, so the
-    // argument prints bare. The `is_true(` marker stays for the post-passes.
+    // The argument of an `is_true(&…)` sink with the printer's `Value::Bool(…)` box peeled when it
+    // spans the whole argument: `IsTruthy for Value` unboxes `Value::Bool(b)` to `b`, so the bool
+    // prints bare. `is_true` is the one sink taking a native `bool`; the marker stays for post-passes.
     printTruthyArgument(expression: string): string {
         const inner = this.peelValueBoolBox(this.stripOuterParens(expression));
         // parens kept: `is_true(&a == b)` would re-associate the argument.

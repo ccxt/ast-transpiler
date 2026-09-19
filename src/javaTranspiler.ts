@@ -68,10 +68,9 @@ const parserConfig = {
     INFER_ARG_TYPE: false,
 };
 
-// hand-written base methods whose Java declaration carries a concrete numeric return
-// type (java/lib/src/main/java/io/github/ccxt/BaseExchange.java: `public Long
-// milliseconds()`), so a `this.<name>()` call holds that box on every path. Generated
-// methods print `Object` - only this closed table is an arithmetic anchor.
+// hand-written base methods whose Java declaration carries a concrete numeric return type
+// (BaseExchange.java: `public Long milliseconds()`), so a `this.<name>()` call holds that box on
+// every path. Generated methods print `Object`; only this closed table is an arithmetic anchor.
 const JAVA_THIS_RETURN_TYPES: { [name: string]: string } = {
     'milliseconds': 'long',
 };
@@ -128,11 +127,9 @@ const JAVA_BOOLEAN_BASE_FIELDS = new Set([
     'this.reloadingEvents',
 ]);
 
-// hand-written map fields of java/lib/src/main/java/io/github/ccxt/BaseExchange.java: every
-// value the field can hold is a java.util.Map, so `this.<field>[k]` is the helper's Map branch.
-// `nullable` marks a field that is set to null (reset / cleanRestData) or written from an
-// Object-typed call, so the read keeps the helper's null answer behind a receiver guard;
-// `ohlcvs`/`orderbooks` are only ever assigned createSafeDictionary(true).
+// hand-written map fields of BaseExchange.java: each value is a java.util.Map, so `this.<field>[k]`
+// is the helper's Map branch. `nullable` marks a field set to null or written from an Object-typed
+// call, so the read keeps the null answer behind a receiver guard.
 const JAVA_FIELD_TYPES: { [name: string]: { map: boolean, nullable: boolean } } = {
     'ohlcvs':     { map: true, nullable: false },
     'orderbooks': { map: true, nullable: false },
@@ -179,13 +176,9 @@ const JAVA_PRECISE_BOOLEAN_STATICS: Set<string> = new Set([
     'stringEq', 'stringEquals', 'stringGt', 'stringGe', 'stringLt', 'stringLe',
 ]);
 
-// The printer erases every TS return annotation to `Object` (DEFAULT_RETURN_TYPE), so a
-// condition wrapping one of these calls in Helpers.isTrue re-tests a value the port's
-// hand-written Java base already returns as a boolean. The Java declaration is the proof:
-// these methods are hand-written in java/lib/src/main/java/io/github/ccxt/BaseExchange.java,
-// above the "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT" delimiter, with exactly
-// these returns -- and a Java override must be covariant, so no generated venue method can
-// widen them (census: no ts/src/exchanges, pro or prediction file declares any of them).
+// The printer erases TS return annotations to `Object`, so Helpers.isTrue would re-test a value the
+// hand-written Java base (BaseExchange.java, above the transpiled delimiter) already returns as a
+// boolean. Java overrides are covariant, so no generated venue method can widen these returns.
 const JAVA_THIS_BOOLEAN_METHODS = new Set<string>([
     'inArray',              // public boolean inArray (Object elem, Object list2)
     'isArray',              // public boolean isArray (Object a)
@@ -195,11 +188,9 @@ const JAVA_THIS_BOOLEAN_METHODS = new Set<string>([
     'isBinaryMessage',      // public boolean isBinaryMessage (Object message)
 ]);
 
-// The boolean accessors that are GENERATED below the delimiter (`Object safeBool (...)`) hand
-// the caller's own `defaultValue` back untouched whenever the found value is not a Boolean,
-// so the box is Boolean-or-null only when the call's default argument is absent or a boolean
-// literal (same proof as build/java-local-types.js HANDLE_ELEMENT_TYPES.defaultArg).
-// Value = the index of that default argument in the printed call.
+// The GENERATED boolean accessors (`Object safeBool (...)`) hand the caller's `defaultValue` back
+// untouched when the found value is not a Boolean, so the box is Boolean-or-null only when the
+// default argument is absent or a boolean literal. Value = index of that argument in the call.
 const JAVA_THIS_BOOLEAN_BOX_METHODS: { [name: string]: number } = {
     'safeBool': 2,
     'safeBool2': 3,
@@ -256,10 +247,9 @@ const JAVA_LIST_BACKED_TS_CLASSES: Set<string> = new Set([
 // looks a key up when it is a String, and a String-typed operand is one on every path
 const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
 
-// TS parameter annotations (`Dict`, `Market`, `Currency`, `Str`, `Bool`) print the native
-// Java type on the declaring method (javaNativeParameterType). `Int`/`Num` stay `Object`:
-// a TS `number` is an Integer, Long or Double box in the generated code, so neither a
-// `Long`/`Double` parameter nor a casting call site can be proven to match.
+// TS parameter annotations (`Dict`, `Market`, `Currency`, `Str`, `Bool`) print the native Java
+// type on the declaring method. `Int`/`Num` stay `Object`: a TS `number` is an Integer, Long or
+// Double box in generated code, so neither a `Long`/`Double` parameter nor a cast site is provable.
 const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = {
     'Dict': 'java.util.Map<String, Object>',
     'Market': 'java.util.Map<String, Object>',
@@ -291,10 +281,9 @@ const JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS: number =
     ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral | ts.TypeFlags.Undefined | ts.TypeFlags.Null
     | ts.TypeFlags.Void;
 
-// the `handle*Bool` accessors route through safeBool, which hands the caller's default back
-// untouched whenever the found value is not a Boolean (BaseExchange.safeBool) - so element 0 of
-// their `[Bool, Dict]` tuple is a Boolean-or-null box. The handleOptionAndParams family returns
-// the raw dictionary member instead and is deliberately absent.
+// the `handle*Bool` accessors route through safeBool, which returns the caller's default untouched
+// when the found value is not a Boolean, so element 0 of their `[Bool, Dict]` tuple is a
+// Boolean-or-null box. The handleOptionAndParams family returns the raw member and is absent.
 const JAVA_BOOLEAN_BOX_TUPLE_METHODS = new Set<string>([
     'handleParamBool',
     'handleParamBool2',
@@ -302,11 +291,9 @@ const JAVA_BOOLEAN_BOX_TUPLE_METHODS = new Set<string>([
 
 export class JavaTranspiler extends BaseTranspiler {
 
-    // optional proof of the concrete printed Java type of an expression, installed by
-    // the embedding build layer for the locals it retypes itself (ccxt:
-    // build/java-local-types.js); it must describe the same type the declaration is
-    // emitted with, or the operator will not compile. Only `String` is consumed today,
-    // as the anchor of a native `+` concat (see javaProvableString).
+    // optional proof of the concrete printed Java type of an expression, installed by the embedding
+    // build layer for the locals it retypes (ccxt: build/java-local-types.js); it must match the
+    // declared type or the operator will not compile. Only `String` is consumed (native `+` anchor).
     javaExpressionTypeResolver?: (node) => string | undefined;
 
     // the embedding build layer (build/java-local-types.js) installs this: it names the
@@ -360,11 +347,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaPrintCallArguments(args, node, identation);
     }
 
-    // a call into a method whose fixed parameter prints a native type hands it the caller's
-    // own expression: the generated locals are `Object`, so the argument carries the same
-    // checkcast the printer already puts in front of its native map/string reads. The
-    // checker proved the argument's TypeScript type assignable to the parameter's, so the
-    // declared type describes the value the parameter really receives.
+    // a call into a method whose fixed parameter prints a native type: generated locals are `Object`,
+    // so the argument carries the same checkcast as native map/string reads. The checker proved the
+    // argument assignable to the parameter, so the declared type describes the value received.
     javaPrintCallArguments(args, node, identation) {
         const parameterTypes = this.javaNativeCallParameterTypes(node);
         return args.map((a, i) => {
@@ -982,17 +967,13 @@ export class JavaTranspiler extends BaseTranspiler {
             || (node?.kind === ts.SyntaxKind.Identifier && node.escapedText === 'undefined');
     }
 
-    // ---- numeric operand kinds (java-15) -----------------------------------
-    // Helpers.isEqual compares two numeric operands by value: two integers through
-    // toLong, a Double/Float member through toDouble, a class mismatch as false. Two
-    // operands of the SAME numeric kind therefore compare natively — `a == b` for two
-    // Java primitives, Objects.equals for a box, whose class the kind pins down. The
-    // kind comes from the printer's own print rule for the node, never the printed text.
+    // ---- numeric operand kinds (java-15) ----
+    // Helpers.isEqual compares numeric operands by value (integers via toLong, Double/Float via
+    // toDouble, class mismatch false), so two operands of the SAME kind compare natively.
 
-    // the Java kind a decimal numeric literal prints with: an integer literal prints as
-    // `N` (int) or `NL` (long, printNumericLiteral's suffix), a '.'/exponent literal as a
-    // Java double. TypeScript normalizes the literal text (`1e3` -> `1000`, `0x10` ->
-    // `16`, `100.0` -> `100`), so node.text is exactly what prints.
+    // the Java kind a decimal numeric literal prints with: integer literal as `N` (int) or `NL` (long),
+    // a '.'/exponent literal as a Java double. TypeScript normalizes the literal text (`1e3` -> `1000`,
+    // `0x10` -> `16`, `100.0` -> `100`), so node.text is exactly what prints.
     javaEqualityLiteralKind(node) {
         if (!node) {
             return undefined;
@@ -1201,10 +1182,9 @@ export class JavaTranspiler extends BaseTranspiler {
             const equalCall = `java.util.Objects.equals(${leftText}, ${rightText})`;
             return negated ? `!${equalCall}` : equalCall;
         }
-        // both operands print a Java numeric primitive (literals, `.length`, index/search
-        // results, for counters, native arithmetic): neither can be null, so the operator
-        // is the helper's value compare on the two boxes (never a boxed Double, whose
-        // equals would separate -0.0).
+        // both operands print a Java numeric primitive (literals, `.length`, index/search results, for
+        // counters, native arithmetic): neither can be null, so the operator is the helper's value compare
+        // on the two boxes (never a boxed Double, whose equals would separate -0.0).
         if (this.javaOperandPrintsPrimitiveNumber(node.left) && this.javaOperandPrintsPrimitiveNumber(node.right)) {
             return `(${leftText} ${negated ? '!=' : '=='} ${rightText})`;
         }
@@ -1304,10 +1284,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(String)${keyText}`;
     }
 
-    // Receivers that are a plain java.util.HashMap at runtime, where ".put" and the
-    // helper's map branch are the same write: a local initialized with an object
-    // literal or with a call whose every return is such a literal (this.account()).
-    // Lists (append), class instances (reflection) and ConcurrentHashMaps stay helpers.
+    // Receivers that are a plain java.util.HashMap at runtime, where ".put" and the helper's map branch
+    // are the same write: a local initialized with an object literal or a call whose every return is
+    // such a literal (this.account()). Lists, class instances and ConcurrentHashMaps stay helpers.
     isPlainHashMapReceiver(container, keys: any[]): boolean {
         if (keys.length !== 1 || container === undefined || container.kind !== ts.SyntaxKind.Identifier) {
             return false; // only a direct write on the proven local, no read in between
@@ -1680,16 +1659,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return incrementor.kind === ts.SyntaxKind.PostfixUnaryExpression || incrementor.kind === ts.SyntaxKind.PrefixUnaryExpression;
     }
 
-    // Java primitive kind of a comparison operand; undefined keeps the helper.
-    // Two proof sources, both from emissions the printer itself performs:
-    //   * literals: int/long (magnitude, `L` suffix) and fractional/exponent doubles;
-    //   * expressions whose Java text is pinned by the printer's own emitter or by the
-    //     runtime signature it calls: a `var` for-counter (int), a `.length` access
-    //     (List.size()/String.length(), else the int-returning Helpers.getArrayLength),
-    //     `x.indexOf(arg)`/`x.search(arg)` (Helpers.getIndexOf / String.indexOf, int),
-    //     Math.round (long) and Math.floor/Math.ceil/Math.pow (double).
-    // The printed value of every accepted shape is a Java primitive, so none of them can
-    // be null and the helper's null ordering cannot differ.
+    // Java primitive kind of a comparison operand; undefined keeps the helper. Proof sources: literals
+    // (int/long/double) and expressions the printer's own emitter pins: `var` for-counter, `.length`,
+    // `x.indexOf(arg)`/`x.search(arg)` (int), Math.round (long), Math.floor/ceil/pow (double).
     javaPrimitiveOperandKind(node) {
         if (node === undefined || node === null) {
             return undefined;
@@ -1728,11 +1700,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return text.indexOf('.') !== -1 || text.indexOf('e') !== -1 || text.indexOf('E') !== -1;
     }
 
-    // Java kind of a call the printer emits itself, undefined when the callee is not one of
-    // the pinned emitters. Mirrors printIndexOfCall / printSearchCall / printMathRoundCall /
-    // printMathFloorCall / printMathCeilCall and the Math.pow emission:
-    //   x.indexOf(a) / x.search(a) -> int    Math.round(x)      -> long
-    //   Math.floor(x) / Math.ceil(x)  -> double                 Math.pow(a, b) -> double
+    // Java kind of a call the printer emits itself, undefined otherwise. Mirrors printIndexOfCall /
+    // printSearchCall / printMathRoundCall / printMathFloorCall / printMathCeilCall and Math.pow:
+    // x.indexOf(a) / x.search(a) -> int; Math.round(x) -> long; Math.floor/ceil/pow -> double.
     javaPrintedCallKind(node) {
         const callee = node.expression;
         if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) {
@@ -1759,14 +1729,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // operand usability for `>=` / `<` / `<=`, which all route through the helper's
-    // isEqual. Two integral operands are always exact (the helper normalizes both to
-    // Long and compares through toLong); once a double is involved, every operand must
-    // be exact on both of isEqual's paths at once — a double goes through toLong (which
-    // saturates at Long.MAX_VALUE) and BigDecimal (which throws for ±Infinity), and a
-    // long above 2^53 is rounded by the operator but not by toLong. So a double is
-    // accepted only as a finite literal within ±2^53, and a long only as a literal in
-    // the same range (every accepted int shape is int-range already).
+    // operand usability for `>=` / `<` / `<=`, which route through the helper's isEqual. Two integral
+    // operands are always exact; once a double is involved, toLong saturates and BigDecimal throws on
+    // ±Infinity, so a double or long is accepted only as a finite literal within ±2^53.
     javaComparisonOperandsAreExact(left, leftKind, right, rightKind) {
         if (leftKind === 'int' && rightKind === 'int') {
             return true;
@@ -1868,11 +1833,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return ts.isPropertyAccessExpression(node) && node.expression?.kind === ts.SyntaxKind.ThisKeyword;
     }
 
-    // The declared Java type of a local/parameter is known to the pass that rewrites the
-    // declaration text (build/java-local-types.js): it records every name it typed here.
-    // Reads consult it; with no consumer installed the table is empty and every read keeps
-    // the helper.
-    // the declared Java type of an identifier, when a consumer installed the table
+    // The declared Java type of a local/parameter is known to the pass that rewrites the declaration
+    // text (build/java-local-types.js), which records every name it typed here. With no consumer
+    // installed the table is empty and every read keeps the helper.
     javaDeclaredTypeOf(expression): string | undefined {
         if (expression === undefined || !ts.isIdentifier(expression)) {
             return undefined;
@@ -1906,21 +1869,17 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // The native Java type a parameter declaration prints with, when its TypeScript
-    // annotation names one of the base/types.ts aliases the Java port can carry
-    // (JAVA_NATIVE_PARAMETER_TYPES). Fixed parameters of a generated-tier method only, and
-    // every declaration of the method up the heritage chain must print the same native
-    // type: Java overrides are invariant on parameter types, and the base tier is
-    // overridden by the hand-written java surface with its own `Object` parameters.
+    // The native Java type a parameter prints with when its TS annotation is a base/types.ts alias in
+    // JAVA_NATIVE_PARAMETER_TYPES. Fixed parameters of generated-tier methods only, and every
+    // declaration up the heritage chain must print the same type: Java overrides are invariant.
     javaNativeParameterType(node): string | undefined {
         const type = this.javaNativeParameterTypeOf(node);
         if (type === undefined) {
             return undefined;
         }
-        // D2: a parameter the enclosing body assigns with a compound operator keeps the box —
-        // `url += '/path'` prints `url = Helpers.add(url, ..)`, whose result is an Object. A
-        // plain `x = ..` or a destructuring target is cast at the write site instead
-        // (javaParameterAssignmentCast).
+        // D2: a parameter the enclosing body assigns with a compound operator keeps the box — `url += '/x'`
+        // prints `url = Helpers.add(url, ..)`, whose result is an Object. A plain `x = ..` or a
+        // destructuring target is cast at the write site instead (javaParameterAssignmentCast).
         if (this.javaParameterIsCompoundAssigned(node)) {
             return undefined;
         }
@@ -1970,10 +1929,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return assigned.has(name as string);
     }
 
-    // a write to a parameter this printer declared natively: the right side prints from
-    // locals the printer declares `Object`, so the assignment carries the same checkcast the
-    // call sites do. The checker proved the right side's TypeScript type assignable to the
-    // parameter's, so the declared type describes the value the parameter really receives.
+    // a write to a parameter this printer declared natively: the right side prints from `Object`
+    // locals, so the assignment carries the same checkcast as the call sites. The checker proved the
+    // right side assignable to the parameter, so the declared type describes the value received.
     javaParameterAssignmentCast(left, right, identation): string | undefined {
         if (!ts.isIdentifier(left)) {
             return undefined;
@@ -2183,10 +2141,9 @@ export class JavaTranspiler extends BaseTranspiler {
                     return `(${objText} != null && ((java.util.Map<?, ?>)${objText}).containsKey(${keyText}))`;
                 }
             }
-            // A key the checker does not prove to be a Java String: the helper's map branch
-            // answers false for it, and so does containsKey on every String-keyed map — the
-            // null test keeps the ConcurrentHashMap/TreeMap receivers from throwing on a
-            // null key. The key prints once per guard, so it must be a side-effect-free read.
+            // A key the checker does not prove a Java String: the helper's map branch and containsKey both
+            // answer false for it, and the null test keeps ConcurrentHashMap/TreeMap receivers from throwing
+            // on a null key. The key prints once per guard, so it must be a side-effect-free read.
             if (this.javaSideEffectFreeReference(left) && !this.javaOperandPrintsPrimitiveNumber(left)
                 && !this.isNullishLiteral(left)
                 && left.kind !== ts.SyntaxKind.TrueKeyword && left.kind !== ts.SyntaxKind.FalseKeyword) {
@@ -2204,10 +2161,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.inOp(${objText}, ${keyText})`;
         }
 
-        // native comparison when both operands provably print as Java numbers. `>` is
-        // exact for every numeric pair (isGreaterThan is a toDouble compare, NaN
-        // included); `>=` / `<` / `<=` also go through the helper's isEqual, so they
-        // need operands isEqual reproduces exactly.
+        // native comparison when both operands provably print as Java numbers. `>` is exact for every
+        // numeric pair (isGreaterThan is a toDouble compare, NaN included); `>=` / `<` / `<=` also go
+        // through the helper's isEqual, so they need operands isEqual reproduces exactly.
         if (op === ts.SyntaxKind.LessThanToken || op === ts.SyntaxKind.GreaterThanToken ||
             op === ts.SyntaxKind.LessThanEqualsToken || op === ts.SyntaxKind.GreaterThanEqualsToken) {
             const leftKind = this.javaPrimitiveOperandKind(left);
@@ -2429,12 +2385,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_DECLARED_MAP_TYPES.test(type);
     }
 
-    // `x[i]` where a consumer declares x a java List and the index is the primitive int
-    // counter of `for (var i = <int literal>; …; i++)`: the native element read. GetValue
-    // answers null for a null receiver and for an index outside [0, size) while List.get
-    // throws on both, so the emission carries the same tests. `||` short-circuits and both
-    // operands are identifiers, so nothing is evaluated twice and nothing is re-evaluated
-    // between the size test and the get.
+    // `x[i]` where x is a declared java List and i is the int counter of `for (var i = <int literal>`:
+    // GetValue answers null for a null receiver or index outside [0, size) while List.get throws, so
+    // the emission carries the same tests. `||` short-circuits over identifiers, so nothing runs twice.
     javaDeclaredListElementRead(node, isCounter) {
         if (node.parent?.kind === ts.SyntaxKind.ExpressionStatement) {
             return undefined; // a bare conditional expression is not a Java statement
@@ -2465,12 +2418,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return declaration !== undefined && node.escapedText === declaration.name?.escapedText;
     }
 
-    // `this.<field>[k]` where the field is a hand-written base map field (JAVA_FIELD_TYPES):
-    // the helper's Map branch is the native `get`. The helper answers null for a null
-    // receiver (ConcurrentHashMap.get throws on null) and for a null key, so both keep that
-    // answer behind a guard; the receiver is a `this.` field and the key prints once, so
-    // repeating either is side-effect free. An unguarded read is returned without parens so
-    // an enclosing checkcast binds the whole call.
+    // `this.<field>[k]` on a hand-written base map field (JAVA_FIELD_TYPES): the helper's Map branch is
+    // the native `get`. The helper answers null for a null receiver or key, so both stay guarded; the
+    // receiver and key are side-effect free. An unguarded read has no parens so a checkcast binds it.
     javaFieldMapReadText(receiver, key): string | undefined {
         if (receiver === undefined || receiver.kind !== ts.SyntaxKind.PropertyAccessExpression
             || receiver.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
@@ -2684,10 +2634,9 @@ export class JavaTranspiler extends BaseTranspiler {
             || (rightProvable && this.javaConcatOtherOperandIsSafe(left));
     }
 
-    // the non-anchor operand of a concat: a value java.lang.StringBuilder.append and
-    // Helpers.add's `String.valueOf` branch turn into the same text. Inlined when it is
-    // a printed String itself, when the checker proves the plain non-nullable `string`
-    // contract, or when the type cannot be a boxed Double (see the operand predicates)
+    // the non-anchor operand of a concat: a value StringBuilder.append and Helpers.add's
+    // `String.valueOf` branch turn into the same text. Inlined when it is a printed String, when the
+    // checker proves a plain non-nullable `string`, or when the type cannot be a boxed Double.
     javaConcatOtherOperandIsSafe(node) {
         if (node === undefined) {
             return false;
@@ -2731,11 +2680,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return false;
     }
 
-    // a Double operand makes Helpers.add take its `instanceof Double` branch (toDouble
-    // on BOTH sides) and hand back a NUMBER, while javac's `+` concatenates it, so an
-    // operand whose runtime value can be a boxed Double keeps the helper. Only types
-    // that can never hold a number are accepted, plus the literals that print as a Java
-    // `long` (an integer literal normalizes to Long before the helper's branches).
+    // a Double operand makes Helpers.add take its `instanceof Double` branch and return a NUMBER, while
+    // javac's `+` concatenates, so an operand that can be a boxed Double keeps the helper. Only types
+    // that can never hold a number are accepted, plus integer literals that print as a Java `long`.
     javaConcatOperandCanBeDouble(node) {
         if (this.javaProvableNumericKind(node) === 'long') {
             return false;
@@ -2763,11 +2710,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return !notNumeric(type);
     }
 
-    // the Java kind a `this.<name>(...)` call provably prints with (a hand-written base
-    // declaration from JAVA_THIS_RETURN_TYPES), or undefined to keep the helper. The
-    // signature must resolve to the base tier or to the Date.now lib signature the
-    // mixed-in functions/time.ts helper points at; a venue override prints its own
-    // (usually Object) signature and is not provable.
+    // the Java kind a `this.<name>(...)` call provably prints with (JAVA_THIS_RETURN_TYPES), or
+    // undefined. The signature must resolve to the base tier or the Date.now lib signature of the
+    // functions/time.ts mixin; a venue override prints its own (usually Object) signature.
     javaThisCallNumericKind(node): string | undefined {
         if (node?.kind !== ts.SyntaxKind.CallExpression) {
             return undefined;
@@ -2800,11 +2745,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return kind;
     }
 
-    // the Java kind a numeric operand provably prints with: decimal integer literal ->
-    // 'long', fractional literal -> 'double', a nested `+ - * /` this rule prints
-    // natively -> that node's kind, a local the embedding layer retyped `Long`/`Double`
-    // -> that kind. Anything else (hex/binary literals, negative literals printed as
-    // Helpers.opNeg, calls, untyped locals) stays undefined.
+    // the Java kind a numeric operand provably prints with: decimal integer literal -> 'long',
+    // fractional literal -> 'double', a nested native `+ - * /` -> its kind, a local retyped
+    // `Long`/`Double` -> that kind. Hex/binary literals, negatives, calls, untyped locals: undefined.
     javaProvableNumericKind(node, allowDeclaredLocals = true): string | undefined {
         if (node === undefined) {
             return undefined;
@@ -2828,10 +2771,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed
-    // numeric, but a null box would NPE where the helpers return null, so the checker must
-    // see a plain non-nullable number here (the nullable aliases and `any` are excluded; a
-    // narrowed use that still reads a `number` is a real guard in the printed Java).
+    // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed numeric, but a
+    // null box would NPE where the helpers return null, so the checker must see a plain non-nullable
+    // number here (nullable aliases and `any` excluded; a narrowed `number` is a real guard in Java).
     javaDeclaredNumericLocalKind(node): string | undefined {
         const resolver = this.javaExpressionTypeResolver;
         if (typeof resolver !== 'function') {
@@ -2907,12 +2849,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
     }
 
-    // the kind of the native operator emitted for a proven pair, or undefined when the
-    // pair keeps the helper. The helper's branch for the pair IS this operator: `/` is
-    // always a double division (TS `/` is float division and divide never returns a long);
-    // `-` boxes long for a long/long pair and double when either side is double; `*` only
-    // on long pairs, since multiply re-boxes an integral double product as Long; `+` keeps
-    // phase-1's equal-kind rule.
+    // the native operator kind for a proven pair, or undefined. The helper's branch IS this operator:
+    // `/` is always double division; `-` boxes long for long/long and double otherwise; `*` only on
+    // long pairs (multiply re-boxes an integral double product as Long); `+` keeps the equal-kind rule.
     javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind): string | undefined {
         if (leftKind === undefined || rightKind === undefined) {
             return undefined;
@@ -2930,18 +2869,13 @@ export class JavaTranspiler extends BaseTranspiler {
         return hasDouble ? 'double' : 'long';
     }
 
-    // ---- widened native add (`+` only) ------------------------------------
-    // Helpers.add normalizes every Integer to Long first, boxes Long for two integral
-    // operands and Double when either operand is a Double (null in -> null out), so a
-    // native `+` over operands that are provably numeric AND non-null reproduces the
-    // same box on every path. A boxed local the printer cannot prove is NOT accepted:
-    // it may hold null, which the helper absorbs and the native operator would NPE.
+    // ---- widened native add (`+` only) ----
+    // Helpers.add normalizes Integer to Long, boxes Long for integral operands and Double otherwise
+    // (null in -> null out), so native `+` over proven numeric non-null operands gives the same box.
 
-    // `this.milliseconds()` / `this.seconds()`: the hand-written Java declares both
-    // `public Long` over a primitive time value, so the box is never null. An unresolved
-    // call (or a venue override) prints Object/callDynamically and keeps the helper —
-    // only a signature resolving into the base time mixin or the Date.now lib chain is
-    // the hand-written Long accessor.
+    // `this.milliseconds()` / `this.seconds()`: the hand-written Java declares both `public Long` over
+    // a primitive time value, so the box is never null. Only a signature resolving into the base time
+    // mixin or the Date.now lib chain qualifies; an unresolved call or venue override keeps the helper.
     javaBaseTimeLongCall(node) {
         if (node?.kind !== ts.SyntaxKind.CallExpression) {
             return false;
@@ -2972,10 +2906,9 @@ export class JavaTranspiler extends BaseTranspiler {
             || /(^|[\\/])lib\.[^\\/]*\.d\.ts$/.test(fileName);
     }
 
-    // `for (var i = <int literal>; ...; i++)`: printForStatement rewrites the emitted
-    // `Object i = 0` initializer to `var i = 0`, so javac types the counter int. The
-    // counter is widened explicitly by javaPrintWidenedOperand, and no `=`/compound
-    // assignment may write it (that value would be a box / a widened long).
+    // `for (var i = <int literal>; ...; i++)`: printForStatement emits `var i = 0`, so javac types the
+    // counter int. It is widened explicitly by javaPrintWidenedOperand, and no `=`/compound assignment
+    // may write it (that value would be a box / a widened long).
     javaIntForCounter(node) {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return false;
@@ -3305,12 +3238,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${this.javaPrintOperandAsLong(left, leftText)} ${operator} ${this.javaPrintOperandAsLong(right, rightText)})`;
     }
 
-    // Helpers.mathMin/mathMax take Object, tolerate null and hand the ORIGINAL operand
-    // box back, while java.lang.Math.min/max take primitives, so the native call is only
-    // emitted when both operands print as primitives of one numeric family: int/long
-    // literals, `for` counters, `.length`/`.size()` and native long arithmetic are
-    // integral; the only NaN-free double is a double literal (a computed double can be
-    // NaN, which the helpers order as "not smaller/greater" and so return the other side)
+    // Helpers.mathMin/mathMax take Object, tolerate null and return the ORIGINAL box; Math.min/max take
+    // primitives, so the native call needs both operands primitive of one family: literals, `for`
+    // counters, `.length`/`.size()`, native long arithmetic; the only NaN-free double is a literal.
     javaNativeMathMinMaxOperandKind(node) {
         if (this.javaIntegerLiteralKind(node) !== undefined) {
             return 'integral';
@@ -3328,10 +3258,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableNumericKind(node) === 'long' ? 'integral' : undefined;
     }
 
-    // a primitive has no members, so a receiver position (and the printer's cast
-    // wrappers) keep the helper - every other position boxes the primitive exactly like
-    // the helper's own box (Jackson, isEqual and toString all read an Integer and a Long
-    // the same way)
+    // a primitive has no members, so a receiver position (and the printer's cast wrappers) keep the
+    // helper - every other position boxes the primitive exactly like the helper's own box (Jackson,
+    // isEqual and toString all read an Integer and a Long the same way)
     javaNativeMathMinMaxResultIsPlainValue(node) {
         let parent = node.parent;
         while (parent !== undefined && ts.isParenthesizedExpression(parent)) {
@@ -3361,12 +3290,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Math.${name}(${leftText}, ${rightText})`;
     }
 
-    // ---- helper-family inlining: `parseInt/parseFloat/toString/padStart` -------
-    // Every one of these helpers answers a value the native Java call cannot: parseInt
-    // catches its NumberFormatException into null, parseFloat catches it into 0.0,
-    // Helpers.toString maps a null input to null (String.valueOf maps it to "null") and
-    // Helpers.padStart pads AND truncates. The native form is printed only where the
-    // helper's fallback path is unreachable for the printed operand.
+    // ---- helper-family inlining: `parseInt/parseFloat/toString/padStart` ----
+    // parseInt catches NumberFormatException into null, parseFloat into 0.0, Helpers.toString maps
+    // null to null, Helpers.padStart truncates: native form only where the fallback is unreachable.
 
     // `Helpers.toString(x)` is `x == null ? null : x.toString()`, so `String.valueOf(x)`
     // is exact for every argument that cannot be null. Only a numeric literal or a
@@ -3375,10 +3301,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableNumericKind(node) !== undefined ? `String.valueOf(${text})` : `Helpers.toString(${text})`;
     }
 
-    // The runtime parses a String with Long.parseLong (parseInt) / Double.parseDouble
-    // (parseFloat) inside a catch; a literal the native parser ACCEPTS cannot reach the
-    // catch, so the native call cannot change the answer (and parseInt additionally
-    // needs the value inside the long range, else the helper would answer null).
+    // The runtime uses Long.parseLong (parseInt) / Double.parseDouble (parseFloat) inside a catch; a
+    // literal the native parser ACCEPTS cannot reach the catch, so the native call cannot change the
+    // answer (parseInt additionally needs the value in long range, else the helper answers null).
     javaScalarParseAccepts(callee, text) {
         if (callee === 'parseInt') {
             if (!/^[+-]?[0-9]+$/.test(text)) {
@@ -3407,10 +3332,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${nativeName}(${this.printNode(args[0], 0)})`;
     }
 
-    // The printed receiver of a `padStart` this rule can inline: the printer or the
-    // ccxt local-typing pass already cast it (`((String)x)`), or the checker proves a
-    // plain TS string, in which case the accessor cast this rule adds cannot fire (the
-    // printer declares locals Object and the local-typing pass decides the final type).
+    // The printed receiver of a `padStart` this rule can inline: already cast (`((String)x)`) by the
+    // printer or the ccxt local-typing pass, or the checker proves a plain TS string, so the accessor
+    // cast this rule adds cannot fire.
     javaPadStartReceiverText(receiver, name) {
         if (/^\(+\(String\)/.test(name)) {
             return name;
@@ -3421,11 +3345,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // `x.padStart(n, 'c')` with a non-negative integer literal length and a single-char
-    // literal pad. Helpers.padStart pads with the pad char up to `n` chars and then
-    // answers the LAST `n` chars, so the native form keeps both halves: String.format
-    // builds the pad from an empty `%<k>s` (never touching a space inside the value)
-    // and the >= arm reproduces the helper's truncation (format does not truncate).
+    // `x.padStart(n, 'c')` with a non-negative integer literal length and single-char literal pad.
+    // Helpers.padStart pads then answers the LAST `n` chars, so the native form keeps both halves:
+    // String.format builds the pad from an empty `%<k>s` and the >= arm reproduces the truncation.
     printNativePadStart(node, name) {
         const args = node?.arguments;
         if (args === undefined || args.length !== 2 || name === undefined) {
@@ -3460,13 +3382,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return character;
     }
 
-    // ---- typed locals for native arithmetic ---------------------------------
-    // A local whose initializer prints as native arithmetic (the classification above)
-    // holds a Java String / Long / Double box, so the declaration can carry that type
-    // instead of Object. The proof is the printer's own classification, so the declared
-    // type always matches the printed expression; every other use of the local in the
-    // enclosing function is scanned first (D2), because naming the type can change
-    // javac's overload and operator resolution.
+    // ---- typed locals for native arithmetic ----
+    // A local whose initializer prints as native arithmetic holds a String / Long / Double box, so the
+    // declaration carries that type; every other use is scanned first (D2) as it changes resolution.
 
     javaUnwrapParentheses(node) {
         let current = node;
@@ -4842,12 +4760,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, signature);
     }
 
-    // `Array.isArray(x)` prints `(x instanceof java.util.List)` — the helper answers
-    // false for null (not an instance of anything) and true for a List, which is the
-    // same answer for every operand the printer types as a Java object. The helper
-    // only stays where the operand prints as a Java array (a rest-parameter reference:
-    // the helper's `getClass().isArray()` branch is true there) or as a final Java
-    // class, on which `instanceof List` is not convertible.
+    // `Array.isArray(x)` prints `(x instanceof java.util.List)`: false for null, true for a List, same
+    // as the helper for every Java-object operand. The helper stays where the operand prints as a Java
+    // array (rest parameter: `getClass().isArray()` branch) or a final class not convertible to List.
     printArrayIsArrayCall(node, _identation, parsedArg = undefined) {
         const native = this.printNativeArrayIsArray(node, parsedArg);
         return native === undefined ? `Helpers.isArray(${parsedArg})` : native;
@@ -4990,12 +4905,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Helpers.json(${parsedArg})`;
     }
 
-    // `await Promise.all ([e1, ..., en])` whose every element is checker-typed `Promise<...>`:
-    // CompletableFuture.allOf waits for exactly those futures, so the reflective
-    // Helpers.promiseAll loop (List cast, `instanceof` filter, get() collection) adds nothing.
-    // Result discarded -> allOf alone (await appends `.join()`); result used -> allOf plus a
-    // thenApply that collects the resolved values; that step joins each element again, so it is
-    // only emitted for `const`-bound locals (re-printing a call would run it twice).
+    // `await Promise.all ([e1, ..., en])` with every element checker-typed `Promise<...>`:
+    // CompletableFuture.allOf waits for exactly those, so Helpers.promiseAll's reflective loop adds
+    // nothing. Result used -> thenApply collecting values, only for `const` locals (no double runs).
     printNativePromiseAllCall(node) {
         const awaitNode = node?.parent;
         if (awaitNode?.kind !== ts.SyntaxKind.AwaitExpression) {
@@ -5073,11 +4985,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${name}.contains(${parsedArg})`;
     }
 
-    // Helpers.getIndexOf(str, target) is List.indexOf(target) for a List receiver and
-    // String.indexOf(target) for a String receiver with a String target, -1 otherwise. The
-    // printer declares every local a `Object`/`var`, so the native call carries the same
-    // checkcast the `.length()` / `containsKey` families emit; the target takes one too when
-    // it is not already a printed String (String.indexOf takes a String, List takes Object).
+    // Helpers.getIndexOf(str, target) is List.indexOf for a List receiver, String.indexOf for a String
+    // receiver with a String target, -1 otherwise. Locals are `Object`/`var`, so the native call takes
+    // the same checkcast as `.length()` / `containsKey`; the target takes one unless a printed String.
     javaNativeIndexOfCall(node, name, parsedArg) {
         if (node === undefined || name === undefined || parsedArg === undefined) {
             return undefined;
@@ -5093,10 +5003,9 @@ export class JavaTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
-        // a rest parameter is a Java array, not a List: the helper's `instanceof List`
-        // test fails there and so must the native call. The wildcard receiver cast is the
-        // `.length()` family's, and it accepts a List of any element type (a
-        // `List<Object>` cast is a compile error on a `List<String>`-static receiver).
+        // a rest parameter is a Java array, not a List: the helper's `instanceof List` test fails there
+        // and so must the native call. The wildcard receiver cast is the `.length()` family's and accepts
+        // a List of any element type (a `List<Object>` cast fails on a `List<String>`-static receiver).
         if (this.isJavaListType(receiverType) && !this.isVarargsArrayReference(receiver)) {
             return `((java.util.List<?>)${name}).indexOf(${parsedArg})`;
         }
@@ -5211,9 +5120,8 @@ export class JavaTranspiler extends BaseTranspiler {
         return `Helpers.slice(${name}, ${parsedArg}, ${parsedArg2})`;
     }
 
-    // Integer value of a slice bound that is an integer literal (`18`, `-64`); anything
-    // else (expression, float, exponent, out of int range) keeps the helper — the Java
-    // helper converts its bounds with toInt, and a double cannot be clamped with the
+    // Integer value of a slice bound that is an integer literal (`18`, `-64`); anything else keeps
+    // the helper — the Java helper converts bounds with toInt, and a double cannot be clamped with the
     // integer Math.min/Math.max of the native form.
     javaSliceLiteralBound(node) {
         if (node === undefined) {
@@ -5244,12 +5152,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return value > 0 ? `Math.min(${value}, ${length})` : `Math.max(${length} - ${-value}, 0)`;
     }
 
-    // `x.slice (a, b)` -> substring/subList when the checker proves the receiver prints
-    // as a String/List AND every bound is an integer literal: Java's substring/subList
-    // throw where JS clamps, so only the literal bounds can be clamped with Math.min /
-    // Math.max before the call. The null guard keeps the helper's null -> null result,
-    // and it is only emitted for a side-effect-free receiver (identifier or property
-    // access), which may be read two or three times.
+    // `x.slice (a, b)` -> substring/subList when the receiver provably prints as String/List AND every
+    // bound is an integer literal: Java throws where JS clamps, so only literal bounds can be clamped.
+    // The null guard keeps null -> null and needs a side-effect-free receiver (read up to three times).
     nativeSliceCallIfProvable(node, name) {
         const args = node?.arguments ?? [];
         if (args.length < 1 || args.length > 2) {
@@ -5413,12 +5318,9 @@ export class JavaTranspiler extends BaseTranspiler {
             && incrementor.operand.escapedText === node.escapedText;
     }
 
-    // `-x` prints as the plain Java operator when the printed operand is already a
-    // primitive: a decimal numeric literal or a nested `+ - * /` this rule prints
-    // natively (long/double), a `for (var i = <int literal>` counter or a `.length`
-    // read (int). Helpers.opNeg negates exactly the box it receives (Integer ->
-    // Integer, Long -> Long, Double -> Double) and maps null to null, so every boxed
-    // local (Object / Long / Double) keeps the helper.
+    // `-x` prints as the plain Java operator when the operand is already primitive: a decimal literal,
+    // a nested native `+ - * /`, a `for (var i = <int literal>` counter or a `.length` read.
+    // Helpers.opNeg preserves the box and maps null to null, so every boxed local keeps the helper.
     javaNativeNegation(node): boolean {
         if (node === undefined) {
             return false;
@@ -5470,10 +5372,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaBooleanOperators.includes(node.operatorToken.kind);
     }
 
-    // `Precise.<relational>(a, b)` where the callee resolves to a static of the base `Precise`
-    // class: the hand-written Precise.java declares those statics `public static boolean`, so the
-    // printed call is a Java primitive boolean; the printed receiver name alone is no proof (a
-    // shadowing local or another class prints the same text), so the resolution is checked too
+    // `Precise.<relational>(a, b)` resolving to a static of the base `Precise` class: Precise.java
+    // declares them `public static boolean`, so the call is a primitive boolean. The receiver name
+    // alone is no proof (a shadowing local prints the same text), so the resolution is checked too.
     javaPreciseBooleanCall(node) {
         if (node.kind === ts.SyntaxKind.ParenthesizedExpression) {
             return this.javaPreciseBooleanCall(node.expression);
@@ -5502,10 +5403,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return (this.getChecker().getTypeAtLocation(node).flags & ts.TypeFlags.Boolean) !== 0;
     }
 
-    // the checker's view of the value a condition holds: BooleanLike is the plain `boolean`
-    // (`boolean` itself carries the Boolean bit; the `boolean | undefined` of an accessor with
-    // a default is a union of BooleanLiteral + Undefined and does not), while a union whose
-    // every member is boolean/nullish is the nullable box
+    // the checker's view of a condition value: BooleanLike is the plain `boolean` (the `boolean |
+    // undefined` of an accessor with a default is BooleanLiteral + Undefined and does not qualify),
+    // while a union whose every member is boolean/nullish is the nullable box.
     javaBooleanValueKind(node): 'boolean' | 'nullableBoolean' | undefined {
         const type = this.getChecker().getTypeAtLocation(node);
         const flags = type?.flags ?? 0;
@@ -5614,10 +5514,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.checkerOrUndefined()?.getTypeAtLocation(decl);
     }
 
-    // the printed Java of this expression is a primitive `boolean` (or a Boolean box): boolean
-    // literals, `!`, the logical / comparison / `in` operators, `Array.isArray(x)` (printed
-    // Helpers.isArray, declared `public static boolean`) and the hand-written `public boolean`
-    // base methods. `seen` breaks the identifier cycle of `a = b; b = a;` style writes.
+    // the printed Java of this expression is a primitive `boolean` (or Boolean box): boolean literals,
+    // `!`, logical / comparison / `in` operators, `Array.isArray(x)` (Helpers.isArray, `public static
+    // boolean`) and hand-written `public boolean` base methods. `seen` breaks `a = b; b = a;` cycles.
     javaPrintsBooleanValue(node, seen: Set<any>, depth = 0): boolean {
         if (node === undefined) {
             return false;
@@ -5646,11 +5545,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return false;
     }
 
-    // the Java box of a `this.<name>(...)` call whose generated body returns a boolean value on
-    // every path: the TS return type is a boolean family and every `return` in the resolved
-    // declaration (nested functions excluded) prints a Java boolean or a proven Boolean-or-null
-    // box. That is the same value the hand-written base table covers for its own methods, one
-    // level deeper for the generated ones. `depth` and `seen` bound the recursion.
+    // the Java box of a `this.<name>(...)` call whose generated body returns a boolean on every path:
+    // the TS return type is a boolean family and every `return` in the resolved declaration prints a
+    // Java boolean or a proven Boolean-or-null box. `depth` and `seen` bound the recursion.
     javaCallReturnsBooleanBox(node, seen: Set<any>, depth: number): boolean {
         if (node?.kind !== ts.SyntaxKind.CallExpression || depth > 2) {
             return false;
@@ -5700,10 +5597,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return ok && returns > 0;
     }
 
-    // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and the
-    // hand-written `public boolean` base methods print a primitive boolean. Everything else -
-    // including the generated boolean-returning methods, which print `public Object` - keeps the
-    // wrapper, because its box is not proven boolean here.
+    // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and hand-written
+    // `public boolean` base methods print a primitive boolean. Everything else, including generated
+    // boolean-returning methods (`public Object`), keeps the wrapper: its box is not proven boolean.
     javaPrintsBooleanCall(node): boolean {
         const callee = node.expression;
         if (this.isArrayIsArrayCall(node)) {
@@ -5747,11 +5643,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaBooleanBoxType(type) ? printed : undefined;
     }
 
-    // the Java name of an identifier that provably holds a Boolean box or null, so that
-    // `Helpers.isTrue(x)` IS `Boolean.TRUE.equals(x)`, or undefined to keep the wrapper.
-    // The proof is the TypeScript type (`boolean`, never `any`/`undefined`-able) plus the
-    // D2 write scan: every write of the identifier in the enclosing function must print a Java
-    // boolean value, so no path can leave a Long/Integer/Double/String box in it.
+    // the Java name of an identifier that provably holds a Boolean box or null, so `Helpers.isTrue(x)`
+    // IS `Boolean.TRUE.equals(x)`. Proof: the TS type (`boolean`, never `any`/`undefined`-able) plus
+    // the D2 write scan: every write in the enclosing function must print a Java boolean value.
     javaBooleanBoxIdentifier(node, seen: Set<any>): string | undefined {
         if (node?.kind !== ts.SyntaxKind.Identifier || seen.has(node)) {
             return undefined;
@@ -5765,10 +5659,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (decl === undefined) {
             return undefined;
         }
-        // only a local with its own initializer: a parameter (and the `optionalArgs[n]` prologue
-        // the printer prints for an optional one) is an `Object` box its CALLERS fill, so the box
-        // is not proven boolean here; a binding element (`for (const b of ...)`, destructuring) is
-        // fed by the container instead of a typed value
+        // only a local with its own initializer: a parameter (and the `optionalArgs[n]` prologue for an
+        // optional one) is an `Object` box its CALLERS fill, so it is not proven boolean; a binding
+        // element (`for (const b of ...)`, destructuring) is fed by the container, not a typed value.
         if (decl.kind !== ts.SyntaxKind.VariableDeclaration) {
             return undefined;
         }
@@ -5842,10 +5735,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return ok;
     }
 
-    // the declared Java type the ccxt-side declaration chain gave this local/param, from the
-    // javaDeclaredLocalTypeResolver hook (build/java-local-types.js records every declaration it
-    // rewrote): `boolean` prints as the primitive, so the identifier IS the condition; `Boolean`
-    // prints as the nullable box, where `Helpers.isTrue(x)` is `Boolean.TRUE.equals(x)`
+    // the declared Java type the ccxt-side declaration chain gave this local/param, via the
+    // javaDeclaredLocalTypeResolver hook (build/java-local-types.js): `boolean` prints as the
+    // primitive, so the identifier IS the condition; `Boolean` is the nullable box (isTrue = equals).
     javaDeclaredBooleanKind(node): 'boolean' | 'Boolean' | undefined {
         const resolver = this.javaDeclaredLocalTypeResolver;
         if (resolver === undefined) {
@@ -5894,10 +5786,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return hasBoolean && members.every(booleanish);
     }
 
-    // a value the nullable-boolean write scan accepts: a Java boolean value this printer already
-    // proves, a nullish literal, or a safeBool-family accessor call whose other paths hand back
-    // the caller's default (a Boolean or null). Nothing else - a Long/Int/String/List box would
-    // change what the isTrue helper answers for it.
+    // a value the nullable-boolean write scan accepts: a Java boolean value this printer proves, a
+    // nullish literal, or a safeBool-family accessor whose other paths return the caller's default
+    // (Boolean or null). A Long/Int/String/List box would change what isTrue answers.
     javaPrintsBooleanBoxValue(node, seen: Set<any>): boolean {
         if (node === undefined) {
             return false;
@@ -5921,10 +5812,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return false;
     }
 
-    // element `index` of a `[ x, params ] = this.handle*Bool (...)` destructure prints a
-    // Boolean-or-null box: those accessors return a safeBool result, which never hands back the
-    // raw dictionary member when it is not a Boolean. The handleOptionAndParams family returns
-    // the raw member (Long/String/List included) and is deliberately not a box proof.
+    // element `index` of a `[ x, params ] = this.handle*Bool (...)` destructure is a Boolean-or-null
+    // box: those accessors return a safeBool result, never the raw member when not a Boolean. The
+    // handleOptionAndParams family returns the raw member and is deliberately not a box proof.
     javaBooleanBoxTupleElement(node, index: number): boolean {
         if (node?.kind !== ts.SyntaxKind.CallExpression) {
             return false;
@@ -6043,10 +5933,8 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // the native Java a falsy wrapper around this condition prints, or undefined to keep
-    // `Helpers.isTrue(...)`: a read of a hand-written boolean field prints bare;
-    // `Array.isArray(x)` prints `Helpers.isArray(x)`, whose result is exactly
-    // `x instanceof java.util.List` (null -> false exactly like the helper); an identifier
-    // holding a proven Boolean box prints `Boolean.TRUE.equals(x)`
+    // `Helpers.isTrue(...)`: a hand-written boolean field prints bare; `Array.isArray(x)` prints
+    // `Helpers.isArray(x)` (null -> false like helper); a proven Boolean box: `Boolean.TRUE.equals(x)`
     javaBooleanWrapperFreeCondition(node): string | undefined {
         if (node === undefined) {
             return undefined;
