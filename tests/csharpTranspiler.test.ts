@@ -1409,6 +1409,80 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object market = this.extend(a, b);');
         expect(output).toContain('object id = getValue(market, "id");');
     });
+    test('a currency-row local the declared table proves is a dictionary prints the native read', () => {
+        const input =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const currency = this.extend(a, b);\n" +
+        "        const code = currency['code'];\n" +
+        "        return code;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('Dictionary<string, object> currency = this.extend(a, b);');
+        // getValue yields null for a missing key, a C# indexer throws: the native read keeps the
+        // ContainsKey test
+        expect(output).toContain('object code = (currency.ContainsKey("code") ? currency["code"] : null);');
+        expect(output).not.toContain('getValue(currency, "code")');
+    });
+    test('currency reads outside the declared table keep getValue', () => {
+        // the receiver local is not typed: no proof, the helper stays
+        const untyped =
+        "class Exchange {\n" +
+        "    getCurrencyFromSymbols(symbols: any): any { return symbols; }\n" +
+        "    main(symbols: any) {\n" +
+        "        const currency = this.getCurrencyFromSymbols(symbols);\n" +
+        "        const code = currency['code'];\n" +
+        "        return code;\n" +
+        "    }\n" +
+        "}";
+        const untypedOutput = transpiler.transpileCSharp(untyped).content;
+        expect(untypedOutput).toContain('object currency = this.getCurrencyFromSymbols(symbols);');
+        expect(untypedOutput).toContain('object code = getValue(currency, "code");');
+        // a numeric key is a list index, not a currency key
+        const numberKey =
+        "class Exchange {\n" +
+        "    extend(a: any, b: any): any { return a; }\n" +
+        "    main(a: any, b: any) {\n" +
+        "        const currency = this.extend(a, b);\n" +
+        "        const first = currency[0];\n" +
+        "        return first;\n" +
+        "    }\n" +
+        "}";
+        expect(transpiler.transpileCSharp(numberKey).content).toContain('object first = getValue(currency, 0);');
+    });
+    test('a declaration the declared-local resolver types as a dictionary reads natively', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        // a parameter the build layer retypes to the interface: its box may still be null, so
+        // the emitted read carries the helper's null receiver branch
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.escapedText === 'currency') ? 'IDictionary<string, object>' : undefined;
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    main(currency: any) {\n" +
+        "        const code = currency['code'];\n" +
+        "        return code;\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        expect(output).toContain('object code = (currency != null && currency.ContainsKey("code") ? currency["code"] : null);');
+        expect(output).not.toContain('getValue(currency, "code")');
+    });
+    test('a non-dictionary declared-local resolver answer keeps getValue', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        printer.csharpDeclaredLocalTypeResolver = () => 'List<object>';
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    main(currency: any) {\n" +
+        "        const code = currency['code'];\n" +
+        "        return code;\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        expect(output).toContain('object code = getValue(currency, "code");');
+    });
     test('reads the checker cannot prove present keep getValue', () => {
         // no guard at all
         const unproven =

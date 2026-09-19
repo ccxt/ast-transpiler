@@ -292,10 +292,10 @@ const CSHARP_SCALAR_ELEMENT_STRING = 2;
 // C# dictionary types this printer can name on a local
 const CSHARP_NATIVE_DICTIONARY_TYPES = [ 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
-// the market-row receiver family of the cs-08 unit: `getValue (market, "lit")` on a local the
-// declared table proves is a dictionary prints natively. Other receivers belong to their own
-// units (cs-09 fields, cs-10 response/result/balance locals, ...)
-const CSHARP_NATIVE_MARKET_RECEIVERS = [ 'market' ];
+// the row-receiver family of the cs-08 unit, extended by B-19 to the currency row: a read of a
+// local with one of these names the declared table proves is a dictionary prints natively.
+// Other receivers belong to their own units (cs-09 fields, cs-10 response/result/balance locals)
+const CSHARP_NATIVE_MARKET_RECEIVERS = [ 'market', 'currency' ];
 
 // callees hand-written in cs/ccxt/base whose C# signature returns a non-nullable `bool` and that
 // have no TS method declaration to read a return annotation from: the imported function-properties
@@ -716,6 +716,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const guarded = !builtFromLiteral && this.csharpKeyPresenceGuarded(node, expression, key);
         if (!builtFromLiteral && !guarded) {
             return this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression)
+                ?? this.csharpDeclaredLocalResolverRowRead(expression, argumentExpression)
                 ?? this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey)
                 ?? this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey);
         }
@@ -727,12 +728,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `((IDictionary<string,object>)${receiver})[${printedKey}]`;
     }
 
-    // `getValue (market, "lit")` on a market-row local whose DECLARED C# type the table proves
-    // is a dictionary: the helper itself is a ContainsKey lookup, so the native form tests the
-    // key and hands back null when it is missing, exactly like the helper does. The declared
-    // table is the embedding build layer's proof (ccxt: build/csharp-local-types.js, which
-    // retypes these locals) and then the locals this printer typed itself; an untyped
-    // receiver keeps the helper.
+    // `getValue (market, "lit")` / `getValue (currency, "lit")` on a row local the declared
+    // table proves is a C# dictionary: the native form tests the key, so a missing key still
+    // reads null exactly like the helper. An untyped receiver keeps the helper.
     csharpNativeDeclaredDictionaryRead(expression, argumentExpression): string | undefined {
         if (!ts.isIdentifier(expression) || !ts.isStringLiteralLike(argumentExpression)) {
             return undefined;
@@ -748,7 +746,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `(${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
     }
 
-    // the concrete C# dictionary type the declared table names for a local read, or undefined
+    // the C# dictionary type the declared table names for a local read, or undefined: the
+    // printer's own table, then the build layer's read proof (the row a market/currency builder
+    // returned; never null on any path)
     csharpDeclaredDictionaryType(node): string | undefined {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
             return undefined;
@@ -758,6 +758,45 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         return named;
+    }
+
+    // the type the embedding build layer recorded for the declaration behind a read
+    // (csharpDeclaredLocalTypeResolver): the declarations it retyped itself, i.e. the parameters
+    // and locals whose printed prefix is no longer what the printer's own tables say
+    csharpDeclaredLocalResolverType(node): string | undefined {
+        if (typeof this.csharpDeclaredLocalTypeResolver !== 'function') {
+            return undefined;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const recorded = this.csharpDeclaredLocalTypeResolver(declaration);
+        return (typeof recorded === 'string') ? recorded : undefined;
+    }
+
+    // the same read for a receiver only the build layer's declared-local resolver names (a
+    // parameter B-17 retyped): its box may still be null, so the read carries the helper's
+    // own `value2 == null -> null` branch as a null test
+    csharpDeclaredLocalResolverRowRead(expression, argumentExpression): string | undefined {
+        if (!ts.isIdentifier(expression) || !ts.isStringLiteralLike(argumentExpression)) {
+            return undefined;
+        }
+        if (CSHARP_NATIVE_MARKET_RECEIVERS.indexOf(expression.escapedText as string) < 0) {
+            return undefined;
+        }
+        const recorded = this.csharpDeclaredLocalResolverType(expression);
+        if (recorded === undefined || CSHARP_NATIVE_DICTIONARY_TYPES.indexOf(recorded) < 0) {
+            return undefined;
+        }
+        const receiver = this.printNode(expression, 0);
+        const printedKey = this.printNode(argumentExpression, 0);
+        return `(${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
     }
 
     // a read of a hand-written BaseExchange dictionary field whose key may be absent: the key
