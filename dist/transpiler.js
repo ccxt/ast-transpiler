@@ -16157,7 +16157,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (text in this.StringLiteralReplacements) {
       return this.StringLiteralReplacements[text];
     }
-    return `Value::Str(${this.quotedStringLiteral(text)}.to_string())`;
+    return `Value::Str(${this.quotedStringLiteral(text)}.into())`;
   }
   printNumericLiteral(node) {
     const text = node.text;
@@ -16629,7 +16629,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       end = this.rustSliceClampedIndex(bound);
     }
     const begin = this.rustSliceClampedIndex(start);
-    return `${receiverText}.as_str().map(|__s| { let __c: Vec<char> = __s.chars().collect(); let __l = __c.len() as i64; let __i = ${begin}; let __j = ${end}; if __i <= __j { __c[__i as usize..__j as usize].iter().collect::<String>() } else { String::new() } }).map(Value::Str).unwrap_or(Value::Null)`;
+    return `${receiverText}.as_str().map(|__s| { let __c: Vec<char> = __s.chars().collect(); let __l = __c.len() as i64; let __i = ${begin}; let __j = ${end}; if __i <= __j { __c[__i as usize..__j as usize].iter().collect::<String>() } else { String::new() } }).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null)`;
   }
   // An identifier bound by a local/param declaration: the printer declares
   // every one of them as `Value`. Imports, classes and function names print
@@ -16720,7 +16720,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // `Value::from("k")`) plus a bare `"k"` once an arg-shape unit drops the box.
   rustStringLiteralOf(printedKey) {
     const boxed = printedKey.match(/^(?:Value::Str|Value::from)\((.+)\)$/);
-    const literal = (boxed ? boxed[1].replace(/\.to_string\(\)$/, "") : printedKey).trim();
+    const literal = (boxed ? boxed[1].replace(/\.(?:to_string|into)\(\)$/, "") : printedKey).trim();
     return /^"(?:[^"\\]|\\.)*"$/.test(literal) ? literal : void 0;
   }
   // `X["k"] = v` on a checker-proven plain Dict receiver: mutate the Dict
@@ -16737,7 +16737,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
       return void 0;
     }
-    const keyLiteral = keyText.match(/^Value::Str\((.+)\.to_string\(\)\)$/);
+    const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
     if (!keyLiteral) {
       return void 0;
     }
@@ -17222,7 +17222,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     return this.printNativeNumeric(op, leftText, rightText);
   }
   printNativeStringConcat(leftText, rightText) {
-    return `Value::Str(format!("{}{}", ${leftText}, ${rightText}))`;
+    return `Value::Str(format!("{}{}", ${leftText}, ${rightText}).into())`;
   }
   // Both operands are `Int`/`Float` at runtime; `-> Value::Null` covers the
   // `Null`/non-numeric values the same way the helper's fallthrough does.
@@ -18250,7 +18250,8 @@ ${classMethods}
     if (kind !== "msg" || !this.rustTypeIsString(node)) {
       return printed;
     }
-    return this.peelValueStrBox(printed) ?? this.peelValueStrBox(this.stripOuterParens(printed)) ?? printed;
+    const payload = this.peelValueStrBox(printed) ?? this.peelValueStrBox(this.stripOuterParens(printed)) ?? printed;
+    return payload.replace(/\.into\(\)$/, "");
   }
   // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
   // post-pass applies to `X::new(..)` calls.

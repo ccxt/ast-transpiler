@@ -9,7 +9,7 @@ pub struct Second {
 impl Second {
     pub fn new() -> Self {
         Second {
-        myClassProperty: Value::Str("classProp".to_string()),
+        myClassProperty: Value::Str("classProp".into()),
         myBoolProp: Value::Bool(false),
         }
     }
@@ -33,9 +33,9 @@ impl Test {
 impl Test {
     pub fn boolToString(&self, x: Value) -> Value {
         if is_true(&x) {
-            return Value::Str("true".to_string());
+            return Value::Str("true".into());
         }  else {
-            return Value::Str("false".to_string());
+            return Value::Str("false".into());
         }
 }
 
@@ -62,8 +62,8 @@ impl Test {
                 m.insert("b".to_string(), self.getValue(self.getValue(self.getValue(Value::Int(2)))));
             m
         });
-        println_val(&get_value(&newObject, &Value::Str("a".to_string()))); // should print 5
-        println_val(&get_value(&newObject, &Value::Str("b".to_string()))); // should print 2
+        println_val(&get_value(&newObject, &Value::Str("a".into()))); // should print 5
+        println_val(&get_value(&newObject, &Value::Str("b".into()))); // should print 2
 }
 
     pub fn test(&self) {
@@ -71,24 +71,24 @@ impl Test {
         let mut b: Value = Value::Int(2);
         let mut c: Value = add(&a, &b);
         println_val(&c); // should print 3
-        let mut s1: Value = Value::Str("a".to_string());
-        let mut s2: Value = Value::Str("b".to_string());
+        let mut s1: Value = Value::Str("a".into());
+        let mut s2: Value = Value::Str("b".into());
         let mut s3: Value = add(&s1, &s2);
         let mut stringVar: Value = Value::Null;
-        stringVar = Value::Str("hello".to_string());
+        stringVar = Value::Str("hello".into());
         println_val(&stringVar); // should print "hello"
         println_val(&s3); // should print "ab"
         let mut x: Value = Value::Bool(false);
         if is_true(&x) {
-            println_val(&Value::Str("x is true".to_string()));
+            println_val(&Value::Str("x is true".into()));
         }  else {
-            println_val(&Value::Str("x is false".to_string())); // should print "x is false"
+            println_val(&Value::Str("x is false".into())); // should print "x is false"
         }
         let mut instance = Second::new();
         println_val(&instance.stringifyNumber(Value::Int(4))); // should print 4
         println_val(&instance.myClassProperty); // should print "classProp"
         if (instance.myBoolProp.as_bool() == Some(false)) {
-            println_val(&Value::Str("myBoolProp is false".to_string())); // should print "myBoolProp is false"
+            println_val(&Value::Str("myBoolProp is false".into())); // should print "myBoolProp is false"
         }
         let mut arr: Value = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
         println_val(&get_array_length(&arr)); // should print 4
@@ -96,10 +96,10 @@ impl Test {
         println_val(&first); // should print 1
         let mut dict: Value = Value::Map({
             let mut m = std::collections::HashMap::new();
-                m.insert("a".to_string(), Value::Str("b".to_string()));
+                m.insert("a".to_string(), Value::Str("b".into()));
             m
         });
-        println_val(&get_value(&dict, &Value::Str("a".to_string()))); // should print "b"
+        println_val(&get_value(&dict, &Value::Str("a".into()))); // should print "b"
         let mut i: Value = Value::Int(0);
         {
                         let mut w: Value = Value::Int(0);
@@ -119,30 +119,30 @@ impl Test {
                 m.insert("b".to_string(), Value::Int(2));
             m
         });
-        remove(&mut dict2, &Value::Str("a".to_string()));
+        remove(&mut dict2, &Value::Str("a".into()));
         let mut dictKeys: Value = object_keys(&dict2);
         println_val(&get_array_length(&dictKeys)); // should print 1
         println_val(&get_value(&dictKeys, &Value::Int(0))); // should print "b"
-        let mut firstConcat: Value = Value::List(vec![Value::Str("a".to_string()), Value::Str("b".to_string())]);
-        let mut secondConcat: Value = Value::List(vec![Value::Str("c".to_string()), Value::Str("d".to_string())]);
+        let mut firstConcat: Value = Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]);
+        let mut secondConcat: Value = Value::List(vec![Value::Str("c".into()), Value::Str("d".into())]);
         let mut both: Value = concat(firstConcat.clone(), secondConcat.clone());
         println_val(&get_array_length(&both)); // should print 4
         println_val(&get_value(&both, &Value::Int(2))); // should print "c"
-        let mut baseString: Value = Value::Str("aabba".to_string());
-        let mut replacedAllString: Value = replace_all_str(&baseString, &Value::Str("a".to_string()), &Value::Str("".to_string()));
+        let mut baseString: Value = Value::Str("aabba".into());
+        let mut replacedAllString: Value = replace_all_str(&baseString, &Value::Str("a".into()), &Value::Str("".into()));
         println_val(&replacedAllString); // should print "bb"
-        self.functionWithOptionals(Value::Str("hello".to_string()), &[]);
-        self.functionWithOptionals(Value::Str("hello".to_string()), &[Value::Int(5)]);
-        self.functionWithOptionals(Value::Str("hello".to_string()), &[Value::Int(5), Value::Int(1)]);
-        let mut list3: Value = Value::List(vec![Value::Str("empty".to_string())]);
-        add_element_to_object(&mut list3, &Value::Int(0), Value::Str("first".to_string()));
+        self.functionWithOptionals(Value::Str("hello".into()), &[]);
+        self.functionWithOptionals(Value::Str("hello".into()), &[Value::Int(5)]);
+        self.functionWithOptionals(Value::Str("hello".into()), &[Value::Int(5), Value::Int(1)]);
+        let mut list3: Value = Value::List(vec![Value::Str("empty".into())]);
+        add_element_to_object(&mut list3, &Value::Int(0), Value::Str("first".into()));
         println_val(&get_value(&list3, &Value::Int(0))); // should print "first"
         let mut dict3: Value = Value::Map({
             let mut m = std::collections::HashMap::new();
             m
         });
-        add_element_to_object(&mut dict3, &Value::Str("key".to_string()), Value::Str("value".to_string()));
-        println_val(&get_value(&dict3, &Value::Str("key".to_string()))); // should print "value"
+        add_element_to_object(&mut dict3, &Value::Str("key".into()), Value::Str("value".into()));
+        println_val(&get_value(&dict3, &Value::Str("key".into()))); // should print "value"
         self.testJavaScope();
         let mut first1second1Variable = self.handleOptionAndParamsTest();
         let mut first1: Value = get_value(&first1second1Variable, &Value::Int(0));
@@ -156,7 +156,7 @@ impl Test {
         println_val(&second2); // should print "a"
         self.funcWithParams(&[Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]), Value::Map({
     let mut m = std::collections::HashMap::new();
-        m.insert("a".to_string(), Value::Str("value of a".to_string()));
+        m.insert("a".to_string(), Value::Str("value of a".into()));
     m
 })]);
         self.testStringMethods();
@@ -171,7 +171,7 @@ impl Test {
 }
 
     pub fn handleOptionAndParamsTest(&self) -> Value {
-        return Value::List(vec![Value::Int(1), Value::Str("a".to_string())]);
+        return Value::List(vec![Value::Int(1), Value::Str("a".into())]);
 }
 
     pub fn funcWithParams(&self, optional_args: &[Value]) {
@@ -183,38 +183,38 @@ impl Test {
         if is_true(&Value::Bool(is_array(&a))) {
             println_val(&get_array_length(&a));
         }
-        if is_true(&Value::Bool(in_op(&params, &Value::Str("a".to_string())))) {
-            println_val(&get_value(&params, &Value::Str("a".to_string())));
+        if is_true(&Value::Bool(in_op(&params, &Value::Str("a".into())))) {
+            println_val(&get_value(&params, &Value::Str("a".into())));
         }
 }
 
     pub fn testStringMethods(&self) {
-        let mut str_val: Value = Value::Str("hello world".to_string());
+        let mut str_val: Value = Value::Str("hello world".into());
         // isEqual test
         if (str_val.as_str() == Some("hello world")) {
-            println_val(&Value::Str("str is hello world".to_string())); // should print "str is hello world"
+            println_val(&Value::Str("str is hello world".into())); // should print "str is hello world"
         }
         println_val(&to_upper(&str_val));
-        let mut startsWithHello: Value = Value::Bool(starts_with(&str_val, &Value::Str("hello".to_string())));
+        let mut startsWithHello: Value = Value::Bool(starts_with(&str_val, &Value::Str("hello".into())));
         println_val(&self.boolToString(startsWithHello)); // should print true
-        let mut endsWithWorld: Value = Value::Bool(ends_with(&str_val, &Value::Str("world".to_string())));
+        let mut endsWithWorld: Value = Value::Bool(ends_with(&str_val, &Value::Str("world".into())));
         println_val(&self.boolToString(endsWithWorld)); // should print true
-        let mut stringParts: Value = split(&str_val, &Value::Str(" ".to_string()));
+        let mut stringParts: Value = split(&str_val, &Value::Str(" ".into()));
         println_val(&get_array_length(&stringParts)); // should print 2
         println_val(&get_value(&stringParts, &Value::Int(0))); // should print "hello"
         println_val(&get_value(&stringParts, &Value::Int(1))); // should print "world"
-        let mut indexOfResult: Value = get_index_of(&str_val, &Value::Str("o".to_string()));
+        let mut indexOfResult: Value = get_index_of(&str_val, &Value::Str("o".into()));
         println_val(&indexOfResult); // should print 4
-        let mut strReplaced: Value = replace_all_str(&str_val, &Value::Str("l".to_string()), &Value::Str("x".to_string()));
+        let mut strReplaced: Value = replace_all_str(&str_val, &Value::Str("l".into()), &Value::Str("x".into()));
         println_val(&strReplaced); // should print "hexxo worxd"
         // concatenation test
-        let mut a: Value = Value::Str("a".to_string());
-        let mut b: Value = Value::Str("b".to_string());
+        let mut a: Value = Value::Str("a".into());
+        let mut b: Value = Value::Str("b".into());
         let mut c: Value = add(&a, &b);
         println_val(&c); // should print "ab"
 }
 
     pub fn functionThatThrows(&self) {
-        panic!("{}", Value::Str("This is an error".to_string()));
+        panic!("{}", Value::Str("This is an error".into()));
 }
 }
