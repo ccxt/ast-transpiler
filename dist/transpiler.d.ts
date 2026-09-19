@@ -1353,6 +1353,12 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaBooleanBaseField(node: any): string | undefined;
     javaBooleanBoxIdentifier(node: any, seen: Set<any>): string | undefined;
     javaBooleanWritesAreBoxed(symbol: any, decl: any, node: any, seen: Set<any>): boolean;
+    javaDeclaredBooleanKind(node: any): 'boolean' | 'Boolean' | undefined;
+    javaNullableBooleanDeclaration(declaration: any): boolean;
+    javaPrintsBooleanBoxValue(node: any, seen: Set<any>): boolean;
+    javaBooleanBoxTupleElement(node: any, index: number): boolean;
+    javaBooleanNullableWritesAreBoxed(symbol: any, declaration: any, node: any, seen: Set<any>): boolean;
+    javaNullableBooleanBoxIdentifier(node: any): string | undefined;
     javaBooleanWrapperFreeCondition(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;
