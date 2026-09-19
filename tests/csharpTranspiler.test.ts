@@ -4438,4 +4438,125 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             expect(output).toContain('parsePredictionOpenInterest(object interest, object market = null)');
         });
     });
+||||||| 73052b6
+    // ---- batch D, D-19: ws handler `message` parameter ----
+    const wsHandlerSource = (body: string, messageType: string = 'Dict', extra: string = '') =>
+        'type Dict = { [key: string]: any };\n' +
+        'interface Client { id: string; }\n' +
+        extra +
+        'class Exchange {\n' +
+        '    helper (symbols: Dict): void {\n' +
+        '        if (Array.isArray (symbols)) { return; }\n' +
+        '    }\n' +
+        '    handleTicker (client: Client, message: ' + messageType + '): void {\n' +
+        '        ' + body + '\n' +
+        '    }\n' +
+        '}\n';
+    test('a table-only ws handler prints the typed message parameter and native reads', () => {
+        const input = wsHandlerSource(
+            'const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];\n' +
+            '        const n = message.length;\n' +
+            '        const has = \'k\' in message;\n' +
+            '        return [methods, a, n, has];');
+        const output = transpiler.transpileCSharp(input).content;
+        // the typed signature (the class itself is not the ws bridge; the ccxt build layer
+        // rewrites the client parameter)
+        expect(output).toContain('public virtual void handleTicker(object client, Dictionary<string, object> message)');
+        // the element read keeps the helper's missing-key null
+        expect(output).toContain('(message != null && message.ContainsKey("ticker") ? message["ticker"] : null)');
+        // the length read keeps the helper's null -> 0
+        expect(output).toContain('(message?.Count ?? 0)');
+        // `key in message` binds ContainsKey on the declared dictionary
+        expect(output).toContain('message.ContainsKey("k")');
+        // the message parameter itself keeps a dispatch-table entry (a method-group value)
+        expect(output).toContain('{ "ticker", this.handleTicker }');
+    });
+    test('a ws handler called statically keeps the boxed message parameter', () => {
+        const input = wsHandlerSource(
+            'this.handleTicker (client, message);\n' +
+            '        const a = message[\'ticker\'];',
+            'Dict',
+            'class Other extends Exchange { }\n');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+        expect(output).toContain('this.handleTicker(client, message);');
+        expect(output).toContain('getValue(message, "ticker")');
+    });
+    test('a class with a list route keeps every handler message boxed', () => {
+        const input = wsHandlerSource(
+            'if (Array.isArray (message)) { return; }\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];',
+            'any');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+        expect(output).toContain('getValue(message, "ticker")');
+    });
+    test('a written message parameter keeps the box', () => {
+        const input = wsHandlerSource(
+            'message = this.safeDict (message, \'data\', message);\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+    });
+    test('an untyped message parameter keeps the box', () => {
+        const input = wsHandlerSource(
+            'const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];',
+            'any');
+        const output = transpiler.transpileCSharp(input).content;
+        expect(output).toContain('public virtual void handleTicker(object client, object message)');
+        expect(output).toContain('getValue(message, "ticker")');
+    });
+    test('an override keeps the base class signature', () => {
+        const input =
+            'type Dict = { [key: string]: any };\n' +
+            'interface Client { id: string; }\n' +
+            'class Base {\n' +
+            '    handleTicker (client: Client, message: Dict): void {}\n' +
+            '}\n' +
+            'class Exchange extends Base {\n' +
+            '    override handleTicker (client: Client, message: Dict): void {\n' +
+            '        const a = message[\'ticker\'];\n' +
+            '    }\n' +
+            '}\n';
+        const output = transpiler.transpileCSharp(input).content;
+        const overrideLine = output.split('\n').filter((line: string) => line.indexOf('override void handleTicker') >= 0);
+        expect(overrideLine.length).toBe(1);
+        expect(overrideLine[0]).toContain('object message');
+    });
+    test('a list test on an unrelated parameter keeps the handler typed', () => {
+        const input = wsHandlerSource(
+            'const methods = { \'ticker\': this.handleTicker };\n' +
+            '        const a = message[\'ticker\'];');
+        const output = transpiler.transpileCSharp(input).content;
+        // the helper's `Array.isArray (symbols)` is not the handler message
+        expect(output).toContain('public virtual void handleTicker(object client, Dictionary<string, object> message)');
+    });
+    test('a call from another class of the same file keeps the box', () => {
+        const input =
+            'type Dict = { [key: string]: any };\n' +
+            'interface Client { id: string; }\n' +
+            'class Alpha {\n' +
+            '    alphaHelper (client: Client, message: Dict): void {\n' +
+            '        const a = message[\'k\'];\n' +
+            '    }\n' +
+            '}\n' +
+            'class Exchange {\n' +
+            '    handleTicker (client: Client, message: Dict): void {\n' +
+            '        const methods = { \'ticker\': this.handleTicker };\n' +
+            '        this.betaPing (client, message);\n' +
+            '    }\n' +
+            '    betaPing (client: Client, message: Dict): void {\n' +
+            '        const b = message[\'k\'];\n' +
+            '    }\n' +
+            '}\n';
+        const output = transpiler.transpileCSharp(input).content;
+        // the file-level index records the static call, so the callee keeps the box
+        expect(output).toContain('public virtual void betaPing(object client, object message)');
+        expect(output).not.toContain('betaPing(object client, Dictionary<string, object> message)');
+        expect(output).toContain('getValue(message, "k")');
+    });
 });

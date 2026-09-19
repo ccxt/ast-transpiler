@@ -496,6 +496,10 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
     csharpDeclaredLocalTypeResolver?: (declaration: any) => string | undefined;
     csharpTypedLocals: WeakMap<ts.Node, string>;
+    csharpHandlerMessageTypes: WeakMap<ts.Node, string>;
+    csharpHandlerCalled: WeakMap<ts.Node, boolean>;
+    csharpListRouteClasses: WeakMap<ts.Node, boolean>;
+    csharpHandlerCallIndex: WeakMap<ts.Node, Map<ts.Symbol, boolean>>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -533,6 +537,13 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpObjectLiteralDeclaresKey(literal: any, key: any): boolean;
     csharpReceiverIsDictionaryLike(expression: any, key: any): boolean;
     csharpReceiverIsRewritten(func: any, expression: any): boolean;
+    csharpHandlerMessageType(param: any): string | undefined;
+    csharpCheckerTypeName(node: any): string | undefined;
+    csharpEnclosingClass(node: any): any | undefined;
+    csharpIsHandlerMessageIdentifier(node: any): boolean;
+    csharpClassHasListRoute(method: any): boolean;
+    csharpHandlerIsCalled(method: any): boolean;
+    csharpHandlerCallIndexFor(file: any): Map<ts.Symbol, boolean>;
     csharpHasKeyRemoval(func: any, expression: any, key: any): boolean;
     csharpGuardIsNegated(guard: any): boolean;
     csharpAlwaysExits(statement: any): boolean;
