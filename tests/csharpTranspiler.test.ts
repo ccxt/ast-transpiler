@@ -4438,7 +4438,6 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             expect(output).toContain('parsePredictionOpenInterest(object interest, object market = null)');
         });
     });
-||||||| 73052b6
     // ---- batch D, D-19: ws handler `message` parameter ----
     const wsHandlerSource = (body: string, messageType: string = 'Dict', extra: string = '') =>
         'type Dict = { [key: string]: any };\n' +

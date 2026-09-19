@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9947,14 +9947,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (fn?.kind !== ts5.SyntaxKind.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== ts5.SyntaxKind.Identifier) {
       return void 0;
     }
-    if (!fn.name.escapedText.startsWith("parse")) {
+    const parseParam = fn.name.escapedText.startsWith("parse");
+    const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
+    if (!parseParam && !handlerParam) {
       return void 0;
     }
     if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
       return void 0;
     }
     const index = fn.parameters.indexOf(param);
-    for (const goType of this.goNativeParameterTypeCandidates(param)) {
+    for (const goType of this.goNativeParameterTypeCandidates(param, handlerParam)) {
       if (this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) {
         return goType;
       }
@@ -10001,11 +10003,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     ts5.forEachChild(body, visit);
     return keeps;
   }
+  // ---- D-03: pro handler frame parameters ------------------------------------
+  // A `handle*` method of a pro exchange class receives the raw frame from the WS
+  // client. When the checker types that parameter as `Dict`, and every call site
+  // passes a proven `map[string]any` (the shared call-site proof), it prints
+  // `map[string]any` and its reads go native. `handleMessage` itself is an override
+  // of the base stub, so it and every handler it calls with its own boxed parameter
+  // keep the box: the generated base class and the hand-written IDerivedExchange
+  // interface compile against the boxed base signature (D8).
+  goIsProHandlerMethod(fn) {
+    const fileName = String(fn.getSourceFile().fileName ?? "");
+    if (!/(^|[\\/])ts[\\/]src[\\/]pro[\\/]/.test(fileName)) {
+      return false;
+    }
+    const name = fn.name.escapedText;
+    return name.length > 6 && name.startsWith("handle") && name[6] === name[6].toUpperCase();
+  }
+  // `Dict` is the checker's structural `{[key: string]: any}`: a string index
+  // signature is the proof. Class instances (OrderBook, ArrayCache*, Client, Future),
+  // named-member interfaces (Market, Order, Ticker) and arrays carry none of them, so
+  // they never qualify — those are exactly the values a Go map cannot hold.
+  goParameterTypeIsDict(type) {
+    try {
+      return typeof type.getStringIndexType === "function" && type.getStringIndexType() !== void 0;
+    } catch (e) {
+      return false;
+    }
+  }
   // the Go types the declared TypeScript type can carry. `Dict`/`Market`/`Currency`
   // and the other dict-shaped object types print as the `map[string]any` the Go side
-  // builds them from, `List` (= any[]) as its `[]any`; the call-site proof decides
-  // whether the retype compiles.
-  goNativeParameterTypeCandidates(param) {
+  // builds them from, `List` (= any[]) as its `[]any`; pro `handle*` frames (isHandler)
+  // admit only the structural Dict. The call-site proof decides whether the retype compiles.
+  goNativeParameterTypeCandidates(param, isHandler = false) {
     let type;
     try {
       type = this.getChecker().getTypeAtLocation(param);
@@ -10022,7 +10051,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     const inner = parts[0];
     if (inner.flags & ts5.TypeFlags.String) {
-      return ["*string"];
+      return isHandler ? [] : ["*string"];
+    }
+    if (isHandler && this.goParameterTypeIsDict(inner)) {
+      return ["map[string]any"];
     }
     if (!(inner.flags & ts5.TypeFlags.Object)) {
       return [];
@@ -13376,6 +13408,7 @@ var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
   "implodeHostname"
 ]);
 var JAVA_STRING_RETURN_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](?:functions[\\/](?:type|time)\.ts|Exchange(\.nooverloads[^/]*)?\.ts)$/;
+var JAVA_NATIVE_PARAMETER_PREDICTION_FILES = /(^|\/)ts\/src\/prediction\/[a-z0-9_]+\.ts$/;
 var JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void | ts6.TypeFlags.Never | ts6.TypeFlags.TypeParameter | ts6.TypeFlags.Conditional | ts6.TypeFlags.Enum | ts6.TypeFlags.EnumLiteral;
 var JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS = ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void;
 var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
@@ -13424,6 +13457,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     // Static method emitted in place of java.util.concurrent.CompletableFuture.supplyAsync
     // for async methods. The callee owns the executor choice, so no second argument is emitted.
     this.asyncSupplier = "";
+    // method names declared by the `Exchange` class of ts/src/base/Exchange.ts, read off the
+    // program the warp ran on. A prediction venue's method with one of these names overrides
+    // the tier body javaTranspiler.ts injects into PredictionExchange.java.
+    this._exchangeTierMethodNames = void 0;
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
     // by method node; a plain assignment is handled by javaParameterAssignmentCast
     this.javaMethodAssignedNames = /* @__PURE__ */ new WeakMap();
@@ -14843,6 +14880,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       const method = node.parent;
       const index = method.parameters.indexOf(node);
       let override = this.getMethodOverride(method);
+      if (override === void 0 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName) && method.name !== void 0 && this.exchangeTierMethodNames().has(method.name.getText().trim())) {
+        return void 0;
+      }
       while (override !== void 0) {
         const baseParam = override.parameters?.[index];
         if (!this.javaParameterPrintsType(baseParam, type)) {
@@ -14854,6 +14894,31 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     return type;
+  }
+  exchangeTierMethodNames() {
+    if (this._exchangeTierMethodNames !== void 0) {
+      return this._exchangeTierMethodNames;
+    }
+    const names = /* @__PURE__ */ new Set();
+    try {
+      const file = this.getProgram().getSourceFiles().find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
+      const collect = (node) => {
+        if (ts6.isClassDeclaration(node) && node.name?.text === "Exchange") {
+          for (const member of node.members) {
+            if (ts6.isMethodDeclaration(member) && member.name !== void 0) {
+              names.add(member.name.getText().trim());
+            }
+          }
+        }
+        ts6.forEachChild(node, collect);
+      };
+      if (file !== void 0) {
+        collect(file);
+      }
+    } catch (e) {
+    }
+    this._exchangeTierMethodNames = names;
+    return names;
   }
   // the same parameter position of an ancestor declaration prints this native type: its
   // own annotation names it, or - with no annotation of its own - it inherits the same
@@ -21368,8 +21433,15 @@ ${classMethods}
     const blockOpen = this.getBlockOpen(identation);
     const blockClose = this.getBlockClose(identation);
     const shadows = this.rustParamShadowLines(node, identation + 2);
+    const shadowPlan = this.rustProHandlerShadowPlan(node, identation);
+    const savedShadowParam = this.rustProHandlerShadowParam;
+    if (shadowPlan !== void 0) {
+      this.rustProHandlerShadowParam = shadowPlan.param;
+    }
     const statements = node.body.statements.map((s) => this.printNode(s, identation + 2)).join("\n");
-    const body = blockOpen + optionalInits + shadows + statements + blockClose;
+    this.rustProHandlerShadowParam = savedShadowParam;
+    const shadow = shadowPlan === void 0 ? "" : shadowPlan.lines;
+    const body = blockOpen + optionalInits + shadows + shadow + statements + blockClose;
     return this.printNodeCommentsIfAny(node, identation, methodDef + body);
   }
   printFunctionDefinition(node, identation) {
@@ -21414,6 +21486,9 @@ ${classMethods}
     const shadowSafeRead = this.printShadowSafeReadCall(node);
     if (shadowSafeRead !== void 0)
       return shadowSafeRead;
+    const shadowRead = this.printProHandlerShadowRead(node);
+    if (shadowRead !== void 0)
+      return shadowRead;
     if (expression.kind === SyntaxKind4.PropertyAccessExpression) {
       const exprText = expression.getText().trim();
       if (exprText === "console.log") {
@@ -22131,7 +22206,7 @@ ${classMethods}
   }
   /** Keys whose text is safe to inline into a rust string literal. */
   rustShadowKeyLiteral(text) {
-    return /^[A-Za-z0-9_.\/\-]*$/.test(text) && text.length > 0;
+    return /^[A-Za-z0-9_./-]*$/.test(text) && text.length > 0;
   }
   /** `this.safeString`-style callee of a call, or undefined. */
   rustShadowSafeCallee(node) {
@@ -22232,6 +22307,181 @@ ${classMethods}
         return wrap(`match ${get} { Some(__v) if matches!(__v, Value::Dict(_)) => __v.clone(), _ => ${fallback} }`);
       case "safeList":
         return wrap(`match ${get} { Some(__v) if matches!(__v, Value::Arr(_)) => __v.clone(), _ => ${fallback} }`);
+    }
+    return void 0;
+  }
+  /** The `message: Dict` parameter of a WS handler method (2nd param of a
+   *  `handle*` method), undefined when unproven or written (D2). */
+  rustProHandlerMessageParam(node) {
+    if (node === void 0 || !ts7.isMethodDeclaration(node) || node.body === void 0)
+      return void 0;
+    const params = node.parameters ?? [];
+    if (params.length < 2)
+      return void 0;
+    const methodName = node.name;
+    if (methodName === void 0 || !/^handle[A-Z]/.test(String(methodName.escapedText ?? "")))
+      return void 0;
+    const param = params[1];
+    if (param === void 0 || !ts7.isIdentifier(param.name) || param.type === void 0)
+      return void 0;
+    if (param.initializer !== void 0 || param.questionToken !== void 0)
+      return void 0;
+    const clientParam = params[0];
+    if (clientParam === void 0 || clientParam.type === void 0)
+      return void 0;
+    const clientType = this.getCheckedTypeOf(clientParam.type);
+    if (clientType === void 0 || !this.isClassInstanceType(clientType))
+      return void 0;
+    const type = this.getCheckedTypeOf(param.type);
+    if (type === void 0 || !this.isProvenMapType(type))
+      return void 0;
+    const name = String(param.name.escapedText);
+    return this.rustProHandlerParamIsWritten(param, name) ? void 0 : param;
+  }
+  /** D2: a write rooted at the parameter (reassignment, element/property
+   *  write, a merge/splice onto it) can reshape the dict after the shadow is
+   *  taken — the shadow is skipped and every read keeps the helper. */
+  rustProHandlerParamIsWritten(param, name) {
+    if (this.rustLocalIsReassigned(param, name))
+      return true;
+    const scope = this.rustEnclosingFunction(param);
+    if (scope === void 0)
+      return true;
+    const merging = ["deepExtend", "extend", "addElementToObject", "remove"];
+    let written = false;
+    const visit = (n) => {
+      if (written)
+        return;
+      if (ts7.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && this.rootPlaceText(n.left) === name) {
+        written = true;
+        return;
+      }
+      if (ts7.isCallExpression(n) && n.arguments.length > 0 && ts7.isIdentifier(n.arguments[0]) && n.arguments[0].escapedText === name) {
+        const callee = n.expression;
+        const calleeName = ts7.isPropertyAccessExpression(callee) ? String(callee.name?.escapedText ?? "") : ts7.isIdentifier(callee) ? String(callee.escapedText ?? "") : "";
+        if (merging.includes(calleeName)) {
+          written = true;
+          return;
+        }
+      }
+      if (ts7.isCallExpression(n) && ts7.isPropertyAccessExpression(n.expression) && n.expression.name?.text === "push" && this.rootPlaceText(n.expression.expression) === name) {
+        written = true;
+        return;
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(scope, visit);
+    return written;
+  }
+  /** Shadow plan for a handler: the parameter plus the two binding lines,
+   *  present only when some body read actually turns native (no dead shed). */
+  rustProHandlerShadowPlan(node, identation) {
+    const param = this.rustProHandlerMessageParam(node);
+    if (param === void 0)
+      return void 0;
+    if (this.rustParamShadowTable(node).has(String(param.name.escapedText)))
+      return void 0;
+    const saved = this.rustProHandlerShadowParam;
+    this.rustProHandlerShadowParam = param;
+    let hasRead = false;
+    const scope = this.rustEnclosingFunction(param);
+    const visit = (n) => {
+      if (hasRead)
+        return;
+      if (ts7.isCallExpression(n) && this.printProHandlerShadowRead(n, true) !== void 0) {
+        hasRead = true;
+        return;
+      }
+      ts7.forEachChild(n, visit);
+    };
+    ts7.forEachChild(scope, visit);
+    this.rustProHandlerShadowParam = saved;
+    if (!hasRead)
+      return void 0;
+    const name = String(param.name.escapedText);
+    const view = _RustTranspiler.PRO_HANDLER_SHADOW_NAME;
+    const arc = `${view}_arc`;
+    const map = "indexmap::IndexMap<String, Value>";
+    const ind = this.getIden(identation + 2);
+    const lines = `${ind}let ${arc}: std::sync::Arc<${map}> = (match &${name} { Value::Dict(__d) => __d.clone(), _ => std::sync::Arc::new(indexmap::IndexMap::new()) });
+${ind}let ${view}: &${map} = &${arc};
+`;
+    return { param, lines };
+  }
+  /** The `safe_*` call on the shadowed parameter prints as a native
+   *  `.get("k")` match, or undefined when the call is not one. In `probe`
+   *  mode the shape is checked without printing (the pre-scan must not print
+   *  a node twice). */
+  printProHandlerShadowRead(node, probe = false) {
+    const param = this.rustProHandlerShadowParam;
+    if (param === void 0 || node === void 0 || !ts7.isCallExpression(node))
+      return void 0;
+    const callee = node.expression;
+    if (callee === void 0 || !ts7.isPropertyAccessExpression(callee))
+      return void 0;
+    if (callee.expression.kind !== SyntaxKind4.ThisKeyword)
+      return void 0;
+    const kind = _RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS[String(callee.name?.escapedText ?? "")];
+    if (kind === void 0)
+      return void 0;
+    const args = node.arguments ?? [];
+    if (args.length < 2 || args.length > 3)
+      return void 0;
+    const receiver = args[0];
+    if (receiver === void 0 || receiver.kind !== SyntaxKind4.Identifier)
+      return void 0;
+    if (this.rustDeclarationOfIdentifier(receiver) !== param)
+      return void 0;
+    const key = args[1];
+    if (key === void 0 || !ts7.isStringLiteral(key))
+      return void 0;
+    const keyText = key.text;
+    if (keyText === "" || _RustTranspiler.RUST_DICT_LOCAL_UNSAFE_KEYS.has(keyText))
+      return void 0;
+    if (args.length === 3 && !this.rustProHandlerShadowDefaultShape(args[2]))
+      return void 0;
+    if (probe)
+      return "native";
+    const dflt = args.length === 3 ? this.rustProHandlerShadowDefault(args[2]) : "Value::Null";
+    if (dflt === void 0)
+      return void 0;
+    return this.rustProHandlerShadowReadText(kind, this.escapeRustStringLiteral(keyText), dflt);
+  }
+  /** A miss-arm default the match can hold: absent (`Value::Null`) or a
+   *  literal; a computed default keeps the helper (its Value is not
+   *  re-printable inside an arm without re-evaluating it twice). */
+  rustProHandlerShadowDefaultShape(node) {
+    return node.kind === SyntaxKind4.StringLiteral || node.kind === SyntaxKind4.NumericLiteral || node.kind === SyntaxKind4.TrueKeyword || node.kind === SyntaxKind4.FalseKeyword || node.kind === SyntaxKind4.NullKeyword || node.kind === SyntaxKind4.ArrayLiteralExpression || node.kind === SyntaxKind4.ObjectLiteralExpression || ts7.isIdentifier(node) && node.escapedText === "undefined";
+  }
+  rustProHandlerShadowDefault(node) {
+    if (!this.rustProHandlerShadowDefaultShape(node))
+      return void 0;
+    const text = this.printNode(node, 0).trim();
+    return text === "" ? void 0 : text;
+  }
+  /** Exact native form of the runtime `_k` helper: same value kinds, same
+   *  empty-string-is-missing rule, same default (verified against
+   *  `exchange_stubs.rs`). `.cloned()` keeps the emitted line clone-free for
+   *  the ccxt clone-pruning passes; the parenthesised `match` keeps the
+   *  driver's `};` trailing-block replacement off the statement's `;`. */
+  rustProHandlerShadowReadText(kind, key, dflt) {
+    const m = _RustTranspiler.PRO_HANDLER_SHADOW_NAME;
+    const at = `${m}.get("${key}").cloned()`;
+    switch (kind) {
+      case "value":
+        return `(match ${at} { Some(Value::Str(__s)) if __s.is_empty() => ${dflt}, Some(__v) => __v, None => ${dflt} })`;
+      case "string":
+        return `(match ${at} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${dflt} })`;
+      case "integer":
+        return `(match ${at} { Some(Value::Int(__n)) => Value::Int(__n), Some(Value::Float(__f)) => Value::Int(__f as i64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<i64>() { Ok(__n) => Value::Int(__n), Err(_) => match __s.parse::<f64>() { Ok(__f) if __f.is_finite() => Value::Int(__f as i64), _ => ${dflt} } }, _ => ${dflt} })`;
+      case "float":
+        return `(match ${at} { Some(Value::Float(__f)) => Value::Float(__f), Some(Value::Int(__n)) => Value::Float(__n as f64), Some(Value::Str(__s)) if !__s.is_empty() => match __s.parse::<f64>() { Ok(__f) => Value::Float(__f), Err(_) => ${dflt} }, _ => ${dflt} })`;
+      case "dict":
+        return `(match ${at} { Some(__v) if matches!(__v, Value::Dict(_)) => __v, _ => ${dflt} })`;
+      case "list":
+        return `(match ${at} { Some(__v) if matches!(__v, Value::Arr(_)) => __v, _ => ${dflt} })`;
+      case "bool":
+        return `(match ${at} { Some(__v) if matches!(__v, Value::Bool(_)) => __v, _ => ${dflt} })`;
     }
     return void 0;
   }
@@ -23365,6 +23615,27 @@ _RustTranspiler.MUT_SELF_METHODS = /* @__PURE__ */ new Set([
 _RustTranspiler.RUST_PARSE_HELPERS = {
   parseInt: "i64",
   parseFloat: "f64"
+};
+// ── pro-tier WS handler `message` shadow (D-27) ───────────────────────────
+// `handle_x (client: Client, message: Dict)` is dispatched by NAME with
+// `Value` args, so the printed signature keeps `Value`; the annotation still
+// proves a plain dict, so a borrowed `&IndexMap` view is bound at fn entry
+// and the `safe_*` reads on the parameter print as native `.get("k")`
+// matches instead of `self.safe_*_k(message, "k", ..)` helper calls. The
+// view holds `Arc<IndexMap>` (an Arc bump, never a dict copy), so every
+// other use of the parameter — moves included — prints unchanged.
+/** The borrowed view bound by the shadow. */
+_RustTranspiler.PRO_HANDLER_SHADOW_NAME = "__pro_message";
+/** TS helper name -> emitted match kind. */
+_RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS = {
+  "safeValue": "value",
+  "safeString": "string",
+  "safeInteger": "integer",
+  "safeNumber": "float",
+  "safeFloat": "float",
+  "safeDict": "dict",
+  "safeList": "list",
+  "safeBool": "bool"
 };
 // ── declared-Dict locals ──────────────────────────────────────────────────
 // The TS checker types many dict-holding locals `any` (an element read off

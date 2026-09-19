@@ -3943,7 +3943,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Keys whose text is safe to inline into a rust string literal. */
     private rustShadowKeyLiteral(text: string): boolean {
-        return /^[A-Za-z0-9_.\/\-]*$/.test(text) && text.length > 0;
+        return /^[A-Za-z0-9_./-]*$/.test(text) && text.length > 0;
     }
 
     /** `this.safeString`-style callee of a call, or undefined. */

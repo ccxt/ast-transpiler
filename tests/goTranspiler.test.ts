@@ -5408,7 +5408,6 @@ describe('native parameter types, Dict/List across the ts/src tree (D-01)', () =
         nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
     });
 });
-||||||| 73052b6
 
 // D-06: an element read on a receiver whose printed Go declaration is a `[]any` slice
 // (a slice literal, a `[]any`-returning accessor, the SafeList unbox) prints the guarded
@@ -5565,7 +5564,6 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         expect(output).not.toContain('DerefScalar(list[');
     });
 });
-||||||| 73052b6
 
 describe('pro handler frame parameters (D-03)', () => {
     // the declaring method must live in a pro-tree file, and the fixture needs a real

@@ -7607,7 +7607,6 @@ describe('java native return types of internal methods (d09)', () => {
         expect(output).toContain('public java.util.concurrent.CompletableFuture<Object> parseAsync(');
     });
 });
-||||||| 73052b6
 
 // d-12: `this.spawn(this.someMethod, args...)` is the pro-tier dispatch shape - the ccxt
 // post-pass rewrites the reference into a lambda `() -> { this.someMethod(args); }`, so the
@@ -7695,8 +7694,9 @@ describe('java spawn method references (d-12)', () => {
         expect(venueOutput).toContain('this.spawn(this.handleUntyped, client, message);');
     });
 
-    test('a spawned hand-written base method keeps the box (no cast)', () => {
-        expect(venueOutput).toContain('this.spawn(this.handleBase, client, message);');
+    test('a spawned base-tier method follows the typed base declaration (D-10)', () => {
+        // the base tier is generated too, so its annotated `data: Dict` prints the Map and the spawn casts to it
+        expect(venueOutput).toContain('this.spawn(this.handleBase, client, (java.util.Map<String, Object>) (message));');
     });
 
     test('an arrow-function spawn keeps the ordinary call-site cast inside its body', () => {
@@ -7704,7 +7704,6 @@ describe('java spawn method references (d-12)', () => {
         expect(venueOutput).toContain('this.handlePing(client, (java.util.Map<String, Object>) (message));');
     });
 });
-||||||| 73052b6
 
 // D-16: a prediction venue (ts/src/prediction/<id>.ts) extends its abstract class ->
 // PredictionExchange -> BaseExchange, a chain that never reaches the `Exchange` class of

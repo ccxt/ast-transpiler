@@ -3523,7 +3523,8 @@ describe('rust parameter shadows (D-25)', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).not.toContain('__data_empty');
-        expect(output).toContain('add_element_to_object(&mut data');
+        // the boxed write is D-31's native insert on the (unshadowed) Value
+        expect(output).toContain('if let Value::Dict(__d) = &mut data { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); };');
     });
 
     test('passing the parameter to another method keeps the box', () => {
@@ -3551,7 +3552,6 @@ describe('rust parameter shadows (D-25)', () => {
         expect(output).toContain('data.as_map().and_then(|__m| __m.get("subscriptions"))');
     });
 });
-||||||| 73052b6
 
 describe('rust native Option<String> returns for `: Str` methods', () => {
     // An internal, non-override, non-async method declared `: Str` returns a
@@ -3614,7 +3614,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
             "    f (status: any) {\n        const m: any = {};\n" +
             "        m['status'] = this.parseStatus (status);\n        return m;\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add_element_to_object(&mut m, &Value::Str("status".into()), self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null));');
+        expect(output).toContain('.insert("status".into(), self.parseStatus(status).map(|__s| Value::Str(__s.into())).unwrap_or(Value::Null));');
     });
 
     test('an assignment of a native return boxes', () => {
@@ -3646,7 +3646,6 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
         expect(output).not.toContain('let mut x: Value = self.parseStatus(status)');
     });
 });
-||||||| 73052b6
 
 describe('rust typed-receiver native reads (D-28)', () => {
     // A dynamic-key read on a checker-proven map local (not only on an
@@ -3728,7 +3727,8 @@ describe('rust typed-receiver native reads (D-28)', () => {
             '}';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('dict.as_map().and_then(|__m| key.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
-        expect(output).toContain('items.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        // the List parameter is shadowed (D-25), so the index reads on the borrowed slice
+        expect(output).toContain('items.get(0).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(&dict, &key)');
     });
 
@@ -3747,11 +3747,13 @@ describe('rust typed-receiver native reads (D-28)', () => {
         expect(output).not.toContain('self.dict.as_map()');
     });
 });
-||||||| 73052b6
 
 describe('rust pro-tier handler message shadow (D-27)', () => {
     // `Client` is a class in the pro tier (base/ws/Client.ts); the shadow is
     // scoped to the `handle_x (client: Client, message: Dict)` shape.
+    // A parameter whose every use is a read gets the D-25 borrowed shadow instead;
+    // the handler view fires when the message is also passed on (a move the D-25
+    // census rejects), so these fixtures forward the frame to the client.
     const DECLS =
         "interface Dictionary<T> { [key: string]: T; }\n" +
         "type Dict = Dictionary<any>;\n" +
@@ -3764,6 +3766,7 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
             "    handleTicker (client: Client, message: Dict): void {\n" +
             "        const channel = this.safeString (message, 'channel');\n" +
             "        client.resolve (channel);\n" +
+            "        client.resolve (message);\n" +
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
@@ -3781,6 +3784,7 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
             "        const l = this.safeList (message, 'data', []);\n" +
             "        const b = this.safeBool (message, 'ok', false);\n" +
             "        client.resolve (v); client.resolve (d); client.resolve (l); client.resolve (b);\n" +
+            "        client.resolve (message);\n" +
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
@@ -3797,6 +3801,7 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
             "        const n = this.safeInteger (message, 'count');\n" +
             "        const f = this.safeNumber (message, 'px');\n" +
             "        client.resolve (n); client.resolve (f);\n" +
+            "        client.resolve (message);\n" +
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
@@ -3826,7 +3831,8 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
             "    }\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('self.safeString(message, Value::Str("channel"');
+        // read-only Dict param: the D-25 shadow prints the read, never the handler view
+        expect(output).toContain('let message = message.as_map().unwrap_or(&__message_empty);');
         expect(output).not.toContain('__pro_message');
     });
 
