@@ -2941,7 +2941,7 @@ describe('rust native value predicates and json', () => {
     });
 
     test('this.json on a self field keeps the method call', () => {
-        const ts = "class A {\n    id: any;\n    params: any;\n    f() {\n        return this.json(this.params);\n    }\n}";
+        const ts = "class A {\n    id: any;\n    params: any;\n    f() {\n        return this.json(this.params);\n    }\n}\n";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('self.json(self.params');
         expect(output).not.toContain('json_stringify');
@@ -3026,4 +3026,180 @@ describe('rust typed-parameter dict reads', () => {
         expect(output).toContain('get_value_k(&market, \"id\")');
         expect(output).not.toContain('.as_map()');
     });
+});
+
+describe('rust native container reads (B-28)', () => {
+    // A dynamic (non-literal) index into a checker-proven list reads natively,
+    // a declared Dict local produced by `this.client(url)` reads its `url`
+    // field natively, and a read the ccxt write passes have to see keeps the
+    // helper.
+
+    const DYNAMIC = '.as_array().and_then(|__arr| match &i { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)';
+
+    test('a dynamic index into a proven list reads natively', () => {
+        const ts =
+            'class T {\n' +
+            '    m(symbols: string[]) {\n' +
+            '        for (let i = 0; i < symbols.length; i++) {\n' +
+            '            const symbol = symbols[i];\n' +
+            '            return symbol;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(`let mut symbol: Value = symbols${DYNAMIC};`);
+        expect(output).not.toContain('get_value(&symbols, &i)');
+    });
+
+    test('a dynamic index into an unproven receiver keeps the helper', () => {
+        const ts =
+            'class T {\n' +
+            '    m(symbols) {\n' +
+            '        for (let i = 0; i < symbols.length; i++) {\n' +
+            '            const symbol = symbols[i];\n' +
+            '            return symbol;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut symbol: Value = get_value(&symbols, &i);');
+        expect(output).not.toContain(DYNAMIC);
+    });
+
+    test('an index whose local is not a numeric-literal declaration keeps the helper', () => {
+        const ts =
+            'class T {\n' +
+            '    m(symbols: string[], start: number) {\n' +
+            '        let i = start;\n' +
+            '        while (i < 2) {\n' +
+            '            const symbol = symbols[i];\n' +
+            '            i = i + 1;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&symbols, &i)');
+        expect(output).not.toContain(DYNAMIC);
+    });
+
+    test('a string key on a proven list keeps the helper', () => {
+        const ts =
+            'class T {\n' +
+            '    m(symbols: string[], key: string) {\n' +
+            '        return symbols[key];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&symbols, &key)');
+    });
+
+    test('a declared Dict local from this.client(url) reads its url natively', () => {
+        const ts =
+            'class T {\n' +
+            '    m(url) {\n' +
+            "        const client = this.client(url);\n" +
+            '        return client.url;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('client.as_map().and_then(|__m| __m.get("url")).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&client');
+    });
+
+    test('live client fields (subscriptions / futures) keep the helper', () => {
+        const ts =
+            'class T {\n' +
+            '    m(url) {\n' +
+            "        const client = this.client(url);\n" +
+            "        return client['subscriptions'];\n" +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&client, &Value::Str("subscriptions".to_string()))');
+        expect(output).not.toContain('__m.get("subscriptions")');
+    });
+
+    test('a property write on a client handle keeps the helper (the ccxt pass rewrites it)', () => {
+        const ts =
+            'class T {\n' +
+            '    m(url) {\n' +
+            "        const client = this.client(url);\n" +
+            '        client.lastPong = 1;\n' +
+            '        return client.url;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('client.lastPong = Value::Int(1);');
+        expect(output).not.toContain('__m.get("lastPong")).cloned().unwrap_or(Value::Null) =');
+    });
+
+    test('an element write through a client field keeps the helper for the base', () => {
+        const ts =
+            'class T {\n' +
+            '    m(url) {\n' +
+            "        const client = this.client(url);\n" +
+            "        client['subscriptions']['hash'] = 1;\n" +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(get_value_mut(&mut client, &Value::Str("subscriptions".to_string())), &Value::Str("hash".to_string()), Value::Int(1));');
+        expect(output).not.toContain('get_value(&client.as_map()');
+    });
+
+    test('a Client-typed class outside the ws client path is not a handle', () => {
+        const ts =
+            'class Client {\n' +
+            '    url: any;\n' +
+            '}\n' +
+            'class T {\n' +
+            '    m(client: Client) {\n' +
+            '        return client.url;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('client.url');
+        expect(output).not.toContain('__m.get("url")');
+    });
+
+    test('a Client-typed parameter of the ws Client class is a handle', () => {
+        // The fixture lives under a `ws/Client.ts` path, the shape the predicate
+        // keys on (the class is the ws client; the port holds it as a Dict).
+        const output = transpiler.transpileRustByPath('./tests/files/input/ws/Client.ts').content;
+        expect(output).toContain('client.as_map().and_then(|__m| __m.get("url")).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&client, &Value::Str("url"');
+        expect(output).toContain('let mut s: Value = client.subscriptions;');
+    });
+
+    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+        const ts =
+            'class T {\n' +
+            '    m(data: any[]) {\n' +
+            '        for (let i = 0; i < data.length; i++) {\n' +
+            '            const entry = data[i];\n' +
+            "            entry['page'] = 1;\n" +
+            '            return entry;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut entry: Value = get_value(&data, &i);');
+        expect(output).not.toContain(DYNAMIC);
+    });
+
+    test('a bind whose next statement does not mutate reads natively', () => {
+        const ts =
+            'class T {\n' +
+            '    m(data: any[]) {\n' +
+            '        for (let i = 0; i < data.length; i++) {\n' +
+            '            const entry = data[i];\n' +
+            '            const other = data[i];\n' +
+            '            return entry;\n' +
+            '        }\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut entry: Value = data.as_array().and_then(|__arr| match &i');
+        expect(output).not.toContain('let mut entry: Value = get_value(&data, &i);');
+    });
+
 });

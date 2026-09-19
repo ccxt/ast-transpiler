@@ -1645,6 +1645,25 @@ declare class RustTranspiler extends BaseTranspiler {
     printNativeListIndex(receiverText: string, index: number): string;
     /** Native read for one chain level, or undefined to keep `get_value`. */
     printNativeContainerAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
+    /** `get_value(&X, &i)` for a checker-proven list `X` and a dynamic integer
+     *  index local `i`: the runtime's own array branch, spelled natively.
+     *  `get_value` reaches its array arm for an `Arr` receiver and its default
+     *  (`Value::Null`) otherwise, so the emitted match reproduces both — an
+     *  `Int` index by value (a negative or out-of-range index misses), a
+     *  numeric string by parse, anything else a miss. */
+    printNativeDynamicListIndex(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
+    /** True when this read initialises a local that the very next statement in
+     *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
+     *  `x.push(v)` -> `append_to_array(&mut x…)`). */
+    isWriteBackBindRead(read: ts.Node): boolean;
+    /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
+     *  `x.push(v)`). */
+    rustStatementMutatesLocal(node: ts.Node, name: string): boolean;
+    /** A dynamic index the printer emits as a `Value` number: a `let x = <numeric
+     *  literal>` declaration of the same function (the C-style loop counter).
+     *  Any other shape keeps the helper — the printed local could be a native
+     *  `i64`/`f64`, which the `Value` match would not compile against. */
+    isRustValueIndexKey(node: ts.Node): boolean;
     printNativeMapAccess(receiverText: string, receiverNode: ts.Node, keyText: string): string | undefined;
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes
@@ -1659,6 +1678,10 @@ declare class RustTranspiler extends BaseTranspiler {
      *  plain dict — `get_value(_k)` and this read agree on every key the
      *  runtime does not route elsewhere. */
     rustIsDeclaredDictLocal(node: ts.Node): boolean;
+    /** A parameter declared as the ws `Client` class (or a union with it). The
+     *  class is the default export of `ts/src/base/ws/Client.ts`, so its type
+     *  symbol is named `default`; the declaration itself carries the name. */
+    rustParameterIsClientHandle(declaration: ts.ParameterDeclaration): boolean;
     /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
      *  `str::parse` would; undefined when the fold is not obviously exact. */
     foldParsedStringLiteral(name: string, text: string): string | undefined;
@@ -1676,6 +1699,12 @@ declare class RustTranspiler extends BaseTranspiler {
     isNativeAccessPositionSafe(node: ts.Node): boolean;
     /** Receiver shapes whose printed text is a single `Value` place (`x`, `this.x`). */
     isShallowValueReceiver(node: ts.Node): boolean;
+    /** True when this read is the receiver of an element-access chain that is
+     *  written (`x['a'] = v`, `x['a']['b'] = v`, `delete x['a']['b']`), or a
+     *  property write itself (`x.k = v`, `delete x.k`). The ccxt write passes
+     *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
+     *  native read would write into a discarded clone. */
+    isNativeWriteTargetBase(node: ts.Node): boolean;
     transformPropertyAcessExpressionIfNeeded(node: any): string;
     staticKeyLookup(node: any, container: any): string | undefined;
     printElementAccessExpression(node: any, identation: any): any;
