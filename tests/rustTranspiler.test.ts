@@ -1799,7 +1799,9 @@ describe('rust borrowed string literals (Cow payload)', () => {
 
 describe('rust native dict inserts', () => {
     const insert = (receiver: string, key: string, value: string) =>
-        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".to_string(), ${value}); }`;
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    const dynamic = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&${key}), ${value}); }`;
 
     test('string-literal write on a typed dict local inserts natively', () => {
         const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = 1;';
@@ -1824,20 +1826,20 @@ describe('rust native dict inserts', () => {
         const ts = 'const result: { [key: string]: any } = {};\nresult["k"] = result["j"];';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('{ let __be_tmp = ');
-        expect(output).toContain('&mut result { std::sync::Arc::make_mut(__d).insert("k".to_string(), __be_tmp); }');
+        expect(output).toContain('&mut result { std::sync::Arc::make_mut(__d).insert("k".into(), __be_tmp); }');
         expect(output).not.toContain('add_element_to_object(&mut result');
     });
 
     test('a call passing the receiver as an arg is hoisted too', () => {
         const ts = 'const params: { [key: string]: any } = {};\nparams["auth"] = this.createAuth(params);';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('{ let __be_tmp = self.createAuth(params); if let Value::Dict(__d) = &mut params { std::sync::Arc::make_mut(__d).insert("auth".to_string(), __be_tmp); } }');
+        expect(output).toContain('{ let __be_tmp = self.createAuth(params); if let Value::Dict(__d) = &mut params { std::sync::Arc::make_mut(__d).insert("auth".into(), __be_tmp); } }');
     });
 
     test('a bool-typed value operand is boxed in Value::Bool', () => {
         const ts = 'const result: { [key: string]: any } = {};\nconst a: any = 1;\nresult["k"] = (a === 1);';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('insert("k".to_string(), Value::Bool(');
+        expect(output).toContain('insert("k".into(), Value::Bool(');
     });
 
     test('this.<field> receivers insert natively', () => {
@@ -1865,16 +1867,54 @@ describe('rust native dict inserts', () => {
         expect(output).toContain('add_element_to_object(&mut result');
     });
 
-    test('book-meta keys keep the helper', () => {
+    test('book-meta keys insert natively on a constructed dict', () => {
         const ts = 'const result: { [key: string]: any } = {};\nresult["timestamp"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('result', 'timestamp', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('book-meta keys keep the helper on a declared-Dict local', () => {
+        const ts = 'function f(response) {\n    const data = this.safeDict(response, "data", {});\n    data["timestamp"] = 1;\n}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut data, &Value::Str("timestamp"');
+    });
+
+    test('book-meta keys keep the helper on a whitelisted name without a construction proof', () => {
+        const ts = 'let result = undefined;\nresult = {};\nresult["timestamp"] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut result, &Value::Str("timestamp"');
+    });
+
+    test('computed keys insert natively through stringify_param', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst k = "x";\nresult[k] = 1;';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(dynamic('result', 'k', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut result');
+    });
+
+    test('computed keys on a base dict field insert natively', () => {
+        const ts = 'class A {\n' +
+            '    balance: any = {};\n' +
+            '    f(account) {\n' +
+            '        this.balance[account] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(dynamic('self.balance', 'account', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut self.balance');
+    });
+
+    test('a computed key reading the receiver keeps the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nresult[result["k"]] = 1;';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut result');
     });
 
-    test('computed keys keep the helper', () => {
-        const ts = 'const result: { [key: string]: any } = {};\nconst k = "x";\nresult[k] = 1;';
+    test('a computed key that is not a plain place keeps the helper', () => {
+        const ts = 'const result: { [key: string]: any } = {};\nconst o: any = {};\nresult[o.k] = 1;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add_element_to_object(&mut result, &k,');
+        expect(output).toContain('add_element_to_object(&mut result');
     });
 
     test('a later write of another shape keeps the helper', () => {
@@ -1961,6 +2001,66 @@ describe('rust native dict inserts', () => {
             '}';
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('add_element_to_object(&mut self.subscriptions');
+    });
+
+    test('a declared-Dict local (safeDict with an object default) inserts natively', () => {
+        const ts = 'function f(response) {\n' +
+            '    const data = this.safeDict(response, "data", {});\n' +
+            '    data["ts"] = 1;\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('data', 'ts', 'Value::Int(1)'));
+        expect(output).not.toContain('add_element_to_object(&mut data');
+    });
+
+    test('a declared-Dict local with a computed key inserts natively', () => {
+        const ts = 'function f(response, code) {\n' +
+            '    const data = this.safeDict(response, "data", {});\n' +
+            '    data[code] = 1;\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(dynamic('data', 'code', 'Value::Int(1)'));
+    });
+
+    test('a Dict-typed parameter inserts natively for literal and computed keys', () => {
+        const decl = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\ntype Str = string | undefined;\n';
+        const literal = transpiler.transpileRust(decl + 'function f (balance: Dict) {\n    balance["k"] = 1;\n}').content;
+        expect(literal).toContain(insert('balance', 'k', 'Value::Int(1)'));
+        expect(literal).not.toContain('add_element_to_object(&mut balance');
+        const computed = transpiler.transpileRust(decl + 'function f (balance: Dict, code: Str) {\n    balance[code] = 1;\n}').content;
+        expect(computed).toContain(dynamic('balance', 'code', 'Value::Int(1)'));
+    });
+
+    test('a parameter with a default value keeps the pre-unit tuple proof', () => {
+        const decl = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\n';
+        const ts = decl + 'class A {\n' +
+            '    f(params: Dict = {}) {\n' +
+            '        let uta: any = undefined;\n' +
+            '        [ uta, params ] = this.getInstType("m", params);\n' +
+            '        params["uta"] = true;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(insert('params', 'uta', 'Value::Bool(true)'));
+        expect(output).not.toContain('add_element_to_object(&mut params');
+    });
+
+    test('a parameter reassigned from a call keeps the helper', () => {
+        const decl = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\n';
+        const ts = decl + 'class A {\n' +
+            '    f(params: Dict = {}) {\n' +
+            '        params = this.omit(params, "margin");\n' +
+            '        params["k"] = 1;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut params');
+    });
+
+    test('any-typed receivers keep the helper', () => {
+        const ts = 'function f(params: any) {\n    params["k"] = 1;\n}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('add_element_to_object(&mut params');
     });
 });
 

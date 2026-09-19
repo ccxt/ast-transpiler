@@ -987,14 +987,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (receiver === undefined) {
             return undefined;
         }
-        if (!ts.isStringLiteral(keyNode) || RustTranspiler.RUST_BOOK_META_KEYS.has(keyNode.text)) {
-            return undefined;
-        }
         if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
             return undefined;
         }
-        const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
-        if (!keyLiteral) {
+        const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
+        if (keyArg === undefined) {
             return undefined;
         }
         const name = receiver.text;
@@ -1003,7 +1000,7 @@ export class RustTranspiler extends BaseTranspiler {
             value = `Value::Bool(${value})`;
         }
         const insert = (val: string) =>
-            `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyLiteral[1]}.to_string(), ${val}); }`;
+            `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyArg}, ${val}); }`;
         // Any mention of the receiver in the value operand reads it while the
         // write holds the `&mut` — ccxt's splitAddElementBorrowConflicts pass
         // hoists on the same signal, so mirror it with a temp binding.
@@ -1019,33 +1016,108 @@ export class RustTranspiler extends BaseTranspiler {
         return insert(value);
     }
 
+    /** The `insert` key argument. A literal becomes `"k".into()`; a proven
+     *  string place becomes `crate::runtime::stringify_param(&k)` — the exact
+     *  conversion the helper's dict branch applies to a non-string key, and
+     *  `k.to_string()` for a string one. */
+    rustNativeInsertKeyArg(receiver, keyNode, keyText: string): string | undefined {
+        if (ts.isStringLiteral(keyNode)) {
+            // A book-meta key can only reach the store through a `__book_id`:
+            // provable only for receivers the transpiler itself built as plain
+            // maps or the hand-written base never tags (fields).
+            if (RustTranspiler.RUST_BOOK_META_KEYS.has(keyNode.text) && !receiver.plain) {
+                return undefined;
+            }
+            const keyLiteral = keyText.match(/^Value::Str\((.+)\.(?:to_string|into)\(\)\)$/);
+            return keyLiteral === null ? undefined : `${keyLiteral[1]}.into()`;
+        }
+        // Dynamic key: a plain place, never one that reads the receiver (the
+        // insert holds its `&mut`). Every other key shape keeps the helper.
+        const key = keyText.trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            return undefined;
+        }
+        if (receiver.isField ? key.includes('self') : new RegExp(`\\b${receiver.text}\\b`).test(key)) {
+            return undefined;
+        }
+        return `crate::runtime::stringify_param(&${key})`;
+    }
+
     // Receivers this unit may write natively: any local whose every path builds
     // a plain `Value::Map` (name-independent — rust-13's four names are the
-    // batch-A subset of this proof), plus `self.<field>` on a field the
-    // hand-written base holds as a plain dict. `request` is rust-12's family.
-    rustNativeInsertReceiver(expr): { text: string, isField: boolean, nameNode: any } | undefined {
-        if (ts.isIdentifier(expr) && this.rustInsertIdentifierReceiver(expr)) {
-            return { text: expr.text, isField: false, nameNode: expr };
+    // batch-A subset of this proof), any parameter the checker proves is a
+    // plain dict, plus `self.<field>` on a field the hand-written base holds
+    // as a plain dict. `request` is rust-12's family.
+    rustNativeInsertReceiver(expr): { text: string, isField: boolean, plain: boolean, nameNode: any } | undefined {
+        if (ts.isIdentifier(expr)) {
+            const plain = this.rustInsertIdentifierReceiver(expr);
+            if (plain !== undefined) {
+                return { text: expr.text, isField: false, plain, nameNode: expr };
+            }
+            return undefined;
         }
         if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind.ThisKeyword
             && expr.name?.kind === SyntaxKind.Identifier) {
-            return { text: `self.${expr.name.text}`, isField: true, nameNode: expr.name };
+            return {
+                text: `self.${expr.name.text}`, isField: true,
+                plain: RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(expr.name.text),
+                nameNode: expr.name,
+            };
         }
         return undefined;
     }
 
-    /** Element-write receiver proof for a local: the batch-A names (unchanged)
-     *  or, for any other name, the dict-shape proof plus a plain-`Value::Map`
-     *  build on every path (rust-12's proof, read off the checker). */
-    rustInsertIdentifierReceiver(ident): boolean {
+    /** Element-write receiver proof for a local: the batch-A names (rust-13,
+     *  `plain: false` — the whitelist is not a construction proof) or, for any
+     *  other name, the dict-shape proof plus a plain-`Value::Map` build on
+     *  every path (rust-12's proof, read off the checker), or a parameter whose
+     *  annotation proves a plain dict and whose writes keep that shape. The
+     *  returned flag is the *by-construction* plainness (literal-init locals,
+     *  handler tuples, hand-written plain fields) that a book-meta key needs. */
+    rustInsertIdentifierReceiver(ident): boolean | undefined {
+        const declaration = this.rustSingleLocalDeclaration(ident);
+        if (declaration !== undefined && ts.isParameter(declaration as any)) {
+            // A default value (`params: Dict = {}`) keeps the pre-unit
+            // initializer proof — `rustReceiverStaysDict` runs both it and the
+            // annotation proof and rejects the site when neither holds.
+            const admitted = this.rustParamStaysPlainDict(declaration as ts.ParameterDeclaration)
+                || (declaration as ts.ParameterDeclaration).initializer !== undefined;
+            if (admitted) {
+                return false;
+            }
+        } else if (declaration !== undefined && ts.isVariableDeclaration(declaration as any)) {
+            if (this.rustInsertReceiverBuildsPlainDict(declaration as ts.VariableDeclaration)) {
+                return true;
+            }
+            // A local the declared-Dict table proves holds a Dict at every use
+            // (alwaysDict && stable): the helper's non-dict branches are dead,
+            // so only the tag hooks and the insert remain — the key rules of
+            // `rustNativeInsertKeyArg` keep the store routes out of reach. An
+            // object-literal initializer still has to be tag-free (it may be a
+            // handle the runtime built, e.g. a `__ws_subs_url` snapshot).
+            if (this.rustDeclaredLocalEntry(ident) !== undefined
+                && this.rustDeclaredInitIsTagFree(declaration as ts.VariableDeclaration)) {
+                return false;
+            }
+        }
         if (RustTranspiler.RUST_NATIVE_INSERT_RECEIVERS.has(ident.text)) {
+            return false; // rust-13 whitelist: not a construction proof
+        }
+        return undefined;
+    }
+
+    /** A literal initializer must carry no runtime tag key; a call initializer
+     *  is the axiom the declared-Dict table itself rests on. */
+    rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean {
+        let init: any = declaration.initializer;
+        while (init !== undefined
+            && (ts.isParenthesizedExpression(init) || ts.isNonNullExpression(init) || ts.isAsExpression(init))) {
+            init = init.expression;
+        }
+        if (init === undefined || !ts.isObjectLiteralExpression(init)) {
             return true;
         }
-        const declaration = this.rustSingleLocalDeclaration(ident);
-        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
-            return false;
-        }
-        return this.rustInsertReceiverBuildsPlainDict(declaration);
+        return this.rustPlainDictLiteral(init);
     }
 
     /** True when every value the local can hold comes from an object literal:
@@ -1206,6 +1278,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
             return false;
         }
+        // The declared-Dict table is its own proof (alwaysDict && stable, D2):
+        // a table local the checker cannot type (an untyped `safe_dict*`
+        // default) still stays a Dict at every use.
+        if (this.rustDeclaredLocalEntry(ident) !== undefined) {
+            return true;
+        }
+        // A parameter with a default carries the transpiler's own initializer,
+        // so it keeps the pre-unit proof; without one only the annotation proof
+        // (`Dict`-style params — the B-25 read family) can admit it.
+        if (ts.isParameter(declaration) && this.rustParamStaysPlainDict(declaration)) {
+            return true;
+        }
         const name = ident.text;
         const initializer = declaration.initializer;
         if (initializer === undefined || ts.isElementAccessExpression(initializer)
@@ -1272,6 +1356,77 @@ export class RustTranspiler extends BaseTranspiler {
         };
         ts.forEachChild(scope, visit);
         return safe;
+    }
+
+    // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
+    // a `Market`-style alias — the proof B-25's native reads use) whose every
+    // write in the body keeps that shape: an object literal with no runtime tag
+    // key, the parameter itself (`headers = headers !== undefined ? headers : {}`),
+    // or `undefined`/`null`. The runtime tags a dict only on a handle its own
+    // store builds, so the helper's write-through branches stay dead.
+    rustParamStaysPlainDict(declaration: ts.ParameterDeclaration): boolean {
+        if (declaration.type === undefined || declaration.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const type = this.getCheckedTypeOf(declaration.type);
+        if (type === undefined || !this.isProvenMapType(type)) {
+            return false;
+        }
+        const name = String((declaration.name as ts.Identifier).escapedText);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        let plain = true;
+        const visit = (n) => {
+            if (!plain) {
+                return;
+            }
+            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind)
+                && ts.isIdentifier(n.left) && n.left.text === name
+                && !this.rustPlainDictPreservingRhs(n.right, name)) {
+                plain = false;
+                return;
+            }
+            if (ts.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
+                && ts.isArrayLiteralExpression(n.left)
+                && n.left.elements.some((e) => ts.isIdentifier(e) && String((e as ts.Identifier).escapedText) === name)
+                && !this.rustHandlerTupleCall(n.right)) {
+                plain = false; // a tuple write keeps only the handle-arg family
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(scope, visit);
+        return plain;
+    }
+
+    /** RHS of a write to a plain-dict parameter that keeps the shape. */
+    rustPlainDictPreservingRhs(node: ts.Node, name: string): boolean {
+        if (this.rustPlainDictLiteral(node) || this.rustTypeIsUndefinedish(node)) {
+            return true;
+        }
+        if (ts.isIdentifier(node) && node.text === name) {
+            return true;
+        }
+        // `this.handle…(…)` returns its own dict arguments (rust-12's proof).
+        if (this.rustHandlerTupleCall(node)) {
+            return true;
+        }
+        if (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node)) {
+            return this.rustPlainDictPreservingRhs(node.expression, name);
+        }
+        if (ts.isConditionalExpression(node)) {
+            return this.rustPlainDictPreservingRhs(node.whenTrue, name)
+                && this.rustPlainDictPreservingRhs(node.whenFalse, name);
+        }
+        if (ts.isBinaryExpression(node)
+            && (node.operatorToken.kind === SyntaxKind.BarBarToken
+                || node.operatorToken.kind === SyntaxKind.QuestionQuestionToken)) {
+            return this.rustPlainDictPreservingRhs(node.left, name)
+                && this.rustPlainDictPreservingRhs(node.right, name);
+        }
+        return false;
     }
 
     // Conservative "argument position expects a Value" bool test — the same set
