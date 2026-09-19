@@ -1423,7 +1423,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaTypeOfDeclaration(decl: any): any;
     javaPrintsBooleanValue(node: any, seen: Set<any>, depth?: number): boolean;
     javaCallReturnsBooleanBox(node: any, seen: Set<any>, depth: number): boolean;
-    javaPrintsBooleanCall(node: any): boolean;
+    javaPrintsBooleanCall(node: any, seen?: Set<any>, depth?: number): boolean;
     isArrayIsArrayCall(node: any): boolean;
     javaBooleanBaseField(node: any): string | undefined;
     javaBooleanBoxIdentifier(node: any, seen: Set<any>): string | undefined;
@@ -1433,7 +1433,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaPrintsBooleanBoxValue(node: any, seen: Set<any>): boolean;
     javaBooleanBoxTupleElement(node: any, index: number): boolean;
     javaBooleanNullableWritesAreBoxed(symbol: any, declaration: any, node: any, seen: Set<any>): boolean;
-    javaNullableBooleanBoxIdentifier(node: any): string | undefined;
+    javaNullableBooleanBoxIdentifier(node: any, seen?: Set<any>): string | undefined;
     javaBooleanWrapperFreeCondition(node: any): string | undefined;
     printCondition(node: any, identation: any): any;
     printConditionalExpression(node: any, _identation: any): string;

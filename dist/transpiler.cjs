@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -17139,7 +17139,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       case _typescript2.default.SyntaxKind.BinaryExpression:
         return JAVA_BOOLEAN_OPERATOR_KINDS.has(node.operatorToken.kind);
       case _typescript2.default.SyntaxKind.CallExpression:
-        return this.javaPrintsBooleanCall(node);
+        return this.javaPrintsBooleanCall(node, seen, depth);
+      case _typescript2.default.SyntaxKind.ConditionalExpression:
+        return this.javaPrintsBooleanValue(node.whenTrue, seen, depth) && this.javaPrintsBooleanValue(node.whenFalse, seen, depth);
       case _typescript2.default.SyntaxKind.PropertyAccessExpression:
         return this.javaBooleanBaseField(node) !== void 0;
       case _typescript2.default.SyntaxKind.Identifier:
@@ -17147,11 +17149,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return false;
   }
-  // the Java box of a `this.<name>(...)` call whose generated body returns a boolean value on
-  // every path: the TS return type is a boolean family and every `return` in the resolved
-  // declaration (nested functions excluded) prints a Java boolean or a proven Boolean-or-null
-  // box. That is the same value the hand-written base table covers for its own methods, one
-  // level deeper for the generated ones. `depth` and `seen` bound the recursion.
+  // every `return` of the resolved declaration's body prints a Java boolean value: the
+  // hand-written base table covers its own methods, this covers the generated ones. Nested
+  // functions' returns are not the method's; `seen` and `depth` bound the recursion.
   javaCallReturnsBooleanBox(node, seen, depth) {
     if (_optionalChain([node, 'optionalAccess', _1207 => _1207.kind]) !== _typescript2.default.SyntaxKind.CallExpression || depth > 2) {
       return false;
@@ -17200,19 +17200,23 @@ var JavaTranspiler = class extends BaseTranspiler {
     scan(declaration.body);
     return ok && returns > 0;
   }
-  // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`) and the
-  // hand-written `public boolean` base methods print a primitive boolean. Everything else -
-  // including the generated boolean-returning methods, which print `public Object` - keeps the
-  // wrapper, because its box is not proven boolean here.
-  javaPrintsBooleanCall(node) {
-    const callee = node.expression;
+  // `Array.isArray(x)` prints `Helpers.isArray(x)` (`public static boolean`), the relational
+  // Precise statics print `public static boolean` and the hand-written `public boolean` base
+  // methods print a primitive boolean. Everything else - including the generated
+  // boolean-returning methods, which print `public Object` - is proven one level deeper by
+  // javaCallReturnsBooleanBox (every return of the resolved body prints a boolean value).
+  javaPrintsBooleanCall(node, seen = /* @__PURE__ */ new Set(), depth = 0) {
     if (this.isArrayIsArrayCall(node)) {
       return true;
     }
-    if (!_typescript2.default.isPropertyAccessExpression(callee) || callee.expression.kind !== _typescript2.default.SyntaxKind.ThisKeyword) {
-      return false;
+    if (this.javaPreciseBooleanCall(node)) {
+      return true;
     }
-    return JAVA_BOOLEAN_BASE_CALLS.has(String(callee.name.escapedText));
+    const callee = node.expression;
+    if (_typescript2.default.isPropertyAccessExpression(callee) && callee.expression.kind === _typescript2.default.SyntaxKind.ThisKeyword && JAVA_BOOLEAN_BASE_CALLS.has(String(callee.name.escapedText))) {
+      return true;
+    }
+    return this.javaCallReturnsBooleanBox(node, seen, depth);
   }
   isArrayIsArrayCall(node) {
     if (node === void 0 || node.kind !== _typescript2.default.SyntaxKind.CallExpression) {
@@ -17328,20 +17332,18 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // the declared Java type the ccxt-side declaration chain gave this local/param, from the
   // javaDeclaredLocalTypeResolver hook (build/java-local-types.js records every declaration it
-  // rewrote): `boolean` prints as the primitive, so the identifier IS the condition; `Boolean`
-  // prints as the nullable box, where `Helpers.isTrue(x)` is `Boolean.TRUE.equals(x)`
+  // rewrote) or, for a parameter, the printer's own native signature type
+  // (javaNativeParameterType): `boolean` prints as the primitive, so the identifier IS the
+  // condition; `Boolean` prints as the nullable box, where `Helpers.isTrue(x)` is
+  // `Boolean.TRUE.equals(x)` — a Java `Boolean` can only hold a Boolean or null
   javaDeclaredBooleanKind(node) {
-    const resolver = this.javaDeclaredLocalTypeResolver;
-    if (resolver === void 0) {
-      return void 0;
-    }
     const declaration = this.javaDeclarationOfIdentifier(node);
     if (declaration === void 0 || node.escapedText !== _optionalChain([declaration, 'access', _1222 => _1222.name, 'optionalAccess', _1223 => _1223.escapedText])) {
       return void 0;
     }
     let declared;
     try {
-      declared = resolver(declaration);
+      declared = this.javaDeclaredTypeOfDeclaration(declaration);
     } catch (e) {
       return void 0;
     }
@@ -17396,6 +17398,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaPrintsBooleanValue(node, seen)) {
       return true;
     }
+    if (node.kind === _typescript2.default.SyntaxKind.Identifier && this.javaNullableBooleanBoxIdentifier(node, seen) !== void 0) {
+      return true;
+    }
     if (node.kind === _typescript2.default.SyntaxKind.CallExpression) {
       return this.javaCallBooleanKind(node) !== void 0;
     }
@@ -17428,6 +17433,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   javaBooleanNullableWritesAreBoxed(symbol, declaration, node, seen) {
     const next = new Set(seen);
     next.add(node);
+    next.add(declaration);
     let fn = declaration.parent;
     while (fn !== void 0 && !_typescript2.default.isFunctionLike(fn)) {
       fn = fn.parent;
@@ -17494,7 +17500,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `Helpers.isTrue(x)` where the DECLARED type of x is a nullable boolean and every write is a
   // proven Boolean-or-null box: `Boolean.TRUE.equals(x)` is exactly what the helper answers on
   // such a box (null and FALSE test false, TRUE tests true)
-  javaNullableBooleanBoxIdentifier(node) {
+  javaNullableBooleanBoxIdentifier(node, seen = /* @__PURE__ */ new Set()) {
     if (_optionalChain([node, 'optionalAccess', _1235 => _1235.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
       return void 0;
     }
@@ -17508,10 +17514,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (declaration === void 0 || _optionalChain([declaration, 'access', _1237 => _1237.name, 'optionalAccess', _1238 => _1238.escapedText]) !== node.escapedText) {
       return void 0;
     }
+    if (seen.has(declaration)) {
+      return void 0;
+    }
     if (!this.javaNullableBooleanDeclaration(declaration)) {
       return void 0;
     }
-    if (!this.javaBooleanNullableWritesAreBoxed(symbol, declaration, node, /* @__PURE__ */ new Set())) {
+    if (!this.javaBooleanNullableWritesAreBoxed(symbol, declaration, node, seen)) {
       return void 0;
     }
     return this.printNode(node, 0);
