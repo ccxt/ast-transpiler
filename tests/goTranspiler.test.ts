@@ -846,6 +846,108 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("var market any = this.SafeMarket(symbol)");
         expect(output).not.toContain("MapTyped(");
     });
+    test('a market local compared to a boolean is declared map[string]any; the compared element keeps GetValue', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "type MarketInterface = { id: string; swap: Bool };\n" +
+        "class Exchange {\n" +
+        "    market(symbol): MarketInterface { return undefined; }\n" +
+        "    main(symbol) {\n" +
+        "        const market = this.market (symbol);\n" +
+        "        if (market['swap'] === true) { return market['id']; }\n" +
+        "        if (market['swap'] !== true) { return market['id']; }\n" +
+        "        return market['id'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var market map[string]any = MapTyped(this.Market(symbol))");
+        // the compared element derefs through the helper, exactly what the boxed local answered
+        expect(output).toContain("GetValue(market, \"swap\") == true");
+        expect(output).toContain("GetValue(market, \"swap\") != true");
+        expect(output).toContain("return market[\"id\"]");
+    });
+    test('a market local written through an element keeps the box', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "type MarketInterface = { id: string; swap: Bool };\n" +
+        "class Exchange {\n" +
+        "    market(symbol): MarketInterface { return undefined; }\n" +
+        "    main(symbol) {\n" +
+        "        const market = this.market (symbol);\n" +
+        "        if (market['swap'] === true) { market['created'] = 1; }\n" +
+        "        return market['id'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var market any = this.Market(symbol)");
+        expect(output).not.toContain("MapTyped(");
+    });
+    test('a Currency local (checker: CurrencyInterface) is declared map[string]any and reads natively', () => {
+        const input =
+        "type CurrencyInterface = { id: string; code: string };\n" +
+        "class Exchange {\n" +
+        "    currency(code): CurrencyInterface { return undefined; }\n" +
+        "    safeCurrency(code): CurrencyInterface { return undefined; }\n" +
+        "    main(code) {\n" +
+        "        const currency = this.currency (code);\n" +
+        "        const id = currency['id'];\n" +
+        "        const safe = this.safeCurrency (code);\n" +
+        "        return [id, safe['code']];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var currency map[string]any = MapTyped(this.Currency(code))");
+        expect(output).toContain("var safe map[string]any = MapTyped(this.SafeCurrency(code))");
+        expect(output).toContain("currency[\"id\"]");
+        expect(output).toContain("safe[\"code\"]");
+        expect(output).not.toContain("GetValue(currency, \"id\")");
+    });
+    test('a SafeCurrency local compared to a boolean keeps the deref helper for the compared element', () => {
+        const input =
+        "type Bool = boolean | undefined;\n" +
+        "type CurrencyInterface = { id: string; margin: Bool };\n" +
+        "class Exchange {\n" +
+        "    safeCurrency(code): CurrencyInterface { return undefined; }\n" +
+        "    main(code) {\n" +
+        "        const currency = this.safeCurrency (code);\n" +
+        "        if (currency['margin'] === true) { return currency['id']; }\n" +
+        "        return currency['id'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var currency map[string]any = MapTyped(this.SafeCurrency(code))");
+        expect(output).toContain("GetValue(currency, \"margin\") == true");
+    });
+    test('a MarketInterface-returning accessor beyond Market/SafeMarket qualifies (getMarketFromSymbols)', () => {
+        const input =
+        "type Strings = string[];\n" +
+        "type MarketInterface = { id: string };\n" +
+        "class Exchange {\n" +
+        "    getMarketFromSymbols(symbols): MarketInterface { return undefined; }\n" +
+        "    main(symbols) {\n" +
+        "        const first = this.getMarketFromSymbols (symbols);\n" +
+        "        return first['id'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var first map[string]any = MapTyped(this.GetMarketFromSymbols(symbols))");
+        expect(output).toContain("first[\"id\"]");
+    });
+    test('a Currency local whose element is written keeps the box', () => {
+        const input =
+        "type CurrencyInterface = { id: string };\n" +
+        "class Exchange {\n" +
+        "    currency(code): CurrencyInterface { return undefined; }\n" +
+        "    main(code) {\n" +
+        "        const currency = this.currency (code);\n" +
+        "        currency['created'] = 1;\n" +
+        "        return currency['id'];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("var currency any = this.Currency(code)");
+        expect(output).not.toContain("MapTyped(");
+    });
     test('a SafeDict local read through the `in` operator stays typed', () => {
         const input =
         "class Exchange {\n" +

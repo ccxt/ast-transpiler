@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -6512,6 +6512,18 @@ var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
 var GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
 var GO_SAFE_DICT_READ_HELPERS = ["GetValue", "InOp", "ObjectKeys", "IsDictionary"];
 var GO_MARKET_LOCAL_TYPE = "map[string]any";
+var GO_MARKET_READ_COMPARISON_OPERATORS = [
+  ts5.SyntaxKind.EqualsEqualsToken,
+  ts5.SyntaxKind.ExclamationEqualsToken,
+  ts5.SyntaxKind.EqualsEqualsEqualsToken,
+  ts5.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts5.SyntaxKind.LessThanToken,
+  ts5.SyntaxKind.GreaterThanToken,
+  ts5.SyntaxKind.LessThanEqualsToken,
+  ts5.SyntaxKind.GreaterThanEqualsToken,
+  ts5.SyntaxKind.AmpersandAmpersandToken,
+  ts5.SyntaxKind.BarBarToken
+];
 var GO_SAFE_LIST_LOCAL_TYPE = "[]any";
 var GO_NUMERIC_KINDS = ["int", "int64", "float64"];
 var ORDERED_COMPARISON_OPERATORS = {
@@ -8162,10 +8174,13 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const key = this.printNode(args.key, 0);
     return `SafeMapTyped(${container}, ${key})`;
   }
-  // the TypeScript return type of the initializer proves the boxed value is the market
-  // dictionary: the checker reports the `MarketInterface` interface for `this.Market(...)` /
-  // `this.SafeMarket(...)` (the `Market` alias is the same interface unioned with undefined).
-  // Read from the checker, never from a printed name.
+  // the TypeScript return type of the initializer proves the boxed value is a dictionary
+  // interface: the checker reports `MarketInterface` for `this.Market(...)` / `this.SafeMarket(...)`
+  // and `CurrencyInterface` for `this.Currency(...)` / `this.SafeCurrency(...)` (both are the
+  // dictionary interfaces a parseMarket / parseCurrency builds). Any other accessor the checker
+  // types as one of the two — `this.SafeMarketStructure(...)`, an override's `this.ParseCurrency(...)`,
+  // `this.GetMarketFromSymbols(...)` — qualifies the same way. Read from the checker, never from a
+  // printed name.
   goMarketCallReturnsDict(initializer) {
     if (initializer?.kind !== ts5.SyntaxKind.CallExpression) {
       return false;
@@ -8175,7 +8190,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return false;
     }
     const name = callee.name?.escapedText;
-    if (name !== "market" && name !== "safeMarket") {
+    if (name === void 0) {
       return false;
     }
     const receiver = callee.expression;
@@ -8195,7 +8210,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     const isMarketInterface = (t) => {
       const names = [t?.symbol?.getName?.() ?? t?.symbol?.escapedName, t?.aliasSymbol?.getName?.()];
-      return names.indexOf("MarketInterface") >= 0;
+      return names.indexOf("MarketInterface") >= 0 || names.indexOf("CurrencyInterface") >= 0;
     };
     if (isMarketInterface(type)) {
       return true;
@@ -8243,22 +8258,37 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // one later use of the market local: the dictionary read shapes the SafeDict family already
   // proves (an element read, `in`, a read-helper argument), plus — only when the accessor throws
   // instead of answering an absent value — a plain argument position, because Go re-boxes the
-  // declared map into the callee's `any` parameter exactly as the local's own box did.
+  // declared map into the callee's `any` parameter exactly as the local's own box did. An
+  // element this local COMPARES is a read too: the element-read printer keeps the GetValue
+  // helper for these operands (goMarketComparisonElementRead), which derefs a boxed element
+  // exactly as the boxed local's own read did.
   goMarketUseReadsTheValue(node, throwingAccessor) {
     if (this.goSafeDictUseReadsTheMap(node)) {
       return true;
     }
+    const parent = node.parent;
+    if (parent?.kind === ts5.SyntaxKind.ElementAccessExpression && parent.expression === node) {
+      let operand = parent;
+      let above = parent.parent;
+      while (above?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+        operand = above;
+        above = above.parent;
+      }
+      if (above?.kind === ts5.SyntaxKind.BinaryExpression && (above.left === operand || above.right === operand) && GO_MARKET_READ_COMPARISON_OPERATORS.indexOf(above.operatorToken?.kind) >= 0) {
+        return true;
+      }
+    }
     if (!throwingAccessor) {
       return false;
     }
-    const parent = node.parent;
     return parent?.kind === ts5.SyntaxKind.CallExpression && parent.expression !== node && parent.arguments.indexOf(node) >= 0;
   }
   goMarketLocalUnboxUncached(declaration) {
     if (!this.goMarketCallReturnsDict(declaration.initializer)) {
       return void 0;
     }
-    const throwingAccessor = declaration.initializer.expression?.name?.escapedText === "market";
+    const accessorName = declaration.initializer.expression?.name?.escapedText;
+    const throwingAccessor = accessorName === "market" || accessorName === "currency";
     const sourceName = declaration.name.escapedText;
     const scope = this.goEnclosingFunction(declaration);
     if (scope === void 0) {
@@ -8301,6 +8331,41 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return void 0;
     }
     return `MapTyped(${parsedValue.trimStart()})`;
+  }
+  // the variable declaration an identifier binds to, through the checker (undefined for every
+  // other shape) — the market rule resolves its own locals this way, never by printed name
+  goDeclarationOfIdentifier(node) {
+    try {
+      const symbol = this.getChecker().getSymbolAtLocation(node);
+      const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+      if (declaration?.kind === ts5.SyntaxKind.VariableDeclaration) {
+        return declaration;
+      }
+    } catch (e) {
+      return void 0;
+    }
+    return void 0;
+  }
+  // a compared element of a market/currency local keeps the GetValue helper: its deref is what
+  // the boxed local's read used to apply, and a parseMarket may have stored a `*bool`/`*string`
+  // under the key. Only the operands the use scan admits this way are affected; every other
+  // element read of the local prints the native index.
+  goMarketComparisonElementRead(node) {
+    const base = node?.expression;
+    if (base?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    const declaration = this.goDeclarationOfIdentifier(base);
+    if (declaration === void 0 || this.goMarketLocalUnbox(declaration) !== GO_MARKET_LOCAL_TYPE) {
+      return false;
+    }
+    let operand = node;
+    let above = node.parent;
+    while (above?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      operand = above;
+      above = above.parent;
+    }
+    return above?.kind === ts5.SyntaxKind.BinaryExpression && (above.left === operand || above.right === operand) && GO_MARKET_READ_COMPARISON_OPERATORS.indexOf(above.operatorToken?.kind) >= 0;
   }
   // the container/key argument nodes of a whole `this.SafeList(container, key)` call, or
   // undefined when the initializer is another shape. A third argument is only droppable when
@@ -12513,7 +12578,7 @@ ${this.getIden(level)}}()`;
     const containerStr = this.goWithExprDepth(indexDepth, () => this.printNode(baseExpr, 0));
     const keyStrs = keys.map((k) => this.goWithExprDepth(indexDepth, () => this.printNode(k, 0)));
     if (this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any") {
-      if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)) {
+      if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node) && !this.goMarketComparisonElementRead(node)) {
         return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
       }
       if (this.goIsDerefStringKeyExpression(keys[0]) && !containerStr.includes("\n") && !this.isGoElementAccessAssignmentTarget(node)) {

@@ -871,6 +871,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goMarketUseReadsTheValue(node: any, throwingAccessor: boolean): boolean;
     goMarketLocalUnboxUncached(declaration: any): string | undefined;
     goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
+    goDeclarationOfIdentifier(node: any): any;
+    goMarketComparisonElementRead(node: any): boolean;
     goSafeListLocalArgs(initializer: any): {
         container: any;
         key: any;
