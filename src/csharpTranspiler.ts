@@ -1760,9 +1760,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             leftType = this.csharpDeclaredReadEqualityType(left, leftType);
             rightType = this.csharpDeclaredReadEqualityType(right, rightType);
         }
-        if ((leftType === undefined) || (rightType === undefined)) {
-            return undefined;
-        }
+        // D-21: an operand the printer could not name (or only named `object`) is not a
+        // rejection by itself -- the value branch below re-reads its DECLARED scalar type
         if (leftType === 'null') {
             if (!this.csharpIsNullComparableType(rightType) || !this.csharpOperandIsNullComparable(right)) {
                 return undefined;
@@ -1775,22 +1774,42 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             return this.csharpNullComparison(leftText, isEquality);
         }
+        // D-21: a read the printer's own tables could only call `object` still has the C# type
+        // its emitted DECLARATION carries -- a parameter the build layer's typing pass narrowed,
+        // a local retyped to the type of a typed return. The declared-read arm below names it.
         const leftKind = this.csharpValueEqualityKind(leftType);
         const rightKind = this.csharpValueEqualityKind(rightType);
-        if ((leftKind === undefined) || (rightKind === undefined)) {
+        const leftReadKind = (leftKind !== undefined) ? leftKind : this.csharpDeclaredReadEqualityKind(left, leftType);
+        const rightReadKind = (rightKind !== undefined) ? rightKind : this.csharpDeclaredReadEqualityKind(right, rightType);
+        if ((leftReadKind === undefined) || (rightReadKind === undefined)) {
             return undefined;
         }
         // mixed numeric kinds are not equal in isEqual: `int` vs `double` takes the
         // `(int)a == (int)b` branch and throws on the boxed double, so only a numeric
         // literal may meet a different numeric type
         const numericKinds = [ 'double', 'Int64', 'int' ];
-        const sameKind = (leftKind === rightKind);
-        const literalVsNumeric = ((leftKind === 'number') && (numericKinds.indexOf(rightKind) >= 0))
-            || ((rightKind === 'number') && (numericKinds.indexOf(leftKind) >= 0));
+        const sameKind = (leftReadKind === rightReadKind);
+        const literalVsNumeric = ((leftReadKind === 'number') && (numericKinds.indexOf(rightReadKind) >= 0))
+            || ((rightReadKind === 'number') && (numericKinds.indexOf(leftReadKind) >= 0));
         if (!sameKind && !literalVsNumeric) {
             return undefined;
         }
         return isEquality ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
+
+    // the value kind of an operand the printer could only call `object`: the type the read's
+    // declaration was PRINTED with (printer table -> build layer's read-type oracle -> the
+    // declared-type registry for the declarations its own passes retyped). A collection/class
+    // declaration and every non-identifier operand answer undefined and keep the helper.
+    csharpDeclaredReadEqualityKind(node, operandType: string | undefined): string | undefined {
+        if ((operandType !== undefined) && (operandType !== '') && (operandType !== 'object')) {
+            return undefined; // the printer named a non-value C# type: never a value comparison
+        }
+        if ((node?.kind !== ts.SyntaxKind.Identifier) || (node.escapedText === 'undefined')) {
+            return undefined; // parameters of a written body / accesses / calls are other units
+        }
+        const declared = this.csharpDeclaredReadType(node) ?? this.csharpDeclaredLocalResolverType(node);
+        return (declared === undefined) ? undefined : this.csharpValueEqualityKind(declared);
     }
 
     csharpNullComparison(text: string, isEquality: boolean) {

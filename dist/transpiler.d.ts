@@ -560,6 +560,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpOperandsAreDeclaredReads(left: any, right: any): boolean;
     csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
+    csharpDeclaredReadEqualityKind(node: any, operandType: string | undefined): string | undefined;
     csharpNullComparison(text: string, isEquality: boolean): string;
     csharpNativeNumericCallEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpNumericCallKind(node: any): string | undefined;
