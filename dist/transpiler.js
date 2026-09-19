@@ -4954,6 +4954,9 @@ var GoTranspiler = class extends BaseTranspiler {
     // gofmt indents every nesting level with exactly one tab; the printer emits the
     // same bytes so the generated tree needs no `gofmt` pass (campaign go-gofmt F01)
     this.DEFAULT_IDENTATION = "	";
+    // true when an `any`-typed local can hold a *T helper result: its initializer or a
+    // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
+    this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
     // the Go type this identifier is actually *declared* with, or undefined when it
     // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
     // declaration the reject filters demoted back to `any` is reported as `any` here
@@ -6403,6 +6406,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // 'int', 'float', 'bool', 'nil' for the undefined/null literals, or undefined
   // when the type is any/unknown/a union of several families
   goScalarFamily(node) {
+    if (node?.kind === ts5.SyntaxKind.Identifier && this.goDeclaredTypeOfIdentifier(node) === void 0) {
+      let decl;
+      try {
+        decl = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+      } catch (e) {
+        decl = void 0;
+      }
+      if (this.goAnyLocalHoldsPointer(decl)) {
+        return void 0;
+      }
+    }
     let type;
     try {
       type = this.getChecker().getTypeAtLocation(node);
@@ -6453,7 +6467,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       if (!isBinding) {
         return false;
       }
-      return this.goDeclaredTypeOfIdentifier(node) === void 0;
+      if (this.goDeclaredTypeOfIdentifier(node) !== void 0) {
+        return false;
+      }
+      return !this.goAnyLocalHoldsPointer(decl);
     }
     if (node?.kind === ts5.SyntaxKind.CallExpression) {
       if (this.goTypeOfInitializer(node, printedText) !== void 0) {
@@ -6462,6 +6479,52 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0;
     }
     return false;
+  }
+  goAnyLocalHoldsPointer(decl) {
+    if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    if (this.goAnyLocalHoldsPointerCache.has(decl)) {
+      return this.goAnyLocalHoldsPointerCache.get(decl);
+    }
+    const isPointerInit = (expr) => {
+      while (expr?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+        expr = expr.expression;
+      }
+      if (expr?.kind !== ts5.SyntaxKind.CallExpression) {
+        return false;
+      }
+      const callee = expr.expression;
+      if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+        return false;
+      }
+      const name = callee.name?.escapedText;
+      if (typeof name !== "string" || name.length === 0) {
+        return false;
+      }
+      const goType = GO_HELPER_RETURN_TYPES["this." + name.charAt(0).toUpperCase() + name.substring(1)];
+      return typeof goType === "string" && goType.startsWith("*");
+    };
+    let holds = isPointerInit(decl.initializer);
+    if (!holds) {
+      const name = decl.name.escapedText;
+      const scope = this.goEnclosingFunction(decl);
+      const visit = (n) => {
+        if (holds) {
+          return;
+        }
+        if (n.kind === ts5.SyntaxKind.BinaryExpression && n.operatorToken.kind === ts5.SyntaxKind.EqualsToken && n.left?.kind === ts5.SyntaxKind.Identifier && n.left.escapedText === name && isPointerInit(n.right)) {
+          holds = true;
+          return;
+        }
+        ts5.forEachChild(n, visit);
+      };
+      if (scope !== void 0) {
+        ts5.forEachChild(scope, visit);
+      }
+    }
+    this.goAnyLocalHoldsPointerCache.set(decl, holds);
+    return holds;
   }
   goScalarFamilyOfType(type, allowNil = false) {
     if (type === void 0) {

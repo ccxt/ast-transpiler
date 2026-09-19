@@ -1735,6 +1735,27 @@ describe('go native element assignment', () => {
         // numbers keep the helper: the box may hold int, int64 or float64
         expect(output).toContain("var g bool = IsEqual(n, 1)");
     });
+    test('an any local rewritten from a *string helper keeps the deref-aware helper', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    safeString (a, b): Str { return a; }\n" +
+        "    f (order: any) {\n" +
+        "        let timeInForce = this.safeString (order, 'timeInForce');\n" +
+        "        if (timeInForce === undefined) { timeInForce = 'IOC'; }\n" +
+        "        const y = (timeInForce !== undefined) && (timeInForce === 'PO');\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // the later string write keeps the local `any`, so it boxes the *string the
+        // helper returned: a nil pointer inside `any` is not `== nil`, and the box is
+        // never `== "PO"` — only IsEqual derefs it
+        expect(output).toContain("var timeInForce any = this.SafeString(order, \"timeInForce\")");
+        expect(output).toContain("if IsEqual(timeInForce, nil) {");
+        expect(output).toContain("var y bool = (!IsEqual(timeInForce, nil)) && (IsEqual(timeInForce, \"PO\"))");
+        expect(output).not.toContain("timeInForce == nil");
+    });
     test('two nullable boxes of the same family compare natively', () => {
         const input =
         "type Str = string | undefined;\n" +
