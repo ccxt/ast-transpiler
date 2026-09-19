@@ -1780,6 +1780,13 @@ declare class RustTranspiler extends BaseTranspiler {
     rustProvenDictParameter(node: ts.Node): ts.ParameterDeclaration | undefined;
     /** `Str` (`string | undefined`) — the key box is `Value::Str` or Null. */
     rustKeyIsProvenString(node: ts.Node): boolean;
+    /** The local/parameter proof of a dynamic-key map read: a parameter whose
+     *  annotation proves a plain dict (B-25), or any local whose checker type
+     *  proves a plain map and which nothing in the enclosing function
+     *  re-assigns (D2). Returns the proven declaration. */
+    rustProvenDynamicMapReceiver(node: ts.Node): ts.Declaration | undefined;
+    /** The element-access read a key node belongs to (`x[k]`, `x[(k)]`). */
+    rustElementReadOfKey(keyNode: ts.Node): ts.Node | undefined;
     /** `x[k]` where `x` is a proven-dict parameter and `k` a proven string. */
     printNativeDynamicMapAccess(receiverText: string, receiverNode: ts.Node, keyNode: ts.Node): string | undefined;
     /** Keys `get_value` serves from the book store / cache bucket / live

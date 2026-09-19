@@ -3316,3 +3316,103 @@ describe('rust destructure over an array-returning callee', () => {
         expect(output).toContain('a = get_value(&__destr_tmp, &Value::Int(0))');
     });
 });
+
+describe('rust typed-receiver native reads (D-28)', () => {
+    // A dynamic-key read on a checker-proven map local (not only on an
+    // annotated parameter) reads natively, and a local/parameter read stays
+    // native inside the args of a `&mut self` call while a `this`-field read
+    // there keeps the helper the ccxt hoist pass needs.
+
+    const PLAIN = 'interface Plain { [key: string]: any; }\n';
+
+    test('a dynamic-key read on a checker-proven map local reads natively', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(code: string) {\n' +
+            '        const currencies: Plain = {};\n' +
+            '        return currencies[code];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('currencies.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&currencies, &code)');
+    });
+
+    test('an any-typed local keeps the helper', () => {
+        const ts =
+            'class T {\n' +
+            '    m(code: string) {\n' +
+            '        const currencies: any = {};\n' +
+            '        return currencies[code];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&currencies, &code)');
+        expect(output).not.toContain('currencies.as_map()');
+    });
+
+    test('a re-assigned local keeps the helper (D2)', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(code: string) {\n' +
+            '        let currencies: Plain = {};\n' +
+            '        currencies = {};\n' +
+            '        return currencies[code];\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&currencies, &code)');
+    });
+
+    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(key: string, vs: number[]) {\n' +
+            '        const result: Plain = {};\n' +
+            '        result[key] = [];\n' +
+            '        for (let i = 0; i < vs.length; i++) {\n' +
+            '            const row = result[key];\n' +
+            '            row.push(vs[i]);\n' +
+            '        }\n' +
+            '        return result;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut row: Value = get_value(&result, &key);');
+        expect(output).not.toContain('row.as_map()');
+    });
+
+    test('a local read inside a &mut self call reads natively', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    m(key: string, items: string[]) {\n' +
+            '        const dict: Plain = {};\n' +
+            '        return this.extend(dict, { "a": dict[key], "b": items[0] });\n' +
+            '    }\n' +
+            '    extend(a: any, b: any) { return a; }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('dict.as_map().and_then(|__m| key.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('items.as_array().and_then(|__arr| __arr.get(0)).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(&dict, &key)');
+    });
+
+    test('a self-field read inside a &mut self call keeps the helper', () => {
+        const ts =
+            PLAIN +
+            'class T {\n' +
+            '    dict: Plain;\n' +
+            '    m(key: string) {\n' +
+            '        return this.extend(this.dict, { "a": this.dict[key] });\n' +
+            '    }\n' +
+            '    extend(a: any, b: any) { return a; }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.dict, &key)');
+        expect(output).not.toContain('self.dict.as_map()');
+    });
+});
