@@ -5177,6 +5177,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // returned undefined by goScalarFamily, so they keep IsEqual.
         if (!lPtr && !rPtr && lFam !== undefined && rFam !== undefined
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
+            if (lFam === 'number') {
+                // TS number does not prove a Go numeric representation: an int
+                // compared with an any holding int64 is unequal even at the same value.
+                const lType = this.goOperandStaticType(left, leftText);
+                const rType = this.goOperandStaticType(right, rightText);
+                const numericTypes = ['int', 'int64', 'float64', 'const-int'];
+                if (numericTypes.indexOf(lType) < 0 || numericTypes.indexOf(rType) < 0
+                    || (lType !== rType && lType !== 'const-int' && rType !== 'const-int')) {
+                    return undefined;
+                }
+            }
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         // the declared-local table names `string` for this identifier (or the signature printer emits the
@@ -7580,4 +7591,3 @@ ${tryBodyBlock}
 // const baseClassDeclaration = baseClassType.symbol.valueDeclaration;
 
 // console.log(baseClassDeclaration);
-

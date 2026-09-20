@@ -358,6 +358,71 @@ describe('go unary minus -> -x', () => {
     });
 });
 
+describe('go numeric equality preserves runtime numeric normalization', () => {
+    test.each([
+        ['===', 'IsEqual'],
+        ['==', 'IsEqual'],
+        ['!==', '!IsEqual'],
+        ['!=', '!IsEqual'],
+    ])('%s keeps the helper for a last-batch comparison in either operand order', (operator, helper) => {
+        const output = transpile(`
+            function last(values: any[]) {
+                const count = values.length;
+                for (let i = 0; i < count; i++) {
+                    const forward = i ${operator} (count - 1);
+                    const reverse = (count - 1) ${operator} i;
+                    console.log(forward, reverse);
+                }
+            }
+        `);
+        expect(output).toContain(`${helper}(i, (Subtract(count, 1)))`);
+        expect(output).toContain(`${helper}((Subtract(count, 1)), i)`);
+    });
+
+    test('number parameters keep normalization across differently boxed values', () => {
+        const output = transpile('function compare(a: number, b: number) { return a === b; }');
+        expect(output).toContain('return IsEqual(a, b)');
+    });
+
+    test('numeric locals emitted as any do not use native equality', () => {
+        const output = transpile('const a = 1; const b = 1; console.log(a === b);');
+        expect(output).toContain('IsEqual(a, b)');
+    });
+
+    test('different concrete numeric types keep normalization', () => {
+        const output = transpile(`
+            const values = [1];
+            const count = values.length;
+            const rounded = Math.floor(1.5);
+            console.log(count === rounded, rounded !== count);
+        `);
+        expect(output).toContain('IsEqual(count, rounded)');
+        expect(output).toContain('!IsEqual(rounded, count)');
+    });
+
+    test('matching concrete types and integer constants still use native equality', () => {
+        const output = transpile(`
+            const values = [1];
+            const left = values.length;
+            const right = values.length;
+            const a = Math.floor(1.5);
+            const b = Math.floor(2.5);
+            console.log(left === right, left !== 0, 0 === right, a === b, a === 1);
+        `);
+        expect(output).toContain('(left == right)');
+        expect(output).toContain('(left != 0)');
+        expect(output).toContain('(0 == right)');
+        expect(output).toContain('(a == b)');
+        expect(output).toContain('(a == 1)');
+        expect(output).not.toContain('IsEqual(');
+    });
+
+    test('number-returning calls are evaluated once per operand', () => {
+        const output = transpile('function next(): number { return 1; } const same = next() === next();');
+        expect(output).toContain('var same bool = IsEqual(Next(), Next())');
+    });
+});
+
 describe('go len() keeps the int classification', () => {
     test('a local initialised from len() is declared int', () => {
         const ts =

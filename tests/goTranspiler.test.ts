@@ -1417,7 +1417,8 @@ describe('go inline equality', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("var a bool = (x == \"delivery\")");
         expect(output).toContain("var c bool = (x != \"delivery\")");
-        expect(output).toContain("var d bool = (n == 1)");
+        // A TS number parameter is emitted as any and may hold different Go numeric types.
+        expect(output).toContain("var d bool = IsEqual(n, 1)");
         expect(output).toContain("var e bool = (b == true)");
         // an `any` operand: only a string/bool literal may drop the helper, the
         // box can hold a number and IsEqual converts across numeric widths
@@ -3386,8 +3387,8 @@ describe('go redundant parentheses', () => {
         // the parentheses of a call are not a ParenExpr, the argument keeps its own pair
         expect(output).toContain("mathAbs((n))");
         // the source pairs sit on the operands, not around the whole disjunction
-        expect(output).toContain("(n == 1) || (n == 2)");
-        expect(output).not.toContain("((n == 1))");
+        expect(output).toContain("(IsEqual(n, 1)) || (IsEqual(n, 2))");
+        expect(output).not.toContain("((IsEqual(n, 1)))");
     });
 });
 
