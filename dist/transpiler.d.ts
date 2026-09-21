@@ -1691,6 +1691,11 @@ declare class RustTranspiler extends BaseTranspiler {
     /** A literal initializer must carry no runtime tag key; a call initializer
      *  is the axiom the declared-Dict table itself rests on. */
     rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean;
+    /** The local's single declaration is initialised from a call that reads
+     *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
+     *  tags with a backref so writes reach the shared store, not the COW copy. */
+    rustLocalInitReadsTaggedContainer(ident: ts.Identifier): boolean;
+    static readonly RUST_TAGGED_CONTAINER_FIELDS: Set<string>;
     /** True when every value the local can hold comes from an object literal:
      *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
      *  `__cache_backref`) only on handles its own store builds, so the helper's

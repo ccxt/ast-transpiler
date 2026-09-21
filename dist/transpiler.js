@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../root/ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../root/ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -20018,6 +20018,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
       return void 0;
     }
+    if (!receiver.isField && this.rustLocalInitReadsTaggedContainer(baseExpr)) {
+      return void 0;
+    }
     const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
     if (keyArg === void 0) {
       return void 0;
@@ -20118,6 +20121,29 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return true;
     }
     return this.rustPlainDictLiteral(init);
+  }
+  /** The local's single declaration is initialised from a call that reads
+   *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
+   *  tags with a backref so writes reach the shared store, not the COW copy. */
+  rustLocalInitReadsTaggedContainer(ident) {
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || !ts7.isVariableDeclaration(declaration)) {
+      return false;
+    }
+    let init = declaration.initializer;
+    while (init !== void 0 && (ts7.isParenthesizedExpression(init) || ts7.isNonNullExpression(init) || ts7.isAsExpression(init))) {
+      init = init.expression;
+    }
+    if (init === void 0 || !ts7.isCallExpression(init)) {
+      return false;
+    }
+    return init.arguments.some((arg) => {
+      let n = arg;
+      while (n !== void 0 && (ts7.isParenthesizedExpression(n) || ts7.isAsExpression(n) || ts7.isNonNullExpression(n))) {
+        n = n.expression;
+      }
+      return n !== void 0 && ts7.isPropertyAccessExpression(n) && _RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(n.name.text);
+    });
   }
   /** True when every value the local can hold comes from an object literal:
    *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
@@ -23731,6 +23757,7 @@ _RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS = {
   "boolean": "Value::Bool(_)",
   "object": "Value::Dict(_)"
 };
+_RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS = /* @__PURE__ */ new Set(["hashmap", "subscriptions", "futures"]);
 // Types whose runtime value the `add` helper stringifies exactly as `format!` does: a string,
 // or `undefined`/`null` boxed as `Value::Null` (`stringify_simple(Value::Null)` and `Display`
 // both give "null"). `any` is absent — the Precise-dict branch has no `Display` equivalent.
