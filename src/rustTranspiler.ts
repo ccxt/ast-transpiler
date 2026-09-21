@@ -1004,6 +1004,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
             return undefined;
         }
+        // A bucket read off `cache.hashmap` / client `subscriptions`/`futures` carries a runtime
+        // backref: only the helper writes through to the shared store, so keep it.
+        if (!receiver.isField && this.rustLocalInitReadsTaggedContainer(baseExpr)) {
+            return undefined;
+        }
         const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
         if (keyArg === undefined) {
             return undefined;
@@ -1128,6 +1133,33 @@ export class RustTranspiler extends BaseTranspiler {
         }
         return this.rustPlainDictLiteral(init);
     }
+
+    /** The local's single declaration is initialised from a call that reads
+     *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
+     *  tags with a backref so writes reach the shared store, not the COW copy. */
+    rustLocalInitReadsTaggedContainer(ident: ts.Identifier): boolean {
+        const declaration = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
+            return false;
+        }
+        let init: any = declaration.initializer;
+        while (init !== undefined && (ts.isParenthesizedExpression(init) || ts.isNonNullExpression(init) || ts.isAsExpression(init))) {
+            init = init.expression;
+        }
+        if (init === undefined || !ts.isCallExpression(init)) {
+            return false;
+        }
+        return init.arguments.some((arg) => {
+            let n: any = arg;
+            while (n !== undefined && (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isNonNullExpression(n))) {
+                n = n.expression;
+            }
+            return n !== undefined && ts.isPropertyAccessExpression(n)
+                && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(n.name.text);
+        });
+    }
+
+    static readonly RUST_TAGGED_CONTAINER_FIELDS = new Set([ 'hashmap', 'subscriptions', 'futures' ]);
 
     /** True when every value the local can hold comes from an object literal:
      *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
