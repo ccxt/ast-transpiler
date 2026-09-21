@@ -1449,7 +1449,7 @@ class BaseTranspiler {
         return  this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
     }
 
-    printCustomRightSidePropertyAssignment(node, identation): string {
+    printCustomRightSidePropertyAssignment(node, identation): string | undefined {
         return undefined; // stub to override
     }
 
