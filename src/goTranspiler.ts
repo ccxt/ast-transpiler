@@ -5980,6 +5980,40 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (callee !== undefined) && (GO_GETARG_NIL_MAP_READERS.indexOf(callee.replace(/^this\./, '')) >= 0);
     }
 
+    // a nil []string reads like the absent box: `x.length` / GetArrayLength is 0, `x[i]` (GetValue)
+    // is nil, InArray finds nothing, and a defaulted Strings position's GetArg folds it to its default
+    goGetArgNilStringSliceUseOnlyReads(n): boolean {
+        const parent: any = n.parent;
+        if ((parent?.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+            return (parent.name?.escapedText === 'length') && (parent.parent?.kind !== ts.SyntaxKind.CallExpression || parent.parent.expression !== parent)
+                && !((parent.parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.parent.left === parent));
+        }
+        if (parent?.kind === ts.SyntaxKind.ElementAccessExpression) {
+            return this.goSafeDictUseReadsTheMap(n);
+        }
+        if ((parent?.kind !== ts.SyntaxKind.CallExpression) || (parent.expression === n)) {
+            return false;
+        }
+        const argIndex = parent.arguments.indexOf(n);
+        const callee: any = parent.expression;
+        if ((callee?.kind === ts.SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword)
+            && (callee.name?.escapedText === 'inArray') && (argIndex === 1)) {
+            return true;
+        }
+        if (!this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+            return false;
+        }
+        let decl: any;
+        try {
+            decl = this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration;
+        } catch (e) {
+            decl = undefined;
+        }
+        // the callee binds it as `any` or through GetArgStringSlice, never a []any twin
+        const declared = String(decl?.parameters?.[argIndex]?.type?.getText() ?? '').replace(/\s+/g, ' ');
+        return (declared === 'Strings') || (declared === 'string[]');
+    }
+
     // the Go type the printed default names, or undefined when it names none
     goGetArgTypeOfShape(shape: string): string | undefined {
         if (/^map\[string\]any\{/.test(shape)) {
@@ -6126,6 +6160,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         if (assigned || this.goGetArgNilMapUseOnlyReads(n)) {
                             return;
                         }
+                    }
+                    if (nilable && (goType === '[]string') && this.goGetArgNilStringSliceUseOnlyReads(n)) {
+                        return;
                     }
                     if (pointer && (parent?.kind === ts.SyntaxKind.BinaryExpression)) {
                         // a write already type-matched by goLocalIsSafeToType, or the key of `x in d` (InOp derefs it)
