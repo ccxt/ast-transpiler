@@ -1373,6 +1373,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
+    javaParameterIsTypeofTested(node: any): boolean;
     javaParameterIsCompoundAssigned(node: any): boolean;
     javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;

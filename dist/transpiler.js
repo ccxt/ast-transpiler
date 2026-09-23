@@ -15989,6 +15989,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaParameterIsCompoundAssigned(node)) {
       return void 0;
     }
+    if (own === JAVA_STRING_LIST_TYPE && this.javaParameterIsTypeofTested(node)) {
+      return void 0;
+    }
     const method = node.parent;
     try {
       const index = method.parameters.indexOf(node);
@@ -16117,6 +16120,25 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const type = this.javaOptionalParameterType(node);
     return type === JAVA_STRING_LIST_TYPE ? type : void 0;
+  }
+  javaParameterIsTypeofTested(node) {
+    const method = node.parent;
+    const name = node.name?.escapedText;
+    let found = false;
+    const visit = (n) => {
+      if (found) {
+        return;
+      }
+      if (ts6.isTypeOfExpression(n) && ts6.isIdentifier(n.expression) && n.expression.escapedText === name) {
+        found = true;
+        return;
+      }
+      ts6.forEachChild(n, visit);
+    };
+    if (method?.body !== void 0 && name !== void 0) {
+      ts6.forEachChild(method.body, visit);
+    }
+    return found;
   }
   javaParameterIsCompoundAssigned(node) {
     const method = node.parent;
@@ -18731,6 +18753,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       let defaultValue = this.printNode(param.initializer, 0);
       if (getter === "getArgLong" && /^-?\d+$/.test(defaultValue)) {
         defaultValue += "L";
+      }
+      if (getter === "getArgStringList" && ts6.isArrayLiteralExpression(param.initializer) && param.initializer.elements.length === 0) {
+        defaultValue = "new java.util.ArrayList<String>()";
       }
       out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
     });

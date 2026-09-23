@@ -2284,6 +2284,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaParameterIsCompoundAssigned(node)) {
             return undefined;
         }
+        // a list parameter the body `typeof`-probes also accepts other boxes at runtime
+        if (own === JAVA_STRING_LIST_TYPE && this.javaParameterIsTypeofTested(node)) {
+            return undefined;
+        }
         const method = node.parent;
         try {
             const index = method.parameters.indexOf(node);
@@ -2434,6 +2438,26 @@ export class JavaTranspiler extends BaseTranspiler {
     // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined> = new WeakMap();
     javaReturnTypeInProgress: Set<ts.Node> = new Set();
+
+    javaParameterIsTypeofTested(node): boolean {
+        const method = node.parent;
+        const name = (node.name as any)?.escapedText;
+        let found = false;
+        const visit = (n: ts.Node) => {
+            if (found) {
+                return;
+            }
+            if (ts.isTypeOfExpression(n) && ts.isIdentifier(n.expression) && n.expression.escapedText === name) {
+                found = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        if (method?.body !== undefined && name !== undefined) {
+            ts.forEachChild(method.body, visit);
+        }
+        return found;
+    }
 
     javaParameterIsCompoundAssigned(node): boolean {
         const method = node.parent;
@@ -5600,6 +5624,10 @@ export class JavaTranspiler extends BaseTranspiler {
             let defaultValue = this.printNode(param.initializer, 0);
             if (getter === 'getArgLong' && /^-?\d+$/.test(defaultValue)) {
                 defaultValue += 'L'; // an int literal does not box to Long
+            }
+            if (getter === 'getArgStringList' && ts.isArrayLiteralExpression(param.initializer)
+                && param.initializer.elements.length === 0) {
+                defaultValue = 'new java.util.ArrayList<String>()';
             }
             out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
         });
