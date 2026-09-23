@@ -929,6 +929,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
     goNativeAppendReceiver(pushNode: any): string | undefined;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
+    goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
+    goPointerWriteText(node: any, identation: any): string | undefined;
     goSafeDictLocalArgs(initializer: any): {
         container: any;
         key: any;
@@ -1368,13 +1370,16 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaOptionalParameterJavaType(node: any): string;
     javaOptionalParameterType(node: any): string | undefined;
     javaOptionalParameterTypeOf(node: any): string | undefined;
+    javaIsStringArrayType(checker: any, type: any): boolean;
     javaOptionalParameterFamilyAgrees(method: any, override: any, index: any, type: string): boolean;
     firstDefaultParameterIndex(params: any): number;
     hasDefaultedTail(node: any): boolean;
     javaSplitParameterWriteType(node: any): string | undefined;
+    javaAsyncParameterLocalType(node: any): string | undefined;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
+    javaParameterIsTypeofTested(node: any): boolean;
     javaParameterIsCompoundAssigned(node: any): boolean;
     javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
@@ -1386,6 +1391,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaReturnedParameterType(node: any): string | undefined;
     javaReturnedCallType(node: any): string | undefined;
     javaStringCallReturn(node: any): boolean;
+    javaParameterAliasSymbol(node: any, type: any, checker: any): any;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;

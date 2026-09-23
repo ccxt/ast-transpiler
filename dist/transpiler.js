@@ -9103,7 +9103,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
           const op = parent.operatorToken.kind;
           if (op === ts5.SyntaxKind.EqualsToken) {
-            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType) {
+            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === ts5.SyntaxKind.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0)) {
               return true;
             }
           } else if (op >= ts5.SyntaxKind.FirstCompoundAssignment && op <= ts5.SyntaxKind.LastCompoundAssignment) {
@@ -9114,6 +9114,41 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return false;
     });
     return safe;
+  }
+  // How a write of another shape reaches a pointer-typed local: 'nil' (undefined/null prints nil),
+  // 'wrap' (a Go string becomes SafeStringPtr(v), never nil), or undefined (not convertible).
+  // Shared by goLocalIsSafeToType (admission) and goPointerWriteText (emission).
+  goPointerWriteConversion(right, goType) {
+    while (right?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      right = right.expression;
+    }
+    if (!["*string", "*int64", "*float64"].includes(goType) || right === void 0) {
+      return void 0;
+    }
+    if (right.kind === ts5.SyntaxKind.NullKeyword || right.kind === ts5.SyntaxKind.UndefinedKeyword || right.kind === ts5.SyntaxKind.Identifier && right.escapedText === "undefined") {
+      return "nil";
+    }
+    if (goType === "*string" && this.goTypeOfInitializer(right, this.printNode(right, 0)) === "string") {
+      return "wrap";
+    }
+    return void 0;
+  }
+  // `x = "limit"` on a *string local prints `x = SafeStringPtr("limit")`; undefined otherwise
+  goPointerWriteText(node, identation) {
+    const { left, right } = node;
+    if (left?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const decl = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration;
+    if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration) {
+      return void 0;
+    }
+    const goType = this.goDeclaredTypeOfIdentifier(left);
+    if (goType === void 0 || this.goPointerWriteConversion(right, goType) !== "wrap") {
+      return void 0;
+    }
+    const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim();
+    return `${this.printNode(left, 0)} = SafeStringPtr(${value})`;
   }
   // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or undefined
   // for another shape. A third argument is droppable only when it is the empty map literal
@@ -13663,6 +13698,10 @@ ${this.getIden(identation)}return nil`;
       return this.printInstanceOfExpression(node, identation);
     }
     if (operatorToken.kind === ts5.SyntaxKind.EqualsToken) {
+      const pointerWrite = this.goPointerWriteText(node, identation);
+      if (pointerWrite !== void 0) {
+        return pointerWrite;
+      }
       const elementAccess = left;
       const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
       if (left.kind === ts5.SyntaxKind.ElementAccessExpression) {
@@ -14339,6 +14378,8 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
   "Bool": "Boolean"
 };
 var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
@@ -14346,8 +14387,14 @@ var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
-  "Int": "Long"
+  "OrderType": "String",
+  "OrderSide": "String",
+  "Int": "Long",
+  "Strings": "java.util.List<String>"
 };
+var JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = /* @__PURE__ */ new Set(["symbols"]);
+var JAVA_STRING_LIST_TYPE = "java.util.List<String>";
+var JAVA_STRINGS_EXCLUDED_METHODS = /* @__PURE__ */ new Set(["marketSymbols", "marketIds", "marketsForSymbols", "getMarketFromSymbols"]);
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
   // implicit endpoints pass fetch2/request/sign params through untyped (arrays for batch orders)
@@ -14602,6 +14649,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (type === "java.util.Map<String, Object>") {
       return `Helpers.toMapArg(${printed})`;
+    }
+    if (type === JAVA_STRING_LIST_TYPE) {
+      return `Helpers.toStringListArg(${printed})`;
     }
     return `(${type}) (${printed})`;
   }
@@ -16066,6 +16116,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaParameterIsCompoundAssigned(node)) {
       return void 0;
     }
+    if (own === JAVA_STRING_LIST_TYPE && this.javaParameterIsTypeofTested(node)) {
+      return void 0;
+    }
     const method = node.parent;
     try {
       const index = method.parameters.indexOf(node);
@@ -16101,18 +16154,41 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = type.aliasSymbol ?? type.symbol;
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = symbol?.name;
-    if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === void 0) {
-      return void 0;
-    }
     const excluded = JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS[method.name?.escapedText];
     if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(node))) {
+      return void 0;
+    }
+    if (name === "Strings" || this.javaIsStringArrayType(checker, type)) {
+      const listName = JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has(node.name?.escapedText) && !JAVA_STRINGS_EXCLUDED_METHODS.has(method.name?.escapedText);
+      return listName ? JAVA_STRING_LIST_TYPE : void 0;
+    }
+    if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === void 0) {
       return void 0;
     }
     const declaration = symbol?.declarations?.[0];
     const fileName = declaration?.getSourceFile?.()?.fileName;
     return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? "") ? JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] : void 0;
+  }
+  // a `string[]` annotation (optionally `| undefined`), the unaliased spelling of `Strings`
+  javaIsStringArrayType(checker, type) {
+    const members = type.isUnion?.() ? type.types : [type];
+    let arrays = 0;
+    for (const member of members) {
+      if (member.flags & (ts6.TypeFlags.Undefined | ts6.TypeFlags.Null)) {
+        continue;
+      }
+      if (!checker.isArrayType(member)) {
+        return false;
+      }
+      const element = checker.getTypeArguments(member)?.[0];
+      if (element === void 0 || !(element.flags & ts6.TypeFlags.String)) {
+        return false;
+      }
+      arrays++;
+    }
+    return arrays === 1;
   }
   // Java overrides are invariant: every ancestor declaration must match the parameter count,
   // the first default-valued index and this position's type, otherwise the position stays Object.
@@ -16155,10 +16231,41 @@ var JavaTranspiler = class extends BaseTranspiler {
   // a typed default-valued parameter of a sync core is written in place (async cores copy it
   // into an Object local first), so its writes convert to the declared type
   javaSplitParameterWriteType(node) {
-    if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent) || this.isAsyncFunction(node.parent)) {
+    if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent)) {
       return void 0;
     }
+    if (this.isAsyncFunction(node.parent)) {
+      return this.javaAsyncParameterLocalType(node);
+    }
     return this.javaOptionalParameterType(node);
+  }
+  // the async body copy of a reassigned default-valued parameter keeps a `List<String>` type;
+  // its writes convert like the sync in-place ones (other types keep the `Object` copy)
+  javaAsyncParameterLocalType(node) {
+    if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent) || !this.isAsyncFunction(node.parent)) {
+      return void 0;
+    }
+    const type = this.javaOptionalParameterType(node);
+    return type === JAVA_STRING_LIST_TYPE ? type : void 0;
+  }
+  javaParameterIsTypeofTested(node) {
+    const method = node.parent;
+    const name = node.name?.escapedText;
+    let found = false;
+    const visit = (n) => {
+      if (found) {
+        return;
+      }
+      if (ts6.isTypeOfExpression(n) && ts6.isIdentifier(n.expression) && n.expression.escapedText === name) {
+        found = true;
+        return;
+      }
+      ts6.forEachChild(n, visit);
+    };
+    if (method?.body !== void 0 && name !== void 0) {
+      ts6.forEachChild(method.body, visit);
+    }
+    return found;
   }
   javaParameterIsCompoundAssigned(node) {
     const method = node.parent;
@@ -16204,6 +16311,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (native === "Long") {
       return `${leftText} = Helpers.toLongOrNull(${this.printNode(right, identation)})`;
+    }
+    if (native === JAVA_STRING_LIST_TYPE) {
+      return `${leftText} = Helpers.toStringListArg(${this.printNode(right, identation)})`;
     }
     return `${leftText} = (${native}) (${this.printNode(right, identation)})`;
   }
@@ -16417,6 +16527,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     const fileName = declaration.getSourceFile?.()?.fileName;
     return fileName !== void 0 && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
   }
+  // the alias a parameter's annotation names; `OrderType` ('limit' | 'market' | string) reduces
+  // to plain `string` and keeps no aliasSymbol, so read the annotation's type reference instead
+  javaParameterAliasSymbol(node, type, checker) {
+    const symbol = type.aliasSymbol ?? type.symbol;
+    if (symbol !== void 0 || node.type === void 0 || !ts6.isTypeReferenceNode(node.type)) {
+      return symbol;
+    }
+    const referenced = checker.getSymbolAtLocation(node.type.typeName);
+    const alias = referenced !== void 0 && referenced.flags & ts6.SymbolFlags.Alias ? checker.getAliasedSymbol(referenced) : referenced;
+    return alias !== void 0 && alias.flags & ts6.SymbolFlags.TypeAlias ? alias : void 0;
+  }
   // the annotation proof alone, without the heritage check
   javaNativeParameterTypeOf(node) {
     if (node === void 0 || !ts6.isParameter(node) || node.initializer !== void 0 || node.dotDotDotToken !== void 0) {
@@ -16437,7 +16558,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = type.aliasSymbol ?? type.symbol;
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = symbol?.name;
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES[name] === void 0) {
       return void 0;
@@ -18762,7 +18883,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       const index = i + offSetIndex;
       const javaType = this.javaOptionalParameterJavaType(param);
-      const getter = javaType === "Long" ? "getArgLong" : javaType === "String" ? "getArgString" : javaType === "java.util.Map<String, Object>" ? "getArgMap" : void 0;
+      const getter = javaType === "Long" ? "getArgLong" : javaType === "String" ? "getArgString" : javaType === "java.util.Map<String, Object>" ? "getArgMap" : javaType === JAVA_STRING_LIST_TYPE ? "getArgStringList" : void 0;
       if (getter === void 0) {
         out.push(this.printOptionalArgExpression(index, param.initializer));
         return;
@@ -18770,6 +18891,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       let defaultValue = this.printNode(param.initializer, 0);
       if (getter === "getArgLong" && /^-?\d+$/.test(defaultValue)) {
         defaultValue += "L";
+      }
+      if (getter === "getArgStringList" && ts6.isArrayLiteralExpression(param.initializer) && param.initializer.elements.length === 0) {
+        defaultValue = "new java.util.ArrayList<String>()";
       }
       out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
     });
@@ -18842,7 +18966,8 @@ var JavaTranspiler = class extends BaseTranspiler {
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
             const { localName, snapName } = this.getAsyncParamWrapperNames(paramName);
-            finalVarWrappers.push(this.getIden(identation + 1) + `Object ${localName} = ${snapName};`);
+            const localType = this.javaAsyncParameterLocalType(param) ?? "Object";
+            finalVarWrappers.push(this.getIden(identation + 1) + `${localType} ${localName} = ${snapName};`);
           }
         }
       });
