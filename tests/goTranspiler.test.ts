@@ -597,7 +597,8 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var amount any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+        expect(output).toContain("amount = SafeStringPtr(ToUpper(other))");
         expect(output).toContain("var stamp any = this.SafeInteger(item, \"time\")");
     });
     test('a Safe* local reassigned from the same Safe* family keeps its pointer type', () => {
@@ -3153,13 +3154,10 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // the later string write keeps the local `any`, so it boxes the *string the
-        // helper returned: a nil pointer inside `any` is not `== nil`, and the box is
-        // never `== "PO"` — only IsEqual derefs it
-        expect(output).toContain("var timeInForce any = this.SafeString(order, \"timeInForce\")");
-        expect(output).toContain("if IsEqual(timeInForce, nil) {");
-        expect(output).toContain("var y bool = (!IsEqual(timeInForce, nil)) && (IsEqual(timeInForce, \"PO\"))");
-        expect(output).not.toContain("timeInForce == nil");
+        // the later string write converts at the write site, so the local stays *string
+        expect(output).toContain("var timeInForce *string = this.SafeString(order, \"timeInForce\")");
+        expect(output).toContain("timeInForce = SafeStringPtr(\"IOC\")");
+        expect(output).toContain("var y bool = (timeInForce != nil && *timeInForce == \"PO\")");
     });
     test('two nullable boxes of the same family compare natively', () => {
         const input =
@@ -4114,7 +4112,7 @@ describe('go string concat chains -> native +', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain('return Add(*fromId+"_", symbol)');
     });
-    test('a *string local reassigned a different type stays an any box and keeps the helper', () => {
+    test('a *string local reassigned a string literal converts the write and stays *string', () => {
         const input =
         "class Exchange {\n" +
         "    safeString (a: any, b: string): string | undefined { return a; }\n" +
@@ -4125,8 +4123,26 @@ describe('go string concat chains -> native +', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('var fromId any = this.SafeString(item, "from")');
-        expect(output).toContain('return Add(fromId, "_")');
+        expect(output).toContain('var fromId *string = this.SafeString(item, "from")');
+        expect(output).toContain('fromId = SafeStringPtr("override")');
+    });
+    test('a pointer local written a nil keeps its pointer type; a non-string write still rejects', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    safeInteger (a: any, b: string): number | undefined { return a; }\n" +
+        "    main (item: any) {\n" +
+        "        let ts = this.safeInteger (item, 'ts');\n" +
+        "        ts = undefined;\n" +
+        "        let side = this.safeString (item, 'side');\n" +
+        "        side = 1;\n" +
+        "        return [ts, side];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var ts *int64 = this.SafeInteger(item, "ts")');
+        expect(output).toContain('ts = nil');
+        expect(output).toContain('var side any = this.SafeString(item, "side")');
     });
     test('a narrowed *int64 leaf keeps Add (the numeric family is not the string one)', () => {
         const input =
