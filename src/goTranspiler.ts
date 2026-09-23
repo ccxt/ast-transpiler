@@ -696,6 +696,18 @@ const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'sign': [ 1, 3 ],
 };
 
+// base helpers typed `any[]` that hand back, at this index, the params map they were given
+// (unchanged, omitted or extended: always a map[string]any in Go)
+const GO_PARAMS_TUPLE_HELPERS: { [name: string]: number } = {
+    'handleUntilOption': 1,
+    'handleNetworkCodeAndParams': 1,
+    'handleWithdrawTagAndParams': 1,
+    'handleTriggerAndParams': 1,
+    'handleTriggerDirectionAndParams': 1,
+    'handlePostOnly': 1,
+    'handleTriggerPricesAndParams': 3,
+};
+
 // receivers that read a nil map exactly like an untyped nil (derefScalar + a missed lookup);
 // IsDictionary and IsEqual answer differently for a nil map, so they are not listed
 const GO_GETARG_NIL_MAP_READERS = [
@@ -2050,7 +2062,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
                 && parent.parent.left === parent
                 && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
-                && !((goType === 'map[string]any') && this.goGetArgBindsDictElement(n, parent.parent.right, parent.elements.indexOf(n)))) {
+                && !((goType === 'map[string]any') && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
                     return true;
                 }
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
@@ -6062,6 +6074,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                             return;
                         }
                     }
+                    if (pointer && (parent?.kind === ts.SyntaxKind.BinaryExpression)) {
+                        // a write already type-matched by goLocalIsSafeToType, or the key of `x in d` (InOp derefs it)
+                        const op = parent.operatorToken?.kind;
+                        if (((parent.left === n) && (op === ts.SyntaxKind.EqualsToken)) || ((parent.left === n) && (op === ts.SyntaxKind.InKeyword))) {
+                            return;
+                        }
+                        // `x === 'lit'`: a pointer operand prints nil-guarded native or through IsEqual (derefs)
+                        const other: any = (parent.left === n) ? parent.right : parent.left;
+                        const equality = [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(op);
+                        if (equality && ((other?.kind === ts.SyntaxKind.StringLiteral) || (other?.kind === ts.SyntaxKind.NumericLiteral))) {
+                            return;
+                        }
+                    }
                     if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
                         const other: any = (parent.left === n) ? parent.right : parent.left;
                         const isNullTest = (other?.kind === ts.SyntaxKind.NullKeyword)
@@ -6113,6 +6138,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                             safe = true;
                             return;
                         }
+                        // a defaulted position binds through GetArg or its twins, which deref a pointer and fold a nil one
+                        if ((verdict === 'unknown') && pointer && this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+                            safe = true;
+                            return;
+                        }
                         if (verdict === 'unknown') {
                             safe = false;
                             return;
@@ -6132,6 +6162,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         safe = true;
                         return;
                     }
+                    if (pointer && this.goGetArgPointerInHelperArithmetic(n)) {
+                        safe = true;
+                        return;
+                    }
                     // a bare read hands the local on as `any`: a pointer or a nil-defaulted container would
                     // no longer compare equal to nil there, so both keep the box
                     safe = !pointer && !nilable;
@@ -6142,6 +6176,22 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         ts.forEachChild(body, visit);
         return safe;
+    }
+
+    // `x / 1000`, `x - 1`, `x > 0`: printed through Divide/Subtract/…/IsGreaterThan, which
+    // derefScalar both operands at entry (checked on the printed text by the caller's diff)
+    goGetArgPointerInHelperArithmetic(n: any): boolean {
+        const parent: any = n.parent;
+        if (parent?.kind !== ts.SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const ops = [ts.SyntaxKind.SlashToken, ts.SyntaxKind.MinusToken, ts.SyntaxKind.AsteriskToken, ts.SyntaxKind.PercentToken,
+            ts.SyntaxKind.GreaterThanToken, ts.SyntaxKind.LessThanToken, ts.SyntaxKind.GreaterThanEqualsToken, ts.SyntaxKind.LessThanEqualsToken];
+        if (!ops.includes(parent.operatorToken?.kind)) {
+            return false;
+        }
+        const printed = this.printNode(parent, 0).trim();
+        return /^(?:\(\s*)*(?:Divide|Subtract|Multiply|Mod|IsGreaterThan|IsLessThan|IsGreaterThanOrEqual|IsLessThanOrEqual)\(/.test(printed);
     }
 
     // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
@@ -6170,11 +6220,35 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const type: any = checker.getTypeAtLocation(expr);
         if ((type === undefined) || !checker.isTupleType(type)) {
-            return false;
+            return this.goParamsTupleHelperIndex(expr) === index;
         }
         const element: any = checker.getTypeArguments(type)?.[index];
         return (element !== undefined) && !(element.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))
             && this.goParameterTypeIsDict(element);
+    }
+
+    // `this.handleXxx(…, params, …)` of a base helper typed `any[]` whose element holds the params
+    // map it was given after omit/extend; only when that element is the same map-typed local
+    goParamsTupleHelperIndex(call: any): number {
+        const callee: any = call?.expression;
+        if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+            return -1;
+        }
+        const index = GO_PARAMS_TUPLE_HELPERS[callee.name?.escapedText];
+        if (index === undefined) {
+            return -1;
+        }
+        const target: any = call.parent?.left?.elements?.[index];
+        const passesTarget = (target?.kind === ts.SyntaxKind.Identifier)
+            && (call.arguments ?? []).some((a: any) => (a.kind === ts.SyntaxKind.Identifier) && (a.escapedText === target.escapedText));
+        return passesTarget ? index : -1;
+    }
+
+    // the safety check of a map-typed GetArg local: a Dict tuple element written into it is printed
+    // through MapTyped once the local is bound as a map (no recursion into goGetArgLocalType)
+    goGetArgTupleWriteIsDict(declaration: any, right: any, index: number): boolean {
+        return (declaration?.kind === ts.SyntaxKind.Parameter) && (declaration.initializer !== undefined)
+            && this.goTupleElementIsDict(right, index);
     }
 
     // `[x, params] = f()` writes a GetArg local bound as map[string]any: unbox the element

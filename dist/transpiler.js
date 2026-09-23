@@ -7821,6 +7821,15 @@ var GO_GETARG_EXCLUDED_POSITIONS = {
   "request": [1, 3],
   "sign": [1, 3]
 };
+var GO_PARAMS_TUPLE_HELPERS = {
+  "handleUntilOption": 1,
+  "handleNetworkCodeAndParams": 1,
+  "handleWithdrawTagAndParams": 1,
+  "handleTriggerAndParams": 1,
+  "handleTriggerDirectionAndParams": 1,
+  "handlePostOnly": 1,
+  "handleTriggerPricesAndParams": 3
+};
 var GO_GETARG_NIL_MAP_READERS = [
   "GetValue",
   "InOp",
@@ -9088,7 +9097,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.SpreadElement) {
           return true;
         }
-        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goGetArgBindsDictElement(n, parent.parent.right, parent.elements.indexOf(n)))) {
+        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
           return true;
         }
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
@@ -12510,6 +12519,17 @@ ${this.getIden(level)}}()`;
               return;
             }
           }
+          if (pointer && parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+            const op = parent.operatorToken?.kind;
+            if (parent.left === n && op === ts5.SyntaxKind.EqualsToken || parent.left === n && op === ts5.SyntaxKind.InKeyword) {
+              return;
+            }
+            const other = parent.left === n ? parent.right : parent.left;
+            const equality = [ts5.SyntaxKind.EqualsEqualsEqualsToken, ts5.SyntaxKind.ExclamationEqualsEqualsToken].includes(op);
+            if (equality && (other?.kind === ts5.SyntaxKind.StringLiteral || other?.kind === ts5.SyntaxKind.NumericLiteral)) {
+              return;
+            }
+          }
           if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
             const other = parent.left === n ? parent.right : parent.left;
             const isNullTest = other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
@@ -12551,6 +12571,10 @@ ${this.getIden(level)}}()`;
               safe = true;
               return;
             }
+            if (verdict === "unknown" && pointer && this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+              safe = true;
+              return;
+            }
             if (verdict === "unknown") {
               safe = false;
               return;
@@ -12570,6 +12594,10 @@ ${this.getIden(level)}}()`;
             safe = true;
             return;
           }
+          if (pointer && this.goGetArgPointerInHelperArithmetic(n)) {
+            safe = true;
+            return;
+          }
           safe = !pointer && !nilable;
           return;
         }
@@ -12578,6 +12606,29 @@ ${this.getIden(level)}}()`;
     };
     ts5.forEachChild(body, visit);
     return safe;
+  }
+  // `x / 1000`, `x - 1`, `x > 0`: printed through Divide/Subtract/…/IsGreaterThan, which
+  // derefScalar both operands at entry (checked on the printed text by the caller's diff)
+  goGetArgPointerInHelperArithmetic(n) {
+    const parent = n.parent;
+    if (parent?.kind !== ts5.SyntaxKind.BinaryExpression) {
+      return false;
+    }
+    const ops = [
+      ts5.SyntaxKind.SlashToken,
+      ts5.SyntaxKind.MinusToken,
+      ts5.SyntaxKind.AsteriskToken,
+      ts5.SyntaxKind.PercentToken,
+      ts5.SyntaxKind.GreaterThanToken,
+      ts5.SyntaxKind.LessThanToken,
+      ts5.SyntaxKind.GreaterThanEqualsToken,
+      ts5.SyntaxKind.LessThanEqualsToken
+    ];
+    if (!ops.includes(parent.operatorToken?.kind)) {
+      return false;
+    }
+    const printed = this.printNode(parent, 0).trim();
+    return /^(?:\(\s*)*(?:Divide|Subtract|Multiply|Mod|IsGreaterThan|IsLessThan|IsGreaterThanOrEqual|IsLessThanOrEqual)\(/.test(printed);
   }
   // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
   // (GetValue, Urlencode, Json, IsEqual) derefScalar it; a `*Request` builder returns that
@@ -12601,10 +12652,30 @@ ${this.getIden(level)}}()`;
     }
     const type = checker.getTypeAtLocation(expr);
     if (type === void 0 || !checker.isTupleType(type)) {
-      return false;
+      return this.goParamsTupleHelperIndex(expr) === index;
     }
     const element = checker.getTypeArguments(type)?.[index];
     return element !== void 0 && !(element.flags & (ts5.TypeFlags.Any | ts5.TypeFlags.Unknown)) && this.goParameterTypeIsDict(element);
+  }
+  // `this.handleXxx(…, params, …)` of a base helper typed `any[]` whose element holds the params
+  // map it was given after omit/extend; only when that element is the same map-typed local
+  goParamsTupleHelperIndex(call) {
+    const callee = call?.expression;
+    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+      return -1;
+    }
+    const index = GO_PARAMS_TUPLE_HELPERS[callee.name?.escapedText];
+    if (index === void 0) {
+      return -1;
+    }
+    const target = call.parent?.left?.elements?.[index];
+    const passesTarget = target?.kind === ts5.SyntaxKind.Identifier && (call.arguments ?? []).some((a) => a.kind === ts5.SyntaxKind.Identifier && a.escapedText === target.escapedText);
+    return passesTarget ? index : -1;
+  }
+  // the safety check of a map-typed GetArg local: a Dict tuple element written into it is printed
+  // through MapTyped once the local is bound as a map (no recursion into goGetArgLocalType)
+  goGetArgTupleWriteIsDict(declaration, right, index) {
+    return declaration?.kind === ts5.SyntaxKind.Parameter && declaration.initializer !== void 0 && this.goTupleElementIsDict(right, index);
   }
   // `[x, params] = f()` writes a GetArg local bound as map[string]any: unbox the element
   goGetArgBindsDictElement(leftElement, right, index) {

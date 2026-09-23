@@ -1117,8 +1117,11 @@ declare class GoTranspiler extends BaseTranspiler {
     goGetArgIsValueType(goType: string): boolean;
     goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
     goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
+    goGetArgPointerInHelperArithmetic(n: any): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
+    goParamsTupleHelperIndex(call: any): number;
+    goGetArgTupleWriteIsDict(declaration: any, right: any, index: number): boolean;
     goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
     goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean;
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
