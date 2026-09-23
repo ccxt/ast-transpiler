@@ -314,7 +314,7 @@ const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|predictio
 // the base tier is generated too: the transpiled `BaseExchange` body of
 // ts/src/base/Exchange.ts is spliced into java/lib/.../BaseExchange.java (the hand-written
 // java surface around it is not a class of its own), so its declarations print the
-const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads[^/]*)?\.ts$/;
+const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 
 // ===== native RETURN types (D-09) =====
 //
