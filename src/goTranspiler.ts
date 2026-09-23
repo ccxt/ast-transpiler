@@ -6044,6 +6044,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 }
                 if (symbol?.valueDeclaration === param) {
                     const parent: any = n.parent;
+                    if (parent === param) {
+                        return;                     // the parameter's own name is not a use
+                    }
                     if (nilable && (goType === 'map[string]any')) {
                         // goLocalIsSafeToType already matched the type of an assigned value
                         const assigned = (parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === n)

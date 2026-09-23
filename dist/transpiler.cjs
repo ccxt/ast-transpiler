@@ -12494,6 +12494,9 @@ ${this.getIden(level)}}()`;
         }
         if (_optionalChain([symbol, 'optionalAccess', _905 => _905.valueDeclaration]) === param) {
           const parent = n.parent;
+          if (parent === param) {
+            return;
+          }
           if (nilable && goType === "map[string]any") {
             const assigned = _optionalChain([parent, 'optionalAccess', _906 => _906.kind]) === _typescript2.default.SyntaxKind.BinaryExpression && parent.left === n && _optionalChain([parent, 'access', _907 => _907.operatorToken, 'optionalAccess', _908 => _908.kind]) === _typescript2.default.SyntaxKind.EqualsToken;
             if (assigned || this.goGetArgNilMapUseOnlyReads(n)) {
