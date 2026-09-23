@@ -270,7 +270,14 @@ const JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL: { [name: string]: string } = {
     'Currency': 'java.util.Map<String, Object>',
     'Str': 'String',
     'Int': 'Long',
+    'Strings': 'java.util.List<String>',
 };
+
+// `Strings` (and a `string[]` spelling of the same slot) is typed only on parameters named `symbols`
+const JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = new Set<string>(['symbols']);
+const JAVA_STRING_LIST_TYPE = 'java.util.List<String>';
+// base symbol-list helpers keep their Object slot (hand-written java callers pass Object)
+const JAVA_STRINGS_EXCLUDED_METHODS = new Set<string>(['marketSymbols', 'marketIds', 'marketsForSymbols', 'getMarketFromSymbols']);
 
 // the aliases above have to come from the shared ts/src/base/types.ts declaration
 const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
@@ -530,6 +537,9 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (type === 'java.util.Map<String, Object>') {
             return `Helpers.toMapArg(${printed})`;
+        }
+        if (type === JAVA_STRING_LIST_TYPE) {
+            return `Helpers.toStringListArg(${printed})`;
         }
         return `(${type}) (${printed})`;
     }
@@ -2313,17 +2323,42 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const symbol = (type as any).aliasSymbol ?? (type as any).symbol;
         const name = symbol?.name;
-        if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
-            return undefined;
-        }
         const excluded = JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS[(method.name as any)?.escapedText];
         if (excluded !== undefined && excluded.includes(method.parameters.indexOf(node))) {
+            return undefined;
+        }
+        if (name === 'Strings' || this.javaIsStringArrayType(checker, type)) {
+            const listName = JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has((node.name as any)?.escapedText)
+                && !JAVA_STRINGS_EXCLUDED_METHODS.has((method.name as any)?.escapedText);
+            return listName ? JAVA_STRING_LIST_TYPE : undefined;
+        }
+        if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
             return undefined;
         }
         const declaration = symbol?.declarations?.[0];
         const fileName = declaration?.getSourceFile?.()?.fileName;
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '')
             ? JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] : undefined;
+    }
+
+    // a `string[]` annotation (optionally `| undefined`), the unaliased spelling of `Strings`
+    javaIsStringArrayType(checker, type): boolean {
+        const members = type.isUnion?.() ? type.types : [type];
+        let arrays = 0;
+        for (const member of members) {
+            if (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) {
+                continue;
+            }
+            if (!checker.isArrayType(member)) {
+                return false;
+            }
+            const element = checker.getTypeArguments(member)?.[0];
+            if (element === undefined || !(element.flags & ts.TypeFlags.String)) {
+                return false;
+            }
+            arrays++;
+        }
+        return arrays === 1;
     }
 
     // Java overrides are invariant: every ancestor declaration must match the parameter count,
@@ -2373,10 +2408,23 @@ export class JavaTranspiler extends BaseTranspiler {
     // a typed default-valued parameter of a sync core is written in place (async cores copy it
     // into an Object local first), so its writes convert to the declared type
     javaSplitParameterWriteType(node): string | undefined {
-        if (node?.initializer === undefined || !this.hasDefaultedTail(node.parent) || this.isAsyncFunction(node.parent)) {
+        if (node?.initializer === undefined || !this.hasDefaultedTail(node.parent)) {
             return undefined;
         }
+        if (this.isAsyncFunction(node.parent)) {
+            return this.javaAsyncParameterLocalType(node);
+        }
         return this.javaOptionalParameterType(node);
+    }
+
+    // the async body copy of a reassigned default-valued parameter keeps a `List<String>` type;
+    // its writes convert like the sync in-place ones (other types keep the `Object` copy)
+    javaAsyncParameterLocalType(node): string | undefined {
+        if (node?.initializer === undefined || !this.hasDefaultedTail(node.parent) || !this.isAsyncFunction(node.parent)) {
+            return undefined;
+        }
+        const type = this.javaOptionalParameterType(node);
+        return type === JAVA_STRING_LIST_TYPE ? type : undefined;
     }
 
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
@@ -2433,6 +2481,9 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (native === 'Long') {
             return `${leftText} = Helpers.toLongOrNull(${this.printNode(right, identation)})`;
+        }
+        if (native === JAVA_STRING_LIST_TYPE) {
+            return `${leftText} = Helpers.toStringListArg(${this.printNode(right, identation)})`;
         }
         // the checkcast carries its own parentheses: a bare `(T) cond ? a : b` binds the
         // condition, not the whole right side
@@ -5540,7 +5591,8 @@ export class JavaTranspiler extends BaseTranspiler {
             const javaType = this.javaOptionalParameterJavaType(param);
             const getter = javaType === 'Long' ? 'getArgLong'
                 : javaType === 'String' ? 'getArgString'
-                    : javaType === 'java.util.Map<String, Object>' ? 'getArgMap' : undefined;
+                    : javaType === 'java.util.Map<String, Object>' ? 'getArgMap'
+                        : javaType === JAVA_STRING_LIST_TYPE ? 'getArgStringList' : undefined;
             if (getter === undefined) {
                 out.push(this.printOptionalArgExpression(index, param.initializer));
                 return;
@@ -5641,7 +5693,8 @@ export class JavaTranspiler extends BaseTranspiler {
                     if (isAsyncMethod && isReassignedVar) {
                         const paramName = param.name.escapedText;
                         const { localName, snapName } = this.getAsyncParamWrapperNames(paramName);
-                        finalVarWrappers.push(this.getIden(identation + 1) + `Object ${localName} = ${snapName};`);
+                        const localType = this.javaAsyncParameterLocalType(param) ?? 'Object';
+                        finalVarWrappers.push(this.getIden(identation + 1) + `${localType} ${localName} = ${snapName};`);
                     }
                 }
 
