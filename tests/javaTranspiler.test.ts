@@ -4623,8 +4623,10 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("public Object m(Object arg, Object symbol)");
         expect(output).toContain("public Object m(Object arg, Object... optionalArgs)");
-        expect(output).toContain("Object symbol = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;");
+        expect(output).toContain("return this.m(arg, optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null);");
+        expect(output).not.toContain("Object symbol = optionalArgs");
         expect(output).not.toContain("Helpers.getArg");
     });
 
@@ -4636,11 +4638,12 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1;");
-        expect(output).toContain("Object b = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true;");
-        expect(output).toContain("Object c = optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\";");
-        expect(output).toContain("Object d = optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}};");
-        expect(output).toContain("Object e = optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList());");
+        expect(output).toContain("public Object m(Object arg, Object a, Object b, Object c, Object d, Object e)");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1, ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true, ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\", ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}}, ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList()));");
         expect(output).not.toContain("Helpers.getArg");
     });
 
@@ -4666,12 +4669,12 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg }));");
-        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar);");
+        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg })), ");
+        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar));");
         expect(output).not.toContain("optionalArgs.length >");
     });
 
-    test('async method unpacks natively inside the supplyAsync lambda', () => {
+    test('async method takes the default as a core parameter; the front unpacks it', () => {
         const input =
         "class T {\n" +
         "    async m(arg, params = {}) {\n" +
@@ -4679,7 +4682,8 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("            Object parameters = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}};");
+        expect(output).toContain("public java.util.concurrent.CompletableFuture<Object> m(Object arg, Object parameters)");
+        expect(output).toContain("return this.m(arg, optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}});");
         expect(output).not.toContain("Helpers.getArg");
     });
 
@@ -7239,6 +7243,9 @@ describe('java typed parameters (b-09)', () => {
             "    parseNum (amount: Num, count: Int): void {\n" +
             "        const x = amount;\n" +
             "    }\n" +
+            "    async fetchRows (symbol: Str, since: Int = undefined, limit: Int = undefined, price: Num = undefined, params = {}) {\n" +
+            "        return [ symbol, since, limit, price, params ];\n" +
+            "    }\n" +
             "}\n" +
             "class Sub extends Venue {\n" +
             "    parseZ (data: Dict, status: Str, market: Market, cur: Currency): void {\n" +
@@ -7306,9 +7313,17 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('public void parseNum(Object amount, Object count)');
     });
 
-    test('an optional parameter keeps its optionalArgs prologue and type', () => {
+    test('Int defaults print Long on the core and read through getArgLong; Num and unannotated stay Object', () => {
+        expect(venueOutput).toContain('fetchRows(String symbol, Long since, Long limit, Object price, Object parameters)');
+        expect(venueOutput).toContain('fetchRows(String symbol, Object... optionalArgs)');
+        expect(venueOutput).toContain('return this.fetchRows(symbol, Helpers.getArgLong(optionalArgs, 0, null), Helpers.getArgLong(optionalArgs, 1, null), optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : null, ');
+    });
+
+    test('an optional parameter is typed on the core; the front reads it with a typed getter', () => {
+        expect(venueOutput).toContain('public void parseOpt(java.util.Map<String, Object> data, String status)');
         expect(venueOutput).toContain('public void parseOpt(Object... optionalArgs)');
-        expect(venueOutput).toContain('Object data = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>()');
+        expect(venueOutput).toContain('this.parseOpt(Helpers.getArgMap(optionalArgs, 0, new java.util.HashMap<String, Object>() {{}}), Helpers.getArgString(optionalArgs, 1, null));');
+        expect(venueOutput).not.toContain('return this.parseOpt(');
     });
 });
 

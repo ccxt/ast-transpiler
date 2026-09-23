@@ -1331,6 +1331,12 @@ declare class JavaTranspiler extends BaseTranspiler {
     exchangeTierMethodNames(): Set<string>;
     javaParameterPrintsType(baseParam: any, type: string): boolean;
     javaInheritedParameterType(node: any): string | undefined;
+    javaOptionalParameterJavaType(node: any): string;
+    javaOptionalParameterType(node: any): string | undefined;
+    javaOptionalParameterTypeOf(node: any): string | undefined;
+    javaOptionalParameterFamilyAgrees(method: any, override: any, index: any, type: string): boolean;
+    firstDefaultParameterIndex(params: any): number;
+    hasDefaultedTail(node: any): boolean;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
@@ -1445,6 +1451,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
+    printOptionalArgExpression(index: any, initializer: any): string;
     printOptionalArgInit(paramName: any, index: any, initializer: any): string;
     isPureInitializer(node: any): any;
     printFunctionBody(node: any, identation: any): string;
@@ -1454,12 +1461,15 @@ declare class JavaTranspiler extends BaseTranspiler {
     printAsExpression(node: any, identation: any): string;
     printParameterType(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
+    printCoreMethodParameters(node: any): any;
+    printFrontForwardedArguments(node: any): string;
+    printFrontMethodDeclaration(node: any, identation: any): string;
     printMethodParameters(node: any): any;
     printArrayLiteralExpression(node: any): string;
     printFinalOutsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printInsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
-    printMethodDefinition(node: any, identation: any): string;
+    printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
     printArrayIsArrayCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeArrayIsArray(node: any, parsedArg: any): string;
     javaPrimaryIsArrayOperand(node: any): boolean;
