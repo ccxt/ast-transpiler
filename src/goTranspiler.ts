@@ -5949,7 +5949,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const verdictOf = (callee: string, argIndex: number): string => {
             const entry = table[callee];
             if (entry === undefined) {
-                return pointer ? 'unknown' : 'deref';       // a container reads the same either way
+                // a nil-defaulted container may be handed back through `any` as a non-nil typed nil
+                return (pointer || nilable) ? 'unknown' : 'deref';
             }
             if (typeof entry === 'string') {
                 return entry;
@@ -5988,7 +5989,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         const calleeName = (callee?.name !== undefined) ? callee.name.escapedText
                             : ((callee?.escapedText !== undefined) ? callee.escapedText : undefined);
                         if (calleeName === undefined) {
-                            safe = !pointer;
+                            safe = !pointer && !nilable;
                             return;
                         }
                         const verdict = verdictOf(calleeName, argIndex);
@@ -6026,8 +6027,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         safe = true;                 // `_ = x` and other inert statements
                         return;
                     }
-                    // a bare read: container/value locals read the same; a pointer local would hand `*T`, so it keeps the box
-                    safe = !pointer;
+                    // a bare read hands the local on as `any`: a pointer or a nil-defaulted container would
+                    // no longer compare equal to nil there, so both keep the box
+                    safe = !pointer && !nilable;
                     return;
                 }
             }

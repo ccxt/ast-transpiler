@@ -12404,7 +12404,7 @@ ${this.getIden(level)}}()`;
     const verdictOf = (callee, argIndex) => {
       const entry = table[callee];
       if (entry === void 0) {
-        return pointer ? "unknown" : "deref";
+        return pointer || nilable ? "unknown" : "deref";
       }
       if (typeof entry === "string") {
         return entry;
@@ -12438,7 +12438,7 @@ ${this.getIden(level)}}()`;
             const callee = parent.expression;
             const calleeName = callee?.name !== void 0 ? callee.name.escapedText : callee?.escapedText !== void 0 ? callee.escapedText : void 0;
             if (calleeName === void 0) {
-              safe = !pointer;
+              safe = !pointer && !nilable;
               return;
             }
             const verdict = verdictOf(calleeName, argIndex);
@@ -12473,7 +12473,7 @@ ${this.getIden(level)}}()`;
             safe = true;
             return;
           }
-          safe = !pointer;
+          safe = !pointer && !nilable;
           return;
         }
       }

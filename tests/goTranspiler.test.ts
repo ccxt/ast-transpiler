@@ -1628,6 +1628,21 @@ describe('go inline equality', () => {
         expect(output).toContain("if force == true {");
         expect(output).not.toContain("EvalTruthy(force)");
     });
+    test('a nil-defaulted dictionary returned bare keeps the GetArg box', () => {
+        const input =
+        "class T {\n" +
+        "    safeValue (a, b, c?) { return a; }\n" +
+        "    f (d: any, key: any, defaultValue: Dict = undefined) {\n" +
+        "        const value = this.safeValue (d, key, defaultValue);\n" +
+        "        if (value === undefined) { return defaultValue; }\n" +
+        "        return value;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a nil map returned through `any` is not nil to the caller, so the untyped box stays
+        expect(output).toContain("defaultValue := GetArg(optionalArgs, 0, nil)");
+        expect(output).not.toContain("GetArgMap(optionalArgs, 0, nil)");
+    });
     test('a direct SafeBool call derefs instead of boxing', () => {
         const input =
         "class T {\n" +
