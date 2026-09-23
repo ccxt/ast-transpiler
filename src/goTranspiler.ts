@@ -712,6 +712,7 @@ export class GoTranspiler extends BaseTranspiler {
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
+    goGetArgTypeCache: WeakMap<any, string | undefined>;
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
     // appended to every async (channel returning) Go method/function name and to each
@@ -2048,7 +2049,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 if (parent?.kind === ts.SyntaxKind.ArrayLiteralExpression
                 && parent.parent?.kind === ts.SyntaxKind.BinaryExpression
                 && parent.parent.left === parent
-                && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+                && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+                && !((goType === 'map[string]any') && this.goTupleElementIsDict(parent.parent.right, parent.elements.indexOf(n)))) {
                     return true;
                 }
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
@@ -3102,7 +3104,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
             parsedArrayBindingElements.forEach((e, index) => {
 
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
+                const statement = this.getIden(identation) + (this.goGetArgBindsDictElement(arrayBindingPatternElements[index], right, index)
+                    ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))`
+                    : `${e} = GetValue(${syntheticName}, ${index})`);
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + "\n";
                 } else {
@@ -6148,6 +6152,48 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return stored && !methodName.endsWith('Request');
     }
 
+    // element `index` of a tuple-typed call result is `Dict` (`[T, Dict]`); the Go tuple holds
+    // that map, so MapTyped reads the same dictionary back
+    goTupleElementIsDict(right: any, index: number): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if ((checker === undefined) || (index < 0)) {
+            return false;
+        }
+        const expr: any = (right?.kind === ts.SyntaxKind.AwaitExpression) ? right.expression : right;
+        if (expr?.kind !== ts.SyntaxKind.CallExpression) {
+            return false;
+        }
+        const type: any = checker.getTypeAtLocation(expr);
+        if ((type === undefined) || !checker.isTupleType(type)) {
+            return false;
+        }
+        const element: any = checker.getTypeArguments(type)?.[index];
+        return (element !== undefined) && !(element.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown))
+            && this.goParameterTypeIsDict(element);
+    }
+
+    // `[x, params] = f()` writes a GetArg local bound as map[string]any: unbox the element
+    goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean {
+        if ((leftElement?.kind !== ts.SyntaxKind.Identifier) || !this.goTupleElementIsDict(right, index)) {
+            return false;
+        }
+        let decl: any;
+        try {
+            decl = this.checkerOrUndefined()?.getSymbolAtLocation(leftElement)?.valueDeclaration;
+        } catch (e) {
+            decl = undefined;
+        }
+        if ((decl?.kind !== ts.SyntaxKind.Parameter) || (decl.initializer === undefined) || (decl.parent?.body === undefined)) {
+            return false;
+        }
+        this.goGetArgTypeCache ??= new WeakMap();
+        if (!this.goGetArgTypeCache.has(decl)) {
+            this.goGetArgTypeCache.set(decl, undefined);
+            this.goGetArgTypeCache.set(decl, this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0)));
+        }
+        return this.goGetArgTypeCache.get(decl) === 'map[string]any';
+    }
+
     // the callee's own GetArg with a container default returns def for an untyped nil box but the
     // nil map for a nil map box (nil slices collapse to def), so only map shapes differ
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean {
@@ -7389,7 +7435,9 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
                 const castExp = parsedType ? `(${parsedType})` : "";
 
                 // const statement = this.getIden(identation) + `${e} = (${castExp}((List<object>)${syntheticName}))[${index}]`;
-                const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
+                const statement = this.getIden(identation) + (this.goGetArgBindsDictElement(leftElement, right, index)
+                    ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))`
+                    : `${e} = GetValue(${syntheticName}, ${index})`);
                 if (index < parsedArrayBindingElements.length - 1) {
                     arrayBindingStatement += statement + "\n";
                 } else {
