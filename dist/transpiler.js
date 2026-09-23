@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -9088,7 +9088,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.SpreadElement) {
           return true;
         }
-        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken) {
+        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goTupleElementIsDict(parent.parent.right, parent.elements.indexOf(n)))) {
           return true;
         }
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
@@ -9947,7 +9947,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}
 `;
       parsedArrayBindingElements.forEach((e, index) => {
-        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
+        const statement = this.getIden(identation) + (this.goGetArgBindsDictElement(arrayBindingPatternElements[index], right, index) ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))` : `${e} = GetValue(${syntheticName}, ${index})`);
         if (index < parsedArrayBindingElements.length - 1) {
           arrayBindingStatement += statement + "\n";
         } else {
@@ -12478,7 +12478,8 @@ ${this.getIden(level)}}()`;
     const pointer = goType.startsWith("*");
     let safe = true;
     const verdictOf = (callee, argIndex) => {
-      const entry = table[callee];
+      const goName = callee.charAt(0).toUpperCase() + callee.slice(1);
+      const entry = table[callee] ?? (pointer ? table[goName] ?? table[goName + "Async"] : void 0);
       if (entry === void 0) {
         return pointer || nilable ? "unknown" : "deref";
       }
@@ -12521,7 +12522,10 @@ ${this.getIden(level)}}()`;
             const args = parent.arguments ?? [];
             const argIndex = args.indexOf(n);
             const callee = parent.expression;
-            const calleeName = callee?.name !== void 0 ? callee.name.escapedText : callee?.escapedText !== void 0 ? callee.escapedText : void 0;
+            let calleeName = callee?.name !== void 0 ? callee.name.escapedText : callee?.escapedText !== void 0 ? callee.escapedText : void 0;
+            if (callee?.expression?.escapedText === "Math" && (calleeName === "min" || calleeName === "max")) {
+              calleeName = "math" + calleeName.charAt(0).toUpperCase() + calleeName.slice(1);
+            }
             if (calleeName === void 0) {
               safe = !pointer && !nilable;
               return;
@@ -12558,6 +12562,10 @@ ${this.getIden(level)}}()`;
             safe = true;
             return;
           }
+          if (pointer && this.goGetArgPointerStoredAsValue(n, param)) {
+            safe = true;
+            return;
+          }
           safe = !pointer && !nilable;
           return;
         }
@@ -12566,6 +12574,54 @@ ${this.getIden(level)}}()`;
     };
     ts5.forEachChild(body, visit);
     return safe;
+  }
+  // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
+  // (GetValue, Urlencode, Json, IsEqual) derefScalar it; a `*Request` builder returns that
+  // dictionary to its caller, so it keeps the box
+  goGetArgPointerStoredAsValue(n, param) {
+    const parent = n.parent;
+    const stored = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.right === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && parent.left?.kind === ts5.SyntaxKind.ElementAccessExpression || parent?.kind === ts5.SyntaxKind.PropertyAssignment && parent.initializer === n;
+    const methodName = String(param?.parent?.name?.escapedText ?? "");
+    return stored && !methodName.endsWith("Request");
+  }
+  // element `index` of a tuple-typed call result is `Dict` (`[T, Dict]`); the Go tuple holds
+  // that map, so MapTyped reads the same dictionary back
+  goTupleElementIsDict(right, index) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0 || index < 0) {
+      return false;
+    }
+    const expr = right?.kind === ts5.SyntaxKind.AwaitExpression ? right.expression : right;
+    if (expr?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const type = checker.getTypeAtLocation(expr);
+    if (type === void 0 || !checker.isTupleType(type)) {
+      return false;
+    }
+    const element = checker.getTypeArguments(type)?.[index];
+    return element !== void 0 && !(element.flags & (ts5.TypeFlags.Any | ts5.TypeFlags.Unknown)) && this.goParameterTypeIsDict(element);
+  }
+  // `[x, params] = f()` writes a GetArg local bound as map[string]any: unbox the element
+  goGetArgBindsDictElement(leftElement, right, index) {
+    if (leftElement?.kind !== ts5.SyntaxKind.Identifier || !this.goTupleElementIsDict(right, index)) {
+      return false;
+    }
+    let decl;
+    try {
+      decl = this.checkerOrUndefined()?.getSymbolAtLocation(leftElement)?.valueDeclaration;
+    } catch (e) {
+      decl = void 0;
+    }
+    if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0 || decl.parent?.body === void 0) {
+      return false;
+    }
+    this.goGetArgTypeCache ??= /* @__PURE__ */ new WeakMap();
+    if (!this.goGetArgTypeCache.has(decl)) {
+      this.goGetArgTypeCache.set(decl, void 0);
+      this.goGetArgTypeCache.set(decl, this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0)));
+    }
+    return this.goGetArgTypeCache.get(decl) === "map[string]any";
   }
   // the callee's own GetArg with a container default returns def for an untyped nil box but the
   // nil map for a nil map box (nil slices collapse to def), so only map shapes differ
@@ -13536,7 +13592,7 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
         const leftType = this.getChecker().getTypeAtLocation(leftElement);
         const parsedType = this.getTypeFromRawType(leftType);
         const castExp = parsedType ? `(${parsedType})` : "";
-        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
+        const statement = this.getIden(identation) + (this.goGetArgBindsDictElement(leftElement, right, index) ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))` : `${e} = GetValue(${syntheticName}, ${index})`);
         if (index < parsedArrayBindingElements.length - 1) {
           arrayBindingStatement += statement + "\n";
         } else {

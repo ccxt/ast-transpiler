@@ -786,6 +786,7 @@ declare class GoTranspiler extends BaseTranspiler {
     wrapCallMethods: string[];
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
+    goGetArgTypeCache: WeakMap<any, string | undefined>;
     goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
     classNameMap: {
@@ -1116,6 +1117,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goGetArgIsValueType(goType: string): boolean;
     goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
     goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
+    goGetArgPointerStoredAsValue(n: any, param: any): boolean;
+    goTupleElementIsDict(right: any, index: number): boolean;
+    goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
