@@ -7211,10 +7211,16 @@ describe('java typed parameters (b-09)', () => {
             "export interface CurrencyInterface {\n    code: string;\n}\n" +
             "export type Currency = CurrencyInterface | undefined;\n");
         fs.writeFileSync(BASE_FIXTURE,
-            "import type { Dict, Str } from './types';\n" +
+            "import type { Dict, Str, Int, Market } from './types';\n" +
             "export default class Exchange {\n" +
             "    parseX (data: Dict, status: Str): void {\n" +
             "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseRow (row: Dict, market: Market = undefined): Dict {\n" +
+            "        return row;\n" +
+            "    }\n" +
+            "    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str {\n" +
+            "        return networkId;\n" +
             "    }\n" +
             "}\n");
         fs.writeFileSync(VENUE_FIXTURE,
@@ -7251,6 +7257,16 @@ describe('java typed parameters (b-09)', () => {
             "        return symbol;\n" +
             "    }\n" +
             "    fetch2 (path: any, api: any = 'public', method = 'GET', params: Dict = {}, headers: any = undefined): void {\n" +
+            "    }\n" +
+            "    parseRow (row: Dict, market: Market = undefined, since: Int = undefined): Dict {\n" +
+            "        return row;\n" +
+            "    }\n" +
+            "    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str {\n" +
+            "        const title = this.safeTitle (networkId);\n" +
+            "        return super.networkIdToCode (title, currencyCode);\n" +
+            "    }\n" +
+            "    safeTitle (x: any): any {\n" +
+            "        return x;\n" +
             "    }\n" +
             "    fetchDepth (symbol: Str, limit: Int = 100, params: Dict = {}): void {\n" +
             "    }\n" +
@@ -7340,6 +7356,16 @@ describe('java typed parameters (b-09)', () => {
     test('fetch2 keeps an untyped params slot for implicit-endpoint arrays', () => {
         expect(venueOutput).toContain('fetch2(Object path, Object api, Object method, Object parameters, Object headers)');
         expect(venueOutput).not.toContain('Helpers.getArgMap(optionalArgs, 2,');
+    });
+
+    test('an override with another parameter list bridges the ancestor core signature', () => {
+        expect(venueOutput).toContain('public Object parseRow(java.util.Map<String, Object> row, java.util.Map<String, Object> market)');
+        expect(venueOutput).toContain('return this.parseRow(row, (Object) (market), (Object) null);');
+    });
+
+    test('a super call into a split method binds the typed core at full arity', () => {
+        expect(venueOutput).toContain('return super.networkIdToCode(Helpers.toStringArg(title), currencyCode);');
+        expect(venueOutput).not.toContain('super.networkIdToCode(title, ');
     });
 
     test('an integer default of a Long slot prints as a long literal', () => {

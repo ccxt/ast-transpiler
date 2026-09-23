@@ -1249,6 +1249,14 @@ declare class JavaTranspiler extends BaseTranspiler {
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
+    javaSuperCoreCallArguments(args: any, node: any, identation: any): string | undefined;
+    javaArgumentHasType(arg: any, type: string): boolean;
+    javaCoreParameterTypes(method: any): string[];
+    javaCoreDefaultArgument(param: any, type: string): string;
+    javaConvertToCoreType(type: string, printed: string, node: any): string;
+    javaErasure(type: string): string;
+    printOverrideBridges(node: any, identation: any): string;
+    printOverrideBridge(node: any, ancestor: any, ancestorTypes: string[], ownTypes: string[], identation: any): string;
     javaSpawnCallParameterTypes(node: any): (string | undefined)[] | undefined;
     javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
