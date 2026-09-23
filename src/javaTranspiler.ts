@@ -281,6 +281,8 @@ const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 const JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     // implicit endpoints pass fetch2/request/sign params through untyped (arrays for batch orders)
     'fetch2': [ 3 ],
+    // the Exchange tier keeps fetchOrderBook's symbol Object; PredictionExchange overrides must erase alike
+    'fetchOrderBook': [ 0 ],
     'request': [ 3 ],
     'sign': [ 3 ],
     'handleErrors': [ 4 ],
