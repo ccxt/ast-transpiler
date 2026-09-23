@@ -1261,6 +1261,22 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(doAwaitBody).toContain("PanicOnError(a)");
         expect(doAwaitBody).not.toContain("Spawn");
     });
+    test('a discarded awaited call is received inside PanicOnError, with no local', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async loadMarkets (reload = false): Promise<any> {\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "    async doLoad (params = {}): Promise<any> {\n" +
+        "        await this.loadMarkets ();\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        const [, , , doLoadBody] = methodBodies(output);
+        expect(doLoadBody).toContain("PanicOnError((<-this.LoadMarkets()))");
+        expect(doLoadBody).not.toContain("retRes");
+    });
     test('receive assignments use gofmt spacing', () => {
         // gofmt writes `x := (<-this.X())`: one space either side of `:=`, none after `<-`
         const input =

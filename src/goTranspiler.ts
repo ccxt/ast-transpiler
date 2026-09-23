@@ -6267,9 +6267,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const expStatement = (stmtUnbox !== undefined)
             ? `
 ${this.getIden(identation)}var ${returnRandName} ${stmtUnbox.goType} = ${stmtUnbox.wrap(exprStm)}`
+            // the discarded value needs no local: PanicOnError still surfaces the channel's error
             : `
-${this.getIden(identation)}${returnRandName} := ${exprStm}
-${this.getIden(identation)}PanicOnError(${returnRandName})`;
+${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
         return this.printNodeCommentsIfAny(node, identation, expStatement);
     }
 

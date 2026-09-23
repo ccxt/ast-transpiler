@@ -12640,8 +12640,7 @@ ${this.getIden(level)}}()`;
     const stmtUnbox = this.goAwaitReceiveUnbox(node.expression, exprStm);
     const expStatement = stmtUnbox !== void 0 ? `
 ${this.getIden(identation)}var ${returnRandName} ${stmtUnbox.goType} = ${stmtUnbox.wrap(exprStm)}` : `
-${this.getIden(identation)}${returnRandName} := ${exprStm}
-${this.getIden(identation)}PanicOnError(${returnRandName})`;
+${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     return this.printNodeCommentsIfAny(node, identation, expStatement);
   }
   isInsideAsyncFunction(returnStatementNode) {
