@@ -12547,6 +12547,10 @@ ${this.getIden(level)}}()`;
                 return;
               }
             }
+            if (verdict === "unknown" && nilable && goType === "map[string]any" && this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+              safe = true;
+              return;
+            }
             if (verdict === "unknown") {
               safe = false;
               return;
@@ -12622,6 +12626,21 @@ ${this.getIden(level)}}()`;
       this.goGetArgTypeCache.set(decl, this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0)));
     }
     return this.goGetArgTypeCache.get(decl) === "map[string]any";
+  }
+  // argument `argIndex` of the callee binds a parameter with a TypeScript default (GetArg-bound)
+  goGetArgPositionIsDefaulted(callee, argIndex) {
+    if (argIndex < 0) {
+      return false;
+    }
+    let decl;
+    try {
+      decl = this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration;
+    } catch (e) {
+      decl = void 0;
+    }
+    const kinds = [ts5.SyntaxKind.MethodDeclaration, ts5.SyntaxKind.FunctionDeclaration];
+    const param = decl !== void 0 && kinds.includes(decl.kind) ? decl.parameters?.[argIndex] : void 0;
+    return param?.initializer !== void 0 && param.dotDotDotToken === void 0;
   }
   // the callee's own GetArg with a container default returns def for an untyped nil box but the
   // nil map for a nil map box (nil slices collapse to def), so only map shapes differ

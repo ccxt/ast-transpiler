@@ -1120,6 +1120,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
     goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
+    goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean;
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
