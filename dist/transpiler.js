@@ -8536,6 +8536,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (op === ts5.SyntaxKind.EqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsEqualsToken || ORDERED_COMPARISON_OPERATORS[op] !== void 0) {
           return "bool";
         }
+        if (op === ts5.SyntaxKind.PlusToken && this.goNativeArithmetic(initializer)?.goType === "string") {
+          return "string";
+        }
         break;
       }
       case ts5.SyntaxKind.CallExpression: {
@@ -8636,6 +8639,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
     if (declaration?.kind !== ts5.SyntaxKind.Parameter) {
       return void 0;
+    }
+    const bound = this.goGetArgParameterType(declaration);
+    if (bound !== void 0 && GO_TYPE_NAMES.indexOf(bound) >= 0 && ["string", "int64", "float64"].includes(bound)) {
+      return bound;
     }
     let type;
     try {

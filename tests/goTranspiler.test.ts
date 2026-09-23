@@ -2918,7 +2918,7 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var s any = this.Id + \" does not support \" + \"market\"");
+        expect(output).toContain("var s string = this.Id + \" does not support \" + \"market\"");
         expect(output).not.toContain("Add(");
     });
     test('concat with an any operand keeps the outer Add but inlines the string part', () => {
@@ -4019,6 +4019,47 @@ describe('go gofmt-clean native shapes', () => {
 // `*string` local the checker narrowed to a non-nilable string at that use site
 describe('go string concat chains -> native +', () => {
     const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('a GetArgString-bound parameter is a concat leaf and the declaration is string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    sign (path: any, api = 'public', method = 'GET') {\n" +
+        "        const auth = method + '\\n';\n" +
+        "        return auth;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var method string = GetArgString(optionalArgs, 1, "GET")');
+        expect(output).toContain('var auth string = method + "\\n"');
+        expect(output).not.toContain('Add(');
+    });
+    test('a chain over a native-concat string local declares string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (method = 'GET') {\n" +
+        "        const nonce = 'n_' + method;\n" +
+        "        const auth = '/u' + 'GET' + method + '' + nonce;\n" +
+        "        return auth;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var auth string = "/u" + "GET" + method + "" + nonce');
+        expect(output).not.toContain('Add(');
+    });
+    test('an any parameter or unproven *string leaf keeps the Add declaration any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any, body: any, method = 'GET') {\n" +
+        "        const q = this.safeString (item, 'q');\n" +
+        "        const a = method + body;\n" +
+        "        const b = method + q;\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var a any = Add(method, body)');
+        expect(output).toContain('var b any = Add(method, q)');
+    });
     test('a chain over two guard-narrowed *string locals prints as one Go expression', () => {
         const input =
         "class Exchange {\n" +
@@ -4192,7 +4233,7 @@ describe('go string concat operands -> declared Go string', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('var u any = this.Version + "/"');
+        expect(output).toContain('var u string = this.Version + "/"');
         expect(output).not.toContain('Add(');
     });
     test('every hand-written string field in the table concats natively', () => {
@@ -4239,7 +4280,7 @@ describe('go string concat operands -> declared Go string', () => {
         "}\n";
         const output = squash(inst.transpileGo(input).content);
         expect(output).toContain('func (this *Exchange) F(symbol string) any {');
-        expect(output).toContain('var id any = symbol + "-"');
+        expect(output).toContain('var id string = symbol + "-"');
         expect(output).not.toContain('Add(');
     });
     test('an `any` parameter keeps the helper', () => {
@@ -4263,7 +4304,7 @@ describe('go string concat operands -> declared Go string', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('var u any = "?" + this.UrlencodeNested(params)');
+        expect(output).toContain('var u string = "?" + this.UrlencodeNested(params)');
         expect(output).not.toContain('Add(');
     });
 });
