@@ -6114,6 +6114,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         safe = true;                 // `_ = x` and other inert statements
                         return;
                     }
+                    if (pointer && this.goGetArgPointerStoredAsValue(n, param)) {
+                        safe = true;
+                        return;
+                    }
                     // a bare read hands the local on as `any`: a pointer or a nil-defaulted container would
                     // no longer compare equal to nil there, so both keep the box
                     safe = !pointer && !nilable;
@@ -6124,6 +6128,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         ts.forEachChild(body, visit);
         return safe;
+    }
+
+    // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
+    // (GetValue, Urlencode, Json, IsEqual) derefScalar it; a `*Request` builder returns that
+    // dictionary to its caller, so it keeps the box
+    goGetArgPointerStoredAsValue(n: any, param: any): boolean {
+        const parent: any = n.parent;
+        const stored = ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.right === n)
+                && (parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken)
+                && (parent.left?.kind === ts.SyntaxKind.ElementAccessExpression))
+            || ((parent?.kind === ts.SyntaxKind.PropertyAssignment) && (parent.initializer === n));
+        const methodName = String(param?.parent?.name?.escapedText ?? '');
+        return stored && !methodName.endsWith('Request');
     }
 
     // the callee's own GetArg with a container default returns def for an untyped nil box but the
