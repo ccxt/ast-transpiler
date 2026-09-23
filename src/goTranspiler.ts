@@ -1431,6 +1431,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 || (ORDERED_COMPARISON_OPERATORS[op] !== undefined)) {
                 return 'bool';
             }
+            // a `+` chain goNativeStringConcat prints as the Go operator is a Go string
+            if ((op === ts.SyntaxKind.PlusToken) && (this.goNativeArithmetic(initializer)?.goType === 'string')) {
+                return 'string';
+            }
             break;
         }
         case ts.SyntaxKind.CallExpression: {
@@ -1550,6 +1554,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
         if (declaration?.kind !== ts.SyntaxKind.Parameter) {
             return undefined;
+        }
+        // a defaulted parameter bound through `GetArgString` & co. is that Go scalar
+        const bound = this.goGetArgParameterType(declaration);
+        if ((bound !== undefined) && (GO_TYPE_NAMES.indexOf(bound) >= 0) && ['string', 'int64', 'float64'].includes(bound)) {
+            return bound;
         }
         let type;
         try {
