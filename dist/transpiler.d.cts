@@ -1312,7 +1312,6 @@ declare class JavaTranspiler extends BaseTranspiler {
     printConstructorDeclaration(node: any, identation: any): string;
     injectLeadingInBody(body: any, firstLine: any): any;
     printDynamicCall(node: any, identation: any): string;
-    getExpressionStatementPrefixesIfAny(node: any, identation: any): string;
     printWrappedUnknownThisProperty(node: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     handleTypeOfInsideBinaryExpression(node: any, _identation: any): string;
@@ -1465,29 +1464,15 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
     javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
     javaProvableNumericDoubleOperand(node: any): boolean;
-    getObjectLiteralFromCallExpressionArguments(node: any): any[];
-    collectCapturingObjectLiterals(node: any): any[];
-    getBinaryExpressionPrefixes(node: any, identation: any): string;
     getFinalVarName(varName: string): string;
     getOriginalVarName(name: string): string;
     private getAsyncParamWrapperNames;
     private isAssignmentOperator;
     private isIncDecOperator;
     analyzeFinalVars(fnBody: ts.Node): void;
-    private finalNameInAncestorScope;
-    buildFinalVarDeclarations(pairs: Array<{
-        orig: string;
-        final: string;
-    }>, identation: number): string;
-    getObjectLiteralId(node: any): string;
-    recordFinalVarMutation(node: any): void;
     restoreFinalVarMutations(): void;
     printNode(node: any, identation?: number): string;
-    createNewNodeForFinalVar(originalName: string): ts.Identifier;
-    getVarListFromObjectLiteralAndUpdateInPlace(node: any): Array<{
-        orig: string;
-        final: string;
-    }>;
+    objectLiteralCapturesReassigned(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
@@ -1595,7 +1580,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     csModifiers: {};
     printPropertyAccessModifiers(node: any): string;
     printModifiers(node: any): any;
+    builderObjectLiterals: WeakSet<ts.Node>;
     printObjectLiteralExpression(node: any, identation: any): string;
+    printObjectLiteralBuilder(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
