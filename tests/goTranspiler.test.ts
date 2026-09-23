@@ -1654,6 +1654,19 @@ describe('go inline equality', () => {
         expect(output).toContain("api := GetArg(optionalArgs, 0, \"public\")");
         expect(output).toContain("var method string = GetArgString(optionalArgs, 1, \"GET\")");
     });
+    test('a union-typed parameter keeps the GetArg box even with a literal default', () => {
+        const input =
+        "type IndexType = number | string;\n" +
+        "class T {\n" +
+        "    filter (array: any[], key: IndexType = 'timestamp', kind: string = 'x') {\n" +
+        "        return [ array, key, kind ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // callers pass an index (0) where the default is a key name
+        expect(output).toContain("key := GetArg(optionalArgs, 0, \"timestamp\")");
+        expect(output).toContain("var kind string = GetArgString(optionalArgs, 1, \"x\")");
+    });
     test('a nil-defaulted dictionary returned bare keeps the GetArg box', () => {
         const input =
         "class T {\n" +

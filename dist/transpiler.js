@@ -12288,6 +12288,9 @@ ${this.getIden(level)}}()`;
     const shape = (printedDefault ?? "").trim();
     const byDefault = this.goGetArgTypeOfShape(shape);
     if (byDefault !== void 0) {
+      if (param?.type !== void 0 && !this.goGetArgDeclaredTypeCandidates(param).some((t) => t.replace(/^\*/, "") === byDefault)) {
+        return void 0;
+      }
       return this.goGetArgLocalIsSafe(body, param, byDefault) ? byDefault : void 0;
     }
     if (shape !== "nil" && shape !== "undefined") {

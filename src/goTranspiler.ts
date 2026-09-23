@@ -5841,6 +5841,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const shape = (printedDefault ?? '').trim();
         const byDefault = this.goGetArgTypeOfShape(shape);
         if (byDefault !== undefined) {
+            // a declared type naming no single Go type (IndexType = number | string) admits other shapes
+            if ((param?.type !== undefined)
+                && !this.goGetArgDeclaredTypeCandidates(param).some((t) => t.replace(/^\*/, '') === byDefault)) {
+                return undefined;
+            }
             return this.goGetArgLocalIsSafe(body, param, byDefault) ? byDefault : undefined;
         }
         if ((shape !== 'nil') && (shape !== 'undefined')) {
