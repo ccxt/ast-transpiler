@@ -1497,6 +1497,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     printParameter(node: any, defaultValue?: boolean): string;
     printCoreMethodParameters(node: any): any;
     javaReassignsParameter(node: any): boolean;
+    javaSymbolOf(node: any): ts.Symbol | undefined;
+    javaWritesSymbol(node: any, symbols: Set<ts.Symbol>): boolean;
+    javaTargetWritesSymbol(target: any, symbols: Set<ts.Symbol>, destructuring: boolean): boolean;
     javaReassigningMethods: string[];
     javaStrictEffectivelyFinal: boolean;
     printMethodParameters(node: any): any;

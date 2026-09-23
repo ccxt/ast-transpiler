@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -18808,9 +18808,68 @@ var JavaTranspiler = class extends BaseTranspiler {
   printCoreMethodParameters(node) {
     return node.parameters.map((param) => param.initializer !== void 0 ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}` : this.printParameter(param)).join(", ");
   }
-  // the async method body reassigns one of its parameters (printed body: ReassignedVars is filled)
+  // the async method body writes one of its parameters, or a non-pure default must be applied
+  // by an `if (x == null) { x = init; }` inside the lambda (both break effective finality)
   javaReassignsParameter(node) {
-    return (_nullishCoalesce(node.parameters, () => ( []))).some((p) => this.ReassignedVars[this.getVarKey(p)] || p.initializer !== void 0 && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node));
+    const params = _nullishCoalesce(node.parameters, () => ( []));
+    if (params.some((p) => p.initializer !== void 0 && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node))) {
+      return true;
+    }
+    const symbols = /* @__PURE__ */ new Set();
+    params.forEach((p) => {
+      const symbol = this.javaSymbolOf(p.name);
+      if (symbol !== void 0) {
+        symbols.add(symbol);
+      }
+    });
+    return symbols.size > 0 && node.body !== void 0 && this.javaWritesSymbol(node.body, symbols);
+  }
+  javaSymbolOf(node) {
+    return this.getChecker().getSymbolAtLocation(node);
+  }
+  // syntactic walk: assignment targets, ++/--, destructuring targets and for-in/of expression heads
+  javaWritesSymbol(node, symbols) {
+    if (_typescript2.default.isBinaryExpression(node)) {
+      const op = node.operatorToken.kind;
+      if (op >= _typescript2.default.SyntaxKind.FirstAssignment && op <= _typescript2.default.SyntaxKind.LastAssignment && this.javaTargetWritesSymbol(node.left, symbols, op === _typescript2.default.SyntaxKind.EqualsToken)) {
+        return true;
+      }
+    } else if ((_typescript2.default.isPrefixUnaryExpression(node) || _typescript2.default.isPostfixUnaryExpression(node)) && (node.operator === _typescript2.default.SyntaxKind.PlusPlusToken || node.operator === _typescript2.default.SyntaxKind.MinusMinusToken) && this.javaTargetWritesSymbol(node.operand, symbols, false)) {
+      return true;
+    } else if ((_typescript2.default.isForInStatement(node) || _typescript2.default.isForOfStatement(node)) && !_typescript2.default.isVariableDeclarationList(node.initializer) && this.javaTargetWritesSymbol(node.initializer, symbols, true)) {
+      return true;
+    }
+    return _typescript2.default.forEachChild(node, (child) => this.javaWritesSymbol(child, symbols) || void 0) === true;
+  }
+  javaTargetWritesSymbol(target, symbols, destructuring) {
+    if (_typescript2.default.isParenthesizedExpression(target) || _typescript2.default.isNonNullExpression(target) || _typescript2.default.isAsExpression(target)) {
+      return this.javaTargetWritesSymbol(target.expression, symbols, destructuring);
+    }
+    if (_typescript2.default.isIdentifier(target)) {
+      const symbol = this.javaSymbolOf(target);
+      return symbol !== void 0 && symbols.has(symbol);
+    }
+    if (!destructuring) {
+      return false;
+    }
+    if (_typescript2.default.isArrayLiteralExpression(target)) {
+      return target.elements.some((e) => this.javaTargetWritesSymbol(_typescript2.default.isSpreadElement(e) ? e.expression : e, symbols, true));
+    }
+    if (_typescript2.default.isObjectLiteralExpression(target)) {
+      return target.properties.some((p) => {
+        if (_typescript2.default.isShorthandPropertyAssignment(p)) {
+          return this.javaTargetWritesSymbol(p.name, symbols, true);
+        }
+        if (_typescript2.default.isPropertyAssignment(p)) {
+          return this.javaTargetWritesSymbol(p.initializer, symbols, true);
+        }
+        return _typescript2.default.isSpreadAssignment(p) && this.javaTargetWritesSymbol(p.expression, symbols, true);
+      });
+    }
+    if (_typescript2.default.isBinaryExpression(target) && target.operatorToken.kind === _typescript2.default.SyntaxKind.EqualsToken) {
+      return this.javaTargetWritesSymbol(target.left, symbols, true);
+    }
+    return false;
   }
   printMethodParameters(node) {
     const isAsyncMethod = this.isAsyncFunction(node);

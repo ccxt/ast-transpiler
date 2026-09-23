@@ -6320,4 +6320,30 @@ describe('strict effectively-final parameters', () => {
         const ts = "class X {\n    async f (symbol: string = undefined) {\n        symbol = 'a';\n        return symbol;\n    }\n}\n";
         expect(() => t.transpileJava(ts)).toThrow(/reassigns a parameter/);
     });
+
+    const reassigns = (body: string, params = 'x: number = undefined') => {
+        const t = new Transpiler({ verbose: false });
+        const java = (t as any).javaTranspiler;
+        t.transpileJava(`class X {\n    async f (${params}) {\n        ${body}\n        return 1;\n    }\n}\n`);
+        return java.javaReassigningMethods.some((m) => m.endsWith(':f'));
+    };
+
+    test('a comparison-only read of a parameter is not a reassignment', () => {
+        expect(reassigns('if (x !== undefined) { return x; }')).toBe(false);
+        expect(reassigns('const y = x === 1 ? 2 : 3; if (x < y) { return y; }')).toBe(false);
+    });
+
+    test('assignment, compound assignment, ++/-- and destructuring targets are reassignments', () => {
+        expect(reassigns('x = 2;')).toBe(true);
+        expect(reassigns('x += 1;')).toBe(true);
+        expect(reassigns('x++;')).toBe(true);
+        expect(reassigns('--x;')).toBe(true);
+        expect(reassigns('[x] = [1];')).toBe(true);
+        expect(reassigns('({ a: x } = { a: 1 });')).toBe(true);
+    });
+
+    test('a shadowing local or nested function parameter is not the parameter', () => {
+        expect(reassigns('if (true) { let x = 1; x = 2; x++; }')).toBe(false);
+        expect(reassigns('const g = (x) => { x = 3; return x; };')).toBe(false);
+    });
 });

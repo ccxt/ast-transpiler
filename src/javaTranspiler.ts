@@ -5517,10 +5517,76 @@ export class JavaTranspiler extends BaseTranspiler {
             : this.printParameter(param))).join(", ");
     }
 
-    // the async method body reassigns one of its parameters (printed body: ReassignedVars is filled)
+    // the async method body writes one of its parameters, or a non-pure default must be applied
+    // by an `if (x == null) { x = init; }` inside the lambda (both break effective finality)
     javaReassignsParameter(node): boolean {
-        return (node.parameters ?? []).some((p) => this.ReassignedVars[this.getVarKey(p)]
-            || (p.initializer !== undefined && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node)));
+        const params = node.parameters ?? [];
+        if (params.some((p) => p.initializer !== undefined && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node))) {
+            return true;
+        }
+        const symbols = new Set<ts.Symbol>();
+        params.forEach((p) => {
+            const symbol = this.javaSymbolOf(p.name);
+            if (symbol !== undefined) {
+                symbols.add(symbol);
+            }
+        });
+        return symbols.size > 0 && node.body !== undefined && this.javaWritesSymbol(node.body, symbols);
+    }
+
+    javaSymbolOf(node): ts.Symbol | undefined {
+        return this.getChecker().getSymbolAtLocation(node);
+    }
+
+    // syntactic walk: assignment targets, ++/--, destructuring targets and for-in/of expression heads
+    javaWritesSymbol(node, symbols: Set<ts.Symbol>): boolean {
+        if (ts.isBinaryExpression(node)) {
+            const op = node.operatorToken.kind;
+            if (op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment
+                && this.javaTargetWritesSymbol(node.left, symbols, op === ts.SyntaxKind.EqualsToken)) {
+                return true;
+            }
+        } else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+            && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+            && this.javaTargetWritesSymbol(node.operand, symbols, false)) {
+            return true;
+        } else if ((ts.isForInStatement(node) || ts.isForOfStatement(node))
+            && !ts.isVariableDeclarationList(node.initializer)
+            && this.javaTargetWritesSymbol(node.initializer, symbols, true)) {
+            return true;
+        }
+        return ts.forEachChild(node, (child) => this.javaWritesSymbol(child, symbols) || undefined) === true;
+    }
+
+    javaTargetWritesSymbol(target, symbols: Set<ts.Symbol>, destructuring: boolean): boolean {
+        if (ts.isParenthesizedExpression(target) || ts.isNonNullExpression(target) || ts.isAsExpression(target)) {
+            return this.javaTargetWritesSymbol(target.expression, symbols, destructuring);
+        }
+        if (ts.isIdentifier(target)) {
+            const symbol = this.javaSymbolOf(target);
+            return symbol !== undefined && symbols.has(symbol);
+        }
+        if (!destructuring) {
+            return false;
+        }
+        if (ts.isArrayLiteralExpression(target)) {
+            return target.elements.some((e) => this.javaTargetWritesSymbol(ts.isSpreadElement(e) ? e.expression : e, symbols, true));
+        }
+        if (ts.isObjectLiteralExpression(target)) {
+            return target.properties.some((p) => {
+                if (ts.isShorthandPropertyAssignment(p)) {
+                    return this.javaTargetWritesSymbol(p.name, symbols, true);
+                }
+                if (ts.isPropertyAssignment(p)) {
+                    return this.javaTargetWritesSymbol(p.initializer, symbols, true);
+                }
+                return ts.isSpreadAssignment(p) && this.javaTargetWritesSymbol(p.expression, symbols, true);
+            });
+        }
+        if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            return this.javaTargetWritesSymbol(target.left, symbols, true); // `[x = 1] = ...` default
+        }
+        return false;
     }
 
     // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
