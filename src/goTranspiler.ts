@@ -6108,6 +6108,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                                 return;
                             }
                         }
+                        // GetArg folds a nil map box to its default, so a defaulted callee position reads it as absent
+                        if ((verdict === 'unknown') && nilable && (goType === 'map[string]any') && this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+                            safe = true;
+                            return;
+                        }
                         if (verdict === 'unknown') {
                             safe = false;
                             return;
@@ -6192,6 +6197,22 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             this.goGetArgTypeCache.set(decl, this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0)));
         }
         return this.goGetArgTypeCache.get(decl) === 'map[string]any';
+    }
+
+    // argument `argIndex` of the callee binds a parameter with a TypeScript default (GetArg-bound)
+    goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean {
+        if (argIndex < 0) {
+            return false;
+        }
+        let decl: any;
+        try {
+            decl = this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration;
+        } catch (e) {
+            decl = undefined;
+        }
+        const kinds = [ts.SyntaxKind.MethodDeclaration, ts.SyntaxKind.FunctionDeclaration];
+        const param: any = (decl !== undefined) && kinds.includes(decl.kind) ? decl.parameters?.[argIndex] : undefined;
+        return (param?.initializer !== undefined) && (param.dotDotDotToken === undefined);
     }
 
     // the callee's own GetArg with a container default returns def for an untyped nil box but the

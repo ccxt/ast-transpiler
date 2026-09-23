@@ -1703,8 +1703,9 @@ describe('go inline equality', () => {
         "}\n"
         const output = inst.transpileGo(input).content;
         // a nil map is not nil once boxed into `any`, and IsDictionary/IsEqual see the difference
-        expect(output).not.toContain("GetArgMap(optionalArgs, 0, nil)");
-        expect((output.match(/market := GetArg\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(4);
+        expect((output.match(/market := GetArg\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(3);
+        // a defaulted callee position binds through GetArg, which folds a nil map to its default
+        expect((output.match(/var market map\[string\]any = GetArgMap\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(1);
     });
     test('the write-site check and the binding agree on a read-only nil-defaulted dictionary', () => {
         const inst = new Transpiler({ 'verbose': false });
