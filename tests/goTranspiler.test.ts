@@ -1706,6 +1706,35 @@ describe('go inline equality', () => {
         expect(output).not.toContain("GetArgMap(optionalArgs, 0, nil)");
         expect((output.match(/market := GetArg\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(4);
     });
+    test('the write-site check and the binding agree on a read-only nil-defaulted dictionary', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        const go: any = (inst as any).goTranspiler;
+        go.CCXT_GO_GETARG_DECLARED_TYPES = { 'Market': 'map[string]any' };
+        const answers: (string | undefined)[] = [];
+        const shipped = go.goGetArgLocalType.bind(go);
+        const shippedBinary = go.printBinaryExpression.bind(go);
+        // a write-site rule asks the same question from the assignment, mid-body
+        go.printBinaryExpression = function (node: any, identation: number) {
+            const param: any = this.getChecker().getSymbolAtLocation(node.left)?.valueDeclaration;
+            if (param?.initializer !== undefined) {
+                answers.push(shipped(this.goEnclosingFunction(param), param, 'nil'));
+            }
+            return shippedBinary(node, identation);
+        };
+        const input =
+        "type Market = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (d: any, market: Market = undefined) {\n" +
+        "        market = { 'id': d };\n" +
+        "        return this.safeString (market, 'symbol');\n" +
+        "    }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain("var market map[string]any = GetArgMap(optionalArgs, 0, nil)");
+        // the parameter's own name is not a use, so both askers get the binding's answer
+        expect(answers).toEqual(['map[string]any']);
+    });
     test('an any-annotated override of an unannotated base parameter binds like the base', () => {
         const input =
         "class B {\n" +

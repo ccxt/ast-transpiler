@@ -12500,6 +12500,9 @@ ${this.getIden(level)}}()`;
         }
         if (symbol?.valueDeclaration === param) {
           const parent = n.parent;
+          if (parent === param) {
+            return;
+          }
           if (nilable && goType === "map[string]any") {
             const assigned = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken;
             if (assigned || this.goGetArgNilMapUseOnlyReads(n)) {
