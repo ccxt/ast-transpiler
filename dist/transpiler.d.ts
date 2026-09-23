@@ -1370,13 +1370,16 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaOptionalParameterJavaType(node: any): string;
     javaOptionalParameterType(node: any): string | undefined;
     javaOptionalParameterTypeOf(node: any): string | undefined;
+    javaIsStringArrayType(checker: any, type: any): boolean;
     javaOptionalParameterFamilyAgrees(method: any, override: any, index: any, type: string): boolean;
     firstDefaultParameterIndex(params: any): number;
     hasDefaultedTail(node: any): boolean;
     javaSplitParameterWriteType(node: any): string | undefined;
+    javaAsyncParameterLocalType(node: any): string | undefined;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
+    javaParameterIsTypeofTested(node: any): boolean;
     javaParameterIsCompoundAssigned(node: any): boolean;
     javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
