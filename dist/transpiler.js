@@ -14378,6 +14378,8 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
   "Bool": "Boolean"
 };
 var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
@@ -14385,6 +14387,8 @@ var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
   "Int": "Long"
 };
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
@@ -16140,7 +16144,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = type.aliasSymbol ?? type.symbol;
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = symbol?.name;
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === void 0) {
       return void 0;
@@ -16456,6 +16460,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     const fileName = declaration.getSourceFile?.()?.fileName;
     return fileName !== void 0 && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
   }
+  // the alias a parameter's annotation names; `OrderType` ('limit' | 'market' | string) reduces
+  // to plain `string` and keeps no aliasSymbol, so read the annotation's type reference instead
+  javaParameterAliasSymbol(node, type, checker) {
+    const symbol = type.aliasSymbol ?? type.symbol;
+    if (symbol !== void 0 || node.type === void 0 || !ts6.isTypeReferenceNode(node.type)) {
+      return symbol;
+    }
+    const referenced = checker.getSymbolAtLocation(node.type.typeName);
+    const alias = referenced !== void 0 && referenced.flags & ts6.SymbolFlags.Alias ? checker.getAliasedSymbol(referenced) : referenced;
+    return alias !== void 0 && alias.flags & ts6.SymbolFlags.TypeAlias ? alias : void 0;
+  }
   // the annotation proof alone, without the heritage check
   javaNativeParameterTypeOf(node) {
     if (node === void 0 || !ts6.isParameter(node) || node.initializer !== void 0 || node.dotDotDotToken !== void 0) {
@@ -16476,7 +16491,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = type.aliasSymbol ?? type.symbol;
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = symbol?.name;
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES[name] === void 0) {
       return void 0;

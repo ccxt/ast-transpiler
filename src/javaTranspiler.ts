@@ -251,7 +251,7 @@ const JAVA_LIST_BACKED_TS_CLASSES: Set<string> = new Set([
 // looks a key up when it is a String, and a String-typed operand is one on every path
 const JAVA_DECLARED_STRING_TYPE = /^(java\.util\.)?String$/;
 
-// TS parameter annotations (`Dict`, `Market`, `Currency`, `Str`, `Bool`) print the native Java
+// TS parameter annotations (`Dict`, `Market`, `Currency`, `Str`, `OrderType`/`OrderSide`, `Bool`) print the native Java
 // type on the declaring method. `Int`/`Num` stay `Object`: a TS `number` is an Integer, Long or
 // Double box in generated code, so neither a `Long`/`Double` parameter nor a cast site is provable.
 const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = {
@@ -259,6 +259,8 @@ const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = {
     'Market': 'java.util.Map<String, Object>',
     'Currency': 'java.util.Map<String, Object>',
     'Str': 'String',
+    'OrderType': 'String',
+    'OrderSide': 'String',
     'Bool': 'Boolean',
 };
 
@@ -269,6 +271,8 @@ const JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL: { [name: string]: string } = {
     'Market': 'java.util.Map<String, Object>',
     'Currency': 'java.util.Map<String, Object>',
     'Str': 'String',
+    'OrderType': 'String',
+    'OrderSide': 'String',
     'Int': 'Long',
 };
 
@@ -2311,7 +2315,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === undefined) {
             return undefined;
         }
-        const symbol = (type as any).aliasSymbol ?? (type as any).symbol;
+        const symbol = this.javaParameterAliasSymbol(node, type, checker);
         const name = symbol?.name;
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
             return undefined;
@@ -2674,6 +2678,19 @@ export class JavaTranspiler extends BaseTranspiler {
         return fileName !== undefined && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
     }
 
+    // the alias a parameter's annotation names; `OrderType` ('limit' | 'market' | string) reduces
+    // to plain `string` and keeps no aliasSymbol, so read the annotation's type reference instead
+    javaParameterAliasSymbol(node, type, checker) {
+        const symbol = (type as any).aliasSymbol ?? (type as any).symbol;
+        if (symbol !== undefined || node.type === undefined || !ts.isTypeReferenceNode(node.type)) {
+            return symbol;
+        }
+        const referenced = checker.getSymbolAtLocation(node.type.typeName);
+        const alias = referenced !== undefined && (referenced.flags & ts.SymbolFlags.Alias)
+            ? checker.getAliasedSymbol(referenced) : referenced;
+        return alias !== undefined && (alias.flags & ts.SymbolFlags.TypeAlias) ? alias : undefined;
+    }
+
     // the annotation proof alone, without the heritage check
     javaNativeParameterTypeOf(node): string | undefined {
         if (node === undefined || !ts.isParameter(node)
@@ -2696,7 +2713,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === undefined) {
             return undefined;
         }
-        const symbol = (type as any).aliasSymbol ?? (type as any).symbol;
+        const symbol = this.javaParameterAliasSymbol(node, type, checker);
         const name = symbol?.name;
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES[name] === undefined) {
             return undefined;

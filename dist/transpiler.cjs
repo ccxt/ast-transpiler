@@ -14372,6 +14372,8 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
   "Bool": "Boolean"
 };
 var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
@@ -14379,6 +14381,8 @@ var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
   "Int": "Long"
 };
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
@@ -16134,7 +16138,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = _nullishCoalesce(type.aliasSymbol, () => ( type.symbol));
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = _optionalChain([symbol, 'optionalAccess', _1254 => _1254.name]);
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === void 0) {
       return void 0;
@@ -16450,6 +16454,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     const fileName = _optionalChain([declaration, 'access', _1284 => _1284.getSourceFile, 'optionalCall', _1285 => _1285(), 'optionalAccess', _1286 => _1286.fileName]);
     return fileName !== void 0 && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
   }
+  // the alias a parameter's annotation names; `OrderType` ('limit' | 'market' | string) reduces
+  // to plain `string` and keeps no aliasSymbol, so read the annotation's type reference instead
+  javaParameterAliasSymbol(node, type, checker) {
+    const symbol = _nullishCoalesce(type.aliasSymbol, () => ( type.symbol));
+    if (symbol !== void 0 || node.type === void 0 || !_typescript2.default.isTypeReferenceNode(node.type)) {
+      return symbol;
+    }
+    const referenced = checker.getSymbolAtLocation(node.type.typeName);
+    const alias = referenced !== void 0 && referenced.flags & _typescript2.default.SymbolFlags.Alias ? checker.getAliasedSymbol(referenced) : referenced;
+    return alias !== void 0 && alias.flags & _typescript2.default.SymbolFlags.TypeAlias ? alias : void 0;
+  }
   // the annotation proof alone, without the heritage check
   javaNativeParameterTypeOf(node) {
     if (node === void 0 || !_typescript2.default.isParameter(node) || node.initializer !== void 0 || node.dotDotDotToken !== void 0) {
@@ -16470,7 +16485,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = _nullishCoalesce(type.aliasSymbol, () => ( type.symbol));
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = _optionalChain([symbol, 'optionalAccess', _1287 => _1287.name]);
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES[name] === void 0) {
       return void 0;
