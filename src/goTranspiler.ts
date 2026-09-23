@@ -6021,7 +6021,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const pointer = goType.startsWith('*');
         let safe = true;
         const verdictOf = (callee: string, argIndex: number): string => {
-            const entry = table[callee];
+            // the table is keyed by the printed Go callee (`this.market` prints `this.Market`); a
+            // pointer is unwrapped by derefScalar, a nil map is not, so only pointers fold the case
+            const entry = table[callee] ?? (pointer ? table[callee.charAt(0).toUpperCase() + callee.slice(1)] : undefined);
             if (entry === undefined) {
                 // a nil-defaulted container may be handed back through `any` as a non-nil typed nil
                 return (pointer || nilable) ? 'unknown' : 'deref';
