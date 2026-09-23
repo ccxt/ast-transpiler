@@ -1391,6 +1391,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaReturnedParameterType(node: any): string | undefined;
     javaReturnedCallType(node: any): string | undefined;
     javaStringCallReturn(node: any): boolean;
+    javaParameterAliasSymbol(node: any, type: any, checker: any): any;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;

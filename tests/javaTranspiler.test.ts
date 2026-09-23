@@ -4029,6 +4029,44 @@ describe('declared-map element reads: Helpers.GetValue(m, k) -> guarded m.get(k)
     });
 });
 
+describe('OrderType/OrderSide parameters print String', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-order-type-params');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+    let out: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export type OrderSide = 'buy' | 'sell' | string | undefined;\n" +
+            "export type OrderType = 'limit' | 'market' | string;\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { OrderType, OrderSide } from './base/types';\n" +
+            "class Venue {\n" +
+            "    place (type: OrderType, side: OrderSide): void {\n" +
+            "    }\n" +
+            "    later (id: string, type: OrderType = undefined, side: OrderSide = undefined): void {\n" +
+            "    }\n" +
+            "    caller (req: any): void {\n" +
+            "        const t = req['t'];\n" +
+            "        this.place (t, 'buy');\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('fixed and optional positions print String; an Object argument is cast', () => {
+        expect(out).toContain('public void place(String type, String side)');
+        expect(out).toContain('public void later(Object id, String type, String side)');
+        expect(out).toContain('this.place((String) (t), "buy")');
+    });
+});
+
 describe('declared-map element reads (d-11): a retyped Dict parameter consumes the read', () => {
     // the headline shape of D-11: the receiver is a parameter B-09/D-10 print as a Java Map,
     // so the read binds natively exactly as it does for a typed local.
