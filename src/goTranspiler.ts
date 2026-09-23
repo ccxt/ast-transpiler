@@ -6023,7 +6023,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const verdictOf = (callee: string, argIndex: number): string => {
             // the table is keyed by the printed Go callee (`this.market` prints `this.Market`); a
             // pointer is unwrapped by derefScalar, a nil map is not, so only pointers fold the case
-            const entry = table[callee] ?? (pointer ? table[callee.charAt(0).toUpperCase() + callee.slice(1)] : undefined);
+            const goName = callee.charAt(0).toUpperCase() + callee.slice(1);
+            const entry = table[callee] ?? (pointer ? (table[goName] ?? table[goName + 'Async']) : undefined);
             if (entry === undefined) {
                 // a nil-defaulted container may be handed back through `any` as a non-nil typed nil
                 return (pointer || nilable) ? 'unknown' : 'deref';
@@ -6073,8 +6074,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         const args: any[] = parent.arguments ?? [];
                         const argIndex = args.indexOf(n);
                         const callee: any = parent.expression;
-                        const calleeName = (callee?.name !== undefined) ? callee.name.escapedText
+                        let calleeName = (callee?.name !== undefined) ? callee.name.escapedText
                             : ((callee?.escapedText !== undefined) ? callee.escapedText : undefined);
+                        // Math.min / Math.max print as the deref-aware mathMin / mathMax
+                        if ((callee?.expression?.escapedText === 'Math') && ((calleeName === 'min') || (calleeName === 'max'))) {
+                            calleeName = 'math' + calleeName.charAt(0).toUpperCase() + calleeName.slice(1);
+                        }
                         if (calleeName === undefined) {
                             safe = !pointer && !nilable;
                             return;
