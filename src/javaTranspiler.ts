@@ -5627,7 +5627,11 @@ export class JavaTranspiler extends BaseTranspiler {
             // unsupported: a lambda cannot capture a reassigned parameter; the TS source must not reassign it
             const where = `${node.getSourceFile().fileName}:${(node.name as any).escapedText}`;
             this.javaReassigningMethods.push(where);
-            Logger.warning(`[Java] async method reassigns a parameter (not effectively final): ${where}`);
+            const message = `[Java] async method reassigns a parameter (not effectively final, the TS source must use a new local): ${where}`;
+            if (this.javaStrictEffectivelyFinal) {
+                throw new Error(message);
+            }
+            Logger.warning(message);
         }
         if (isAsync) {
             const finalWrapperVars = ts.isMethodDeclaration(node) ? '\n' : this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
@@ -5755,6 +5759,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
     javaReassigningMethods: string[] = [];
+    // the embedding build turns a reassigned async parameter into a hard transpile error
+    javaStrictEffectivelyFinal = false;
 
     printMethodParameters(node) {
         const isAsyncMethod = this.isAsyncFunction(node);

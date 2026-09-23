@@ -7798,3 +7798,12 @@ describe('java prediction venue Exchange-tier parameter boxing (D-16)', () => {
         expect(venueOutput).toContain('fetchEvents(String query');
     });
 });
+
+describe('strict effectively-final parameters', () => {
+    test('an async method reassigning a parameter fails the transpile in strict mode', () => {
+        const t = new Transpiler({ verbose: false });
+        (t as any).javaTranspiler.javaStrictEffectivelyFinal = true;
+        const ts = "class X {\n    async f (symbol: string = undefined) {\n        symbol = 'a';\n        return symbol;\n    }\n}\n";
+        expect(() => t.transpileJava(ts)).toThrow(/reassigns a parameter/);
+    });
+});
