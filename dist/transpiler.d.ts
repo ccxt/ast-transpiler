@@ -1473,6 +1473,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     restoreFinalVarMutations(): void;
     printNode(node: any, identation?: number): string;
     objectLiteralCapturesReassigned(node: any): boolean;
+    objectLiteralCapturedKeys(node: any): string[];
     printVariableDeclarationList(node: any, identation: any): string;
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
@@ -1583,6 +1584,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     builderObjectLiterals: WeakSet<ts.Node>;
     printObjectLiteralExpression(node: any, identation: any): string;
     printObjectLiteralBuilder(node: any, identation: any): string;
+    printObjectLiteralBuilderText(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;

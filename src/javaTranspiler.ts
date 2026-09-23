@@ -4958,14 +4958,20 @@ export class JavaTranspiler extends BaseTranspiler {
     // true when a property value reads a local the body reassigns (or the analyzer saw
     // reassigned ahead): a double-brace anonymous class could not capture it
     objectLiteralCapturesReassigned(node): boolean {
-        let found = false;
+        return this.objectLiteralCapturedKeys(node).length > 0;
+    }
+
+    // ReassignedVars keys of the reassigned locals a literal's property values read
+    objectLiteralCapturedKeys(node): string[] {
+        const keys: string[] = [];
         const walk = (n) => {
-            if (found || !n) return;
+            if (!n) return;
             if (n.kind === ts.SyntaxKind.Identifier) {
                 const name = n.escapedText as string | undefined;
+                const key = this.getVarKey(n);
                 if (name && name !== 'undefined' && !name.startsWith('null') &&
-                    (this.usageToFinalName.has(n) || this.ReassignedVars[this.getVarKey(n)])) {
-                    found = true;
+                    (this.usageToFinalName.has(n) || this.ReassignedVars[key])) {
+                    keys.push(key);
                 }
                 return;
             }
@@ -4974,7 +4980,7 @@ export class JavaTranspiler extends BaseTranspiler {
         for (const prop of node.properties) {
             walk(prop.initializer);
         }
-        return found;
+        return keys;
     }
 
     printVariableDeclarationList(node, identation) {
@@ -6976,6 +6982,24 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printObjectLiteralBuilder(node, identation) {
+        // a comparison inside the values must not mark a captured local as reassigned
+        // (that flag drives the async-parameter copies and the typed-parameter write casts)
+        const keys = this.objectLiteralCapturedKeys(node);
+        const saved = keys.map((key) => this.ReassignedVars[key]);
+        try {
+            return this.printObjectLiteralBuilderText(node, identation);
+        } finally {
+            keys.forEach((key, i) => {
+                if (saved[i] === undefined) {
+                    delete this.ReassignedVars[key];
+                } else {
+                    this.ReassignedVars[key] = saved[i];
+                }
+            });
+        }
+    }
+
+    printObjectLiteralBuilderText(node, identation) {
         const props = node.properties;
         const lines = props.map((prop, i) => {
             const name = this.printNode(prop.name, 0);

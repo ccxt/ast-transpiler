@@ -18363,14 +18363,19 @@ var JavaTranspiler = class extends BaseTranspiler {
   // true when a property value reads a local the body reassigns (or the analyzer saw
   // reassigned ahead): a double-brace anonymous class could not capture it
   objectLiteralCapturesReassigned(node) {
-    let found = false;
+    return this.objectLiteralCapturedKeys(node).length > 0;
+  }
+  // ReassignedVars keys of the reassigned locals a literal's property values read
+  objectLiteralCapturedKeys(node) {
+    const keys = [];
     const walk = (n) => {
-      if (found || !n)
+      if (!n)
         return;
       if (n.kind === _typescript2.default.SyntaxKind.Identifier) {
         const name = n.escapedText;
-        if (name && name !== "undefined" && !name.startsWith("null") && (this.usageToFinalName.has(n) || this.ReassignedVars[this.getVarKey(n)])) {
-          found = true;
+        const key = this.getVarKey(n);
+        if (name && name !== "undefined" && !name.startsWith("null") && (this.usageToFinalName.has(n) || this.ReassignedVars[key])) {
+          keys.push(key);
         }
         return;
       }
@@ -18379,7 +18384,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     for (const prop of node.properties) {
       walk(prop.initializer);
     }
-    return found;
+    return keys;
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
@@ -19965,6 +19970,21 @@ var JavaTranspiler = class extends BaseTranspiler {
     return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
   }
   printObjectLiteralBuilder(node, identation) {
+    const keys = this.objectLiteralCapturedKeys(node);
+    const saved = keys.map((key) => this.ReassignedVars[key]);
+    try {
+      return this.printObjectLiteralBuilderText(node, identation);
+    } finally {
+      keys.forEach((key, i) => {
+        if (saved[i] === void 0) {
+          delete this.ReassignedVars[key];
+        } else {
+          this.ReassignedVars[key] = saved[i];
+        }
+      });
+    }
+  }
+  printObjectLiteralBuilderText(node, identation) {
     const props = node.properties;
     const lines = props.map((prop, i) => {
       const name = this.printNode(prop.name, 0);
