@@ -1328,3 +1328,408 @@ func DerefScalar(v any) any {
 	}
 	return v
 }
+
+// Typed optional-argument readers matching the ccxt Go runtime (go/v4/exchange_helpers.go).
+
+func goArgValue(args []any, index int) (any, bool) {
+	if len(args) <= index {
+		return nil, false
+	}
+	val := args[index]
+	if val == nil {
+		return nil, false
+	}
+	// GetArg's derefScalar step: a generated wrapper boxes the typed option field
+	// (`opts.Since *int64`), a nil pointer means "argument absent"
+	val = DerefScalar(val)
+	if val == nil {
+		return nil, false
+	}
+	// GetArg also reads a nil []any / []string box as absent (dynamic calls pass one)
+	if res, isList := val.([]any); isList && res == nil {
+		return nil, false
+	}
+	if res, isStrings := val.([]string); isStrings && res == nil {
+		return nil, false
+	}
+	if res, isMap := val.(map[string]any); isMap && res == nil {
+		return nil, false
+	}
+	return val, true
+}
+
+func goArgIsEmptyList(val any) bool {
+	if res, isList := val.([]any); isList {
+		return len(res) == 0
+	}
+	if res, isStrings := val.([]string); isStrings {
+		return len(res) == 0
+	}
+	return false
+}
+
+func goArgPanic(twin string, index int, box any) {
+	panic(fmt.Sprintf("%s(): optionalArgs[%d] is %T, which is not the declared type of this parameter", twin, index, box))
+}
+
+func GetArgMap(args []any, index int, def map[string]any) map[string]any {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	if res, isMap := val.(map[string]any); isMap {
+		return res
+	}
+	goArgPanic("GetArgMap", index, val)
+	return def
+}
+
+func GetArgAnySlice(args []any, index int, def []any) []any {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	if res, isList := val.([]any); isList {
+		return res
+	}
+	goArgPanic("GetArgAnySlice", index, val)
+	return def
+}
+
+func GetArgStringSlice(args []any, index int, def []string) []string {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	if res, isStrs := val.([]string); isStrs {
+		return res
+	}
+	// dynamic callers pass a []any of strings
+	if list, isList := val.([]any); isList {
+		res := make([]string, 0, len(list))
+		for _, item := range list {
+			str, isStr := item.(string)
+			if !isStr {
+				goArgPanic("GetArgStringSlice", index, val)
+			}
+			res = append(res, str)
+		}
+		return res
+	}
+	goArgPanic("GetArgStringSlice", index, val)
+	return def
+}
+
+func GetArgMapSlice(args []any, index int, def []map[string]any) []map[string]any {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	if res, isMaps := val.([]map[string]any); isMaps {
+		return res
+	}
+	goArgPanic("GetArgMapSlice", index, val)
+	return def
+}
+
+func GetArgString(args []any, index int, def string) string {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	if res, isStr := val.(string); isStr {
+		return res
+	}
+	goArgPanic("GetArgString", index, val)
+	return def
+}
+
+func GetArgBool(args []any, index int, def bool) bool {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	if res, isBool := val.(bool); isBool {
+		return res
+	}
+	goArgPanic("GetArgBool", index, val)
+	return def
+}
+
+func GetArgInt64(args []any, index int, def int64) int64 {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	switch res := val.(type) {
+	case int64:
+		return res
+	case int:
+		return int64(res)
+	case int32:
+		return int64(res)
+	case int16:
+		return int64(res)
+	case int8:
+		return int64(res)
+	case uint:
+		return int64(res)
+	case uint32:
+		return int64(res)
+	case uint64:
+		return int64(res)
+	case float64:
+		return int64(res)
+	case float32:
+		return int64(res)
+	}
+	goArgPanic("GetArgInt64", index, val)
+	return def
+}
+
+func GetArgFloat64(args []any, index int, def float64) float64 {
+	val, ok := goArgValue(args, index)
+	if !ok {
+		return def
+	}
+	switch res := val.(type) {
+	case float64:
+		return res
+	case float32:
+		return float64(res)
+	case int64:
+		return float64(res)
+	case int:
+		return float64(res)
+	case int32:
+		return float64(res)
+	case uint:
+		return float64(res)
+	case uint32:
+		return float64(res)
+	case uint64:
+		return float64(res)
+	}
+	goArgPanic("GetArgFloat64", index, val)
+	return def
+}
+
+func GetArgStringPtr(args []any, index int, def *string) *string {
+	if len(args) <= index {
+		return def
+	}
+	val := args[index]
+	if (val == nil) || goArgIsEmptyList(val) {
+		return def
+	}
+	if res, isPtr := val.(*string); isPtr {
+		if res == nil {
+			return def
+		}
+		return res
+	}
+	// A typed nil pointer is an omitted argument.
+	if val = DerefScalar(val); val == nil {
+		return def
+	} else {
+		if res, isStr := val.(string); isStr {
+			return &res
+		}
+	}
+	goArgPanic("GetArgStringPtr", index, args[index])
+	return def
+}
+
+func GetArgInt64Ptr(args []any, index int, def *int64) *int64 {
+	if len(args) <= index {
+		return def
+	}
+	val := args[index]
+	if (val == nil) || goArgIsEmptyList(val) {
+		return def
+	}
+	if res, isPtr := val.(*int64); isPtr {
+		if res == nil {
+			return def
+		}
+		return res
+	}
+	// A typed nil pointer is an omitted argument.
+	if val = DerefScalar(val); val == nil {
+		return def
+	} else {
+		switch res := val.(type) {
+		case int64:
+			return &res
+		case int:
+			num := int64(res)
+			return &num
+		case int32:
+			num := int64(res)
+			return &num
+		case uint:
+			num := int64(res)
+			return &num
+		case uint32:
+			num := int64(res)
+			return &num
+		case uint64:
+			num := int64(res)
+			return &num
+		case float64:
+			num := int64(res)
+			return &num
+		case float32:
+			num := int64(res)
+			return &num
+		}
+	}
+	goArgPanic("GetArgInt64Ptr", index, args[index])
+	return def
+}
+
+func GetArgFloat64Ptr(args []any, index int, def *float64) *float64 {
+	if len(args) <= index {
+		return def
+	}
+	val := args[index]
+	if (val == nil) || goArgIsEmptyList(val) {
+		return def
+	}
+	if res, isPtr := val.(*float64); isPtr {
+		if res == nil {
+			return def
+		}
+		return res
+	}
+	// A typed nil pointer is an omitted argument.
+	if val = DerefScalar(val); val == nil {
+		return def
+	} else {
+		switch res := val.(type) {
+		case float64:
+			return &res
+		case float32:
+			num := float64(res)
+			return &num
+		case int64:
+			num := float64(res)
+			return &num
+		case int:
+			num := float64(res)
+			return &num
+		case int32:
+			num := float64(res)
+			return &num
+		case uint:
+			num := float64(res)
+			return &num
+		case uint32:
+			num := float64(res)
+			return &num
+		case uint64:
+			num := float64(res)
+			return &num
+		}
+	}
+	goArgPanic("GetArgFloat64Ptr", index, args[index])
+	return def
+}
+
+func GetArgBoolPtr(args []any, index int, def *bool) *bool {
+	if len(args) <= index {
+		return def
+	}
+	val := args[index]
+	if (val == nil) || goArgIsEmptyList(val) {
+		return def
+	}
+	if res, isPtr := val.(*bool); isPtr {
+		if res == nil {
+			return def
+		}
+		return res
+	}
+	// A typed nil pointer is an omitted argument.
+	if val = DerefScalar(val); val == nil {
+		return def
+	} else {
+		if res, isBool := val.(bool); isBool {
+			return &res
+		}
+	}
+	goArgPanic("GetArgBoolPtr", index, args[index])
+	return def
+}
+
+func Int64PtrTyped(v any) *int64 {
+	res := GetArgInt64Ptr([]any{v}, 0, nil)
+	if res == nil {
+		return nil
+	}
+	num := *res
+	return &num
+}
+
+func MapTyped(v any) map[string]any {
+	v = DerefScalar(v)
+	if v == nil {
+		return nil
+	}
+	if asMap, ok := v.(map[string]any); ok {
+		return asMap
+	}
+	return nil
+}
+
+func ListTyped(v any) []any {
+	v = DerefScalar(v)
+	if v == nil {
+		return nil
+	}
+	if asSlice, ok := v.([]any); ok {
+		return asSlice
+	}
+	if asStrings, ok := v.([]string); ok {
+		out := make([]any, len(asStrings))
+		for i, item := range asStrings {
+			out[i] = item
+		}
+		return out
+	}
+	return nil
+}
+
+func BoxAbsent(v any) any {
+	switch c := v.(type) {
+	case map[string]any:
+		if c == nil {
+			return nil
+		}
+	case []any:
+		if c == nil {
+			return nil
+		}
+	}
+	return v
+}
+
+func PanicOnError(msg any) any {
+	switch v := msg.(type) {
+	case string:
+		if strings.HasPrefix(v, "panic:") {
+			panic(v)
+		}
+	case []any:
+		for _, item := range v {
+			if str, ok := item.(string); ok && strings.HasPrefix(str, "panic:") {
+				panic(str)
+			} else if nested, ok := item.([]any); ok {
+				PanicOnError(nested)
+			}
+		}
+	case error:
+		panic(v)
+	}
+	return msg
+}
