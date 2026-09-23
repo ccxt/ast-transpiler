@@ -1277,6 +1277,13 @@ declare class JavaTranspiler extends BaseTranspiler {
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
+    javaMethodImplementation(declaration: any): ts.Declaration;
+    javaIsPrintedMethod(method: any): boolean;
+    javaHasOptionalParameter(method: any): boolean;
+    javaFullArityCallArguments(args: any, node: any, identation: any): string | undefined;
+    javaFullArityArguments(method: any, args: any, identation: any): string | undefined;
+    javaIsUndefinedLiteral(node: any): boolean;
+    javaScheduledCallArguments(args: any, node: any, identation: any): string | undefined;
     javaSuperCoreCallArguments(args: any, node: any, identation: any): string | undefined;
     javaArgumentHasType(arg: any, type: string): boolean;
     javaCoreParameterTypes(method: any): string[];
@@ -1503,8 +1510,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printParameterType(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printCoreMethodParameters(node: any): any;
-    printFrontForwardedArguments(node: any): string;
-    printFrontMethodDeclaration(node: any, identation: any): string;
+    javaReassignsParameter(node: any): boolean;
+    javaReassigningMethods: string[];
     printMethodParameters(node: any): any;
     printArrayLiteralExpression(node: any): string;
     printFinalOutsideMethodVariableWrappersIfAny(node: any, identation: any): string;

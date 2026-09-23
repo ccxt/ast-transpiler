@@ -14427,6 +14427,7 @@ var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
   "watch": [0, 1]
 };
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
+var JAVA_TRANSPILE_DELIMITER = "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT";
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
 var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
@@ -14505,6 +14506,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
     this.javaReturnTypeCache = /* @__PURE__ */ new WeakMap();
     this.javaReturnTypeInProgress = /* @__PURE__ */ new Set();
+    // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
+    this.javaReassigningMethods = [];
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -14532,6 +14535,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     return required;
   }
   printArgsForCallExpression(node, identation) {
+    const fullArity = this.javaFullArityCallArguments(node.arguments ?? [], node, identation);
+    if (fullArity !== void 0) {
+      return fullArity;
+    }
     let args = node.arguments ?? [];
     const callee = node.expression;
     const isThisCall = callee?.kind === ts6.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts6.SyntaxKind.ThisKeyword;
@@ -14560,6 +14567,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (superCore !== void 0) {
       return superCore;
     }
+    const scheduled = this.javaScheduledCallArguments(args, node, identation);
+    if (scheduled !== void 0) {
+      return scheduled;
+    }
     const spawnTypes = this.javaSpawnCallParameterTypes(node);
     const parameterTypes = spawnTypes !== void 0 ? spawnTypes : this.javaNativeCallParameterTypes(node);
     return args.map((a, i) => {
@@ -14571,7 +14582,111 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `(${type}) (${parsedArg})`;
     }).join(", ");
   }
-  // `super.x(..)` into a split method must bind the typed core: the untyped front re-dispatches
+  // the implementation declaration of a resolved method (an overload signature has no body)
+  javaMethodImplementation(declaration) {
+    if (declaration === void 0 || !ts6.isMethodDeclaration(declaration)) {
+      return void 0;
+    }
+    if (declaration.body !== void 0) {
+      return declaration;
+    }
+    try {
+      const symbol = this.getChecker().getSymbolAtLocation(declaration.name);
+      return symbol?.declarations?.find((d) => ts6.isMethodDeclaration(d) && d.body !== void 0);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  // a method this printer emits with its single typed signature: hand-written Java declares
+  // ts/src/base/** except the base tiers below their transpile delimiter
+  javaIsPrintedMethod(method) {
+    if (method === void 0 || !ts6.isMethodDeclaration(method) || method.body === void 0 || !ts6.isClassDeclaration(method.parent)) {
+      return false;
+    }
+    const file = method.getSourceFile();
+    const fileName = file.fileName.replace(/\\/g, "/");
+    if (!/(^|\/)ts\/src\//.test(fileName)) {
+      return true;
+    }
+    if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName)) {
+      const delimiter = file.text.indexOf(JAVA_TRANSPILE_DELIMITER);
+      return delimiter >= 0 && method.pos > delimiter;
+    }
+    return JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
+  }
+  javaHasOptionalParameter(method) {
+    return (method?.parameters ?? []).some((p) => p.initializer !== void 0 || p.questionToken !== void 0);
+  }
+  // a call into a printed method with optional parameters passes every parameter: omitted or
+  // `undefined` slots take the TS default, fixed slots keep the native checkcast
+  javaFullArityCallArguments(args, node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind === ts6.SyntaxKind.SuperKeyword) {
+      return void 0;
+    }
+    let method;
+    try {
+      method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration);
+    } catch (e) {
+      return void 0;
+    }
+    return this.javaFullArityArguments(method, args, identation);
+  }
+  javaFullArityArguments(method, args, identation) {
+    if (!this.javaIsPrintedMethod(method) || !this.javaHasOptionalParameter(method)) {
+      return void 0;
+    }
+    const params = method.parameters;
+    if (args.length > params.length || params.some((p) => p.dotDotDotToken !== void 0) || args.some((a) => a.kind === ts6.SyntaxKind.SpreadElement)) {
+      return void 0;
+    }
+    const types = this.javaCoreParameterTypes(method);
+    return params.map((p, i) => {
+      const arg = args[i];
+      if (arg === void 0 || p.initializer !== void 0 && this.javaIsUndefinedLiteral(arg)) {
+        return this.javaCoreDefaultArgument(p, types[i]);
+      }
+      const printed = this.printNode(arg, identation).trim();
+      if (p.initializer !== void 0) {
+        return this.javaArgumentHasType(arg, types[i]) || types[i] === "Object" ? this.javaIsUndefinedLiteral(arg) ? "null" : printed : this.javaConvertToCoreType(types[i], printed, arg);
+      }
+      const native = this.javaNativeParameterType(p);
+      if (native === void 0 || this.javaNativeArgumentAlreadyTyped(arg, native)) {
+        return printed;
+      }
+      return `(${native}) (${printed})`;
+    }).join(", ");
+  }
+  javaIsUndefinedLiteral(node) {
+    return node?.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined";
+  }
+  // `this.spawn(this.m, a..)` / `this.delay(ms, this.m, a..)`: the ccxt post-pass turns the
+  // reference into a lambda calling `this.m(a..)`, so those arguments take m's full arity
+  javaScheduledCallArguments(args, node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    const at = callee.name?.escapedText === "spawn" ? 0 : callee.name?.escapedText === "delay" ? 1 : -1;
+    const reference = at >= 0 ? args[at] : void 0;
+    if (reference?.kind !== ts6.SyntaxKind.PropertyAccessExpression || reference.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    let method;
+    try {
+      const symbol = this.getChecker().getSymbolAtLocation(reference.name);
+      method = this.javaMethodImplementation(symbol?.valueDeclaration ?? symbol?.declarations?.[0]);
+    } catch (e) {
+      return void 0;
+    }
+    const forwarded = this.javaFullArityArguments(method, args.slice(at + 1), identation);
+    if (forwarded === void 0) {
+      return void 0;
+    }
+    const head = args.slice(0, at + 1).map((a) => this.printNode(a, identation).trim());
+    return head.concat(forwarded.length > 0 ? [forwarded] : []).join(", ");
+  }
+  // `super.x(..)` into a split method must bind the typed core: an ancestor bridge re-dispatches
   // through `this`, which lands back in the overriding core (infinite recursion)
   javaSuperCoreCallArguments(args, node, identation) {
     const callee = node.expression;
@@ -14580,7 +14695,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration);
     } catch (e) {
       return void 0;
     }
@@ -14588,6 +14703,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const params = declaration.parameters;
+    if (params.some((p) => p.dotDotDotToken !== void 0)) {
+      return void 0;
+    }
     if (args.length > params.length) {
       return void 0;
     }
@@ -14609,7 +14727,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const method = declaration.parent;
-    if (this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
+    if (!ts6.isMethodDeclaration(method) && this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
       return false;
     }
     const printed = declaration.initializer !== void 0 ? this.hasDefaultedTail(method) ? this.javaOptionalParameterJavaType(declaration) : "Object" : (this.printParameterType(declaration) || "Object").trim();
@@ -14621,17 +14739,21 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // an omitted parameter of a typed-core call: its TS default, typed like the front's reader
   javaCoreDefaultArgument(param, type) {
-    if (param.initializer === void 0) {
-      return `(${type}) null`;
-    }
-    let value = this.printNode(param.initializer, 0);
+    const initializer = param.initializer;
+    const value = initializer === void 0 || !this.isPureInitializer(initializer) ? "null" : this.printNode(initializer, 0);
     if (value === "null") {
       return `(${type}) null`;
     }
     if (type === "Long" && /^-?\d+$/.test(value)) {
-      value += "L";
+      return value + "L";
     }
-    return this.javaConvertToCoreType(type, value, param.initializer);
+    if (type === JAVA_STRING_LIST_TYPE && ts6.isArrayLiteralExpression(initializer) && initializer.elements.length === 0) {
+      return "new java.util.ArrayList<String>()";
+    }
+    if (type === "Object" || type === "String" && ts6.isStringLiteralLike(initializer) || type === "java.util.Map<String, Object>" && ts6.isObjectLiteralExpression(initializer)) {
+      return value;
+    }
+    return this.javaConvertToCoreType(type, value, initializer);
   }
   // a value of any static type converted to a typed-core parameter, with the fronts' semantics
   javaConvertToCoreType(type, printed, node) {
@@ -16220,22 +16342,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return -1;
   }
-  // >=1 parameter with a default value: the method splits into typed core + untyped front.
-  // A method whose only optional markers are `?` keeps today's single declaration.
+  // a method with >=1 optional parameter prints one typed full signature (callers pass every slot).
   hasDefaultedTail(node) {
     if (node === void 0 || !ts6.isMethodDeclaration(node)) {
       return false;
     }
-    return (node.parameters ?? []).some((p) => p.initializer !== void 0);
+    return this.javaHasOptionalParameter(node);
   }
-  // a typed default-valued parameter of a sync core is written in place (async cores copy it
-  // into an Object local first), so its writes convert to the declared type
+  // a typed default-valued method parameter is written in place, so its writes convert to the declared type
   javaSplitParameterWriteType(node) {
     if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent)) {
       return void 0;
-    }
-    if (this.isAsyncFunction(node.parent)) {
-      return this.javaAsyncParameterLocalType(node);
     }
     return this.javaOptionalParameterType(node);
   }
@@ -18723,7 +18840,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const funcParams = node.parameters ?? [];
     const bodyStatements = node.body.statements;
     const isAsync = this.isAsyncFunction(node);
-    const splitCore = this.hasDefaultedTail(node);
+    const splitCore = ts6.isMethodDeclaration(node);
     const initParams = [];
     const processedParts = [];
     try {
@@ -18742,6 +18859,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       const initializer = param.initializer;
       if (initializer) {
         if (splitCore) {
+          if (!this.isPureInitializer(initializer)) {
+            const name = this.printNode(param.name, 0);
+            initParams.push(`if (${name} == null) { ${name} = ${this.printNode(initializer, 0)}; }`);
+          }
           return;
         }
         const index = i + offSetIndex;
@@ -18767,9 +18888,14 @@ var JavaTranspiler = class extends BaseTranspiler {
     const blockOpen = this.getBlockOpen(identation);
     const blockClose = this.getBlockClose(identation);
     firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
+    if (isAsync && ts6.isMethodDeclaration(node) && this.javaReassignsParameter(node)) {
+      const where = `${node.getSourceFile().fileName}:${node.name.escapedText}`;
+      this.javaReassigningMethods.push(where);
+      Logger.warning(`[Java] async method reassigns a parameter (not effectively final): ${where}`);
+    }
     if (isAsync) {
-      const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
-      const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
+      const finalWrapperVars = ts6.isMethodDeclaration(node) ? "\n" : this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
+      const insideWrappers = ts6.isMethodDeclaration(node) ? "\n" : this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
       const body = (firstStatement + remainingString).split("\n").map((line) => this.getIden(identation) + line).join("\n");
       const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : bodyStatements.length > 0 ? bodyStatements[0] : void 0;
       const lastStmtIsReturn = lastStatement && (ts6.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
@@ -18857,56 +18983,11 @@ var JavaTranspiler = class extends BaseTranspiler {
   // the typed core signature: every parameter prints its Java type, the default-valued ones
   // included (a Java signature cannot carry a default - the front supplies it)
   printCoreMethodParameters(node) {
-    const isAsyncMethod = this.isAsyncFunction(node);
-    return node.parameters.map((param) => {
-      const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
-      const isDefaulted = param.initializer !== void 0;
-      let printedParam = isDefaulted ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}` : this.printParameter(param);
-      if (isAsyncMethod && isReassignedVar) {
-        const paramName = param.name.escapedText;
-        const { localName, sigName } = this.getAsyncParamWrapperNames(paramName);
-        printedParam = printedParam.replace(localName, sigName);
-      }
-      return printedParam;
-    }).join(", ");
+    return node.parameters.map((param) => param.initializer !== void 0 ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}` : this.printParameter(param)).join(", ");
   }
-  // the front's arguments: omitted slot -> TS default, explicit null -> null, typed slots widened
-  printFrontForwardedArguments(node) {
-    const out = [];
-    let offSetIndex = 0;
-    (node.parameters ?? []).forEach((param, i) => {
-      const name = this.printNode(param.name, 0);
-      if (param.initializer === void 0) {
-        offSetIndex--;
-        out.push(name);
-        return;
-      }
-      const index = i + offSetIndex;
-      const javaType = this.javaOptionalParameterJavaType(param);
-      const getter = javaType === "Long" ? "getArgLong" : javaType === "String" ? "getArgString" : javaType === "java.util.Map<String, Object>" ? "getArgMap" : javaType === JAVA_STRING_LIST_TYPE ? "getArgStringList" : void 0;
-      if (getter === void 0) {
-        out.push(this.printOptionalArgExpression(index, param.initializer));
-        return;
-      }
-      let defaultValue = this.printNode(param.initializer, 0);
-      if (getter === "getArgLong" && /^-?\d+$/.test(defaultValue)) {
-        defaultValue += "L";
-      }
-      if (getter === "getArgStringList" && ts6.isArrayLiteralExpression(param.initializer) && param.initializer.elements.length === 0) {
-        defaultValue = "new java.util.ArrayList<String>()";
-      }
-      out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
-    });
-    return out.join(", ");
-  }
-  // the front keeps today's `Object...` signature for TypedSurface, findMethod and legacy callers
-  printFrontMethodDeclaration(node, identation) {
-    const name = this.transformMethodNameIfNeeded(node.name.escapedText);
-    const methodDef = this.printMethodDefinition(node, identation, (n) => n.parameters.filter((p) => p.initializer === void 0).map((p) => this.printParameter(p)).concat(["Object... optionalArgs"]).join(", "));
-    const args = this.printFrontForwardedArguments(node);
-    const call = `this.${name}(${args});`;
-    const isVoid = /(^|\s)void\s+\w+\s*\(/.test(methodDef);
-    return "\n" + methodDef + this.getBlockOpen(identation) + this.getIden(identation + 1) + (isVoid ? call : `return ${call}`) + this.getBlockClose(identation);
+  // the async method body reassigns one of its parameters (printed body: ReassignedVars is filled)
+  javaReassignsParameter(node) {
+    return (node.parameters ?? []).some((p) => this.ReassignedVars[this.getVarKey(p)] || p.initializer !== void 0 && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node));
   }
   printMethodParameters(node) {
     const isAsyncMethod = this.isAsyncFunction(node);
@@ -18976,14 +19057,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   printMethodDeclaration(node, identation) {
     const funcBody = this.printFunctionBody(node, identation);
-    if (this.hasDefaultedTail(node)) {
-      let splitDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
-      splitDef += funcBody;
-      splitDef += this.printFrontMethodDeclaration(node, identation);
-      splitDef += this.printOverrideBridges(node, identation);
-      return splitDef;
-    }
-    let methodDef = this.printMethodDefinition(node, identation);
+    let methodDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
     methodDef += funcBody;
     methodDef += this.printOverrideBridges(node, identation);
     return methodDef;

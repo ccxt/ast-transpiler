@@ -1460,31 +1460,7 @@ describe('java transpiling tests', () => {
     // names must be derived from the remapped Java identifier; otherwise the
     // outside snapshot RHS references an undeclared variable.
 
-    test('async-wrapper: reassigned keyword-remapped param (params) — sig/snap/local round-trip on `parameters`', () => {
-        // Use a fresh transpiler to avoid cross-call ReassignedVars leakage
-        const fresh = new Transpiler();
-        const input =
-        "class T {\n" +
-        "  async handleAccountIndex(params: object, methodName1: string): Promise<any> {\n" +
-        "    let accountIndex = undefined;\n" +
-        "    [accountIndex, params] = this.handleOptionAndParams2(params, methodName1);\n" +
-        "    return accountIndex;\n" +
-        "  }\n" +
-        "  handleOptionAndParams2(p: object, m: string) { return [1, p]; }\n" +
-        "}";
-        const output = fresh.transpileJava(input).content;
-        // Signature: param is remapped + suffixed (Object parameters2)
-        expect(output).toMatch(/handleAccountIndex\s*\(\s*Object parameters2\b/);
-        // Outside snapshot: RHS = sig name (parameters2), LHS = parameters3
-        expect(output).toContain('final Object parameters3 = parameters2;');
-        // Inside lambda: local rebinds the post-keyword-remap name
-        expect(output).toContain('Object parameters = parameters3;');
-        // Must NOT emit the broken pre-fix output (`params2`/`params3` referenced anywhere)
-        expect(output).not.toMatch(/\bparams2\b/);
-        expect(output).not.toMatch(/\bparams3\b/);
-    });
-
-    test('async-wrapper: reassigned non-remapped param (body) — preserves existing body2/body3 shape', () => {
+    test('async method reassigning a parameter keeps one binding and is recorded', () => {
         const fresh = new Transpiler();
         const input =
         "class T {\n" +
@@ -1494,49 +1470,11 @@ describe('java transpiling tests', () => {
         "  }\n" +
         "}";
         const output = fresh.transpileJava(input).content;
-        expect(output).toMatch(/f\s*\(\s*Object body2\b/);
-        expect(output).toContain('final Object body3 = body2;');
-        expect(output).toContain('Object body = body3;');
-    });
-
-    test('async-wrapper: other keyword-remapped params (internal, event) get correct wrappers', () => {
-        const fresh = new Transpiler();
-        // `internal` -> `intern`, `event` -> `eventVar`
-        const input =
-        "class T {\n" +
-        "  async f(internal: string, event: string): Promise<any> {\n" +
-        "    internal = 'x';\n" +
-        "    event = 'y';\n" +
-        "    return internal;\n" +
-        "  }\n" +
-        "}";
-        const output = fresh.transpileJava(input).content;
-        expect(output).toMatch(/f\s*\(\s*Object intern2,\s*Object eventVar2\b/);
-        expect(output).toContain('final Object intern3 = intern2;');
-        expect(output).toContain('final Object eventVar3 = eventVar2;');
-        expect(output).toContain('Object intern = intern3;');
-        expect(output).toContain('Object eventVar = eventVar3;');
-        // Pre-fix bug would emit `internal2`/`event2` on RHS — must not appear.
-        expect(output).not.toMatch(/\binternal2\b/);
-        expect(output).not.toMatch(/\bevent2\b/);
-    });
-
-    test('async-wrapper: mixed remapped + non-remapped reassigned params coexist', () => {
-        const fresh = new Transpiler();
-        const input =
-        "class T {\n" +
-        "  async f(params: object, body: string): Promise<any> {\n" +
-        "    params = {};\n" +
-        "    body = 'x';\n" +
-        "    return body;\n" +
-        "  }\n" +
-        "}";
-        const output = fresh.transpileJava(input).content;
-        expect(output).toMatch(/f\s*\(\s*Object parameters2,\s*Object body2\b/);
-        expect(output).toContain('final Object parameters3 = parameters2;');
-        expect(output).toContain('final Object body3 = body2;');
-        expect(output).toContain('Object parameters = parameters3;');
-        expect(output).toContain('Object body = body3;');
+        // unsupported shape: the parameter keeps its name (no copies, no twin) and the method is recorded
+        expect(output).toMatch(/f\s*\(\s*Object body\)/);
+        expect(output).not.toMatch(/\bbody[23]\b/);
+        expect(output).not.toContain('fBody');
+        expect((fresh as any).javaTranspiler.javaReassigningMethods.some((m) => m.endsWith(':f'))).toBe(true);
     });
 
     // --- Integration: realistic exchange pattern combining all features ---
@@ -2384,10 +2322,8 @@ describe('java transpiling tests', () => {
     });
 });
 
-describe('trailing null/undefined omission on this-calls (varargs ambiguity)', () => {
-    // the generated java surface is uniformly varargs - a trailing bare null
-    // triggers javac's "non-varargs call of varargs method" warning; the
-    // transpiler drops exactly one trailing null/undefined on this.-calls
+describe('calls into a method with optional parameters pass every slot', () => {
+    // one typed signature per method: an omitted or undefined optional slot prints its default
     const classWrap = (body: string) =>
         "class T {\n" +
         "    safeString2(o, k1, k2, d = undefined) { return undefined; }\n" +
@@ -2407,11 +2343,10 @@ describe('trailing null/undefined omission on this-calls (varargs ambiguity)', (
             "        const d = this.handleParamString2({}, 'x', 'y', undefined);\n" +
             "    }\n");
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
-        expect(output).not.toContain('safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y", null)');
-        expect(output).toContain('this.safeValue(new java.util.HashMap<String, Object>() {{}}, "x")');
-        expect(output).toContain('this.parseOrders(new java.util.ArrayList<Object>(java.util.Arrays.asList()))');
-        expect(output).toContain('this.handleParamString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
+        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y", (Object) null)');
+        expect(output).toContain('this.safeValue(new java.util.HashMap<String, Object>() {{}}, "x", (Object) null)');
+        expect(output).toContain('this.parseOrders(new java.util.ArrayList<Object>(java.util.Arrays.asList()), (Object) null, (Object) null, (Object) null)');
+        expect(output).toContain('this.handleParamString2(new java.util.HashMap<String, Object>() {{}}, "x", "y", (Object) null)');
     });
 
     test('drops only one trailing nullish and leaves interior nulls intact', () => {
@@ -2420,8 +2355,8 @@ describe('trailing null/undefined omission on this-calls (varargs ambiguity)', (
             "        this.method(undefined, undefined);\n" +
             "    }\n");
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('this.method(null)');
-        expect(output).not.toContain('this.method(null, null)');
+        // a required slot passed as undefined stays null; the optional one takes its default
+        expect(output).toContain('this.method(null, (Object) null)');
     });
 
     test('non-this calls keep trailing null', () => {
@@ -2450,7 +2385,7 @@ describe('trailing undefined into a REQUIRED positional parameter is kept', () =
         expect(output).toContain('this.signDydxTx("pk", new java.util.HashMap<String, Object>() {{}}, "", "chain", new java.util.HashMap<String, Object>() {{}}, null)');
     });
 
-    test('optional tail still gets dropped', () => {
+    test('an optional undefined slot prints its default', () => {
         const input =
         "class T {\n" +
         "    safeString2(o, k1, k2, d = undefined) { return undefined; }\n" +
@@ -2459,7 +2394,7 @@ describe('trailing undefined into a REQUIRED positional parameter is kept', () =
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y")');
+        expect(output).toContain('this.safeString2(new java.util.HashMap<String, Object>() {{}}, "x", "y", (Object) null)');
     });
 });
 
@@ -2759,9 +2694,9 @@ ${body}
             .toContain('if (Boolean.TRUE.equals(this.safeBool(x, "k", false)))');
         expect(conditionOf("if (this.safeBool2(x, 'a', 'b', true)) { return; }"))
             .toContain('if (Boolean.TRUE.equals(this.safeBool2(x, "a", "b", true)))');
-        // absent default: the accessor hands back null, which is what TRUE.equals tests
+        // absent default: the full-arity call passes null, which is what TRUE.equals tests
         expect(conditionOf("if (this.safeBool(x, 'k')) { return; }"))
-            .toContain('if (Boolean.TRUE.equals(this.safeBool(x, "k")))');
+            .toContain('if (Boolean.TRUE.equals(this.safeBool(x, "k", (Object) null)))');
         expect(conditionOf("if (this.safeBool(x, 'k', false)) { return; }")).not.toContain('Helpers.isTrue(this.');
     });
 
@@ -4653,66 +4588,61 @@ describe('java hand-written return-type arithmetic (java-19)', () => {
 });
 
 describe('java optional parameter unpacking', () => {
-    test('literal defaults unpack natively from optionalArgs (no Helpers.getArg)', () => {
+    test('an optional parameter is an ordinary parameter of the single signature', () => {
         const input =
         "class T {\n" +
         "    m(arg, symbol = undefined) {\n" +
         "        return symbol;\n" +
         "    }\n" +
+        "    n() { return this.m(1); }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("public Object m(Object arg, Object symbol)");
-        expect(output).toContain("public Object m(Object arg, Object... optionalArgs)");
-        expect(output).toContain("return this.m(arg, optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null);");
-        expect(output).not.toContain("Object symbol = optionalArgs");
-        expect(output).not.toContain("Helpers.getArg");
+        expect(output).toContain("return this.m(1, (Object) null);");
+        expect(output).not.toContain("optionalArgs");
     });
 
-    test('every literal default shape keeps its index and its default value', () => {
+    test('an omitted slot prints its literal default at the call site', () => {
         const input =
         "class T {\n" +
         "    m(arg, a = 1, b = true, c = 'x', d = {}, e = []) {\n" +
         "        return a;\n" +
         "    }\n" +
+        "    n() { return this.m(0, undefined); }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("public Object m(Object arg, Object a, Object b, Object c, Object d, Object e)");
-        expect(output).toContain("optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1, ");
-        expect(output).toContain("optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true, ");
-        expect(output).toContain("optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\", ");
-        expect(output).toContain("optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}}, ");
-        expect(output).toContain("optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList()));");
-        expect(output).not.toContain("Helpers.getArg");
+        expect(output).toContain("this.m(0, 1, true, \"x\", new java.util.HashMap<String, Object>() {{}}, new java.util.ArrayList<Object>(java.util.Arrays.asList()))");
+        expect(output).not.toContain("optionalArgs");
     });
 
-    test('every native unpack is null-guarded, like the helper it replaces', () => {
+    test('a method signature never carries Object... optionalArgs', () => {
         const input =
         "class T {\n" +
-        "    m(arg, params = {}) {\n" +
+        "    m(arg, params = {}, other?: any) {\n" +
         "        return params;\n" +
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // a caller passing a bare trailing null supplies a null varargs array; the
-        // guard keeps that reading like an empty one instead of throwing NPE
-        expect(output).not.toMatch(/= optionalArgs\.length/);
-        expect(output).toContain("optionalArgs != null && optionalArgs.length > 0");
+        expect(output).toContain("public Object m(Object arg, Object parameters, Object other)");
+        expect(output).not.toContain("Object...");
     });
 
-    test('defaults that are not pure literals keep Helpers.getArg', () => {
+    test('a default that is not a pure literal is applied by the callee on null', () => {
         const input =
         "class T {\n" +
         "    m(arg, params = this.something(arg), other = someVar) {\n" +
         "        return params;\n" +
         "    }\n" +
+        "    n() { return this.m(1); }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg })), ");
-        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar));");
-        expect(output).not.toContain("optionalArgs.length >");
+        expect(output).toContain("if (parameters == null) { parameters = Helpers.callDynamically(this, \"something\", new Object[] { arg }); }");
+        expect(output).toContain("if (other == null) { other = someVar; }");
+        expect(output).toContain("this.m(1, (Object) null, (Object) null)");
     });
 
-    test('async method takes the default as a core parameter; the front unpacks it', () => {
+    test('an async method takes its default as a parameter and its lambda reads it', () => {
         const input =
         "class T {\n" +
         "    async m(arg, params = {}) {\n" +
@@ -4721,8 +4651,8 @@ describe('java optional parameter unpacking', () => {
         "}"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("public java.util.concurrent.CompletableFuture<Object> m(Object arg, Object parameters)");
-        expect(output).toContain("return this.m(arg, optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}});");
-        expect(output).not.toContain("Helpers.getArg");
+        expect(output).not.toContain("optionalArgs");
+        expect(output).not.toMatch(/parameters[23]/);
     });
 
     test('constructor optional parameters unpack natively', () => {
@@ -7379,16 +7309,15 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('public void parseNum(Object amount, Object count)');
     });
 
-    test('Int defaults print Long on the core and read through getArgLong; Num and unannotated stay Object', () => {
+    test('Int defaults print Long; Num and unannotated stay Object', () => {
         expect(venueOutput).toContain('fetchRows(String symbol, Long since, Long limit, Object price, Object parameters)');
-        expect(venueOutput).toContain('fetchRows(String symbol, Object... optionalArgs)');
-        expect(venueOutput).toContain('return this.fetchRows(symbol, Helpers.getArgLong(optionalArgs, 0, null), Helpers.getArgLong(optionalArgs, 1, null), optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : null, ');
+        expect(venueOutput).not.toContain('fetchRows(String symbol, Object... optionalArgs)');
     });
 
-    test('the front forwards a reassigned fixed parameter by its source name', () => {
-        expect(venueOutput).toContain('fetchMoved(String symbol2, java.util.Map<String, Object> parameters)');
-        expect(venueOutput).toContain('fetchMoved(String symbol, Object... optionalArgs)');
-        expect(venueOutput).toContain('return this.fetchMoved(symbol, Helpers.getArgMap(optionalArgs, 0, ');
+    test('an async method reassigning a parameter keeps its source names', () => {
+        expect(venueOutput).toContain('fetchMoved(String symbol, java.util.Map<String, Object> parameters)');
+        expect(venueOutput).not.toContain('symbol2');
+        expect(venueOutput).not.toContain('fetchMovedBody');
     });
 
     test('fetch2 keeps an untyped params slot for implicit-endpoint arrays', () => {
@@ -7407,7 +7336,8 @@ describe('java typed parameters (b-09)', () => {
     });
 
     test('an integer default of a Long slot prints as a long literal', () => {
-        expect(venueOutput).toContain('this.fetchDepth(symbol, Helpers.getArgLong(optionalArgs, 0, 100L), ');
+        expect(venueOutput).toContain('fetchDepth(String symbol, Long limit, java.util.Map<String, Object> parameters)');
+        expect(venueOutput).not.toContain('getArgLong');
     });
 
     test('writes to a typed Long parameter of a sync core convert through Helpers.toLongOrNull', () => {
@@ -7416,11 +7346,9 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('limit = Helpers.toLongOrNull(((java.util.List<Object>) ');
     });
 
-    test('an optional parameter is typed on the core; the front reads it with a typed getter', () => {
+    test('an optional parameter is typed in the single signature', () => {
         expect(venueOutput).toContain('public void parseOpt(java.util.Map<String, Object> data, String status)');
-        expect(venueOutput).toContain('public void parseOpt(Object... optionalArgs)');
-        expect(venueOutput).toContain('this.parseOpt(Helpers.getArgMap(optionalArgs, 0, new java.util.HashMap<String, Object>() {{}}), Helpers.getArgString(optionalArgs, 1, null));');
-        expect(venueOutput).not.toContain('return this.parseOpt(');
+        expect(venueOutput).not.toContain('parseOpt(Object... optionalArgs)');
     });
 });
 
@@ -7486,9 +7414,7 @@ describe('java override parameters move with the base declaration (d-10)', () =>
     });
 
     test('an override of a typed base declaration prints the same typed signature', () => {
-        // the venue output carries the Venue declaration; the base declaration prints the
-        // same signature in Exchange.ts (checked by the b-09 parseX case above)
-        expect(output).toContain('public void parseTyped(java.util.Map<String, Object> data, Object... optionalArgs)');
+        expect(output).toContain('public void parseTyped(java.util.Map<String, Object> data, java.util.Map<String, Object> market)');
         expect(output).not.toContain('parseTyped(Object data');
     });
 
