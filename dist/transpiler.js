@@ -9103,7 +9103,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
           const op = parent.operatorToken.kind;
           if (op === ts5.SyntaxKind.EqualsToken) {
-            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType) {
+            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === ts5.SyntaxKind.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0)) {
               return true;
             }
           } else if (op >= ts5.SyntaxKind.FirstCompoundAssignment && op <= ts5.SyntaxKind.LastCompoundAssignment) {
@@ -9114,6 +9114,41 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return false;
     });
     return safe;
+  }
+  // How a write of another shape reaches a pointer-typed local: 'nil' (undefined/null prints nil),
+  // 'wrap' (a Go string becomes SafeStringPtr(v), never nil), or undefined (not convertible).
+  // Shared by goLocalIsSafeToType (admission) and goPointerWriteText (emission).
+  goPointerWriteConversion(right, goType) {
+    while (right?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      right = right.expression;
+    }
+    if (!["*string", "*int64", "*float64"].includes(goType) || right === void 0) {
+      return void 0;
+    }
+    if (right.kind === ts5.SyntaxKind.NullKeyword || right.kind === ts5.SyntaxKind.UndefinedKeyword || right.kind === ts5.SyntaxKind.Identifier && right.escapedText === "undefined") {
+      return "nil";
+    }
+    if (goType === "*string" && this.goTypeOfInitializer(right, this.printNode(right, 0)) === "string") {
+      return "wrap";
+    }
+    return void 0;
+  }
+  // `x = "limit"` on a *string local prints `x = SafeStringPtr("limit")`; undefined otherwise
+  goPointerWriteText(node, identation) {
+    const { left, right } = node;
+    if (left?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const decl = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration;
+    if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration) {
+      return void 0;
+    }
+    const goType = this.goDeclaredTypeOfIdentifier(left);
+    if (goType === void 0 || this.goPointerWriteConversion(right, goType) !== "wrap") {
+      return void 0;
+    }
+    const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim();
+    return `${this.printNode(left, 0)} = SafeStringPtr(${value})`;
   }
   // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or undefined
   // for another shape. A third argument is droppable only when it is the empty map literal
@@ -13663,6 +13698,10 @@ ${this.getIden(identation)}return nil`;
       return this.printInstanceOfExpression(node, identation);
     }
     if (operatorToken.kind === ts5.SyntaxKind.EqualsToken) {
+      const pointerWrite = this.goPointerWriteText(node, identation);
+      if (pointerWrite !== void 0) {
+        return pointerWrite;
+      }
       const elementAccess = left;
       const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
       if (left.kind === ts5.SyntaxKind.ElementAccessExpression) {

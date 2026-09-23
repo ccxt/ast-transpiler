@@ -2068,7 +2068,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
                     const op = parent.operatorToken.kind;
                     if (op === ts.SyntaxKind.EqualsToken) {
-                        if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType) {
+                        if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
+                            && !((declaration.kind === ts.SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)) {
                             return true;
                         }
                     } else if ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment)) {
@@ -2079,6 +2080,44 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         });
         return safe;
+    }
+
+    // How a write of another shape reaches a pointer-typed local: 'nil' (undefined/null prints nil),
+    // 'wrap' (a Go string becomes SafeStringPtr(v), never nil), or undefined (not convertible).
+    // Shared by goLocalIsSafeToType (admission) and goPointerWriteText (emission).
+    goPointerWriteConversion(right, goType: string): 'nil' | 'wrap' | undefined {
+        while (right?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            right = right.expression;
+        }
+        if (!['*string', '*int64', '*float64'].includes(goType) || right === undefined) {
+            return undefined;
+        }
+        if ((right.kind === ts.SyntaxKind.NullKeyword) || (right.kind === ts.SyntaxKind.UndefinedKeyword)
+            || ((right.kind === ts.SyntaxKind.Identifier) && (right.escapedText === 'undefined'))) {
+            return 'nil';
+        }
+        if ((goType === '*string') && (this.goTypeOfInitializer(right, this.printNode(right, 0)) === 'string')) {
+            return 'wrap';
+        }
+        return undefined;
+    }
+
+    // `x = "limit"` on a *string local prints `x = SafeStringPtr("limit")`; undefined otherwise
+    goPointerWriteText(node, identation): string | undefined {
+        const { left, right } = node;
+        if (left?.kind !== ts.SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration;
+        if (decl?.kind !== ts.SyntaxKind.VariableDeclaration) {
+            return undefined;
+        }
+        const goType = this.goDeclaredTypeOfIdentifier(left);
+        if ((goType === undefined) || (this.goPointerWriteConversion(right, goType) !== 'wrap')) {
+            return undefined;
+        }
+        const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim();
+        return `${this.printNode(left, 0)} = SafeStringPtr(${value})`;
     }
 
     // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or undefined
@@ -7501,6 +7540,10 @@ ${this.getIden(identation)}${returnStatement}`;
         }
 
         if (operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            const pointerWrite = this.goPointerWriteText(node, identation);
+            if (pointerWrite !== undefined) {
+                return pointerWrite;
+            }
             // handle test['a'] = 1;
             const elementAccess = left;
             const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
