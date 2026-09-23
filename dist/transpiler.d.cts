@@ -1337,6 +1337,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaOptionalParameterFamilyAgrees(method: any, override: any, index: any, type: string): boolean;
     firstDefaultParameterIndex(params: any): number;
     hasDefaultedTail(node: any): boolean;
+    javaSplitParameterWriteType(node: any): string | undefined;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;

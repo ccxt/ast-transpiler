@@ -7246,6 +7246,14 @@ describe('java typed parameters (b-09)', () => {
             "    async fetchRows (symbol: Str, since: Int = undefined, limit: Int = undefined, price: Num = undefined, params = {}) {\n" +
             "        return [ symbol, since, limit, price, params ];\n" +
             "    }\n" +
+            "    async fetchMoved (symbol: Str, params: Dict = {}) {\n" +
+            "        symbol = this.safeString (params, 'symbol', symbol);\n" +
+            "        return symbol;\n" +
+            "    }\n" +
+            "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
+            "        limit = raw;\n" +
+            "        [ limit, raw ] = [ raw, limit ];\n" +
+            "    }\n" +
             "}\n" +
             "class Sub extends Venue {\n" +
             "    parseZ (data: Dict, status: Str, market: Market, cur: Currency): void {\n" +
@@ -7317,6 +7325,18 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('fetchRows(String symbol, Long since, Long limit, Object price, Object parameters)');
         expect(venueOutput).toContain('fetchRows(String symbol, Object... optionalArgs)');
         expect(venueOutput).toContain('return this.fetchRows(symbol, Helpers.getArgLong(optionalArgs, 0, null), Helpers.getArgLong(optionalArgs, 1, null), optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : null, ');
+    });
+
+    test('the front forwards a reassigned fixed parameter by its source name', () => {
+        expect(venueOutput).toContain('fetchMoved(String symbol2, java.util.Map<String, Object> parameters)');
+        expect(venueOutput).toContain('fetchMoved(String symbol, Object... optionalArgs)');
+        expect(venueOutput).toContain('return this.fetchMoved(symbol, Helpers.getArgMap(optionalArgs, 0, ');
+    });
+
+    test('writes to a typed Long parameter of a sync core convert through Helpers.toLongOrNull', () => {
+        expect(venueOutput).toContain('public void pageRows(Long limit, Object raw)');
+        expect(venueOutput).toContain('limit = Helpers.toLongOrNull(raw);');
+        expect(venueOutput).toContain('limit = Helpers.toLongOrNull(((java.util.List<Object>) ');
     });
 
     test('an optional parameter is typed on the core; the front reads it with a typed getter', () => {

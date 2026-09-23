@@ -15504,6 +15504,14 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return (node.parameters ?? []).some((p) => p.initializer !== void 0);
   }
+  // a typed default-valued parameter of a sync core is written in place (async cores copy it
+  // into an Object local first), so its writes convert to the declared type
+  javaSplitParameterWriteType(node) {
+    if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent) || this.isAsyncFunction(node.parent)) {
+      return void 0;
+    }
+    return this.javaOptionalParameterType(node);
+  }
   javaParameterIsCompoundAssigned(node) {
     const method = node.parent;
     const name = node.name?.escapedText;
@@ -15538,13 +15546,16 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (declaration === void 0 || !ts6.isParameter(declaration) || left.escapedText !== declaration.name?.escapedText) {
       return void 0;
     }
-    const native = this.javaNativeParameterType(declaration);
+    const native = this.javaNativeParameterType(declaration) ?? this.javaSplitParameterWriteType(declaration);
     if (native === void 0) {
       return void 0;
     }
     const leftText = this.printNode(left, 0);
     if (this.javaNativeArgumentAlreadyTyped(right, native)) {
       return `${leftText} = ${this.printNode(right, identation)}`;
+    }
+    if (native === "Long") {
+      return `${leftText} = Helpers.toLongOrNull(${this.printNode(right, identation)})`;
     }
     return `${leftText} = (${native}) (${this.printNode(right, identation)})`;
   }
@@ -15833,8 +15844,10 @@ var JavaTranspiler = class extends BaseTranspiler {
         const target = arrayBindingPatternElements[index];
         if (ts6.isIdentifier(target)) {
           const declaration = this.javaDeclarationOfIdentifier(target);
-          const native = declaration !== void 0 && ts6.isParameter(declaration) ? this.javaNativeParameterType(declaration) : void 0;
-          if (native !== void 0) {
+          const native = declaration !== void 0 && ts6.isParameter(declaration) ? this.javaNativeParameterType(declaration) ?? this.javaSplitParameterWriteType(declaration) : void 0;
+          if (native === "Long") {
+            elementValue = `Helpers.toLongOrNull(${elementValue})`;
+          } else if (native !== void 0) {
             elementValue = `(${native}) ${elementValue}`;
           }
         }
@@ -18113,7 +18126,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // the front keeps today's `Object...` signature for TypedSurface, findMethod and legacy callers
   printFrontMethodDeclaration(node, identation) {
     const name = this.transformMethodNameIfNeeded(node.name.escapedText);
-    const methodDef = this.printMethodDefinition(node, identation);
+    const methodDef = this.printMethodDefinition(node, identation, (n) => n.parameters.filter((p) => p.initializer === void 0).map((p) => this.printParameter(p)).concat(["Object... optionalArgs"]).join(", "));
     const args = this.printFrontForwardedArguments(node);
     const call = `this.${name}(${args});`;
     const isVoid = /(^|\s)void\s+\w+\s*\(/.test(methodDef);
