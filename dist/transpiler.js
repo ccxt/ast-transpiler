@@ -7817,9 +7817,9 @@ function goBalancedCallArgs(text, open) {
   return void 0;
 }
 var GO_GETARG_EXCLUDED_POSITIONS = {
-  "fetch2": [3],
-  "request": [3],
-  "sign": [3]
+  "fetch2": [1, 3],
+  "request": [1, 3],
+  "sign": [1, 3]
 };
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the printed source file references. A Go import must precede the first

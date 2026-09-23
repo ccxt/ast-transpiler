@@ -688,11 +688,12 @@ export {
     alignGoTrailingComments,
 };
 
-// implicit endpoints pass fetch2/request/sign params through untyped (a list for batch orders)
+// implicit endpoints pass api (['v1', 'private']) and params (a list for batch orders) untyped;
+// exchange overrides of sign/fetch2/request usually omit the base `api: any` annotation
 const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
-    'fetch2': [ 3 ],
-    'request': [ 3 ],
-    'sign': [ 3 ],
+    'fetch2': [ 1, 3 ],
+    'request': [ 1, 3 ],
+    'sign': [ 1, 3 ],
 };
 
 export class GoTranspiler extends BaseTranspiler {

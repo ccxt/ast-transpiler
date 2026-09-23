@@ -1640,6 +1640,7 @@ describe('go inline equality', () => {
         const output = transpiler.transpileGo(input).content;
         // okx posts a list of orders through this slot
         expect(output).toContain("params := GetArg(optionalArgs, 2, map[string]any{})");
+        expect(output).toContain("api := GetArg(optionalArgs, 0, \"public\")");
     });
     test('an any-annotated string-defaulted parameter keeps the GetArg box', () => {
         const input =
