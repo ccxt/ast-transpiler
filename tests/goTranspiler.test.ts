@@ -1641,6 +1641,18 @@ describe('go inline equality', () => {
         // okx posts a list of orders through this slot
         expect(output).toContain("params := GetArg(optionalArgs, 2, map[string]any{})");
     });
+    test('an any-annotated string-defaulted parameter keeps the GetArg box', () => {
+        const input =
+        "class T {\n" +
+        "    fetch2 (path: any, api: any = 'public', method = 'GET') {\n" +
+        "        return [ path, api, method ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // venues pass api as a list (['v1', 'private'])
+        expect(output).toContain("api := GetArg(optionalArgs, 0, \"public\")");
+        expect(output).toContain("var method string = GetArgString(optionalArgs, 1, \"GET\")");
+    });
     test('a nil-defaulted dictionary returned bare keeps the GetArg box', () => {
         const input =
         "class T {\n" +

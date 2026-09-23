@@ -5833,6 +5833,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((excluded !== undefined) && excluded.includes(method.parameters.indexOf(param))) {
             return undefined;
         }
+        // an explicit `any` annotation admits values of other shapes than the default (api lists)
+        if (param?.type?.kind === ts.SyntaxKind.AnyKeyword) {
+            return undefined;
+        }
         const shape = (printedDefault ?? '').trim();
         const byDefault = this.goGetArgTypeOfShape(shape);
         if (byDefault !== undefined) {

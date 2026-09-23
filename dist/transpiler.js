@@ -12282,6 +12282,9 @@ ${this.getIden(level)}}()`;
     if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(param))) {
       return void 0;
     }
+    if (param?.type?.kind === ts5.SyntaxKind.AnyKeyword) {
+      return void 0;
+    }
     const shape = (printedDefault ?? "").trim();
     const byDefault = this.goGetArgTypeOfShape(shape);
     if (byDefault !== void 0) {
