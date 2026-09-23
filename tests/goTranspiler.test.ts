@@ -1628,6 +1628,19 @@ describe('go inline equality', () => {
         expect(output).toContain("if force == true {");
         expect(output).not.toContain("EvalTruthy(force)");
     });
+    test('the params slot of sign keeps the GetArg box', () => {
+        const input =
+        "class T {\n" +
+        "    sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {\n" +
+        "        const query = this.omit (params, 'x');\n" +
+        "        return { 'url': path, 'method': method, 'body': body, 'headers': headers, 'q': query };\n" +
+        "    }\n" +
+        "    omit (a, b) { return a; }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // okx posts a list of orders through this slot
+        expect(output).toContain("params := GetArg(optionalArgs, 2, map[string]any{})");
+    });
     test('a nil-defaulted dictionary returned bare keeps the GetArg box', () => {
         const input =
         "class T {\n" +

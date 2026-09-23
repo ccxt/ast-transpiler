@@ -7816,6 +7816,11 @@ function goBalancedCallArgs(text, open) {
   }
   return void 0;
 }
+var GO_GETARG_EXCLUDED_POSITIONS = {
+  "fetch2": [3],
+  "request": [3],
+  "sign": [3]
+};
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the printed source file references. A Go import must precede the first
   // declaration, so the file-level print (printSourceFileStatements) collects names here and
@@ -12272,6 +12277,11 @@ ${this.getIden(level)}}()`;
   // for a nil default), or undefined to keep `any`; the retype needs goLocalIsSafeToType,
   // goParameterKeepsNilCompareNative and goGetArgConsumersAreSafe to agree.
   goGetArgLocalType(body, param, printedDefault) {
+    const method = param?.parent;
+    const excluded = GO_GETARG_EXCLUDED_POSITIONS[method?.name?.escapedText];
+    if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(param))) {
+      return void 0;
+    }
     const shape = (printedDefault ?? "").trim();
     const byDefault = this.goGetArgTypeOfShape(shape);
     if (byDefault !== void 0) {

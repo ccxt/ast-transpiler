@@ -688,6 +688,13 @@ export {
     alignGoTrailingComments,
 };
 
+// implicit endpoints pass fetch2/request/sign params through untyped (a list for batch orders)
+const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
+    'fetch2': [ 3 ],
+    'request': [ 3 ],
+    'sign': [ 3 ],
+};
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -5821,6 +5828,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // for a nil default), or undefined to keep `any`; the retype needs goLocalIsSafeToType,
     // goParameterKeepsNilCompareNative and goGetArgConsumersAreSafe to agree.
     goGetArgLocalType(body, param, printedDefault: string): string | undefined {
+        const method: any = param?.parent;
+        const excluded = GO_GETARG_EXCLUDED_POSITIONS[method?.name?.escapedText];
+        if ((excluded !== undefined) && excluded.includes(method.parameters.indexOf(param))) {
+            return undefined;
+        }
         const shape = (printedDefault ?? '').trim();
         const byDefault = this.goGetArgTypeOfShape(shape);
         if (byDefault !== undefined) {
