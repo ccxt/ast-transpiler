@@ -18119,7 +18119,11 @@ var JavaTranspiler = class extends BaseTranspiler {
         out.push(this.printOptionalArgExpression(index, param.initializer));
         return;
       }
-      out.push(`Helpers.${getter}(optionalArgs, ${index}, ${this.printNode(param.initializer, 0)})`);
+      let defaultValue = this.printNode(param.initializer, 0);
+      if (getter === "getArgLong" && /^-?\d+$/.test(defaultValue)) {
+        defaultValue += "L";
+      }
+      out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
     });
     return out.join(", ");
   }

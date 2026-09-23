@@ -7250,7 +7250,9 @@ describe('java typed parameters (b-09)', () => {
             "        symbol = this.safeString (params, 'symbol', symbol);\n" +
             "        return symbol;\n" +
             "    }\n" +
-            "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
+            "    fetchDepth (symbol: Str, limit: Int = 100, params: Dict = {}): void {\n" +
+            "    }\n" +
+                        "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
             "        limit = raw;\n" +
             "        [ limit, raw ] = [ raw, limit ];\n" +
             "    }\n" +
@@ -7331,6 +7333,10 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('fetchMoved(String symbol2, java.util.Map<String, Object> parameters)');
         expect(venueOutput).toContain('fetchMoved(String symbol, Object... optionalArgs)');
         expect(venueOutput).toContain('return this.fetchMoved(symbol, Helpers.getArgMap(optionalArgs, 0, ');
+    });
+
+    test('an integer default of a Long slot prints as a long literal', () => {
+        expect(venueOutput).toContain('this.fetchDepth(symbol, Helpers.getArgLong(optionalArgs, 0, 100L), ');
     });
 
     test('writes to a typed Long parameter of a sync core convert through Helpers.toLongOrNull', () => {
