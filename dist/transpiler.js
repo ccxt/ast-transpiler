@@ -10901,6 +10901,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return void 0;
     }
     if (decl.kind === ts5.SyntaxKind.Parameter) {
+      const bound = this.goGetArgParameterType(decl);
+      if (bound !== void 0 && bound.startsWith("*")) {
+        return bound;
+      }
       return this.goNativeParameterType(decl);
     }
     if (decl.kind !== ts5.SyntaxKind.VariableDeclaration) {
@@ -12691,12 +12695,21 @@ ${this.getIden(level)}}()`;
     if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0 || decl.parent?.body === void 0) {
       return false;
     }
+    return this.goGetArgParameterType(decl) === "map[string]any";
+  }
+  // the Go type a defaulted parameter's GetArg twin binds (undefined: the `any` GetArg); the one
+  // predicate shared by the binding line and every consumer's printing
+  goGetArgParameterType(decl) {
+    if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0 || decl.dotDotDotToken !== void 0 || decl.name?.kind !== ts5.SyntaxKind.Identifier || decl.parent?.body === void 0 || ![ts5.SyntaxKind.MethodDeclaration, ts5.SyntaxKind.FunctionDeclaration].includes(decl.parent.kind)) {
+      return void 0;
+    }
     this.goGetArgTypeCache ??= /* @__PURE__ */ new WeakMap();
     if (!this.goGetArgTypeCache.has(decl)) {
       this.goGetArgTypeCache.set(decl, void 0);
-      this.goGetArgTypeCache.set(decl, this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0)));
+      const goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+      this.goGetArgTypeCache.set(decl, goType !== void 0 && this.goGetArgTwinName(goType) !== void 0 ? goType : void 0);
     }
-    return this.goGetArgTypeCache.get(decl) === "map[string]any";
+    return this.goGetArgTypeCache.get(decl);
   }
   // argument `argIndex` of the callee binds a parameter with a TypeScript default (GetArg-bound)
   goGetArgPositionIsDefaulted(callee, argIndex) {
@@ -12751,7 +12764,7 @@ ${this.getIden(level)}}()`;
           const index = i + offSetIndex;
           const paramName = this.printNode(param.name, 0);
           const printedDefault = this.printNode(initializer, 0);
-          const goType = this.goGetArgLocalType(node.body, param, printedDefault);
+          const goType = this.goGetArgParameterType(param);
           const twinName = goType !== void 0 ? this.goGetArgTwinName(goType) : void 0;
           if (goType !== void 0 && twinName !== void 0) {
             initParams.push(`var ${paramName} ${goType} = ${twinName}(optionalArgs, ${index}, ${printedDefault})`);

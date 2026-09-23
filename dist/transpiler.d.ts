@@ -1123,6 +1123,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goParamsTupleHelperIndex(call: any): number;
     goGetArgTupleWriteIsDict(declaration: any, right: any, index: number): boolean;
     goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
+    goGetArgParameterType(decl: any): string | undefined;
     goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean;
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;

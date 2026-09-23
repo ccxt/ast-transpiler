@@ -3370,9 +3370,9 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // the reassignment re-boxes a *int64 (the scan is what keeps the box pointer-free)
-        expect(output).toContain("IsEqual(since, nil)");
-        expect(output).not.toContain("since == nil");
+        // the local is bound as *int64 by its GetArg twin, so the nil test is native
+        expect(output).toContain("var since *int64 = GetArgInt64Ptr(");
+        expect(output).toContain("(since == nil)");
     });
     test('a later pointer accessor outside the Go type table keeps the helper', () => {
         const input =

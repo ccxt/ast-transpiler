@@ -4243,6 +4243,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         if (decl.kind === ts.SyntaxKind.Parameter) {
+            // a defaulted parameter bound through a pointer GetArg twin is that pointer at every consumer
+            const bound = this.goGetArgParameterType(decl);
+            if ((bound !== undefined) && bound.startsWith('*')) {
+                return bound;
+            }
             // B-02: a parameter the call-site proof typed prints its native Go type
             return this.goNativeParameterType(decl);
         }
@@ -6265,12 +6270,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((decl?.kind !== ts.SyntaxKind.Parameter) || (decl.initializer === undefined) || (decl.parent?.body === undefined)) {
             return false;
         }
+        return this.goGetArgParameterType(decl) === 'map[string]any';
+    }
+
+    // the Go type a defaulted parameter's GetArg twin binds (undefined: the `any` GetArg); the one
+    // predicate shared by the binding line and every consumer's printing
+    goGetArgParameterType(decl: any): string | undefined {
+        if ((decl?.kind !== ts.SyntaxKind.Parameter) || (decl.initializer === undefined) || (decl.dotDotDotToken !== undefined)
+            || (decl.name?.kind !== ts.SyntaxKind.Identifier) || (decl.parent?.body === undefined)
+            || ![ts.SyntaxKind.MethodDeclaration, ts.SyntaxKind.FunctionDeclaration].includes(decl.parent.kind)) {
+            return undefined;
+        }
         this.goGetArgTypeCache ??= new WeakMap();
         if (!this.goGetArgTypeCache.has(decl)) {
             this.goGetArgTypeCache.set(decl, undefined);
-            this.goGetArgTypeCache.set(decl, this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0)));
+            const goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+            this.goGetArgTypeCache.set(decl, (goType !== undefined) && (this.goGetArgTwinName(goType) !== undefined) ? goType : undefined);
         }
-        return this.goGetArgTypeCache.get(decl) === 'map[string]any';
+        return this.goGetArgTypeCache.get(decl);
     }
 
     // argument `argIndex` of the callee binds a parameter with a TypeScript default (GetArg-bound)
@@ -6333,7 +6350,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     const paramName = this.printNode(param.name, 0);
                     const printedDefault = this.printNode(initializer, 0);
                     // a default that names a Go type exactly binds through its typed twin; others keep GetArg (ABI unchanged)
-                    const goType = this.goGetArgLocalType(node.body, param, printedDefault);
+                    const goType = this.goGetArgParameterType(param);
                     const twinName = (goType !== undefined) ? this.goGetArgTwinName(goType) : undefined;
                     if ((goType !== undefined) && (twinName !== undefined)) {
                         initParams.push(`var ${paramName} ${goType} = ${twinName}(optionalArgs, ${index}, ${printedDefault})`);
