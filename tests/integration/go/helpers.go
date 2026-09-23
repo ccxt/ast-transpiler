@@ -1733,3 +1733,11 @@ func PanicOnError(msg any) any {
 	}
 	return msg
 }
+
+// SafeStringPtr gives a string-ish value the *string shape: non-strings (including absent) become nil.
+func SafeStringPtr(v any) *string {
+	if s, ok := DerefScalar(v).(string); ok {
+		return &s
+	}
+	return nil
+}
