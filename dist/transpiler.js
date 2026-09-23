@@ -9088,7 +9088,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.SpreadElement) {
           return true;
         }
-        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goTupleElementIsDict(parent.parent.right, parent.elements.indexOf(n)))) {
+        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goGetArgBindsDictElement(n, parent.parent.right, parent.elements.indexOf(n)))) {
           return true;
         }
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {

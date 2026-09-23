@@ -9082,7 +9082,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (_optionalChain([parent, 'optionalAccess', _553 => _553.kind]) === _typescript2.default.SyntaxKind.SpreadElement) {
           return true;
         }
-        if (_optionalChain([parent, 'optionalAccess', _554 => _554.kind]) === _typescript2.default.SyntaxKind.ArrayLiteralExpression && _optionalChain([parent, 'access', _555 => _555.parent, 'optionalAccess', _556 => _556.kind]) === _typescript2.default.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === _typescript2.default.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goTupleElementIsDict(parent.parent.right, parent.elements.indexOf(n)))) {
+        if (_optionalChain([parent, 'optionalAccess', _554 => _554.kind]) === _typescript2.default.SyntaxKind.ArrayLiteralExpression && _optionalChain([parent, 'access', _555 => _555.parent, 'optionalAccess', _556 => _556.kind]) === _typescript2.default.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === _typescript2.default.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goGetArgBindsDictElement(n, parent.parent.right, parent.elements.indexOf(n)))) {
           return true;
         }
         if (_optionalChain([parent, 'optionalAccess', _557 => _557.kind]) === _typescript2.default.SyntaxKind.BinaryExpression && parent.left === n) {
