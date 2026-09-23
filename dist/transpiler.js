@@ -14280,6 +14280,10 @@ var JavaTranspiler = class extends BaseTranspiler {
   // so the argument carries the same checkcast as native map/string reads. The checker proved the
   // argument assignable to the parameter, so the declared type describes the value received.
   javaPrintCallArguments(args, node, identation) {
+    const superCore = this.javaSuperCoreCallArguments(args, node, identation);
+    if (superCore !== void 0) {
+      return superCore;
+    }
     const spawnTypes = this.javaSpawnCallParameterTypes(node);
     const parameterTypes = spawnTypes !== void 0 ? spawnTypes : this.javaNativeCallParameterTypes(node);
     return args.map((a, i) => {
@@ -14290,6 +14294,138 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       return `(${type}) (${parsedArg})`;
     }).join(", ");
+  }
+  // `super.x(..)` into a split method must bind the typed core: the untyped front re-dispatches
+  // through `this`, which lands back in the overriding core (infinite recursion)
+  javaSuperCoreCallArguments(args, node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.SuperKeyword) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration === void 0 || !this.hasDefaultedTail(declaration)) {
+      return void 0;
+    }
+    const params = declaration.parameters;
+    if (args.length > params.length) {
+      return void 0;
+    }
+    const types = this.javaCoreParameterTypes(declaration);
+    return params.map((p, i) => i < args.length ? this.javaArgumentHasType(args[i], types[i]) ? this.printNode(args[i], identation).trim() : this.javaConvertToCoreType(types[i], this.printNode(args[i], identation).trim(), args[i]) : this.javaCoreDefaultArgument(p, types[i])).join(", ");
+  }
+  // an argument that is a parameter of the enclosing method already printed with this type
+  javaArgumentHasType(arg, type) {
+    if (arg?.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(arg)?.valueDeclaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || !ts6.isParameter(declaration)) {
+      return false;
+    }
+    const method = declaration.parent;
+    if (this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
+      return false;
+    }
+    const printed = declaration.initializer !== void 0 ? this.hasDefaultedTail(method) ? this.javaOptionalParameterJavaType(declaration) : "Object" : (this.printParameterType(declaration) || "Object").trim();
+    return this.javaErasure(printed) === this.javaErasure(type);
+  }
+  // the printed Java type of every parameter of a split method's typed core
+  javaCoreParameterTypes(method) {
+    return method.parameters.map((p) => p.initializer !== void 0 ? this.javaOptionalParameterJavaType(p) : (this.printParameterType(p) || "Object").trim());
+  }
+  // an omitted parameter of a typed-core call: its TS default, typed like the front's reader
+  javaCoreDefaultArgument(param, type) {
+    if (param.initializer === void 0) {
+      return `(${type}) null`;
+    }
+    let value = this.printNode(param.initializer, 0);
+    if (value === "null") {
+      return `(${type}) null`;
+    }
+    if (type === "Long" && /^-?\d+$/.test(value)) {
+      value += "L";
+    }
+    return this.javaConvertToCoreType(type, value, param.initializer);
+  }
+  // a value of any static type converted to a typed-core parameter, with the fronts' semantics
+  javaConvertToCoreType(type, printed, node) {
+    if (node?.kind === ts6.SyntaxKind.NullKeyword || node?.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined") {
+      return `(${type}) null`;
+    }
+    if (type === "Object") {
+      return `(Object) (${printed})`;
+    }
+    if (type === "Long") {
+      return /^-?\d+L$/.test(printed) ? printed : `Helpers.toLongOrNull(${printed})`;
+    }
+    if (type === "String") {
+      return this.javaNativeArgumentAlreadyTyped(node, type) ? printed : `Helpers.toStringArg(${printed})`;
+    }
+    if (type === "java.util.Map<String, Object>") {
+      return `Helpers.toMapArg(${printed})`;
+    }
+    return `(${type}) (${printed})`;
+  }
+  // Java erasure of a printed type, for override/bridge comparisons
+  javaErasure(type) {
+    return type.replace(/<.*>/, "").replace(/^java\.util\./, "").trim();
+  }
+  // An override whose typed core differs from an ancestor's (another parameter count, another
+  // default position or type) no longer overrides it in Java: a bridge with the ancestor's
+  // signature forwards to this method, so base code calling the ancestor core reaches it.
+  printOverrideBridges(node, identation) {
+    const ownTypes = this.javaCoreParameterTypes(node);
+    const ownKey = ownTypes.map((t) => this.javaErasure(t)).join(",");
+    const seen = /* @__PURE__ */ new Set();
+    let out = "";
+    let ancestor;
+    try {
+      ancestor = this.getMethodOverride(node);
+    } catch (e) {
+      return "";
+    }
+    while (ancestor !== void 0) {
+      if (this.hasDefaultedTail(ancestor)) {
+        const ancestorTypes = this.javaCoreParameterTypes(ancestor);
+        const key = ancestorTypes.map((t) => this.javaErasure(t)).join(",");
+        if (key !== ownKey && !seen.has(key)) {
+          seen.add(key);
+          out += this.printOverrideBridge(node, ancestor, ancestorTypes, ownTypes, identation);
+        }
+      }
+      try {
+        ancestor = this.getMethodOverride(ancestor);
+      } catch (e) {
+        ancestor = void 0;
+      }
+    }
+    return out;
+  }
+  printOverrideBridge(node, ancestor, ancestorTypes, ownTypes, identation) {
+    const name = this.transformMethodNameIfNeeded(node.name.escapedText);
+    const ancestorNames = ancestor.parameters.map((p) => this.printNode(p.name, 0));
+    const ancestorDef = this.printMethodDefinition(
+      ancestor,
+      identation,
+      () => ancestorTypes.map((t, i) => `${t} ${ancestorNames[i]}`).join(", ")
+    );
+    const forwarded = node.parameters.map((p, i) => i < ancestorNames.length ? this.javaErasure(ownTypes[i]) === this.javaErasure(ancestorTypes[i]) ? ancestorNames[i] : this.javaConvertToCoreType(ownTypes[i], ancestorNames[i], void 0) : this.javaCoreDefaultArgument(p, ownTypes[i])).join(", ");
+    const call = `this.${name}(${forwarded})`;
+    const returnOf = (def) => def.match(/(?:public|protected|private)\s+(?:static\s+)?(.+?)\s+\w+\s*\(/)?.[1]?.trim() ?? "Object";
+    const returnType = returnOf(ancestorDef);
+    const ownReturn = returnOf(this.printMethodDefinition(node, identation, () => ""));
+    const body = returnType === "void" ? `${call};` : returnType === ownReturn ? `return ${call};` : `return (${returnType}) (Object) ${call};`;
+    return "\n" + ancestorDef + this.getBlockOpen(identation) + this.getIden(identation + 1) + body + this.getBlockClose(identation);
   }
   // `this.spawn(this.someMethod, args...)`: the spawned work executes `this.someMethod(args)`
   // (the ccxt post-pass rewrites the reference into a lambda), so the arguments belong to the
@@ -18490,10 +18626,12 @@ var JavaTranspiler = class extends BaseTranspiler {
       let splitDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
       splitDef += funcBody;
       splitDef += this.printFrontMethodDeclaration(node, identation);
+      splitDef += this.printOverrideBridges(node, identation);
       return splitDef;
     }
     let methodDef = this.printMethodDefinition(node, identation);
     methodDef += funcBody;
+    methodDef += this.printOverrideBridges(node, identation);
     return methodDef;
   }
   printMethodDefinition(node, identation, paramsPrinter = void 0) {
