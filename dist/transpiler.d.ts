@@ -784,6 +784,8 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    CCXT_GO_GETARG_DECLARED_TYPES: any;
+    CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
     classNameMap: {
@@ -955,6 +957,10 @@ declare class GoTranspiler extends BaseTranspiler {
     goSafeListLocalUnboxUncached(declaration: any): string | undefined;
     goSafeListUnboxValue(declaration: any, identation: number): string | undefined;
     getGoLocalType(declaration: any, parsedValue: string): string;
+    goAwaitReceiveUnbox(awaitNode: any, printedInitializer: string): {
+        goType: string;
+        wrap: (recv: string) => string;
+    } | undefined;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
     alignGoCompositeEntries(entries: any): any;
@@ -1100,6 +1106,15 @@ declare class GoTranspiler extends BaseTranspiler {
     goSkipGoLiteral(text: string, start: number): number;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
+    goGetArgLocalType(body: any, param: any, printedDefault: string): string | undefined;
+    goGetArgTypeOfShape(shape: string): string | undefined;
+    goGetArgDeclaredTypeCandidates(param: any): string[];
+    goGetArgPrimitiveType(declared: string): string | undefined;
+    goGetArgTwinName(goType: string): string | undefined;
+    goGetArgIsValueType(goType: string): boolean;
+    goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
+    goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
+    goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: BinaryExpression, identation: number): string;

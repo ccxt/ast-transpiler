@@ -324,8 +324,8 @@ describe('go transpiling tests', () => {
         expect(output).toContain("go this.fetchTickerBody(ch, symbol, optionalArgs...)");
         expect(output).toContain("fetchTickerBody(ch chan any, symbol any, optionalArgs ...any) any");
         // the defaults are unpacked in the BODY, not in the trampoline
-        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any{})");
-        expect(output.indexOf("params := GetArg")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
+        expect(output).toContain("var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})");
+        expect(output.indexOf("var params map[string]any = GetArgMap")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
     });
     test('a colliding body name is uniquified instead of clobbered', () => {
         const input =
@@ -1624,7 +1624,7 @@ describe('go inline equality', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         // GetArg derefs a pointer argument, so the box holds a plain bool or the default
-        expect(output).toContain("force := GetArg(optionalArgs, 0, false)");
+        expect(output).toContain("var force bool = GetArgBool(optionalArgs, 0, false)");
         expect(output).toContain("if force == true {");
         expect(output).not.toContain("EvalTruthy(force)");
     });
@@ -3180,9 +3180,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // GetArg folds a typed nil pointer into the untyped default, so the box a defaulted
-        // parameter is read through is nil-comparable
-        expect(output).toContain("since := GetArg(optionalArgs, 0, nil)");
+        // a nil-defaulted scalar binds through its pointer twin, which stays nil-comparable
+        expect(output).toContain("var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)");
         expect(output).toContain("var a bool = (since == nil)");
         expect(output).toContain("var b bool = (price != nil)");
         expect(output).toContain("var c bool = (symbol == nil)");
@@ -3593,9 +3592,9 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         expect(lines[4]).toBe(`${indent} * @method`);
         expect(lines[5]).toBe(`${indent} * @name exchange#fetchMarkOHLCV`);
         expect(lines[6]).toBe(`${indent} */`);
-        expect(lines[7]).toBe(`${indent}timeframe := GetArg(optionalArgs, 0, "1m")`);
+        expect(lines[7]).toBe(`${indent}var timeframe string = GetArgString(optionalArgs, 0, "1m")`);
         expect(lines[8]).toBe(`${indent}_ = timeframe`);
-        expect(lines[9]).toBe(`${indent}params := GetArg(optionalArgs, 1, map[string]any{})`);
+        expect(lines[9]).toBe(`${indent}var params map[string]any = GetArgMap(optionalArgs, 1, map[string]any{})`);
     });
     test('the body statements are not indented one level deeper than the defers', () => {
         const input =
@@ -3607,7 +3606,7 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         const output = transpiler.transpileGo(input).content;
         const lines = output.slice(output.indexOf("func (this *Exchange) fetchTimeBody(")).split("\n");
         const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
-        expect(lines[3]).toBe(`${indent}params := GetArg(optionalArgs, 0, map[string]any{})`);
+        expect(lines[3]).toBe(`${indent}var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})`);
         expect(lines[4]).toBe(`${indent}_ = params`);
         const chLine = lines.findIndex((line) => line.includes('ch <- callDynamically("milliseconds"'));
         expect(lines[chLine]).toBe(`${indent}ch <- callDynamically("milliseconds", )`);

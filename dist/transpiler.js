@@ -9480,6 +9480,12 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return goType;
   }
+  // Typed async receive: an extension that knows the core's channel element type replaces
+  // `x := (<-this.FooAsync(..))` + `PanicOnError(x)` with a typed declaration that runs PanicOnError
+  // first (same frame and message). The default returns undefined and changes nothing.
+  goAwaitReceiveUnbox(awaitNode, printedInitializer) {
+    return void 0;
+  }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
     if (declaration?.name.kind === ts5.SyntaxKind.ArrayBindingPattern) {
@@ -9502,6 +9508,11 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (declaration?.initializer?.kind === ts5.SyntaxKind.AwaitExpression) {
       const parsedName = this.printNode(declaration.name, 0);
       const parsedInitializer = this.printNode(declaration.initializer, identation);
+      const awaitUnbox = this.goAwaitReceiveUnbox(declaration.initializer, parsedInitializer);
+      if (awaitUnbox !== void 0) {
+        return `
+${this.getIden(identation)}var ${parsedName} ${awaitUnbox.goType} = ${awaitUnbox.wrap(parsedInitializer)}`;
+      }
       return `
 ${this.getIden(identation)}${parsedName} := ${parsedInitializer}
 ${this.getIden(identation)}PanicOnError(${parsedName})`;
@@ -12257,6 +12268,241 @@ ${this.getIden(level)}}()`;
   printCustomDefaultValueIfNeeded(node) {
     return void 0;
   }
+  // The Go type of a GetArg-bound optional local (from the printed default, or the declared type
+  // for a nil default), or undefined to keep `any`; the retype needs goLocalIsSafeToType,
+  // goParameterKeepsNilCompareNative and goGetArgConsumersAreSafe to agree.
+  goGetArgLocalType(body, param, printedDefault) {
+    const shape = (printedDefault ?? "").trim();
+    const byDefault = this.goGetArgTypeOfShape(shape);
+    if (byDefault !== void 0) {
+      return this.goGetArgLocalIsSafe(body, param, byDefault) ? byDefault : void 0;
+    }
+    if (shape !== "nil" && shape !== "undefined") {
+      return void 0;
+    }
+    for (const goType of this.goGetArgDeclaredTypeCandidates(param)) {
+      if (this.goGetArgLocalIsSafe(body, param, goType, true)) {
+        return goType;
+      }
+    }
+    return void 0;
+  }
+  // the Go type the printed default names, or undefined when it names none
+  goGetArgTypeOfShape(shape) {
+    if (/^map\[string\]any\{/.test(shape)) {
+      return "map[string]any";
+    }
+    if (/^\[map\[string\]any\]\{/.test(shape)) {
+      return "[]map[string]any";
+    }
+    if (/^\[\]string\{/.test(shape)) {
+      return "[]string";
+    }
+    if (/^\[\]any\{/.test(shape)) {
+      return "[]any";
+    }
+    if (/^"/.test(shape)) {
+      return "string";
+    }
+    if (shape === "true" || shape === "false") {
+      return "bool";
+    }
+    if (/^-?[0-9]/.test(shape) || /^math\./.test(shape)) {
+      return "int64";
+    }
+    return void 0;
+  }
+  // Go type candidates for a nil-defaulted parameter, in try order: the annotation text
+  // (`Int` vs `Num` exist only there), then goNativeParameterTypeCandidates.
+  goGetArgDeclaredTypeCandidates(param) {
+    const out = [];
+    const declared = param?.type !== void 0 ? String(param.type.getText()).replace(/\s+/g, " ") : void 0;
+    const alias = this.CCXT_GO_GETARG_DECLARED_TYPES ?? {};
+    if (declared !== void 0 && alias[declared] !== void 0) {
+      out.push(alias[declared]);
+    } else if (declared !== void 0 && this.goGetArgPrimitiveType(declared) !== void 0) {
+      out.push("*" + this.goGetArgPrimitiveType(declared));
+    }
+    for (const goType of this.goNativeParameterTypeCandidates(param)) {
+      if (out.indexOf(goType) < 0) {
+        out.push(goType);
+      }
+    }
+    return out;
+  }
+  goGetArgPrimitiveType(declared) {
+    if (declared === "Int" || declared === "Integer" || declared === "int") {
+      return "int64";
+    }
+    if (declared === "Num" || declared === "number" || declared === "Float") {
+      return "float64";
+    }
+    if (declared === "Bool" || declared === "boolean") {
+      return "bool";
+    }
+    if (declared === "Str" || declared === "string" || declared === "String") {
+      return "string";
+    }
+    return void 0;
+  }
+  // the twin of a declared Go type (go/v4/exchange_helpers.go); undefined when the twin is
+  // missing, in which case the parameter keeps the `any` box (an `any` return must never be
+  // assigned to a typed local)
+  goGetArgTwinName(goType) {
+    switch (goType) {
+      case "map[string]any":
+        return "GetArgMap";
+      case "[]map[string]any":
+        return "GetArgMapSlice";
+      case "[]string":
+        return "GetArgStringSlice";
+      case "[]any":
+        return "GetArgAnySlice";
+      case "string":
+        return "GetArgString";
+      case "bool":
+        return "GetArgBool";
+      case "int64":
+        return "GetArgInt64";
+      case "float64":
+        return "GetArgFloat64";
+      case "*string":
+        return "GetArgStringPtr";
+      case "*int64":
+        return "GetArgInt64Ptr";
+      case "*float64":
+        return "GetArgFloat64Ptr";
+      case "*bool":
+        return "GetArgBoolPtr";
+    }
+    return void 0;
+  }
+  goGetArgIsValueType(goType) {
+    return goType === "string" || goType === "bool" || goType === "int64" || goType === "float64";
+  }
+  goGetArgLocalIsSafe(body, param, goType, nilable = false) {
+    const name = param.name.escapedText;
+    if (this.goGetArgTwinName(goType) === void 0) {
+      return false;
+    }
+    if (!this.goLocalIsSafeToType(body, param, name, goType)) {
+      return false;
+    }
+    if (this.goGetArgIsValueType(goType)) {
+      return this.goParameterKeepsNilCompareNative(body, param, goType);
+    }
+    return this.goGetArgConsumersAreSafe(body, param, goType, nilable);
+  }
+  // Every later use must read the typed local as it read the `any` box: pointers only reach
+  // audited deref consumers (fail-closed); containers are the same map/list, and nil-sensitive
+  // consumers are tabled as `container` (goGetArgPassesIntoContainerDefault covers call chains).
+  goGetArgConsumersAreSafe(body, param, goType, nilable) {
+    const name = param.name.escapedText;
+    const table = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
+    const pointer = goType.startsWith("*");
+    let safe = true;
+    const verdictOf = (callee, argIndex) => {
+      const entry = table[callee];
+      if (entry === void 0) {
+        return pointer ? "unknown" : "deref";
+      }
+      if (typeof entry === "string") {
+        return entry;
+      }
+      return entry[String(argIndex)] ?? entry["*"] ?? (pointer ? "unknown" : "deref");
+    };
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (n?.kind === ts5.SyntaxKind.Identifier && n.escapedText === name) {
+        let symbol;
+        try {
+          symbol = this.getChecker().getSymbolAtLocation(n);
+        } catch (e) {
+          symbol = void 0;
+        }
+        if (symbol?.valueDeclaration === param) {
+          const parent = n.parent;
+          if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+            const other = parent.left === n ? parent.right : parent.left;
+            const isNullTest = other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
+            if (isNullTest) {
+              safe = true;
+              return;
+            }
+          }
+          if (parent?.kind === ts5.SyntaxKind.CallExpression) {
+            const args = parent.arguments ?? [];
+            const argIndex = args.indexOf(n);
+            const callee = parent.expression;
+            const calleeName = callee?.name !== void 0 ? callee.name.escapedText : callee?.escapedText !== void 0 ? callee.escapedText : void 0;
+            if (calleeName === void 0) {
+              safe = !pointer;
+              return;
+            }
+            const verdict = verdictOf(calleeName, argIndex);
+            if (verdict === "unsafe") {
+              safe = false;
+              return;
+            }
+            if (verdict === "container" && nilable) {
+              safe = false;
+              return;
+            }
+            if (calleeName === "IsEqual" && nilable) {
+              const other = argIndex === 0 ? args[1] : args[0];
+              const otherIsNil = other === void 0 || other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
+              if (otherIsNil) {
+                safe = false;
+                return;
+              }
+            }
+            if (verdict === "unknown") {
+              safe = false;
+              return;
+            }
+            if (nilable && !pointer && this.goGetArgPassesIntoContainerDefault(callee, argIndex)) {
+              safe = false;
+              return;
+            }
+            safe = true;
+            return;
+          }
+          if (parent?.kind === ts5.SyntaxKind.ExpressionStatement) {
+            safe = true;
+            return;
+          }
+          safe = !pointer;
+          return;
+        }
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(body, visit);
+    return safe;
+  }
+  // the callee's own GetArg with a container default returns def for an untyped nil box but the
+  // nil map for a nil map box (nil slices collapse to def), so only map shapes differ
+  goGetArgPassesIntoContainerDefault(callee, argIndex) {
+    if (argIndex < 0) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(callee);
+    } catch (e) {
+      symbol = void 0;
+    }
+    const decl = symbol?.valueDeclaration;
+    const params = decl?.parameters ?? [];
+    const param = params[argIndex];
+    const initializer = param?.initializer;
+    if (initializer === void 0) {
+      return false;
+    }
+    return initializer.kind === ts5.SyntaxKind.ObjectLiteralExpression;
+  }
   printFunctionBody(node, identation, wrapInChannel = false) {
     let functionBody;
     const funcParams = node.parameters;
@@ -12273,7 +12519,14 @@ ${this.getIden(level)}}()`;
         if (initializer) {
           const index = i + offSetIndex;
           const paramName = this.printNode(param.name, 0);
-          initParams.push(`${paramName} := GetArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)})`);
+          const printedDefault = this.printNode(initializer, 0);
+          const goType = this.goGetArgLocalType(node.body, param, printedDefault);
+          const twinName = goType !== void 0 ? this.goGetArgTwinName(goType) : void 0;
+          if (goType !== void 0 && twinName !== void 0) {
+            initParams.push(`var ${paramName} ${goType} = ${twinName}(optionalArgs, ${index}, ${printedDefault})`);
+          } else {
+            initParams.push(`${paramName} := GetArg(optionalArgs, ${index}, ${printedDefault})`);
+          }
           initParams.push(`_ = ${paramName}`);
         } else {
           offSetIndex--;
@@ -12368,7 +12621,9 @@ ${this.getIden(level)}}()`;
     }
     const exprStm = this.printNode(node.expression, identation);
     const returnRandName = "retRes" + this.getLineBasedSuffix(node);
-    const expStatement = `
+    const stmtUnbox = this.goAwaitReceiveUnbox(node.expression, exprStm);
+    const expStatement = stmtUnbox !== void 0 ? `
+${this.getIden(identation)}var ${returnRandName} ${stmtUnbox.goType} = ${stmtUnbox.wrap(exprStm)}` : `
 ${this.getIden(identation)}${returnRandName} := ${exprStm}
 ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     return this.printNodeCommentsIfAny(node, identation, expStatement);
@@ -12411,7 +12666,15 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     }
     if (node?.expression?.kind === ts5.SyntaxKind.AwaitExpression) {
       const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
+      const printedExpr = rightPart;
       rightPart = rightPart ? rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+      const retUnbox = this.goAwaitReceiveUnbox(node.expression, printedExpr);
+      if (retUnbox !== void 0) {
+        return `
+${this.getIden(identation)}var ${returnRandName} ${retUnbox.goType} = ${retUnbox.wrap(printedExpr)}
+${leadingComment}${this.getIden(identation)}ch <- ${returnRandName}${trailingComment}
+${this.getIden(identation)}${returnStatement}`;
+      }
       return `
 ${this.getIden(identation)}${returnRandName} := ${rightPart}
 ${this.getIden(identation)}PanicOnError(${returnRandName})
