@@ -7250,6 +7250,8 @@ describe('java typed parameters (b-09)', () => {
             "        symbol = this.safeString (params, 'symbol', symbol);\n" +
             "        return symbol;\n" +
             "    }\n" +
+            "    fetch2 (path: any, api: any = 'public', method = 'GET', params: Dict = {}, headers: any = undefined): void {\n" +
+            "    }\n" +
             "    fetchDepth (symbol: Str, limit: Int = 100, params: Dict = {}): void {\n" +
             "    }\n" +
                         "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
@@ -7333,6 +7335,11 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('fetchMoved(String symbol2, java.util.Map<String, Object> parameters)');
         expect(venueOutput).toContain('fetchMoved(String symbol, Object... optionalArgs)');
         expect(venueOutput).toContain('return this.fetchMoved(symbol, Helpers.getArgMap(optionalArgs, 0, ');
+    });
+
+    test('fetch2 keeps an untyped params slot for implicit-endpoint arrays', () => {
+        expect(venueOutput).toContain('fetch2(Object path, Object api, Object method, Object parameters, Object headers)');
+        expect(venueOutput).not.toContain('Helpers.getArgMap(optionalArgs, 2,');
     });
 
     test('an integer default of a Long slot prints as a long literal', () => {

@@ -13838,6 +13838,10 @@ var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
 };
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
+  // implicit endpoints pass fetch2/request/sign params through untyped (arrays for batch orders)
+  "fetch2": [3],
+  "request": [3],
+  "sign": [3],
   "handleErrors": [4],
   "parseOrder": [0],
   "parseTrade": [0],
