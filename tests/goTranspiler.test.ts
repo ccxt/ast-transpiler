@@ -1670,6 +1670,62 @@ describe('go inline equality', () => {
         expect(output).toContain("api := GetArg(optionalArgs, 0, \"public\")");
         expect(output).toContain("var method string = GetArgString(optionalArgs, 1, \"GET\")");
     });
+    test('a nil-defaulted dictionary that is only read binds through GetArgMap', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Market': 'map[string]any' };
+        const input =
+        "type Market = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (d: any, market: Market = undefined) {\n" +
+        "        let id = undefined;\n" +
+        "        if (market !== undefined) { id = market['id']; }\n" +
+        "        return [ id, this.safeString (market, 'symbol'), ('x' in market) ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        // GetValue/InOp/Safe* read a nil map as the absent value the nil box was
+        expect(output).toContain("var market map[string]any = GetArgMap(optionalArgs, 0, nil)");
+    });
+    test('a nil-defaulted dictionary handed on or type-tested keeps the GetArg box', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Market': 'map[string]any' };
+        const input =
+        "type Market = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    isDictionary (a) { return true; }\n" +
+        "    g (a, m = undefined) { return a; }\n" +
+        "    f1 (d: any, market: Market = undefined) { return market; }\n" +
+        "    f2 (d: any, market: Market = undefined) { return this.isDictionary (market); }\n" +
+        "    f3 (d: any, market: Market = undefined) { return this.g (d, market); }\n" +
+        "    f4 (d: any, market: Market = undefined) { return this.safeString (d, market); }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        // a nil map is not nil once boxed into `any`, and IsDictionary/IsEqual see the difference
+        expect(output).not.toContain("GetArgMap(optionalArgs, 0, nil)");
+        expect((output.match(/market := GetArg\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(4);
+    });
+    test('an any-annotated override of an unannotated base parameter binds like the base', () => {
+        const input =
+        "class B {\n" +
+        "    calculateFee (a, takerOrMaker = 'taker', config = {}) { return 0; }\n" +
+        "    fetch2 (path, api: any = 'public') { return 0; }\n" +
+        "}\n" +
+        "class T extends B {\n" +
+        "    calculateFee (a, takerOrMaker: any = 'taker', config: any = {}) {\n" +
+        "        if (takerOrMaker === 'maker') { return config['maker']; }\n" +
+        "        return config['taker'];\n" +
+        "    }\n" +
+        "    fetch2 (path, api: any = 'public') { return [ path, api ]; }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // both the base and the override bind through the twins
+        expect((output.match(/var takerOrMaker string = GetArgString\(optionalArgs, 0, "taker"\)/g) ?? []).length).toBe(2);
+        expect((output.match(/var config map\[string\]any = GetArgMap\(optionalArgs, 1, map\[string\]any\{\}\)/g) ?? []).length).toBe(2);
+        // the base annotates api as `any` itself (venues pass lists), so both keep the box
+        expect((output.match(/api := GetArg\(optionalArgs, 0, "public"\)/g) ?? []).length).toBe(2);
+    });
     test('a union-typed parameter keeps the GetArg box even with a literal default', () => {
         const input =
         "type IndexType = number | string;\n" +

@@ -1107,6 +1107,8 @@ declare class GoTranspiler extends BaseTranspiler {
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
     goGetArgLocalType(body: any, param: any, printedDefault: string): string | undefined;
+    goGetArgBaseParamIsUnannotated(param: any): boolean;
+    goGetArgNilMapUseOnlyReads(n: any): boolean;
     goGetArgTypeOfShape(shape: string): string | undefined;
     goGetArgDeclaredTypeCandidates(param: any): string[];
     goGetArgPrimitiveType(declared: string): string | undefined;

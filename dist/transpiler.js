@@ -7821,6 +7821,27 @@ var GO_GETARG_EXCLUDED_POSITIONS = {
   "request": [1, 3],
   "sign": [1, 3]
 };
+var GO_GETARG_NIL_MAP_READERS = [
+  "GetValue",
+  "InOp",
+  "ObjectKeys",
+  "SafeValue",
+  "SafeValue2",
+  "SafeDict",
+  "SafeList",
+  "SafeString",
+  "SafeString2",
+  "SafeStringN",
+  "SafeStringUpper",
+  "SafeStringLower",
+  "SafeInteger",
+  "SafeInteger2",
+  "SafeNumber",
+  "SafeNumber2",
+  "SafeFloat",
+  "SafeBool",
+  "SafeTimestamp"
+];
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the printed source file references. A Go import must precede the first
   // declaration, so the file-level print (printSourceFileStatements) collects names here and
@@ -12282,13 +12303,13 @@ ${this.getIden(level)}}()`;
     if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(param))) {
       return void 0;
     }
-    if (param?.type?.kind === ts5.SyntaxKind.AnyKeyword) {
+    if (param?.type?.kind === ts5.SyntaxKind.AnyKeyword && !this.goGetArgBaseParamIsUnannotated(param)) {
       return void 0;
     }
     const shape = (printedDefault ?? "").trim();
     const byDefault = this.goGetArgTypeOfShape(shape);
     if (byDefault !== void 0) {
-      if (param?.type !== void 0 && !this.goGetArgDeclaredTypeCandidates(param).some((t) => t.replace(/^\*/, "") === byDefault)) {
+      if (param?.type !== void 0 && param.type.kind !== ts5.SyntaxKind.AnyKeyword && !this.goGetArgDeclaredTypeCandidates(param).some((t) => t.replace(/^\*/, "") === byDefault)) {
         return void 0;
       }
       return this.goGetArgLocalIsSafe(body, param, byDefault) ? byDefault : void 0;
@@ -12302,6 +12323,45 @@ ${this.getIden(level)}}()`;
       }
     }
     return void 0;
+  }
+  // true when the method overrides a base method whose parameter at the same position has no
+  // type annotation and a default of the same syntax kind (the base binds it through its twin)
+  goGetArgBaseParamIsUnannotated(param) {
+    const method = param?.parent;
+    const name = method?.name?.escapedText;
+    const index = method?.parameters?.indexOf(param) ?? -1;
+    const cls = method?.parent;
+    const checker = this.checkerOrUndefined();
+    if (name === void 0 || index < 0 || checker === void 0 || param.initializer === void 0) {
+      return false;
+    }
+    for (const clause of cls?.heritageClauses ?? []) {
+      if (clause.token !== ts5.SyntaxKind.ExtendsKeyword) {
+        continue;
+      }
+      for (const expr of clause.types ?? []) {
+        const baseDecl = checker.getTypeAtLocation(expr)?.getProperty?.(name)?.valueDeclaration;
+        const baseParam = baseDecl?.parameters?.[index];
+        if (baseParam === void 0) {
+          return false;
+        }
+        return baseParam.type === void 0 && baseParam.initializer !== void 0 && baseParam.initializer.kind === param.initializer.kind;
+      }
+    }
+    return false;
+  }
+  // a use of a nil-defaulted map local that only reads it: an element read, `k in x`, or the
+  // receiver of a helper that treats a nil map like an absent value (no IsDictionary/IsEqual)
+  goGetArgNilMapUseOnlyReads(n) {
+    const parent = n.parent;
+    if (parent?.kind === ts5.SyntaxKind.ElementAccessExpression || parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+      return this.goSafeDictUseReadsTheMap(n);
+    }
+    if (parent?.kind !== ts5.SyntaxKind.CallExpression || parent.arguments.indexOf(n) !== 0) {
+      return false;
+    }
+    const callee = this.goPrintedCallee(this.printNode(parent, 0));
+    return callee !== void 0 && GO_GETARG_NIL_MAP_READERS.indexOf(callee.replace(/^this\./, "")) >= 0;
   }
   // the Go type the printed default names, or undefined when it names none
   goGetArgTypeOfShape(shape) {
@@ -12440,6 +12500,12 @@ ${this.getIden(level)}}()`;
         }
         if (symbol?.valueDeclaration === param) {
           const parent = n.parent;
+          if (nilable && goType === "map[string]any") {
+            const assigned = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken;
+            if (assigned || this.goGetArgNilMapUseOnlyReads(n)) {
+              return;
+            }
+          }
           if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
             const other = parent.left === n ? parent.right : parent.left;
             const isNullTest = other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";

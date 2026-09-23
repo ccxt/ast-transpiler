@@ -696,6 +696,14 @@ const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'sign': [ 1, 3 ],
 };
 
+// receivers that read a nil map exactly like an untyped nil (derefScalar + a missed lookup);
+// IsDictionary and IsEqual answer differently for a nil map, so they are not listed
+const GO_GETARG_NIL_MAP_READERS = [
+    'GetValue', 'InOp', 'ObjectKeys', 'SafeValue', 'SafeValue2', 'SafeDict', 'SafeList',
+    'SafeString', 'SafeString2', 'SafeStringN', 'SafeStringUpper', 'SafeStringLower',
+    'SafeInteger', 'SafeInteger2', 'SafeNumber', 'SafeNumber2', 'SafeFloat', 'SafeBool', 'SafeTimestamp',
+];
+
 export class GoTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -5834,15 +5842,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((excluded !== undefined) && excluded.includes(method.parameters.indexOf(param))) {
             return undefined;
         }
-        // an explicit `any` annotation admits values of other shapes than the default (api lists)
-        if (param?.type?.kind === ts.SyntaxKind.AnyKeyword) {
+        // an explicit `any` annotation admits values of other shapes than the default (api lists),
+        // unless it only restates an override of a base parameter the base leaves unannotated
+        if ((param?.type?.kind === ts.SyntaxKind.AnyKeyword) && !this.goGetArgBaseParamIsUnannotated(param)) {
             return undefined;
         }
         const shape = (printedDefault ?? '').trim();
         const byDefault = this.goGetArgTypeOfShape(shape);
         if (byDefault !== undefined) {
-            // a declared type naming no single Go type (IndexType = number | string) admits other shapes
-            if ((param?.type !== undefined)
+            // a declared type naming no single Go type (IndexType = number | string) admits other shapes;
+            // an admitted `any` restatement binds by its default, as the base does
+            if ((param?.type !== undefined) && (param.type.kind !== ts.SyntaxKind.AnyKeyword)
                 && !this.goGetArgDeclaredTypeCandidates(param).some((t) => t.replace(/^\*/, '') === byDefault)) {
                 return undefined;
             }
@@ -5857,6 +5867,48 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         return undefined;
+    }
+
+    // true when the method overrides a base method whose parameter at the same position has no
+    // type annotation and a default of the same syntax kind (the base binds it through its twin)
+    goGetArgBaseParamIsUnannotated(param): boolean {
+        const method: any = param?.parent;
+        const name = method?.name?.escapedText;
+        const index = method?.parameters?.indexOf(param) ?? -1;
+        const cls: any = method?.parent;
+        const checker: any = this.checkerOrUndefined();
+        if ((name === undefined) || (index < 0) || (checker === undefined) || (param.initializer === undefined)) {
+            return false;
+        }
+        for (const clause of (cls?.heritageClauses ?? [])) {
+            if (clause.token !== ts.SyntaxKind.ExtendsKeyword) {
+                continue;
+            }
+            for (const expr of (clause.types ?? [])) {
+                const baseDecl: any = checker.getTypeAtLocation(expr)?.getProperty?.(name)?.valueDeclaration;
+                const baseParam: any = baseDecl?.parameters?.[index];
+                if (baseParam === undefined) {
+                    return false;
+                }
+                return (baseParam.type === undefined) && (baseParam.initializer !== undefined)
+                    && (baseParam.initializer.kind === param.initializer.kind);
+            }
+        }
+        return false;
+    }
+
+    // a use of a nil-defaulted map local that only reads it: an element read, `k in x`, or the
+    // receiver of a helper that treats a nil map like an absent value (no IsDictionary/IsEqual)
+    goGetArgNilMapUseOnlyReads(n): boolean {
+        const parent: any = n.parent;
+        if ((parent?.kind === ts.SyntaxKind.ElementAccessExpression) || (parent?.kind === ts.SyntaxKind.BinaryExpression)) {
+            return this.goSafeDictUseReadsTheMap(n);
+        }
+        if ((parent?.kind !== ts.SyntaxKind.CallExpression) || (parent.arguments.indexOf(n) !== 0)) {
+            return false;
+        }
+        const callee = this.goPrintedCallee(this.printNode(parent, 0));
+        return (callee !== undefined) && (GO_GETARG_NIL_MAP_READERS.indexOf(callee.replace(/^this\./, '')) >= 0);
     }
 
     // the Go type the printed default names, or undefined when it names none
@@ -5992,6 +6044,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 }
                 if (symbol?.valueDeclaration === param) {
                     const parent: any = n.parent;
+                    if (nilable && (goType === 'map[string]any')) {
+                        // goLocalIsSafeToType already matched the type of an assigned value
+                        const assigned = (parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === n)
+                            && (parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken);
+                        if (assigned || this.goGetArgNilMapUseOnlyReads(n)) {
+                            return;
+                        }
+                    }
                     if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
                         const other: any = (parent.left === n) ? parent.right : parent.left;
                         const isNullTest = (other?.kind === ts.SyntaxKind.NullKeyword)
