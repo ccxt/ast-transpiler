@@ -14430,6 +14430,7 @@ var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 var JAVA_TRANSPILE_DELIMITER = "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT";
 var JAVA_HANDWRITTEN_FULL_ARITY = /* @__PURE__ */ new Set(["loadMarkets", "fetchMarkets", "fetchCurrencies"]);
+var JAVA_HANDWRITTEN_TIER_FILES = /(^|\/)ts\/src\/(?:base|static_dependencies)\//;
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
 var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
@@ -14619,7 +14620,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       const delimiter = file.text.indexOf(JAVA_TRANSPILE_DELIMITER);
       return delimiter >= 0 && method.pos > delimiter || JAVA_HANDWRITTEN_FULL_ARITY.has(_optionalChain([method, 'access', _1106 => _1106.name, 'optionalAccess', _1107 => _1107.escapedText]));
     }
-    return JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
+    return !JAVA_HANDWRITTEN_TIER_FILES.test(fileName);
   }
   javaHasOptionalParameter(method) {
     return (_nullishCoalesce(_optionalChain([method, 'optionalAccess', _1108 => _1108.parameters]), () => ( []))).some((p) => p.initializer !== void 0 || p.questionToken !== void 0);

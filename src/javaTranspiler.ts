@@ -332,6 +332,7 @@ const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|predictio
 const JAVA_TRANSPILE_DELIMITER = 'METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT';
 // hand-written base methods whose Java runtime declares exactly the TS parameters (no varargs)
 const JAVA_HANDWRITTEN_FULL_ARITY = new Set(['loadMarkets', 'fetchMarkets', 'fetchCurrencies']);
+const JAVA_HANDWRITTEN_TIER_FILES = /(^|\/)ts\/src\/(?:base|static_dependencies)\//;
 const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 
 // ===== native RETURN types (D-09) =====
@@ -496,7 +497,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return (delimiter >= 0 && method.pos > delimiter)
                 || JAVA_HANDWRITTEN_FULL_ARITY.has((method.name as any)?.escapedText);
         }
-        return JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
+        // every class outside the hand-written tiers is printed (exchanges, tests, ...)
+        return !JAVA_HANDWRITTEN_TIER_FILES.test(fileName);
     }
 
     javaHasOptionalParameter(method): boolean {

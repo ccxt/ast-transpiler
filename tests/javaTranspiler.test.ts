@@ -6347,3 +6347,41 @@ describe('strict effectively-final parameters', () => {
         expect(reassigns('const g = (x) => { x = 3; return x; };')).toBe(false);
     });
 });
+
+// a class outside the hand-written tiers (e.g. ts/src/test/tests.ts) prints ONE signature for
+// its own optional-parameter methods, so its short-arity `this` calls fill the declared defaults
+describe('java full arity for own methods of a non-exchange class', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-own-full-arity');
+    const TEST_FIXTURE = path.join(TMP, 'ts', 'src', 'test', 'tests.ts');
+    let output: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TEST_FIXTURE), { recursive: true });
+        fs.writeFileSync(TEST_FIXTURE,
+            "export default class testMainClass {\n" +
+            "    initOffline (name: string, isWs: boolean = false): any {\n" +
+            "        return name;\n" +
+            "    }\n" +
+            "    assertErr (cond: boolean, message: string, key: string = undefined): void {\n" +
+            "    }\n" +
+            "    run (): void {\n" +
+            "        this.initOffline ('a');\n" +
+            "        this.initOffline ('a', true);\n" +
+            "        this.assertErr (true, 'm');\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        output = byPath.transpileJavaByPath(TEST_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('omitted trailing parameters take the declared defaults', () => {
+        expect(output).toMatch(/this\.initOffline\("a", false\)/);
+        expect(output).toMatch(/this\.initOffline\("a", true\)/);
+        expect(output).toMatch(/this\.assertErr\(true, "m", \(Object\) null\)/);
+        expect(output).not.toContain('Object... optionalArgs');
+    });
+});
