@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type Node, type ParameterDeclaration } from "typescript/unstable/ast";
-import { type Symbol } from "typescript/unstable/sync";
+import { type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
+import { TypeFlags, type Symbol as TsSymbol } from 'typescript/unstable/sync';
 export declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     csharpBooleanReturnTypes: WeakMap<Node, string>;
@@ -12,7 +12,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpHandlerMessageTypes: WeakMap<Node, string>;
     csharpHandlerCalled: WeakMap<Node, boolean>;
     csharpListRouteClasses: WeakMap<Node, boolean>;
-    csharpHandlerCallIndex: WeakMap<Node, Map<Symbol, boolean>>;
+    csharpHandlerCallIndex: WeakMap<Node, Map<TsSymbol, boolean>>;
     csharpParamTypes: WeakMap<Node, string>;
     stringReceiverTypes: WeakMap<Node, string>;
     conditionOperandTypes: WeakMap<Node, string>;
@@ -63,7 +63,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsHandlerMessageIdentifier(node: any): boolean;
     csharpClassHasListRoute(method: any): boolean;
     csharpHandlerIsCalled(method: any): boolean;
-    csharpHandlerCallIndexFor(file: any): Map<Symbol, boolean>;
+    csharpHandlerCallIndexFor(file: any): Map<TsSymbol, boolean>;
     csharpHasKeyRemoval(func: any, expression: any, key: any): boolean;
     csharpGuardIsNegated(guard: any): boolean;
     csharpAlwaysExits(statement: any): boolean;
@@ -174,7 +174,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsClassThrowArgument(node: any): boolean;
     csharpIsDeleteKey(node: any): boolean;
     csharpIsLeftPlusOperand(node: any): boolean;
-    csharpReceiverBinding(receiver: any): import("typescript/unstable/sync").NodeHandle<import("typescript/unstable/ast").DeclarationBase>;
+    csharpReceiverBinding(receiver: any): import("typescript/unstable/ast").DeclarationBase;
     csharpStringReceiverType(receiver: any): string | undefined;
     csharpStringMethodReceiver(node: any, name: any): any;
     csharpDestructuringTempType(initializer: any): string | undefined;
@@ -192,6 +192,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpOverrideParamSpelling(node: any): string | undefined;
     csharpOverrideParamSpellingOfType(type: any, unionArms?: number): string | undefined;
     printParameter(node: any, defaultValue?: boolean): string;
+    csharpCallSiteFunctionType(node: any): string;
     printArrayLiteralExpression(node: any): string;
     csharpBooleanReturnType(node: any): string | undefined;
     printFunctionType(node: any): string;
@@ -251,7 +252,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceReceiverKind(expression: any): "list" | "string";
     csharpSliceStringType(type: any): boolean;
-    csharpSliceNullishType(flags: ts.TypeFlags): boolean;
+    csharpSliceNullishType(flags: TypeFlags): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
