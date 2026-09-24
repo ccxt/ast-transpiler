@@ -1344,7 +1344,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     javaOperandPrintsPrimitiveNumber(node: any): boolean;
     javaDeclaredNumericFamily(expression: any): string | undefined;
-    elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
+    elementWriteTargetsMap(container: any, base: any, keys: any, value: any): boolean;
+    elementWriteValueMayBeNull(value: any): boolean;
     elementWriteKeyText(key: any, keyText: string): string;
     isPlainHashMapReceiver(container: any, keys: any[]): boolean;
     unwrapPrintTransparentExpression(node: any): any;

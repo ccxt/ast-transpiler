@@ -15640,7 +15640,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // exists for receivers the printer cannot type (Lists, arbitrary objects via
   // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
   // printed only when the checker excludes all of those.
-  elementWriteTargetsMap(container, base, keys) {
+  elementWriteTargetsMap(container, base, keys, value) {
     const lastKey = keys[keys.length - 1];
     if (!_typescript2.default.isStringLiteral(lastKey) && !this.isJavaStringType(this.getChecker().getTypeAtLocation(lastKey))) {
       return false;
@@ -15648,7 +15648,21 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (_typescript2.default.isPropertyAccessExpression(base) && base.expression.kind === _typescript2.default.SyntaxKind.ThisKeyword) {
       return false;
     }
-    return this.isDictionaryType(container) || this.isPlainHashMapReceiver(container, keys);
+    if (this.isPlainHashMapReceiver(container, keys)) {
+      return true;
+    }
+    return this.isDictionaryType(container) && !this.elementWriteValueMayBeNull(value);
+  }
+  // true unless the checker proves the written value is never null/undefined
+  elementWriteValueMayBeNull(value) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0 || value === void 0) {
+      return true;
+    }
+    const type = checker.getTypeAtLocation(value);
+    const parts = type.flags & _typescript2.default.TypeFlags.Union ? _nullishCoalesce(type.types, () => ( [])) : [type];
+    const nullable = _typescript2.default.TypeFlags.Any | _typescript2.default.TypeFlags.Unknown | JAVA_NULLISH_TYPE_FLAGS | _typescript2.default.TypeFlags.TypeParameter;
+    return parts.length === 0 || parts.some((t) => (t.flags & nullable) !== 0);
   }
   // a key proven by the checker to be a string prints as a java String: the read is
   // the same expression, only the key needs the (String) cast the typed put demands
@@ -16853,7 +16867,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
       const keyArg = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
-      if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
+      if (this.elementWriteTargetsMap(left.expression, baseExpr, keys, right)) {
         return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${keyArg}, ${rhs})`;
       }
       return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;

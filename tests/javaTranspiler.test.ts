@@ -3280,6 +3280,21 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         expect(output).not.toContain(".set(");
     });
 
+    test('a possibly-undefined write into a dict that may be a ConcurrentHashMap keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(d: { [key: string]: any }, s: string | undefined): void {\n" +
+        "        d[\"a\"] = undefined;\n" +
+        "        d[\"b\"] = s;\n" +
+        "        d[\"c\"] = 1;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(d, "a", null)');
+        expect(output).toContain('Helpers.addElementToObject(d, "b", s)');
+        expect(output).toContain('((java.util.Map<String, Object>)d).put("c", 1)');
+    });
+
     test('object-literal local keeps the native put even when its type is any', () => {
         const input =
         "class T {\n" +

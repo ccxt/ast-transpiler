@@ -1710,7 +1710,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // exists for receivers the printer cannot type (Lists, arbitrary objects via
     // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
     // printed only when the checker excludes all of those.
-    elementWriteTargetsMap(container, base, keys): boolean {
+    elementWriteTargetsMap(container, base, keys, value): boolean {
         const lastKey = keys[keys.length - 1];
         if (!ts.isStringLiteral(lastKey) && !this.isJavaStringType(this.getChecker().getTypeAtLocation(lastKey))) {
             return false; // Map.put takes the String key; every other key prints as Object
@@ -1718,7 +1718,23 @@ export class JavaTranspiler extends BaseTranspiler {
         if (ts.isPropertyAccessExpression(base) && base.expression.kind === ts.SyntaxKind.ThisKeyword) {
             return false; // field maps are ConcurrentHashMaps (a null value must remove, not put) and other threads read them
         }
-        return this.isDictionaryType(container) || this.isPlainHashMapReceiver(container, keys);
+        if (this.isPlainHashMapReceiver(container, keys)) {
+            return true; // a HashMap the code created holds a null value like the helper does
+        }
+        // any other Map may be a ConcurrentHashMap, which rejects a null value the helper removes
+        return this.isDictionaryType(container) && !this.elementWriteValueMayBeNull(value);
+    }
+
+    // true unless the checker proves the written value is never null/undefined
+    elementWriteValueMayBeNull(value): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined || value === undefined) {
+            return true;
+        }
+        const type = checker.getTypeAtLocation(value);
+        const parts: any[] = (type.flags & ts.TypeFlags.Union) ? (type.types ?? []) : [type];
+        const nullable = ts.TypeFlags.Any | ts.TypeFlags.Unknown | JAVA_NULLISH_TYPE_FLAGS | ts.TypeFlags.TypeParameter;
+        return parts.length === 0 || parts.some((t) => (t.flags & nullable) !== 0);
     }
 
     // a key proven by the checker to be a string prints as a java String: the read is
@@ -3093,7 +3109,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const rhs     = this.printNode(right, 0);
             const keyArg  = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
 
-            if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
+            if (this.elementWriteTargetsMap(left.expression, baseExpr, keys, right)) {
                 return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${keyArg}, ${rhs})`;
             }
 
