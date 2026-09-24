@@ -6395,8 +6395,8 @@ describe('java full arity for own methods of a non-exchange class', () => {
     });
 
     test('a literal default reaches the body when a dynamic caller passes null', () => {
-        expect(output).toMatch(/(String|Object) timeframeValue;\s*if \(timeframe == null\) \{ timeframeValue = "1m"; \} else \{ timeframeValue = timeframe; \}/);
-        expect(output).toMatch(/symbol, timeframeValue, limitValue, parameters/);
+        expect(output).toMatch(/symbol, java\.util\.Objects\.requireNonNullElse\(timeframe, "1m"\), java\.util\.Objects\.requireNonNullElse\(limit, 25L?\), parameters/);
+        expect(output).not.toContain('timeframeValue');
         expect(output).not.toMatch(/timeframe = /);
     });
 });

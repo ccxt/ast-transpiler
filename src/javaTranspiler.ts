@@ -5373,27 +5373,17 @@ export class JavaTranspiler extends BaseTranspiler {
         }
     }
 
-    // a literal-defaulted parameter reads through a fresh local holding the TS default when the
-    // caller passed null (a dynamic call pads omitted slots with null); the parameter stays final
+    // a literal-defaulted parameter is read as `Objects.requireNonNullElse(x, <default>)`: a dynamic
+    // caller pads omitted slots with null, and the parameter stays final with no local copy
     javaDefaultedLocalNames: Map<ts.Symbol, string> = new Map();
 
     javaDefaultedParameterLocals(node): string[] {
-        const lines = [];
         if (node.body === undefined) {
-            return lines;
+            return [];
         }
-        const used = new Set<string>();
-        const collect = (n) => {
-            if (ts.isIdentifier(n)) {
-                used.add(n.text);
-            }
-            ts.forEachChild(n, collect);
-        };
-        collect(node.body);
         const types = this.javaCoreParameterTypes(node);
         node.parameters.forEach((param, i) => {
-            const initializer = param.initializer;
-            if (!this.javaIsLiteralDefault(initializer) || !ts.isIdentifier(param.name)) {
+            if (!this.javaIsLiteralDefault(param.initializer) || !ts.isIdentifier(param.name)) {
                 return;
             }
             const symbol = this.javaSymbolOf(param.name);
@@ -5401,17 +5391,10 @@ export class JavaTranspiler extends BaseTranspiler {
                 return;
             }
             const name = this.printNode(param.name, 0);
-            let local = name + 'Value';
-            for (let k = 2; used.has(local); k++) {
-                local = name + 'Value' + k;
-            }
-            used.add(local);
-            this.javaDefaultedLocalNames.set(symbol, local);
             const value = this.javaCoreDefaultArgument(param, types[i]);
-            lines.push(`${types[i]} ${local};`);
-            lines.push(`if (${name} == null) { ${local} = ${value}; } else { ${local} = ${name}; }`);
+            this.javaDefaultedLocalNames.set(symbol, `java.util.Objects.requireNonNullElse(${name}, ${value})`);
         });
-        return lines;
+        return [];
     }
 
     // a string, number or boolean literal default (null, `undefined` and `{}` / `[]` keep the parameter)

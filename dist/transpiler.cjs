@@ -14550,8 +14550,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
     this.javaReturnTypeCache = /* @__PURE__ */ new WeakMap();
     this.javaReturnTypeInProgress = /* @__PURE__ */ new Set();
-    // a literal-defaulted parameter reads through a fresh local holding the TS default when the
-    // caller passed null (a dynamic call pads omitted slots with null); the parameter stays final
+    // a literal-defaulted parameter is read as `Objects.requireNonNullElse(x, <default>)`: a dynamic
+    // caller pads omitted slots with null, and the parameter stays final with no local copy
     this.javaDefaultedLocalNames = /* @__PURE__ */ new Map();
     // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
     this.javaReassigningMethods = [];
@@ -18738,22 +18738,12 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
   }
   javaDefaultedParameterLocals(node) {
-    const lines = [];
     if (node.body === void 0) {
-      return lines;
+      return [];
     }
-    const used = /* @__PURE__ */ new Set();
-    const collect = (n) => {
-      if (_typescript2.default.isIdentifier(n)) {
-        used.add(n.text);
-      }
-      _typescript2.default.forEachChild(n, collect);
-    };
-    collect(node.body);
     const types = this.javaCoreParameterTypes(node);
     node.parameters.forEach((param, i) => {
-      const initializer = param.initializer;
-      if (!this.javaIsLiteralDefault(initializer) || !_typescript2.default.isIdentifier(param.name)) {
+      if (!this.javaIsLiteralDefault(param.initializer) || !_typescript2.default.isIdentifier(param.name)) {
         return;
       }
       const symbol = this.javaSymbolOf(param.name);
@@ -18761,17 +18751,10 @@ var JavaTranspiler = class extends BaseTranspiler {
         return;
       }
       const name = this.printNode(param.name, 0);
-      let local = name + "Value";
-      for (let k = 2; used.has(local); k++) {
-        local = name + "Value" + k;
-      }
-      used.add(local);
-      this.javaDefaultedLocalNames.set(symbol, local);
       const value = this.javaCoreDefaultArgument(param, types[i]);
-      lines.push(`${types[i]} ${local};`);
-      lines.push(`if (${name} == null) { ${local} = ${value}; } else { ${local} = ${name}; }`);
+      this.javaDefaultedLocalNames.set(symbol, `java.util.Objects.requireNonNullElse(${name}, ${value})`);
     });
-    return lines;
+    return [];
   }
   // a string, number or boolean literal default (null, `undefined` and `{}` / `[]` keep the parameter)
   javaIsLiteralDefault(initializer) {
