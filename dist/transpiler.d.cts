@@ -784,6 +784,9 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    CCXT_GO_GETARG_DECLARED_TYPES: any;
+    CCXT_GO_GETARG_SAFE_CONSUMERS: any;
+    goGetArgTypeCache: WeakMap<any, string | undefined>;
     goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
     classNameMap: {
@@ -926,6 +929,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
     goNativeAppendReceiver(pushNode: any): string | undefined;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
+    goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
+    goPointerWriteText(node: any, identation: any): string | undefined;
     goSafeDictLocalArgs(initializer: any): {
         container: any;
         key: any;
@@ -955,6 +960,10 @@ declare class GoTranspiler extends BaseTranspiler {
     goSafeListLocalUnboxUncached(declaration: any): string | undefined;
     goSafeListUnboxValue(declaration: any, identation: number): string | undefined;
     getGoLocalType(declaration: any, parsedValue: string): string;
+    goAwaitReceiveUnbox(awaitNode: any, printedInitializer: string): {
+        goType: string;
+        wrap: (recv: string) => string;
+    } | undefined;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
     alignGoCompositeEntries(entries: any): any;
@@ -1100,6 +1109,25 @@ declare class GoTranspiler extends BaseTranspiler {
     goSkipGoLiteral(text: string, start: number): number;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): any;
+    goGetArgLocalType(body: any, param: any, printedDefault: string): string | undefined;
+    goGetArgBaseParamIsUnannotated(param: any): boolean;
+    goGetArgNilMapUseOnlyReads(n: any): boolean;
+    goGetArgTypeOfShape(shape: string): string | undefined;
+    goGetArgDeclaredTypeCandidates(param: any): string[];
+    goGetArgPrimitiveType(declared: string): string | undefined;
+    goGetArgTwinName(goType: string): string | undefined;
+    goGetArgIsValueType(goType: string): boolean;
+    goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
+    goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
+    goGetArgPointerInHelperArithmetic(n: any): boolean;
+    goGetArgPointerStoredAsValue(n: any, param: any): boolean;
+    goTupleElementIsDict(right: any, index: number): boolean;
+    goParamsTupleHelperIndex(call: any): number;
+    goGetArgTupleWriteIsDict(declaration: any, right: any, index: number): boolean;
+    goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
+    goGetArgParameterType(decl: any): string | undefined;
+    goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean;
+    goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: BinaryExpression, identation: number): string;
@@ -1249,6 +1277,14 @@ declare class JavaTranspiler extends BaseTranspiler {
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
+    javaSuperCoreCallArguments(args: any, node: any, identation: any): string | undefined;
+    javaArgumentHasType(arg: any, type: string): boolean;
+    javaCoreParameterTypes(method: any): string[];
+    javaCoreDefaultArgument(param: any, type: string): string;
+    javaConvertToCoreType(type: string, printed: string, node: any): string;
+    javaErasure(type: string): string;
+    printOverrideBridges(node: any, identation: any): string;
+    printOverrideBridge(node: any, ancestor: any, ancestorTypes: string[], ownTypes: string[], identation: any): string;
     javaSpawnCallParameterTypes(node: any): (string | undefined)[] | undefined;
     javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
@@ -1331,9 +1367,19 @@ declare class JavaTranspiler extends BaseTranspiler {
     exchangeTierMethodNames(): Set<string>;
     javaParameterPrintsType(baseParam: any, type: string): boolean;
     javaInheritedParameterType(node: any): string | undefined;
+    javaOptionalParameterJavaType(node: any): string;
+    javaOptionalParameterType(node: any): string | undefined;
+    javaOptionalParameterTypeOf(node: any): string | undefined;
+    javaIsStringArrayType(checker: any, type: any): boolean;
+    javaOptionalParameterFamilyAgrees(method: any, override: any, index: any, type: string): boolean;
+    firstDefaultParameterIndex(params: any): number;
+    hasDefaultedTail(node: any): boolean;
+    javaSplitParameterWriteType(node: any): string | undefined;
+    javaAsyncParameterLocalType(node: any): string | undefined;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
+    javaParameterIsTypeofTested(node: any): boolean;
     javaParameterIsCompoundAssigned(node: any): boolean;
     javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
@@ -1345,6 +1391,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaReturnedParameterType(node: any): string | undefined;
     javaReturnedCallType(node: any): string | undefined;
     javaStringCallReturn(node: any): boolean;
+    javaParameterAliasSymbol(node: any, type: any, checker: any): any;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
@@ -1445,6 +1492,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printThisKeyword(node: any, identation: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printCustomDefaultValueIfNeeded(node: any): string;
+    printOptionalArgExpression(index: any, initializer: any): string;
     printOptionalArgInit(paramName: any, index: any, initializer: any): string;
     isPureInitializer(node: any): any;
     printFunctionBody(node: any, identation: any): string;
@@ -1454,12 +1502,15 @@ declare class JavaTranspiler extends BaseTranspiler {
     printAsExpression(node: any, identation: any): string;
     printParameterType(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
+    printCoreMethodParameters(node: any): any;
+    printFrontForwardedArguments(node: any): string;
+    printFrontMethodDeclaration(node: any, identation: any): string;
     printMethodParameters(node: any): any;
     printArrayLiteralExpression(node: any): string;
     printFinalOutsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printInsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
-    printMethodDefinition(node: any, identation: any): string;
+    printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
     printArrayIsArrayCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeArrayIsArray(node: any, parsedArg: any): string;
     javaPrimaryIsArrayOperand(node: any): boolean;
@@ -1691,6 +1742,11 @@ declare class RustTranspiler extends BaseTranspiler {
     /** A literal initializer must carry no runtime tag key; a call initializer
      *  is the axiom the declared-Dict table itself rests on. */
     rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean;
+    /** The local's single declaration is initialised from a call that reads
+     *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
+     *  tags with a backref so writes reach the shared store, not the COW copy. */
+    rustLocalInitReadsTaggedContainer(ident: ts.Identifier): boolean;
+    static readonly RUST_TAGGED_CONTAINER_FIELDS: Set<string>;
     /** True when every value the local can hold comes from an object literal:
      *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
      *  `__cache_backref`) only on handles its own store builds, so the helper's

@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../root/ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../root/ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -7816,6 +7816,41 @@ function goBalancedCallArgs(text, open) {
   }
   return void 0;
 }
+var GO_GETARG_EXCLUDED_POSITIONS = {
+  "fetch2": [1, 3],
+  "request": [1, 3],
+  "sign": [1, 3]
+};
+var GO_PARAMS_TUPLE_HELPERS = {
+  "handleUntilOption": 1,
+  "handleNetworkCodeAndParams": 1,
+  "handleWithdrawTagAndParams": 1,
+  "handleTriggerAndParams": 1,
+  "handleTriggerDirectionAndParams": 1,
+  "handlePostOnly": 1,
+  "handleTriggerPricesAndParams": 3
+};
+var GO_GETARG_NIL_MAP_READERS = [
+  "GetValue",
+  "InOp",
+  "ObjectKeys",
+  "SafeValue",
+  "SafeValue2",
+  "SafeDict",
+  "SafeList",
+  "SafeString",
+  "SafeString2",
+  "SafeStringN",
+  "SafeStringUpper",
+  "SafeStringLower",
+  "SafeInteger",
+  "SafeInteger2",
+  "SafeNumber",
+  "SafeNumber2",
+  "SafeFloat",
+  "SafeBool",
+  "SafeTimestamp"
+];
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the printed source file references. A Go import must precede the first
   // declaration, so the file-level print (printSourceFileStatements) collects names here and
@@ -8501,6 +8536,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (op === ts5.SyntaxKind.EqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsEqualsToken || ORDERED_COMPARISON_OPERATORS[op] !== void 0) {
           return "bool";
         }
+        if (op === ts5.SyntaxKind.PlusToken && this.goNativeArithmetic(initializer)?.goType === "string") {
+          return "string";
+        }
         break;
       }
       case ts5.SyntaxKind.CallExpression: {
@@ -8601,6 +8639,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
     if (declaration?.kind !== ts5.SyntaxKind.Parameter) {
       return void 0;
+    }
+    const bound = this.goGetArgParameterType(declaration);
+    if (bound !== void 0 && GO_TYPE_NAMES.indexOf(bound) >= 0 && ["string", "int64", "float64"].includes(bound)) {
+      return bound;
     }
     let type;
     try {
@@ -9062,13 +9104,13 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.SpreadElement) {
           return true;
         }
-        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken) {
+        if (parent?.kind === ts5.SyntaxKind.ArrayLiteralExpression && parent.parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === ts5.SyntaxKind.EqualsToken && !(goType === "map[string]any" && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
           return true;
         }
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
           const op = parent.operatorToken.kind;
           if (op === ts5.SyntaxKind.EqualsToken) {
-            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType) {
+            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === ts5.SyntaxKind.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0)) {
               return true;
             }
           } else if (op >= ts5.SyntaxKind.FirstCompoundAssignment && op <= ts5.SyntaxKind.LastCompoundAssignment) {
@@ -9079,6 +9121,41 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return false;
     });
     return safe;
+  }
+  // How a write of another shape reaches a pointer-typed local: 'nil' (undefined/null prints nil),
+  // 'wrap' (a Go string becomes SafeStringPtr(v), never nil), or undefined (not convertible).
+  // Shared by goLocalIsSafeToType (admission) and goPointerWriteText (emission).
+  goPointerWriteConversion(right, goType) {
+    while (right?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      right = right.expression;
+    }
+    if (!["*string", "*int64", "*float64"].includes(goType) || right === void 0) {
+      return void 0;
+    }
+    if (right.kind === ts5.SyntaxKind.NullKeyword || right.kind === ts5.SyntaxKind.UndefinedKeyword || right.kind === ts5.SyntaxKind.Identifier && right.escapedText === "undefined") {
+      return "nil";
+    }
+    if (goType === "*string" && this.goTypeOfInitializer(right, this.printNode(right, 0)) === "string") {
+      return "wrap";
+    }
+    return void 0;
+  }
+  // `x = "limit"` on a *string local prints `x = SafeStringPtr("limit")`; undefined otherwise
+  goPointerWriteText(node, identation) {
+    const { left, right } = node;
+    if (left?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const decl = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration;
+    if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration) {
+      return void 0;
+    }
+    const goType = this.goDeclaredTypeOfIdentifier(left);
+    if (goType === void 0 || this.goPointerWriteConversion(right, goType) !== "wrap") {
+      return void 0;
+    }
+    const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim();
+    return `${this.printNode(left, 0)} = SafeStringPtr(${value})`;
   }
   // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or undefined
   // for another shape. A third argument is droppable only when it is the empty map literal
@@ -9480,6 +9557,12 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return goType;
   }
+  // Typed async receive: an extension that knows the core's channel element type replaces
+  // `x := (<-this.FooAsync(..))` + `PanicOnError(x)` with a typed declaration that runs PanicOnError
+  // first (same frame and message). The default returns undefined and changes nothing.
+  goAwaitReceiveUnbox(awaitNode, printedInitializer) {
+    return void 0;
+  }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
     if (declaration?.name.kind === ts5.SyntaxKind.ArrayBindingPattern) {
@@ -9502,6 +9585,11 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (declaration?.initializer?.kind === ts5.SyntaxKind.AwaitExpression) {
       const parsedName = this.printNode(declaration.name, 0);
       const parsedInitializer = this.printNode(declaration.initializer, identation);
+      const awaitUnbox = this.goAwaitReceiveUnbox(declaration.initializer, parsedInitializer);
+      if (awaitUnbox !== void 0) {
+        return `
+${this.getIden(identation)}var ${parsedName} ${awaitUnbox.goType} = ${awaitUnbox.wrap(parsedInitializer)}`;
+      }
       return `
 ${this.getIden(identation)}${parsedName} := ${parsedInitializer}
 ${this.getIden(identation)}PanicOnError(${parsedName})`;
@@ -9910,7 +9998,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       let arrayBindingStatement = `${syntheticName} := ${this.printNode(right, 0)}
 `;
       parsedArrayBindingElements.forEach((e, index) => {
-        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
+        const statement = this.getIden(identation) + (this.goGetArgBindsDictElement(arrayBindingPatternElements[index], right, index) ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))` : `${e} = GetValue(${syntheticName}, ${index})`);
         if (index < parsedArrayBindingElements.length - 1) {
           arrayBindingStatement += statement + "\n";
         } else {
@@ -10855,6 +10943,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return void 0;
     }
     if (decl.kind === ts5.SyntaxKind.Parameter) {
+      const bound = this.goGetArgParameterType(decl);
+      if (bound !== void 0 && bound.startsWith("*")) {
+        return bound;
+      }
       return this.goNativeParameterType(decl);
     }
     if (decl.kind !== ts5.SyntaxKind.VariableDeclaration) {
@@ -12257,6 +12349,446 @@ ${this.getIden(level)}}()`;
   printCustomDefaultValueIfNeeded(node) {
     return void 0;
   }
+  // The Go type of a GetArg-bound optional local (from the printed default, or the declared type
+  // for a nil default), or undefined to keep `any`; the retype needs goLocalIsSafeToType,
+  // goParameterKeepsNilCompareNative and goGetArgConsumersAreSafe to agree.
+  goGetArgLocalType(body, param, printedDefault) {
+    const method = param?.parent;
+    const excluded = GO_GETARG_EXCLUDED_POSITIONS[method?.name?.escapedText];
+    if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(param))) {
+      return void 0;
+    }
+    if (param?.type?.kind === ts5.SyntaxKind.AnyKeyword && !this.goGetArgBaseParamIsUnannotated(param)) {
+      return void 0;
+    }
+    const shape = (printedDefault ?? "").trim();
+    const byDefault = this.goGetArgTypeOfShape(shape);
+    if (byDefault !== void 0) {
+      if (param?.type !== void 0 && param.type.kind !== ts5.SyntaxKind.AnyKeyword && !this.goGetArgDeclaredTypeCandidates(param).some((t) => t.replace(/^\*/, "") === byDefault)) {
+        return void 0;
+      }
+      return this.goGetArgLocalIsSafe(body, param, byDefault) ? byDefault : void 0;
+    }
+    if (shape !== "nil" && shape !== "undefined") {
+      return void 0;
+    }
+    for (const goType of this.goGetArgDeclaredTypeCandidates(param)) {
+      if (this.goGetArgLocalIsSafe(body, param, goType, true)) {
+        return goType;
+      }
+    }
+    return void 0;
+  }
+  // true when the method overrides a base method whose parameter at the same position has no
+  // type annotation and a default of the same syntax kind (the base binds it through its twin)
+  goGetArgBaseParamIsUnannotated(param) {
+    const method = param?.parent;
+    const name = method?.name?.escapedText;
+    const index = method?.parameters?.indexOf(param) ?? -1;
+    const cls = method?.parent;
+    const checker = this.checkerOrUndefined();
+    if (name === void 0 || index < 0 || checker === void 0 || param.initializer === void 0) {
+      return false;
+    }
+    for (const clause of cls?.heritageClauses ?? []) {
+      if (clause.token !== ts5.SyntaxKind.ExtendsKeyword) {
+        continue;
+      }
+      for (const expr of clause.types ?? []) {
+        const baseDecl = checker.getTypeAtLocation(expr)?.getProperty?.(name)?.valueDeclaration;
+        const baseParam = baseDecl?.parameters?.[index];
+        if (baseParam === void 0) {
+          return false;
+        }
+        return baseParam.type === void 0 && baseParam.initializer !== void 0 && baseParam.initializer.kind === param.initializer.kind;
+      }
+    }
+    return false;
+  }
+  // a use of a nil-defaulted map local that only reads it: an element read, `k in x`, or the
+  // receiver of a helper that treats a nil map like an absent value (no IsDictionary/IsEqual)
+  goGetArgNilMapUseOnlyReads(n) {
+    const parent = n.parent;
+    if (parent?.kind === ts5.SyntaxKind.ElementAccessExpression || parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+      return this.goSafeDictUseReadsTheMap(n);
+    }
+    if (parent?.kind !== ts5.SyntaxKind.CallExpression || parent.arguments.indexOf(n) !== 0) {
+      return false;
+    }
+    const callee = this.goPrintedCallee(this.printNode(parent, 0));
+    return callee !== void 0 && GO_GETARG_NIL_MAP_READERS.indexOf(callee.replace(/^this\./, "")) >= 0;
+  }
+  // the Go type the printed default names, or undefined when it names none
+  goGetArgTypeOfShape(shape) {
+    if (/^map\[string\]any\{/.test(shape)) {
+      return "map[string]any";
+    }
+    if (/^\[map\[string\]any\]\{/.test(shape)) {
+      return "[]map[string]any";
+    }
+    if (/^\[\]string\{/.test(shape)) {
+      return "[]string";
+    }
+    if (/^\[\]any\{/.test(shape)) {
+      return "[]any";
+    }
+    if (/^"/.test(shape)) {
+      return "string";
+    }
+    if (shape === "true" || shape === "false") {
+      return "bool";
+    }
+    if (/^-?[0-9]/.test(shape) || /^math\./.test(shape)) {
+      return "int64";
+    }
+    return void 0;
+  }
+  // Go type candidates for a nil-defaulted parameter, in try order: the annotation text
+  // (`Int` vs `Num` exist only there), then goNativeParameterTypeCandidates.
+  goGetArgDeclaredTypeCandidates(param) {
+    const out = [];
+    const declared = param?.type !== void 0 ? String(param.type.getText()).replace(/\s+/g, " ") : void 0;
+    const alias = this.CCXT_GO_GETARG_DECLARED_TYPES ?? {};
+    if (declared !== void 0 && alias[declared] !== void 0) {
+      out.push(alias[declared]);
+    } else if (declared !== void 0 && this.goGetArgPrimitiveType(declared) !== void 0) {
+      out.push("*" + this.goGetArgPrimitiveType(declared));
+    }
+    for (const goType of this.goNativeParameterTypeCandidates(param)) {
+      if (out.indexOf(goType) < 0) {
+        out.push(goType);
+      }
+    }
+    return out;
+  }
+  goGetArgPrimitiveType(declared) {
+    if (declared === "Int" || declared === "Integer" || declared === "int") {
+      return "int64";
+    }
+    if (declared === "Num" || declared === "number" || declared === "Float") {
+      return "float64";
+    }
+    if (declared === "Bool" || declared === "boolean") {
+      return "bool";
+    }
+    if (declared === "Str" || declared === "string" || declared === "String") {
+      return "string";
+    }
+    return void 0;
+  }
+  // the twin of a declared Go type (go/v4/exchange_helpers.go); undefined when the twin is
+  // missing, in which case the parameter keeps the `any` box (an `any` return must never be
+  // assigned to a typed local)
+  goGetArgTwinName(goType) {
+    switch (goType) {
+      case "map[string]any":
+        return "GetArgMap";
+      case "[]map[string]any":
+        return "GetArgMapSlice";
+      case "[]string":
+        return "GetArgStringSlice";
+      case "[]any":
+        return "GetArgAnySlice";
+      case "string":
+        return "GetArgString";
+      case "bool":
+        return "GetArgBool";
+      case "int64":
+        return "GetArgInt64";
+      case "float64":
+        return "GetArgFloat64";
+      case "*string":
+        return "GetArgStringPtr";
+      case "*int64":
+        return "GetArgInt64Ptr";
+      case "*float64":
+        return "GetArgFloat64Ptr";
+      case "*bool":
+        return "GetArgBoolPtr";
+    }
+    return void 0;
+  }
+  goGetArgIsValueType(goType) {
+    return goType === "string" || goType === "bool" || goType === "int64" || goType === "float64";
+  }
+  goGetArgLocalIsSafe(body, param, goType, nilable = false) {
+    const name = param.name.escapedText;
+    if (this.goGetArgTwinName(goType) === void 0) {
+      return false;
+    }
+    if (!this.goLocalIsSafeToType(body, param, name, goType)) {
+      return false;
+    }
+    if (this.goGetArgIsValueType(goType)) {
+      return this.goParameterKeepsNilCompareNative(body, param, goType);
+    }
+    return this.goGetArgConsumersAreSafe(body, param, goType, nilable);
+  }
+  // Every later use must read the typed local as it read the `any` box: pointers only reach
+  // audited deref consumers (fail-closed); containers are the same map/list, and nil-sensitive
+  // consumers are tabled as `container` (goGetArgPassesIntoContainerDefault covers call chains).
+  goGetArgConsumersAreSafe(body, param, goType, nilable) {
+    const name = param.name.escapedText;
+    const table = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
+    const pointer = goType.startsWith("*");
+    let safe = true;
+    const verdictOf = (callee, argIndex) => {
+      const goName = callee.charAt(0).toUpperCase() + callee.slice(1);
+      const entry = table[callee] ?? (pointer ? table[goName] ?? table[goName + "Async"] : void 0);
+      if (entry === void 0) {
+        return pointer || nilable ? "unknown" : "deref";
+      }
+      if (typeof entry === "string") {
+        return entry;
+      }
+      return entry[String(argIndex)] ?? entry["*"] ?? (pointer ? "unknown" : "deref");
+    };
+    const visit = (n) => {
+      if (!safe) {
+        return;
+      }
+      if (n?.kind === ts5.SyntaxKind.Identifier && n.escapedText === name) {
+        let symbol;
+        try {
+          symbol = this.getChecker().getSymbolAtLocation(n);
+        } catch (e) {
+          symbol = void 0;
+        }
+        if (symbol?.valueDeclaration === param) {
+          const parent = n.parent;
+          if (parent === param) {
+            return;
+          }
+          if (nilable && goType === "map[string]any") {
+            const assigned = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken;
+            if (assigned || this.goGetArgNilMapUseOnlyReads(n)) {
+              return;
+            }
+          }
+          if (pointer && parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+            const op = parent.operatorToken?.kind;
+            if (parent.left === n && op === ts5.SyntaxKind.EqualsToken || parent.left === n && op === ts5.SyntaxKind.InKeyword) {
+              return;
+            }
+            const other = parent.left === n ? parent.right : parent.left;
+            const equality = [ts5.SyntaxKind.EqualsEqualsEqualsToken, ts5.SyntaxKind.ExclamationEqualsEqualsToken].includes(op);
+            if (equality && (other?.kind === ts5.SyntaxKind.StringLiteral || other?.kind === ts5.SyntaxKind.NumericLiteral)) {
+              return;
+            }
+          }
+          if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+            const other = parent.left === n ? parent.right : parent.left;
+            const isNullTest = other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
+            if (isNullTest) {
+              safe = true;
+              return;
+            }
+          }
+          if (parent?.kind === ts5.SyntaxKind.CallExpression) {
+            const args = parent.arguments ?? [];
+            const argIndex = args.indexOf(n);
+            const callee = parent.expression;
+            let calleeName = callee?.name !== void 0 ? callee.name.escapedText : callee?.escapedText !== void 0 ? callee.escapedText : void 0;
+            if (callee?.expression?.escapedText === "Math" && (calleeName === "min" || calleeName === "max")) {
+              calleeName = "math" + calleeName.charAt(0).toUpperCase() + calleeName.slice(1);
+            }
+            if (calleeName === void 0) {
+              safe = !pointer && !nilable;
+              return;
+            }
+            const verdict = verdictOf(calleeName, argIndex);
+            if (verdict === "unsafe") {
+              safe = false;
+              return;
+            }
+            if (verdict === "container" && nilable) {
+              safe = false;
+              return;
+            }
+            if (calleeName === "IsEqual" && nilable) {
+              const other = argIndex === 0 ? args[1] : args[0];
+              const otherIsNil = other === void 0 || other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
+              if (otherIsNil) {
+                safe = false;
+                return;
+              }
+            }
+            if (verdict === "unknown" && nilable && goType === "map[string]any" && this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+              safe = true;
+              return;
+            }
+            if (verdict === "unknown" && pointer && this.goGetArgPositionIsDefaulted(callee, argIndex)) {
+              safe = true;
+              return;
+            }
+            if (verdict === "unknown") {
+              safe = false;
+              return;
+            }
+            if (nilable && !pointer && this.goGetArgPassesIntoContainerDefault(callee, argIndex)) {
+              safe = false;
+              return;
+            }
+            safe = true;
+            return;
+          }
+          if (parent?.kind === ts5.SyntaxKind.ExpressionStatement) {
+            safe = true;
+            return;
+          }
+          if (pointer && this.goGetArgPointerStoredAsValue(n, param)) {
+            safe = true;
+            return;
+          }
+          if (pointer && this.goGetArgPointerInHelperArithmetic(n)) {
+            safe = true;
+            return;
+          }
+          safe = !pointer && !nilable;
+          return;
+        }
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(body, visit);
+    return safe;
+  }
+  // `x / 1000`, `x - 1`, `x > 0`: printed through Divide/Subtract/…/IsGreaterThan, which
+  // derefScalar both operands at entry (checked on the printed text by the caller's diff)
+  goGetArgPointerInHelperArithmetic(n) {
+    const parent = n.parent;
+    if (parent?.kind !== ts5.SyntaxKind.BinaryExpression) {
+      return false;
+    }
+    const ops = [
+      ts5.SyntaxKind.SlashToken,
+      ts5.SyntaxKind.MinusToken,
+      ts5.SyntaxKind.AsteriskToken,
+      ts5.SyntaxKind.PercentToken,
+      ts5.SyntaxKind.GreaterThanToken,
+      ts5.SyntaxKind.LessThanToken,
+      ts5.SyntaxKind.GreaterThanEqualsToken,
+      ts5.SyntaxKind.LessThanEqualsToken
+    ];
+    if (!ops.includes(parent.operatorToken?.kind)) {
+      return false;
+    }
+    const printed = this.printNode(parent, 0).trim();
+    return /^(?:\(\s*)*(?:Divide|Subtract|Multiply|Mod|IsGreaterThan|IsLessThan|IsGreaterThanOrEqual|IsLessThanOrEqual)\(/.test(printed);
+  }
+  // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
+  // (GetValue, Urlencode, Json, IsEqual) derefScalar it; a `*Request` builder returns that
+  // dictionary to its caller, so it keeps the box
+  goGetArgPointerStoredAsValue(n, param) {
+    const parent = n.parent;
+    const stored = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.right === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && parent.left?.kind === ts5.SyntaxKind.ElementAccessExpression || parent?.kind === ts5.SyntaxKind.PropertyAssignment && parent.initializer === n;
+    const methodName = String(param?.parent?.name?.escapedText ?? "");
+    return stored && !methodName.endsWith("Request");
+  }
+  // element `index` of a tuple-typed call result is `Dict` (`[T, Dict]`); the Go tuple holds
+  // that map, so MapTyped reads the same dictionary back
+  goTupleElementIsDict(right, index) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0 || index < 0) {
+      return false;
+    }
+    const expr = right?.kind === ts5.SyntaxKind.AwaitExpression ? right.expression : right;
+    if (expr?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const type = checker.getTypeAtLocation(expr);
+    if (type === void 0 || !checker.isTupleType(type)) {
+      return this.goParamsTupleHelperIndex(expr) === index;
+    }
+    const element = checker.getTypeArguments(type)?.[index];
+    return element !== void 0 && !(element.flags & (ts5.TypeFlags.Any | ts5.TypeFlags.Unknown)) && this.goParameterTypeIsDict(element);
+  }
+  // `this.handleXxx(…, params, …)` of a base helper typed `any[]` whose element holds the params
+  // map it was given after omit/extend; only when that element is the same map-typed local
+  goParamsTupleHelperIndex(call) {
+    const callee = call?.expression;
+    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
+      return -1;
+    }
+    const index = GO_PARAMS_TUPLE_HELPERS[callee.name?.escapedText];
+    if (index === void 0) {
+      return -1;
+    }
+    const target = call.parent?.left?.elements?.[index];
+    const passesTarget = target?.kind === ts5.SyntaxKind.Identifier && (call.arguments ?? []).some((a) => a.kind === ts5.SyntaxKind.Identifier && a.escapedText === target.escapedText);
+    return passesTarget ? index : -1;
+  }
+  // the safety check of a map-typed GetArg local: a Dict tuple element written into it is printed
+  // through MapTyped once the local is bound as a map (no recursion into goGetArgLocalType)
+  goGetArgTupleWriteIsDict(declaration, right, index) {
+    return declaration?.kind === ts5.SyntaxKind.Parameter && declaration.initializer !== void 0 && this.goTupleElementIsDict(right, index);
+  }
+  // `[x, params] = f()` writes a GetArg local bound as map[string]any: unbox the element
+  goGetArgBindsDictElement(leftElement, right, index) {
+    if (leftElement?.kind !== ts5.SyntaxKind.Identifier || !this.goTupleElementIsDict(right, index)) {
+      return false;
+    }
+    let decl;
+    try {
+      decl = this.checkerOrUndefined()?.getSymbolAtLocation(leftElement)?.valueDeclaration;
+    } catch (e) {
+      decl = void 0;
+    }
+    if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0 || decl.parent?.body === void 0) {
+      return false;
+    }
+    return this.goGetArgParameterType(decl) === "map[string]any";
+  }
+  // the Go type a defaulted parameter's GetArg twin binds (undefined: the `any` GetArg); the one
+  // predicate shared by the binding line and every consumer's printing
+  goGetArgParameterType(decl) {
+    if (decl?.kind !== ts5.SyntaxKind.Parameter || decl.initializer === void 0 || decl.dotDotDotToken !== void 0 || decl.name?.kind !== ts5.SyntaxKind.Identifier || decl.parent?.body === void 0 || ![ts5.SyntaxKind.MethodDeclaration, ts5.SyntaxKind.FunctionDeclaration].includes(decl.parent.kind)) {
+      return void 0;
+    }
+    this.goGetArgTypeCache ??= /* @__PURE__ */ new WeakMap();
+    if (!this.goGetArgTypeCache.has(decl)) {
+      this.goGetArgTypeCache.set(decl, void 0);
+      const goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+      this.goGetArgTypeCache.set(decl, goType !== void 0 && this.goGetArgTwinName(goType) !== void 0 ? goType : void 0);
+    }
+    return this.goGetArgTypeCache.get(decl);
+  }
+  // argument `argIndex` of the callee binds a parameter with a TypeScript default (GetArg-bound)
+  goGetArgPositionIsDefaulted(callee, argIndex) {
+    if (argIndex < 0) {
+      return false;
+    }
+    let decl;
+    try {
+      decl = this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration;
+    } catch (e) {
+      decl = void 0;
+    }
+    const kinds = [ts5.SyntaxKind.MethodDeclaration, ts5.SyntaxKind.FunctionDeclaration];
+    const param = decl !== void 0 && kinds.includes(decl.kind) ? decl.parameters?.[argIndex] : void 0;
+    return param?.initializer !== void 0 && param.dotDotDotToken === void 0;
+  }
+  // the callee's own GetArg with a container default returns def for an untyped nil box but the
+  // nil map for a nil map box (nil slices collapse to def), so only map shapes differ
+  goGetArgPassesIntoContainerDefault(callee, argIndex) {
+    if (argIndex < 0) {
+      return false;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(callee);
+    } catch (e) {
+      symbol = void 0;
+    }
+    const decl = symbol?.valueDeclaration;
+    const params = decl?.parameters ?? [];
+    const param = params[argIndex];
+    const initializer = param?.initializer;
+    if (initializer === void 0) {
+      return false;
+    }
+    return initializer.kind === ts5.SyntaxKind.ObjectLiteralExpression;
+  }
   printFunctionBody(node, identation, wrapInChannel = false) {
     let functionBody;
     const funcParams = node.parameters;
@@ -12273,7 +12805,14 @@ ${this.getIden(level)}}()`;
         if (initializer) {
           const index = i + offSetIndex;
           const paramName = this.printNode(param.name, 0);
-          initParams.push(`${paramName} := GetArg(optionalArgs, ${index}, ${this.printNode(initializer, 0)})`);
+          const printedDefault = this.printNode(initializer, 0);
+          const goType = this.goGetArgParameterType(param);
+          const twinName = goType !== void 0 ? this.goGetArgTwinName(goType) : void 0;
+          if (goType !== void 0 && twinName !== void 0) {
+            initParams.push(`var ${paramName} ${goType} = ${twinName}(optionalArgs, ${index}, ${printedDefault})`);
+          } else {
+            initParams.push(`${paramName} := GetArg(optionalArgs, ${index}, ${printedDefault})`);
+          }
           initParams.push(`_ = ${paramName}`);
         } else {
           offSetIndex--;
@@ -12368,9 +12907,10 @@ ${this.getIden(level)}}()`;
     }
     const exprStm = this.printNode(node.expression, identation);
     const returnRandName = "retRes" + this.getLineBasedSuffix(node);
-    const expStatement = `
-${this.getIden(identation)}${returnRandName} := ${exprStm}
-${this.getIden(identation)}PanicOnError(${returnRandName})`;
+    const stmtUnbox = this.goAwaitReceiveUnbox(node.expression, exprStm);
+    const expStatement = stmtUnbox !== void 0 ? `
+${this.getIden(identation)}var ${returnRandName} ${stmtUnbox.goType} = ${stmtUnbox.wrap(exprStm)}` : `
+${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     return this.printNodeCommentsIfAny(node, identation, expStatement);
   }
   isInsideAsyncFunction(returnStatementNode) {
@@ -12411,7 +12951,15 @@ ${this.getIden(identation)}PanicOnError(${returnRandName})`;
     }
     if (node?.expression?.kind === ts5.SyntaxKind.AwaitExpression) {
       const returnRandName = "retRes" + this.getLineBasedSuffix(node.expression);
+      const printedExpr = rightPart;
       rightPart = rightPart ? rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
+      const retUnbox = this.goAwaitReceiveUnbox(node.expression, printedExpr);
+      if (retUnbox !== void 0) {
+        return `
+${this.getIden(identation)}var ${returnRandName} ${retUnbox.goType} = ${retUnbox.wrap(printedExpr)}
+${leadingComment}${this.getIden(identation)}ch <- ${returnRandName}${trailingComment}
+${this.getIden(identation)}${returnStatement}`;
+      }
       return `
 ${this.getIden(identation)}${returnRandName} := ${rightPart}
 ${this.getIden(identation)}PanicOnError(${returnRandName})
@@ -13157,6 +13705,10 @@ ${this.getIden(identation)}return nil`;
       return this.printInstanceOfExpression(node, identation);
     }
     if (operatorToken.kind === ts5.SyntaxKind.EqualsToken) {
+      const pointerWrite = this.goPointerWriteText(node, identation);
+      if (pointerWrite !== void 0) {
+        return pointerWrite;
+      }
       const elementAccess = left;
       const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
       if (left.kind === ts5.SyntaxKind.ElementAccessExpression) {
@@ -13189,7 +13741,7 @@ ${this.getIden(identation)}PanicOnError(${leftParsed})`;
         const leftType = this.getChecker().getTypeAtLocation(leftElement);
         const parsedType = this.getTypeFromRawType(leftType);
         const castExp = parsedType ? `(${parsedType})` : "";
-        const statement = this.getIden(identation) + `${e} = GetValue(${syntheticName}, ${index})`;
+        const statement = this.getIden(identation) + (this.goGetArgBindsDictElement(leftElement, right, index) ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))` : `${e} = GetValue(${syntheticName}, ${index})`);
         if (index < parsedArrayBindingElements.length - 1) {
           arrayBindingStatement += statement + "\n";
         } else {
@@ -13833,10 +14385,31 @@ var JAVA_NATIVE_PARAMETER_TYPES = {
   "Market": "java.util.Map<String, Object>",
   "Currency": "java.util.Map<String, Object>",
   "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
   "Bool": "Boolean"
 };
+var JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL = {
+  "Dict": "java.util.Map<String, Object>",
+  "Market": "java.util.Map<String, Object>",
+  "Currency": "java.util.Map<String, Object>",
+  "Str": "String",
+  "OrderType": "String",
+  "OrderSide": "String",
+  "Int": "Long",
+  "Strings": "java.util.List<String>"
+};
+var JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = /* @__PURE__ */ new Set(["symbols"]);
+var JAVA_STRING_LIST_TYPE = "java.util.List<String>";
+var JAVA_STRINGS_EXCLUDED_METHODS = /* @__PURE__ */ new Set(["marketSymbols", "marketIds", "marketsForSymbols", "getMarketFromSymbols"]);
 var JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
+  // implicit endpoints pass fetch2/request/sign params through untyped (arrays for batch orders)
+  "fetch2": [3],
+  // the Exchange tier keeps fetchOrderBook's symbol Object; PredictionExchange overrides must erase alike
+  "fetchOrderBook": [0],
+  "request": [3],
+  "sign": [3],
   "handleErrors": [4],
   "parseOrder": [0],
   "parseTrade": [0],
@@ -13861,7 +14434,7 @@ var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
   "watch": [0, 1]
 };
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
-var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads[^/]*)?\.ts$/;
+var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
 var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
   "safeString",
@@ -13990,6 +14563,10 @@ var JavaTranspiler = class extends BaseTranspiler {
   // so the argument carries the same checkcast as native map/string reads. The checker proved the
   // argument assignable to the parameter, so the declared type describes the value received.
   javaPrintCallArguments(args, node, identation) {
+    const superCore = this.javaSuperCoreCallArguments(args, node, identation);
+    if (superCore !== void 0) {
+      return superCore;
+    }
     const spawnTypes = this.javaSpawnCallParameterTypes(node);
     const parameterTypes = spawnTypes !== void 0 ? spawnTypes : this.javaNativeCallParameterTypes(node);
     return args.map((a, i) => {
@@ -14000,6 +14577,141 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       return `(${type}) (${parsedArg})`;
     }).join(", ");
+  }
+  // `super.x(..)` into a split method must bind the typed core: the untyped front re-dispatches
+  // through `this`, which lands back in the overriding core (infinite recursion)
+  javaSuperCoreCallArguments(args, node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.SuperKeyword) {
+      return void 0;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration === void 0 || !this.hasDefaultedTail(declaration)) {
+      return void 0;
+    }
+    const params = declaration.parameters;
+    if (args.length > params.length) {
+      return void 0;
+    }
+    const types = this.javaCoreParameterTypes(declaration);
+    return params.map((p, i) => i < args.length ? this.javaArgumentHasType(args[i], types[i]) ? this.printNode(args[i], identation).trim() : this.javaConvertToCoreType(types[i], this.printNode(args[i], identation).trim(), args[i]) : this.javaCoreDefaultArgument(p, types[i])).join(", ");
+  }
+  // an argument that is a parameter of the enclosing method already printed with this type
+  javaArgumentHasType(arg, type) {
+    if (arg?.kind !== ts6.SyntaxKind.Identifier) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getSymbolAtLocation(arg)?.valueDeclaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || !ts6.isParameter(declaration)) {
+      return false;
+    }
+    const method = declaration.parent;
+    if (this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
+      return false;
+    }
+    const printed = declaration.initializer !== void 0 ? this.hasDefaultedTail(method) ? this.javaOptionalParameterJavaType(declaration) : "Object" : (this.printParameterType(declaration) || "Object").trim();
+    return this.javaErasure(printed) === this.javaErasure(type);
+  }
+  // the printed Java type of every parameter of a split method's typed core
+  javaCoreParameterTypes(method) {
+    return method.parameters.map((p) => p.initializer !== void 0 ? this.javaOptionalParameterJavaType(p) : (this.printParameterType(p) || "Object").trim());
+  }
+  // an omitted parameter of a typed-core call: its TS default, typed like the front's reader
+  javaCoreDefaultArgument(param, type) {
+    if (param.initializer === void 0) {
+      return `(${type}) null`;
+    }
+    let value = this.printNode(param.initializer, 0);
+    if (value === "null") {
+      return `(${type}) null`;
+    }
+    if (type === "Long" && /^-?\d+$/.test(value)) {
+      value += "L";
+    }
+    return this.javaConvertToCoreType(type, value, param.initializer);
+  }
+  // a value of any static type converted to a typed-core parameter, with the fronts' semantics
+  javaConvertToCoreType(type, printed, node) {
+    if (node?.kind === ts6.SyntaxKind.NullKeyword || node?.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined") {
+      return `(${type}) null`;
+    }
+    if (type === "Object") {
+      return `(Object) (${printed})`;
+    }
+    if (type === "Long") {
+      return /^-?\d+L$/.test(printed) ? printed : `Helpers.toLongOrNull(${printed})`;
+    }
+    if (type === "String") {
+      return this.javaNativeArgumentAlreadyTyped(node, type) ? printed : `Helpers.toStringArg(${printed})`;
+    }
+    if (type === "java.util.Map<String, Object>") {
+      return `Helpers.toMapArg(${printed})`;
+    }
+    if (type === JAVA_STRING_LIST_TYPE) {
+      return `Helpers.toStringListArg(${printed})`;
+    }
+    return `(${type}) (${printed})`;
+  }
+  // Java erasure of a printed type, for override/bridge comparisons
+  javaErasure(type) {
+    return type.replace(/<.*>/, "").replace(/^java\.util\./, "").trim();
+  }
+  // An override whose typed core differs from an ancestor's (another parameter count, another
+  // default position or type) no longer overrides it in Java: a bridge with the ancestor's
+  // signature forwards to this method, so base code calling the ancestor core reaches it.
+  printOverrideBridges(node, identation) {
+    const ownTypes = this.javaCoreParameterTypes(node);
+    const ownKey = ownTypes.map((t) => this.javaErasure(t)).join(",");
+    const seen = /* @__PURE__ */ new Set();
+    let out = "";
+    let ancestor;
+    try {
+      ancestor = this.getMethodOverride(node);
+    } catch (e) {
+      return "";
+    }
+    while (ancestor !== void 0) {
+      if (this.hasDefaultedTail(ancestor)) {
+        const ancestorTypes = this.javaCoreParameterTypes(ancestor);
+        const key = ancestorTypes.map((t) => this.javaErasure(t)).join(",");
+        if (key !== ownKey && !seen.has(key)) {
+          seen.add(key);
+          out += this.printOverrideBridge(node, ancestor, ancestorTypes, ownTypes, identation);
+        }
+      }
+      try {
+        ancestor = this.getMethodOverride(ancestor);
+      } catch (e) {
+        ancestor = void 0;
+      }
+    }
+    return out;
+  }
+  printOverrideBridge(node, ancestor, ancestorTypes, ownTypes, identation) {
+    const name = this.transformMethodNameIfNeeded(node.name.escapedText);
+    const ancestorNames = ancestor.parameters.map((p) => this.printNode(p.name, 0));
+    const ancestorDef = this.printMethodDefinition(
+      ancestor,
+      identation,
+      () => ancestorTypes.map((t, i) => `${t} ${ancestorNames[i]}`).join(", ")
+    );
+    const forwarded = node.parameters.map((p, i) => i < ancestorNames.length ? this.javaErasure(ownTypes[i]) === this.javaErasure(ancestorTypes[i]) ? ancestorNames[i] : this.javaConvertToCoreType(ownTypes[i], ancestorNames[i], void 0) : this.javaCoreDefaultArgument(p, ownTypes[i])).join(", ");
+    const call = `this.${name}(${forwarded})`;
+    const returnOf = (def) => def.match(/(?:public|protected|private)\s+(?:static\s+)?(.+?)\s+\w+\s*\(/)?.[1]?.trim() ?? "Object";
+    const returnType = returnOf(ancestorDef);
+    const ownReturn = returnOf(this.printMethodDefinition(node, identation, () => ""));
+    const body = returnType === "void" ? `${call};` : returnType === ownReturn ? `return ${call};` : `return (${returnType}) (Object) ${call};`;
+    return "\n" + ancestorDef + this.getBlockOpen(identation) + this.getIden(identation + 1) + body + this.getBlockClose(identation);
   }
   // `this.spawn(this.someMethod, args...)`: the spawned work executes `this.someMethod(args)`
   // (the ccxt post-pass rewrites the reference into a lambda), so the arguments belong to the
@@ -15392,6 +16104,176 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
+  // Default-valued parameters are real parameters of the typed core that carries the body;
+  // the untyped `Object... optionalArgs` front delegates to it.
+  javaOptionalParameterJavaType(node) {
+    return this.javaOptionalParameterType(node) ?? "Object";
+  }
+  javaOptionalParameterType(node) {
+    if (node === void 0 || !ts6.isParameter(node)) {
+      return void 0;
+    }
+    if (node.initializer === void 0 || node.dotDotDotToken !== void 0) {
+      return void 0;
+    }
+    const own = this.javaOptionalParameterTypeOf(node);
+    if (own === void 0) {
+      return void 0;
+    }
+    if (this.javaParameterIsCompoundAssigned(node)) {
+      return void 0;
+    }
+    if (own === JAVA_STRING_LIST_TYPE && this.javaParameterIsTypeofTested(node)) {
+      return void 0;
+    }
+    const method = node.parent;
+    try {
+      const index = method.parameters.indexOf(node);
+      let override = this.getMethodOverride(method);
+      while (override !== void 0) {
+        if (!this.javaOptionalParameterFamilyAgrees(method, override, index, own)) {
+          return void 0;
+        }
+        override = this.getMethodOverride(override);
+      }
+    } catch (e) {
+      return void 0;
+    }
+    return own;
+  }
+  // the annotation proof for an optional parameter (no initializer bail)
+  javaOptionalParameterTypeOf(node) {
+    if (node === void 0 || !ts6.isParameter(node) || node.dotDotDotToken !== void 0) {
+      return void 0;
+    }
+    const method = node.parent;
+    if (method === void 0 || !ts6.isMethodDeclaration(method) || !ts6.isClassDeclaration(method.parent)) {
+      return void 0;
+    }
+    if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName) && !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
+      return void 0;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    const type = checker.getTypeAtLocation(node);
+    if (type === void 0) {
+      return void 0;
+    }
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
+    const name = symbol?.name;
+    const excluded = JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS[method.name?.escapedText];
+    if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(node))) {
+      return void 0;
+    }
+    if (name === "Strings" || this.javaIsStringArrayType(checker, type)) {
+      const listName = JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has(node.name?.escapedText) && !JAVA_STRINGS_EXCLUDED_METHODS.has(method.name?.escapedText);
+      return listName ? JAVA_STRING_LIST_TYPE : void 0;
+    }
+    if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === void 0) {
+      return void 0;
+    }
+    const declaration = symbol?.declarations?.[0];
+    const fileName = declaration?.getSourceFile?.()?.fileName;
+    return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? "") ? JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] : void 0;
+  }
+  // a `string[]` annotation (optionally `| undefined`), the unaliased spelling of `Strings`
+  javaIsStringArrayType(checker, type) {
+    const members = type.isUnion?.() ? type.types : [type];
+    let arrays = 0;
+    for (const member of members) {
+      if (member.flags & (ts6.TypeFlags.Undefined | ts6.TypeFlags.Null)) {
+        continue;
+      }
+      if (!checker.isArrayType(member)) {
+        return false;
+      }
+      const element = checker.getTypeArguments(member)?.[0];
+      if (element === void 0 || !(element.flags & ts6.TypeFlags.String)) {
+        return false;
+      }
+      arrays++;
+    }
+    return arrays === 1;
+  }
+  // Java overrides are invariant: every ancestor declaration must match the parameter count,
+  // the first default-valued index and this position's type, otherwise the position stays Object.
+  javaOptionalParameterFamilyAgrees(method, override, index, type) {
+    const baseParams = override?.parameters;
+    if (baseParams === void 0 || baseParams.length !== method.parameters.length) {
+      return false;
+    }
+    if (this.firstDefaultParameterIndex(baseParams) !== this.firstDefaultParameterIndex(method.parameters)) {
+      return false;
+    }
+    const baseParam = baseParams[index];
+    if (baseParam === void 0 || !ts6.isParameter(baseParam) || baseParam.dotDotDotToken !== void 0) {
+      return false;
+    }
+    const baseIsOptional = baseParam.initializer !== void 0 || baseParam.questionToken !== void 0;
+    const ownIsOptional = method.parameters[index].initializer !== void 0 || method.parameters[index].questionToken !== void 0;
+    if (baseIsOptional !== ownIsOptional) {
+      return false;
+    }
+    const baseType = baseIsOptional ? this.javaOptionalParameterTypeOf(baseParam) : this.javaNativeParameterTypeOf(baseParam);
+    return baseType === type;
+  }
+  firstDefaultParameterIndex(params) {
+    for (let i = 0; i < params.length; i++) {
+      if (params[i].initializer !== void 0 || params[i].questionToken !== void 0) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  // >=1 parameter with a default value: the method splits into typed core + untyped front.
+  // A method whose only optional markers are `?` keeps today's single declaration.
+  hasDefaultedTail(node) {
+    if (node === void 0 || !ts6.isMethodDeclaration(node)) {
+      return false;
+    }
+    return (node.parameters ?? []).some((p) => p.initializer !== void 0);
+  }
+  // a typed default-valued parameter of a sync core is written in place (async cores copy it
+  // into an Object local first), so its writes convert to the declared type
+  javaSplitParameterWriteType(node) {
+    if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent)) {
+      return void 0;
+    }
+    if (this.isAsyncFunction(node.parent)) {
+      return this.javaAsyncParameterLocalType(node);
+    }
+    return this.javaOptionalParameterType(node);
+  }
+  // the async body copy of a reassigned default-valued parameter keeps a `List<String>` type;
+  // its writes convert like the sync in-place ones (other types keep the `Object` copy)
+  javaAsyncParameterLocalType(node) {
+    if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent) || !this.isAsyncFunction(node.parent)) {
+      return void 0;
+    }
+    const type = this.javaOptionalParameterType(node);
+    return type === JAVA_STRING_LIST_TYPE ? type : void 0;
+  }
+  javaParameterIsTypeofTested(node) {
+    const method = node.parent;
+    const name = node.name?.escapedText;
+    let found = false;
+    const visit = (n) => {
+      if (found) {
+        return;
+      }
+      if (ts6.isTypeOfExpression(n) && ts6.isIdentifier(n.expression) && n.expression.escapedText === name) {
+        found = true;
+        return;
+      }
+      ts6.forEachChild(n, visit);
+    };
+    if (method?.body !== void 0 && name !== void 0) {
+      ts6.forEachChild(method.body, visit);
+    }
+    return found;
+  }
   javaParameterIsCompoundAssigned(node) {
     const method = node.parent;
     const name = node.name?.escapedText;
@@ -15426,13 +16308,19 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (declaration === void 0 || !ts6.isParameter(declaration) || left.escapedText !== declaration.name?.escapedText) {
       return void 0;
     }
-    const native = this.javaNativeParameterType(declaration);
+    const native = this.javaNativeParameterType(declaration) ?? this.javaSplitParameterWriteType(declaration);
     if (native === void 0) {
       return void 0;
     }
     const leftText = this.printNode(left, 0);
     if (this.javaNativeArgumentAlreadyTyped(right, native)) {
       return `${leftText} = ${this.printNode(right, identation)}`;
+    }
+    if (native === "Long") {
+      return `${leftText} = Helpers.toLongOrNull(${this.printNode(right, identation)})`;
+    }
+    if (native === JAVA_STRING_LIST_TYPE) {
+      return `${leftText} = Helpers.toStringListArg(${this.printNode(right, identation)})`;
     }
     return `${leftText} = (${native}) (${this.printNode(right, identation)})`;
   }
@@ -15646,6 +16534,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     const fileName = declaration.getSourceFile?.()?.fileName;
     return fileName !== void 0 && JAVA_STRING_RETURN_BASE_FILES.test(fileName);
   }
+  // the alias a parameter's annotation names; `OrderType` ('limit' | 'market' | string) reduces
+  // to plain `string` and keeps no aliasSymbol, so read the annotation's type reference instead
+  javaParameterAliasSymbol(node, type, checker) {
+    const symbol = type.aliasSymbol ?? type.symbol;
+    if (symbol !== void 0 || node.type === void 0 || !ts6.isTypeReferenceNode(node.type)) {
+      return symbol;
+    }
+    const referenced = checker.getSymbolAtLocation(node.type.typeName);
+    const alias = referenced !== void 0 && referenced.flags & ts6.SymbolFlags.Alias ? checker.getAliasedSymbol(referenced) : referenced;
+    return alias !== void 0 && alias.flags & ts6.SymbolFlags.TypeAlias ? alias : void 0;
+  }
   // the annotation proof alone, without the heritage check
   javaNativeParameterTypeOf(node) {
     if (node === void 0 || !ts6.isParameter(node) || node.initializer !== void 0 || node.dotDotDotToken !== void 0) {
@@ -15666,7 +16565,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const symbol = type.aliasSymbol ?? type.symbol;
+    const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = symbol?.name;
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES[name] === void 0) {
       return void 0;
@@ -15721,8 +16620,10 @@ var JavaTranspiler = class extends BaseTranspiler {
         const target = arrayBindingPatternElements[index];
         if (ts6.isIdentifier(target)) {
           const declaration = this.javaDeclarationOfIdentifier(target);
-          const native = declaration !== void 0 && ts6.isParameter(declaration) ? this.javaNativeParameterType(declaration) : void 0;
-          if (native !== void 0) {
+          const native = declaration !== void 0 && ts6.isParameter(declaration) ? this.javaNativeParameterType(declaration) ?? this.javaSplitParameterWriteType(declaration) : void 0;
+          if (native === "Long") {
+            elementValue = `Helpers.toLongOrNull(${elementValue})`;
+          } else if (native !== void 0) {
             elementValue = `(${native}) ${elementValue}`;
           }
         }
@@ -17781,12 +18682,17 @@ var JavaTranspiler = class extends BaseTranspiler {
   // Unpacks one optional parameter. Native array access replaces Helpers.getArg
   // when the initializer is a pure literal; the null check keeps the helper's
   // contract that a null varargs array reads like an empty one.
-  printOptionalArgInit(paramName, index, initializer) {
+  // The expression half is shared with the untyped front, which passes the same value to the
+  // typed core as an argument instead of binding a local.
+  printOptionalArgExpression(index, initializer) {
     const defaultValue = this.printNode(initializer, 0);
     if (!this.isPureInitializer(initializer)) {
-      return `Object ${paramName} = Helpers.getArg(optionalArgs, ${index}, ${defaultValue});`;
+      return `Helpers.getArg(optionalArgs, ${index}, ${defaultValue})`;
     }
-    return `Object ${paramName} = optionalArgs != null && optionalArgs.length > ${index} ? optionalArgs[${index}] : ${defaultValue};`;
+    return `optionalArgs != null && optionalArgs.length > ${index} ? optionalArgs[${index}] : ${defaultValue}`;
+  }
+  printOptionalArgInit(paramName, index, initializer) {
+    return `Object ${paramName} = ${this.printOptionalArgExpression(index, initializer)};`;
   }
   // Pure = evaluating the initializer has no effect and cannot throw, so
   // skipping it when the argument was supplied cannot change behavior.
@@ -17824,6 +18730,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const funcParams = node.parameters ?? [];
     const bodyStatements = node.body.statements;
     const isAsync = this.isAsyncFunction(node);
+    const splitCore = this.hasDefaultedTail(node);
     const initParams = [];
     const processedParts = [];
     try {
@@ -17841,6 +18748,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     funcParams.forEach((param, i) => {
       const initializer = param.initializer;
       if (initializer) {
+        if (splitCore) {
+          return;
+        }
         const index = i + offSetIndex;
         const paramName = this.printNode(param.name, 0);
         initParams.push(this.printOptionalArgInit(paramName, index, initializer));
@@ -17951,6 +18861,60 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return name;
   }
+  // the typed core signature: every parameter prints its Java type, the default-valued ones
+  // included (a Java signature cannot carry a default - the front supplies it)
+  printCoreMethodParameters(node) {
+    const isAsyncMethod = this.isAsyncFunction(node);
+    return node.parameters.map((param) => {
+      const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
+      const isDefaulted = param.initializer !== void 0;
+      let printedParam = isDefaulted ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}` : this.printParameter(param);
+      if (isAsyncMethod && isReassignedVar) {
+        const paramName = param.name.escapedText;
+        const { localName, sigName } = this.getAsyncParamWrapperNames(paramName);
+        printedParam = printedParam.replace(localName, sigName);
+      }
+      return printedParam;
+    }).join(", ");
+  }
+  // the front's arguments: omitted slot -> TS default, explicit null -> null, typed slots widened
+  printFrontForwardedArguments(node) {
+    const out = [];
+    let offSetIndex = 0;
+    (node.parameters ?? []).forEach((param, i) => {
+      const name = this.printNode(param.name, 0);
+      if (param.initializer === void 0) {
+        offSetIndex--;
+        out.push(name);
+        return;
+      }
+      const index = i + offSetIndex;
+      const javaType = this.javaOptionalParameterJavaType(param);
+      const getter = javaType === "Long" ? "getArgLong" : javaType === "String" ? "getArgString" : javaType === "java.util.Map<String, Object>" ? "getArgMap" : javaType === JAVA_STRING_LIST_TYPE ? "getArgStringList" : void 0;
+      if (getter === void 0) {
+        out.push(this.printOptionalArgExpression(index, param.initializer));
+        return;
+      }
+      let defaultValue = this.printNode(param.initializer, 0);
+      if (getter === "getArgLong" && /^-?\d+$/.test(defaultValue)) {
+        defaultValue += "L";
+      }
+      if (getter === "getArgStringList" && ts6.isArrayLiteralExpression(param.initializer) && param.initializer.elements.length === 0) {
+        defaultValue = "new java.util.ArrayList<String>()";
+      }
+      out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
+    });
+    return out.join(", ");
+  }
+  // the front keeps today's `Object...` signature for TypedSurface, findMethod and legacy callers
+  printFrontMethodDeclaration(node, identation) {
+    const name = this.transformMethodNameIfNeeded(node.name.escapedText);
+    const methodDef = this.printMethodDefinition(node, identation, (n) => n.parameters.filter((p) => p.initializer === void 0).map((p) => this.printParameter(p)).concat(["Object... optionalArgs"]).join(", "));
+    const args = this.printFrontForwardedArguments(node);
+    const call = `this.${name}(${args});`;
+    const isVoid = /(^|\s)void\s+\w+\s*\(/.test(methodDef);
+    return "\n" + methodDef + this.getBlockOpen(identation) + this.getIden(identation + 1) + (isVoid ? call : `return ${call}`) + this.getBlockClose(identation);
+  }
   printMethodParameters(node) {
     const isAsyncMethod = this.isAsyncFunction(node);
     const params = node.parameters.map((param) => {
@@ -17980,14 +18944,16 @@ var JavaTranspiler = class extends BaseTranspiler {
     const finalVarWrappers = [];
     if (parameters) {
       const isAsyncMethod = this.isAsyncFunction(node);
+      const splitCore = this.hasDefaultedTail(node);
       parameters.forEach((param) => {
         const isOptionalParam = param.initializer !== void 0 || param.questionToken !== void 0;
-        if (!isOptionalParam) {
+        if (!isOptionalParam || splitCore) {
           const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
             const { sigName, snapName } = this.getAsyncParamWrapperNames(paramName);
-            finalVarWrappers.push(this.getIden(identation + 1) + `final Object ${snapName} = ${sigName};`);
+            const snapType = isOptionalParam && param.initializer !== void 0 ? this.javaOptionalParameterJavaType(param) : "Object";
+            finalVarWrappers.push(this.getIden(identation + 1) + `final ${snapType} ${snapName} = ${sigName};`);
           }
         }
       });
@@ -17999,14 +18965,16 @@ var JavaTranspiler = class extends BaseTranspiler {
     const finalVarWrappers = [];
     if (parameters) {
       const isAsyncMethod = this.isAsyncFunction(node);
+      const splitCore = this.hasDefaultedTail(node);
       parameters.forEach((param) => {
         const isOptionalParam = param.initializer !== void 0 || param.questionToken !== void 0;
-        if (!isOptionalParam) {
+        if (!isOptionalParam || splitCore) {
           const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
           if (isAsyncMethod && isReassignedVar) {
             const paramName = param.name.escapedText;
             const { localName, snapName } = this.getAsyncParamWrapperNames(paramName);
-            finalVarWrappers.push(this.getIden(identation + 1) + `Object ${localName} = ${snapName};`);
+            const localType = this.javaAsyncParameterLocalType(param) ?? "Object";
+            finalVarWrappers.push(this.getIden(identation + 1) + `${localType} ${localName} = ${snapName};`);
           }
         }
       });
@@ -18015,11 +18983,19 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   printMethodDeclaration(node, identation) {
     const funcBody = this.printFunctionBody(node, identation);
+    if (this.hasDefaultedTail(node)) {
+      let splitDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
+      splitDef += funcBody;
+      splitDef += this.printFrontMethodDeclaration(node, identation);
+      splitDef += this.printOverrideBridges(node, identation);
+      return splitDef;
+    }
     let methodDef = this.printMethodDefinition(node, identation);
     methodDef += funcBody;
+    methodDef += this.printOverrideBridges(node, identation);
     return methodDef;
   }
-  printMethodDefinition(node, identation) {
+  printMethodDefinition(node, identation, paramsPrinter = void 0) {
     let name = node.name.escapedText;
     name = this.transformMethodNameIfNeeded(name);
     let returnType = this.printFunctionType(node);
@@ -18035,7 +19011,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const defaultAccess = this.METHOD_DEFAULT_ACCESS ? this.METHOD_DEFAULT_ACCESS + " " : "";
     const modifiers = defaultAccess;
     let parsedArgs = void 0;
-    parsedArgs = parsedArgs ? parsedArgs : this.printMethodParameters(node);
+    parsedArgs = parsedArgs ? parsedArgs : paramsPrinter ? paramsPrinter(node) : this.printMethodParameters(node);
     returnType = returnType ? returnType + " " : returnType;
     const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : "";
     const signature = this.getIden(identation) + modifiers + returnType + methodToken + name + "(" + parsedArgs + ")";
@@ -20018,6 +20994,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
       return void 0;
     }
+    if (!receiver.isField && this.rustLocalInitReadsTaggedContainer(baseExpr)) {
+      return void 0;
+    }
     const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
     if (keyArg === void 0) {
       return void 0;
@@ -20118,6 +21097,29 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return true;
     }
     return this.rustPlainDictLiteral(init);
+  }
+  /** The local's single declaration is initialised from a call that reads
+   *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
+   *  tags with a backref so writes reach the shared store, not the COW copy. */
+  rustLocalInitReadsTaggedContainer(ident) {
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || !ts7.isVariableDeclaration(declaration)) {
+      return false;
+    }
+    let init = declaration.initializer;
+    while (init !== void 0 && (ts7.isParenthesizedExpression(init) || ts7.isNonNullExpression(init) || ts7.isAsExpression(init))) {
+      init = init.expression;
+    }
+    if (init === void 0 || !ts7.isCallExpression(init)) {
+      return false;
+    }
+    return init.arguments.some((arg) => {
+      let n = arg;
+      while (n !== void 0 && (ts7.isParenthesizedExpression(n) || ts7.isAsExpression(n) || ts7.isNonNullExpression(n))) {
+        n = n.expression;
+      }
+      return n !== void 0 && ts7.isPropertyAccessExpression(n) && _RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(n.name.text);
+    });
   }
   /** True when every value the local can hold comes from an object literal:
    *  the runtime tags a dict (`__book_id`, `__ws_subs_url`, `__ws_sub_ref`,
@@ -23731,6 +24733,7 @@ _RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS = {
   "boolean": "Value::Bool(_)",
   "object": "Value::Dict(_)"
 };
+_RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS = /* @__PURE__ */ new Set(["hashmap", "subscriptions", "futures"]);
 // Types whose runtime value the `add` helper stringifies exactly as `format!` does: a string,
 // or `undefined`/`null` boxed as `Value::Null` (`stringify_simple(Value::Null)` and `Display`
 // both give "null"). `any` is absent — the Precise-dict branch has no `Display` equivalent.

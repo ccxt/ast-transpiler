@@ -324,8 +324,8 @@ describe('go transpiling tests', () => {
         expect(output).toContain("go this.fetchTickerBody(ch, symbol, optionalArgs...)");
         expect(output).toContain("fetchTickerBody(ch chan any, symbol any, optionalArgs ...any) any");
         // the defaults are unpacked in the BODY, not in the trampoline
-        expect(output).toContain("params := GetArg(optionalArgs, 0, map[string]any{})");
-        expect(output.indexOf("params := GetArg")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
+        expect(output).toContain("var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})");
+        expect(output.indexOf("var params map[string]any = GetArgMap")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
     });
     test('a colliding body name is uniquified instead of clobbered', () => {
         const input =
@@ -597,7 +597,8 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var amount any = this.SafeString(item, \"income\")");
+        expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
+        expect(output).toContain("amount = SafeStringPtr(ToUpper(other))");
         expect(output).toContain("var stamp any = this.SafeInteger(item, \"time\")");
     });
     test('a Safe* local reassigned from the same Safe* family keeps its pointer type', () => {
@@ -1261,6 +1262,22 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(doAwaitBody).toContain("PanicOnError(a)");
         expect(doAwaitBody).not.toContain("Spawn");
     });
+    test('a discarded awaited call is received inside PanicOnError, with no local', () => {
+        const input =
+        "class Exchange {\n" +
+        "    async loadMarkets (reload = false): Promise<any> {\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "    async doLoad (params = {}): Promise<any> {\n" +
+        "        await this.loadMarkets ();\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        const [, , , doLoadBody] = methodBodies(output);
+        expect(doLoadBody).toContain("PanicOnError((<-this.LoadMarkets()))");
+        expect(doLoadBody).not.toContain("retRes");
+    });
     test('receive assignments use gofmt spacing', () => {
         // gofmt writes `x := (<-this.X())`: one space either side of `:=`, none after `<-`
         const input =
@@ -1624,9 +1641,149 @@ describe('go inline equality', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         // GetArg derefs a pointer argument, so the box holds a plain bool or the default
-        expect(output).toContain("force := GetArg(optionalArgs, 0, false)");
+        expect(output).toContain("var force bool = GetArgBool(optionalArgs, 0, false)");
         expect(output).toContain("if force == true {");
         expect(output).not.toContain("EvalTruthy(force)");
+    });
+    test('the params slot of sign keeps the GetArg box', () => {
+        const input =
+        "class T {\n" +
+        "    sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {\n" +
+        "        const query = this.omit (params, 'x');\n" +
+        "        return { 'url': path, 'method': method, 'body': body, 'headers': headers, 'q': query };\n" +
+        "    }\n" +
+        "    omit (a, b) { return a; }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // okx posts a list of orders through this slot
+        expect(output).toContain("params := GetArg(optionalArgs, 2, map[string]any{})");
+        expect(output).toContain("api := GetArg(optionalArgs, 0, \"public\")");
+    });
+    test('an any-annotated string-defaulted parameter keeps the GetArg box', () => {
+        const input =
+        "class T {\n" +
+        "    fetch2 (path: any, api: any = 'public', method = 'GET') {\n" +
+        "        return [ path, api, method ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // venues pass api as a list (['v1', 'private'])
+        expect(output).toContain("api := GetArg(optionalArgs, 0, \"public\")");
+        expect(output).toContain("var method string = GetArgString(optionalArgs, 1, \"GET\")");
+    });
+    test('a nil-defaulted dictionary that is only read binds through GetArgMap', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Market': 'map[string]any' };
+        const input =
+        "type Market = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (d: any, market: Market = undefined) {\n" +
+        "        let id = undefined;\n" +
+        "        if (market !== undefined) { id = market['id']; }\n" +
+        "        return [ id, this.safeString (market, 'symbol'), ('x' in market) ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        // GetValue/InOp/Safe* read a nil map as the absent value the nil box was
+        expect(output).toContain("var market map[string]any = GetArgMap(optionalArgs, 0, nil)");
+    });
+    test('a nil-defaulted dictionary handed on or type-tested keeps the GetArg box', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Market': 'map[string]any' };
+        const input =
+        "type Market = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    isDictionary (a) { return true; }\n" +
+        "    g (a, m = undefined) { return a; }\n" +
+        "    f1 (d: any, market: Market = undefined) { return market; }\n" +
+        "    f2 (d: any, market: Market = undefined) { return this.isDictionary (market); }\n" +
+        "    f3 (d: any, market: Market = undefined) { return this.g (d, market); }\n" +
+        "    f4 (d: any, market: Market = undefined) { return this.safeString (d, market); }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        // a nil map is not nil once boxed into `any`, and IsDictionary/IsEqual see the difference
+        expect((output.match(/market := GetArg\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(3);
+        // a defaulted callee position binds through GetArg, which folds a nil map to its default
+        expect((output.match(/var market map\[string\]any = GetArgMap\(optionalArgs, 0, nil\)/g) ?? []).length).toBe(1);
+    });
+    test('the write-site check and the binding agree on a read-only nil-defaulted dictionary', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        const go: any = (inst as any).goTranspiler;
+        go.CCXT_GO_GETARG_DECLARED_TYPES = { 'Market': 'map[string]any' };
+        const answers: (string | undefined)[] = [];
+        const shipped = go.goGetArgLocalType.bind(go);
+        const shippedBinary = go.printBinaryExpression.bind(go);
+        // a write-site rule asks the same question from the assignment, mid-body
+        go.printBinaryExpression = function (node: any, identation: number) {
+            const param: any = this.getChecker().getSymbolAtLocation(node.left)?.valueDeclaration;
+            if (param?.initializer !== undefined) {
+                answers.push(shipped(this.goEnclosingFunction(param), param, 'nil'));
+            }
+            return shippedBinary(node, identation);
+        };
+        const input =
+        "type Market = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    f (d: any, market: Market = undefined) {\n" +
+        "        market = { 'id': d };\n" +
+        "        return this.safeString (market, 'symbol');\n" +
+        "    }\n" +
+        "}\n"
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain("var market map[string]any = GetArgMap(optionalArgs, 0, nil)");
+        // the parameter's own name is not a use, so both askers get the binding's answer
+        expect(answers).toEqual(['map[string]any']);
+    });
+    test('an any-annotated override of an unannotated base parameter binds like the base', () => {
+        const input =
+        "class B {\n" +
+        "    calculateFee (a, takerOrMaker = 'taker', config = {}) { return 0; }\n" +
+        "    fetch2 (path, api: any = 'public') { return 0; }\n" +
+        "}\n" +
+        "class T extends B {\n" +
+        "    calculateFee (a, takerOrMaker: any = 'taker', config: any = {}) {\n" +
+        "        if (takerOrMaker === 'maker') { return config['maker']; }\n" +
+        "        return config['taker'];\n" +
+        "    }\n" +
+        "    fetch2 (path, api: any = 'public') { return [ path, api ]; }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // both the base and the override bind through the twins
+        expect((output.match(/var takerOrMaker string = GetArgString\(optionalArgs, 0, "taker"\)/g) ?? []).length).toBe(2);
+        expect((output.match(/var config map\[string\]any = GetArgMap\(optionalArgs, 1, map\[string\]any\{\}\)/g) ?? []).length).toBe(2);
+        // the base annotates api as `any` itself (venues pass lists), so both keep the box
+        expect((output.match(/api := GetArg\(optionalArgs, 0, "public"\)/g) ?? []).length).toBe(2);
+    });
+    test('a union-typed parameter keeps the GetArg box even with a literal default', () => {
+        const input =
+        "type IndexType = number | string;\n" +
+        "class T {\n" +
+        "    filter (array: any[], key: IndexType = 'timestamp', kind: string = 'x') {\n" +
+        "        return [ array, key, kind ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // callers pass an index (0) where the default is a key name
+        expect(output).toContain("key := GetArg(optionalArgs, 0, \"timestamp\")");
+        expect(output).toContain("var kind string = GetArgString(optionalArgs, 1, \"x\")");
+    });
+    test('a nil-defaulted dictionary returned bare keeps the GetArg box', () => {
+        const input =
+        "class T {\n" +
+        "    safeValue (a, b, c?) { return a; }\n" +
+        "    f (d: any, key: any, defaultValue: Dict = undefined) {\n" +
+        "        const value = this.safeValue (d, key, defaultValue);\n" +
+        "        if (value === undefined) { return defaultValue; }\n" +
+        "        return value;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // a nil map returned through `any` is not nil to the caller, so the untyped box stays
+        expect(output).toContain("defaultValue := GetArg(optionalArgs, 0, nil)");
+        expect(output).not.toContain("GetArgMap(optionalArgs, 0, nil)");
     });
     test('a direct SafeBool call derefs instead of boxing', () => {
         const input =
@@ -2761,7 +2918,7 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var s any = this.Id + \" does not support \" + \"market\"");
+        expect(output).toContain("var s string = this.Id + \" does not support \" + \"market\"");
         expect(output).not.toContain("Add(");
     });
     test('concat with an any operand keeps the outer Add but inlines the string part', () => {
@@ -2997,13 +3154,10 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // the later string write keeps the local `any`, so it boxes the *string the
-        // helper returned: a nil pointer inside `any` is not `== nil`, and the box is
-        // never `== "PO"` — only IsEqual derefs it
-        expect(output).toContain("var timeInForce any = this.SafeString(order, \"timeInForce\")");
-        expect(output).toContain("if IsEqual(timeInForce, nil) {");
-        expect(output).toContain("var y bool = (!IsEqual(timeInForce, nil)) && (IsEqual(timeInForce, \"PO\"))");
-        expect(output).not.toContain("timeInForce == nil");
+        // the later string write converts at the write site, so the local stays *string
+        expect(output).toContain("var timeInForce *string = this.SafeString(order, \"timeInForce\")");
+        expect(output).toContain("timeInForce = SafeStringPtr(\"IOC\")");
+        expect(output).toContain("var y bool = (timeInForce != nil && *timeInForce == \"PO\")");
     });
     test('two nullable boxes of the same family compare natively', () => {
         const input =
@@ -3180,9 +3334,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // GetArg folds a typed nil pointer into the untyped default, so the box a defaulted
-        // parameter is read through is nil-comparable
-        expect(output).toContain("since := GetArg(optionalArgs, 0, nil)");
+        // a nil-defaulted scalar binds through its pointer twin, which stays nil-comparable
+        expect(output).toContain("var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)");
         expect(output).toContain("var a bool = (since == nil)");
         expect(output).toContain("var b bool = (price != nil)");
         expect(output).toContain("var c bool = (symbol == nil)");
@@ -3215,9 +3368,9 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // the reassignment re-boxes a *int64 (the scan is what keeps the box pointer-free)
-        expect(output).toContain("IsEqual(since, nil)");
-        expect(output).not.toContain("since == nil");
+        // the local is bound as *int64 by its GetArg twin, so the nil test is native
+        expect(output).toContain("var since *int64 = GetArgInt64Ptr(");
+        expect(output).toContain("(since == nil)");
     });
     test('a later pointer accessor outside the Go type table keeps the helper', () => {
         const input =
@@ -3593,9 +3746,9 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         expect(lines[4]).toBe(`${indent} * @method`);
         expect(lines[5]).toBe(`${indent} * @name exchange#fetchMarkOHLCV`);
         expect(lines[6]).toBe(`${indent} */`);
-        expect(lines[7]).toBe(`${indent}timeframe := GetArg(optionalArgs, 0, "1m")`);
+        expect(lines[7]).toBe(`${indent}var timeframe string = GetArgString(optionalArgs, 0, "1m")`);
         expect(lines[8]).toBe(`${indent}_ = timeframe`);
-        expect(lines[9]).toBe(`${indent}params := GetArg(optionalArgs, 1, map[string]any{})`);
+        expect(lines[9]).toBe(`${indent}var params map[string]any = GetArgMap(optionalArgs, 1, map[string]any{})`);
     });
     test('the body statements are not indented one level deeper than the defers', () => {
         const input =
@@ -3607,7 +3760,7 @@ describe('go comment placement on the trampoline body half (gofmt)', () => {
         const output = transpiler.transpileGo(input).content;
         const lines = output.slice(output.indexOf("func (this *Exchange) fetchTimeBody(")).split("\n");
         const indent = /^([ \t]+)defer close\(ch\)$/.exec(lines[1])[1];
-        expect(lines[3]).toBe(`${indent}params := GetArg(optionalArgs, 0, map[string]any{})`);
+        expect(lines[3]).toBe(`${indent}var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})`);
         expect(lines[4]).toBe(`${indent}_ = params`);
         const chLine = lines.findIndex((line) => line.includes('ch <- callDynamically("milliseconds"'));
         expect(lines[chLine]).toBe(`${indent}ch <- callDynamically("milliseconds", )`);
@@ -3866,6 +4019,47 @@ describe('go gofmt-clean native shapes', () => {
 // `*string` local the checker narrowed to a non-nilable string at that use site
 describe('go string concat chains -> native +', () => {
     const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('a GetArgString-bound parameter is a concat leaf and the declaration is string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    sign (path: any, api = 'public', method = 'GET') {\n" +
+        "        const auth = method + '\\n';\n" +
+        "        return auth;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var method string = GetArgString(optionalArgs, 1, "GET")');
+        expect(output).toContain('var auth string = method + "\\n"');
+        expect(output).not.toContain('Add(');
+    });
+    test('a chain over a native-concat string local declares string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (method = 'GET') {\n" +
+        "        const nonce = 'n_' + method;\n" +
+        "        const auth = '/u' + 'GET' + method + '' + nonce;\n" +
+        "        return auth;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var auth string = "/u" + "GET" + method + "" + nonce');
+        expect(output).not.toContain('Add(');
+    });
+    test('an any parameter or unproven *string leaf keeps the Add declaration any', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (item: any, body: any, method = 'GET') {\n" +
+        "        const q = this.safeString (item, 'q');\n" +
+        "        const a = method + body;\n" +
+        "        const b = method + q;\n" +
+        "        return [a, b];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var a any = Add(method, body)');
+        expect(output).toContain('var b any = Add(method, q)');
+    });
     test('a chain over two guard-narrowed *string locals prints as one Go expression', () => {
         const input =
         "class Exchange {\n" +
@@ -3959,7 +4153,7 @@ describe('go string concat chains -> native +', () => {
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain('return Add(*fromId+"_", symbol)');
     });
-    test('a *string local reassigned a different type stays an any box and keeps the helper', () => {
+    test('a *string local reassigned a string literal converts the write and stays *string', () => {
         const input =
         "class Exchange {\n" +
         "    safeString (a: any, b: string): string | undefined { return a; }\n" +
@@ -3970,8 +4164,26 @@ describe('go string concat chains -> native +', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('var fromId any = this.SafeString(item, "from")');
-        expect(output).toContain('return Add(fromId, "_")');
+        expect(output).toContain('var fromId *string = this.SafeString(item, "from")');
+        expect(output).toContain('fromId = SafeStringPtr("override")');
+    });
+    test('a pointer local written a nil keeps its pointer type; a non-string write still rejects', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a: any, b: string): string | undefined { return a; }\n" +
+        "    safeInteger (a: any, b: string): number | undefined { return a; }\n" +
+        "    main (item: any) {\n" +
+        "        let ts = this.safeInteger (item, 'ts');\n" +
+        "        ts = undefined;\n" +
+        "        let side = this.safeString (item, 'side');\n" +
+        "        side = 1;\n" +
+        "        return [ts, side];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('var ts *int64 = this.SafeInteger(item, "ts")');
+        expect(output).toContain('ts = nil');
+        expect(output).toContain('var side any = this.SafeString(item, "side")');
     });
     test('a narrowed *int64 leaf keeps Add (the numeric family is not the string one)', () => {
         const input =
@@ -4021,7 +4233,7 @@ describe('go string concat operands -> declared Go string', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('var u any = this.Version + "/"');
+        expect(output).toContain('var u string = this.Version + "/"');
         expect(output).not.toContain('Add(');
     });
     test('every hand-written string field in the table concats natively', () => {
@@ -4068,7 +4280,7 @@ describe('go string concat operands -> declared Go string', () => {
         "}\n";
         const output = squash(inst.transpileGo(input).content);
         expect(output).toContain('func (this *Exchange) F(symbol string) any {');
-        expect(output).toContain('var id any = symbol + "-"');
+        expect(output).toContain('var id string = symbol + "-"');
         expect(output).not.toContain('Add(');
     });
     test('an `any` parameter keeps the helper', () => {
@@ -4092,7 +4304,7 @@ describe('go string concat operands -> declared Go string', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain('var u any = "?" + this.UrlencodeNested(params)');
+        expect(output).toContain('var u string = "?" + this.UrlencodeNested(params)');
         expect(output).not.toContain('Add(');
     });
 });

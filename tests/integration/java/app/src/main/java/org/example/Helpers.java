@@ -684,6 +684,104 @@ public class Helpers {
         return v[index];
     }
 
+    // Slot readers for the generated `Object... optionalArgs` fronts: an omitted slot takes the
+    // default, an explicit null stays null, and any Number widens to Long.
+
+    /** the `Long` slot reader: omitted -> def, explicit null -> null, Number -> longValue() */
+    public static Long getArgLong(Object[] v, int index, Long def) {
+        if (v == null || v.length <= index) {
+            return def;
+        }
+        Object value = v[index];
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Long) {
+            return (Long) value;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        throw new ClassCastException("ccxt: expected a number for optional argument " + index
+                + ", got " + value.getClass().getName());
+    }
+
+    /** a write into a typed `Long` parameter: null stays null, any Number widens to Long */
+    public static Long toLongOrNull(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Long) {
+            return (Long) value;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        throw new ClassCastException("ccxt: expected a number, got " + value.getClass().getName());
+    }
+
+    /** a value passed to a typed `String` core parameter: the getArgString conversion */
+    public static String toStringArg(Object value) {
+        return value == null ? null : (value instanceof String ? (String) value : String.valueOf(value));
+    }
+
+    /** a value passed to a typed `Map` core parameter: the getArgMap check */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> toMapArg(Object value) {
+        if (value == null || value instanceof Map) {
+            return (Map<String, Object>) value;
+        }
+        throw new ClassCastException("ccxt: expected a dictionary, got " + value.getClass().getName());
+    }
+
+    /** the `String` slot reader: omitted -> def, explicit null -> null, non-String -> its string form */
+    public static String getArgString(Object[] v, int index, String def) {
+        if (v == null || v.length <= index) {
+            return def;
+        }
+        Object value = v[index];
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String) {
+            return (String) value;
+        }
+        return String.valueOf(value);
+    }
+
+    /** the `Map<String, Object>` slot reader: omitted -> def, explicit null -> null */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> getArgMap(Object[] v, int index, Map<String, Object> def) {
+        if (v == null || v.length <= index) {
+            return def;
+        }
+        Object value = v[index];
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Map) {
+            return (Map<String, Object>) value;
+        }
+        throw new ClassCastException("ccxt: expected a dictionary for optional argument " + index
+                + ", got " + value.getClass().getName());
+    }
+
+    @SuppressWarnings("unchecked")
+    public static List<String> toStringListArg(Object value) {
+        if (value == null || value instanceof List) {
+            return (List<String>) value;
+        }
+        throw new ClassCastException("ccxt: expected a list of strings, got " + value.getClass().getName());
+    }
+
+    /** the `List<String>` slot reader: omitted -> def, explicit null -> null */
+    public static List<String> getArgStringList(Object[] v, int index, List<String> def) {
+        if (v == null || v.length <= index) {
+            return def;
+        }
+        return toStringListArg(v[index]);
+    }
+
     public static boolean isArray(Object value) {
         if (value == null) return false;
         return (value instanceof List) || value.getClass().isArray();

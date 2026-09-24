@@ -4029,6 +4029,44 @@ describe('declared-map element reads: Helpers.GetValue(m, k) -> guarded m.get(k)
     });
 });
 
+describe('OrderType/OrderSide parameters print String', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-order-type-params');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+    let out: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export type OrderSide = 'buy' | 'sell' | string | undefined;\n" +
+            "export type OrderType = 'limit' | 'market' | string;\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { OrderType, OrderSide } from './base/types';\n" +
+            "class Venue {\n" +
+            "    place (type: OrderType, side: OrderSide): void {\n" +
+            "    }\n" +
+            "    later (id: string, type: OrderType = undefined, side: OrderSide = undefined): void {\n" +
+            "    }\n" +
+            "    caller (req: any): void {\n" +
+            "        const t = req['t'];\n" +
+            "        this.place (t, 'buy');\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('fixed and optional positions print String; an Object argument is cast', () => {
+        expect(out).toContain('public void place(String type, String side)');
+        expect(out).toContain('public void later(Object id, String type, String side)');
+        expect(out).toContain('this.place((String) (t), "buy")');
+    });
+});
+
 describe('declared-map element reads (d-11): a retyped Dict parameter consumes the read', () => {
     // the headline shape of D-11: the receiver is a parameter B-09/D-10 print as a Java Map,
     // so the read binds natively exactly as it does for a typed local.
@@ -4623,8 +4661,10 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("public Object m(Object arg, Object symbol)");
         expect(output).toContain("public Object m(Object arg, Object... optionalArgs)");
-        expect(output).toContain("Object symbol = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null;");
+        expect(output).toContain("return this.m(arg, optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : null);");
+        expect(output).not.toContain("Object symbol = optionalArgs");
         expect(output).not.toContain("Helpers.getArg");
     });
 
@@ -4636,11 +4676,12 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Object a = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1;");
-        expect(output).toContain("Object b = optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true;");
-        expect(output).toContain("Object c = optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\";");
-        expect(output).toContain("Object d = optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}};");
-        expect(output).toContain("Object e = optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList());");
+        expect(output).toContain("public Object m(Object arg, Object a, Object b, Object c, Object d, Object e)");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : 1, ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 1 ? optionalArgs[1] : true, ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : \"x\", ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 3 ? optionalArgs[3] : new java.util.HashMap<String, Object>() {{}}, ");
+        expect(output).toContain("optionalArgs != null && optionalArgs.length > 4 ? optionalArgs[4] : new java.util.ArrayList<Object>(java.util.Arrays.asList()));");
         expect(output).not.toContain("Helpers.getArg");
     });
 
@@ -4666,12 +4707,12 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg }));");
-        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar);");
+        expect(output).toContain("Helpers.getArg(optionalArgs, 0, Helpers.callDynamically(this, \"something\", new Object[] { arg })), ");
+        expect(output).toContain("Helpers.getArg(optionalArgs, 1, someVar));");
         expect(output).not.toContain("optionalArgs.length >");
     });
 
-    test('async method unpacks natively inside the supplyAsync lambda', () => {
+    test('async method takes the default as a core parameter; the front unpacks it', () => {
         const input =
         "class T {\n" +
         "    async m(arg, params = {}) {\n" +
@@ -4679,7 +4720,8 @@ describe('java optional parameter unpacking', () => {
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("            Object parameters = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}};");
+        expect(output).toContain("public java.util.concurrent.CompletableFuture<Object> m(Object arg, Object parameters)");
+        expect(output).toContain("return this.m(arg, optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>() {{}});");
         expect(output).not.toContain("Helpers.getArg");
     });
 
@@ -7207,10 +7249,16 @@ describe('java typed parameters (b-09)', () => {
             "export interface CurrencyInterface {\n    code: string;\n}\n" +
             "export type Currency = CurrencyInterface | undefined;\n");
         fs.writeFileSync(BASE_FIXTURE,
-            "import type { Dict, Str } from './types';\n" +
+            "import type { Dict, Str, Int, Market } from './types';\n" +
             "export default class Exchange {\n" +
             "    parseX (data: Dict, status: Str): void {\n" +
             "        const id = data['id'];\n" +
+            "    }\n" +
+            "    parseRow (row: Dict, market: Market = undefined): Dict {\n" +
+            "        return row;\n" +
+            "    }\n" +
+            "    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str {\n" +
+            "        return networkId;\n" +
             "    }\n" +
             "}\n");
         fs.writeFileSync(VENUE_FIXTURE,
@@ -7238,6 +7286,31 @@ describe('java typed parameters (b-09)', () => {
             "    }\n" +
             "    parseNum (amount: Num, count: Int): void {\n" +
             "        const x = amount;\n" +
+            "    }\n" +
+            "    async fetchRows (symbol: Str, since: Int = undefined, limit: Int = undefined, price: Num = undefined, params = {}) {\n" +
+            "        return [ symbol, since, limit, price, params ];\n" +
+            "    }\n" +
+            "    async fetchMoved (symbol: Str, params: Dict = {}) {\n" +
+            "        symbol = this.safeString (params, 'symbol', symbol);\n" +
+            "        return symbol;\n" +
+            "    }\n" +
+            "    fetch2 (path: any, api: any = 'public', method = 'GET', params: Dict = {}, headers: any = undefined): void {\n" +
+            "    }\n" +
+            "    parseRow (row: Dict, market: Market = undefined, since: Int = undefined): Dict {\n" +
+            "        return row;\n" +
+            "    }\n" +
+            "    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str {\n" +
+            "        const title = this.safeTitle (networkId);\n" +
+            "        return super.networkIdToCode (title, currencyCode);\n" +
+            "    }\n" +
+            "    safeTitle (x: any): any {\n" +
+            "        return x;\n" +
+            "    }\n" +
+            "    fetchDepth (symbol: Str, limit: Int = 100, params: Dict = {}): void {\n" +
+            "    }\n" +
+                        "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
+            "        limit = raw;\n" +
+            "        [ limit, raw ] = [ raw, limit ];\n" +
             "    }\n" +
             "}\n" +
             "class Sub extends Venue {\n" +
@@ -7306,9 +7379,48 @@ describe('java typed parameters (b-09)', () => {
         expect(venueOutput).toContain('public void parseNum(Object amount, Object count)');
     });
 
-    test('an optional parameter keeps its optionalArgs prologue and type', () => {
+    test('Int defaults print Long on the core and read through getArgLong; Num and unannotated stay Object', () => {
+        expect(venueOutput).toContain('fetchRows(String symbol, Long since, Long limit, Object price, Object parameters)');
+        expect(venueOutput).toContain('fetchRows(String symbol, Object... optionalArgs)');
+        expect(venueOutput).toContain('return this.fetchRows(symbol, Helpers.getArgLong(optionalArgs, 0, null), Helpers.getArgLong(optionalArgs, 1, null), optionalArgs != null && optionalArgs.length > 2 ? optionalArgs[2] : null, ');
+    });
+
+    test('the front forwards a reassigned fixed parameter by its source name', () => {
+        expect(venueOutput).toContain('fetchMoved(String symbol2, java.util.Map<String, Object> parameters)');
+        expect(venueOutput).toContain('fetchMoved(String symbol, Object... optionalArgs)');
+        expect(venueOutput).toContain('return this.fetchMoved(symbol, Helpers.getArgMap(optionalArgs, 0, ');
+    });
+
+    test('fetch2 keeps an untyped params slot for implicit-endpoint arrays', () => {
+        expect(venueOutput).toContain('fetch2(Object path, Object api, Object method, Object parameters, Object headers)');
+        expect(venueOutput).not.toContain('Helpers.getArgMap(optionalArgs, 2,');
+    });
+
+    test('an override with another parameter list bridges the ancestor core signature', () => {
+        expect(venueOutput).toContain('public Object parseRow(java.util.Map<String, Object> row, java.util.Map<String, Object> market)');
+        expect(venueOutput).toContain('return this.parseRow(row, (Object) (market), (Object) null);');
+    });
+
+    test('a super call into a split method binds the typed core at full arity', () => {
+        expect(venueOutput).toContain('return super.networkIdToCode(Helpers.toStringArg(title), currencyCode);');
+        expect(venueOutput).not.toContain('super.networkIdToCode(title, ');
+    });
+
+    test('an integer default of a Long slot prints as a long literal', () => {
+        expect(venueOutput).toContain('this.fetchDepth(symbol, Helpers.getArgLong(optionalArgs, 0, 100L), ');
+    });
+
+    test('writes to a typed Long parameter of a sync core convert through Helpers.toLongOrNull', () => {
+        expect(venueOutput).toContain('public void pageRows(Long limit, Object raw)');
+        expect(venueOutput).toContain('limit = Helpers.toLongOrNull(raw);');
+        expect(venueOutput).toContain('limit = Helpers.toLongOrNull(((java.util.List<Object>) ');
+    });
+
+    test('an optional parameter is typed on the core; the front reads it with a typed getter', () => {
+        expect(venueOutput).toContain('public void parseOpt(java.util.Map<String, Object> data, String status)');
         expect(venueOutput).toContain('public void parseOpt(Object... optionalArgs)');
-        expect(venueOutput).toContain('Object data = optionalArgs != null && optionalArgs.length > 0 ? optionalArgs[0] : new java.util.HashMap<String, Object>()');
+        expect(venueOutput).toContain('this.parseOpt(Helpers.getArgMap(optionalArgs, 0, new java.util.HashMap<String, Object>() {{}}), Helpers.getArgString(optionalArgs, 1, null));');
+        expect(venueOutput).not.toContain('return this.parseOpt(');
     });
 });
 
