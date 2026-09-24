@@ -4136,6 +4136,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((declared === 'List<object>') || (declared === 'IList<object>')) {
             return `((${declared})${name}).IndexOf(${parsedArg})`;
         }
+        // a `string?` local holds a string or null: `?.` answers the helper's -1 for null; the
+        // needle is a literal or a local, so skipping its evaluation on null changes nothing
+        const key = node.arguments?.[0];
+        const plainNeedle = (key !== undefined) && (ts.isStringLiteralLike(key) || ts.isIdentifier(key));
+        if ((declared === 'string?') && ts.isIdentifier(receiver) && plainNeedle) {
+            const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
+            if (needle !== undefined) {
+                return `(${name}?.IndexOf(${needle}, StringComparison.Ordinal) ?? -1)`;
+            }
+        }
         return undefined;
     }
 

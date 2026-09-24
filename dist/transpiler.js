@@ -6128,6 +6128,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (declared === "List<object>" || declared === "IList<object>") {
       return `((${declared})${name}).IndexOf(${parsedArg})`;
     }
+    const key = node.arguments?.[0];
+    const plainNeedle = key !== void 0 && (ts4.isStringLiteralLike(key) || ts4.isIdentifier(key));
+    if (declared === "string?" && ts4.isIdentifier(receiver) && plainNeedle) {
+      const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
+      if (needle !== void 0) {
+        return `(${name}?.IndexOf(${needle}, StringComparison.Ordinal) ?? -1)`;
+      }
+    }
     return void 0;
   }
   // the receiver is a string the helper would scan and no null can reach the read: a C#
