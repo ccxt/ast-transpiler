@@ -6314,6 +6314,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (this.csharpIndexOfReceiverIsDeclaredList(declared)) {
       return `((${declared})${name}).IndexOf(${parsedArg})`;
     }
+    if (declared === "string?" && ts4.isIdentifier(receiver)) {
+      const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
+      if (needle !== void 0) {
+        return `(${name}?.IndexOf(${needle}, StringComparison.Ordinal) ?? -1)`;
+      }
+    }
     return void 0;
   }
   // the receiver is a string the helper would scan and no null can reach the read: a C#

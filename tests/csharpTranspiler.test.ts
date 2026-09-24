@@ -3776,7 +3776,7 @@ describe('csharp helper removal: getIndexOf becomes the receiver IndexOf', () =>
         expect(output).toContain('((string)symbol).IndexOf("/", StringComparison.Ordinal) > -1');
         expect(output).not.toContain('getIndexOf(');
     });
-    test('a `string?` local without a non-null test keeps the -1 answer for null', () => {
+    test('a `string?` local without a non-null test answers -1 for null through ?.', () => {
         const input =
         "class Exchange {\n" +
         "    main(flags: string) {\n" +
@@ -3785,8 +3785,8 @@ describe('csharp helper removal: getIndexOf becomes the receiver IndexOf', () =>
         "    }\n" +
         "}\n";
         const output = withKinds({ flags: 'string?' }, input);
-        expect(output).toContain('getIndexOf(flags, "post")');
-        expect(output).not.toContain('StringComparison.Ordinal');
+        expect(output).toContain('(flags?.IndexOf("post", StringComparison.Ordinal) ?? -1) > -1');
+        expect(output).not.toContain('getIndexOf(');
     });
     test('an early-exiting `x === undefined` guard admits the read', () => {
         const input =
@@ -3857,7 +3857,7 @@ describe('csharp helper removal: getIndexOf becomes the receiver IndexOf', () =>
         "}\n" +
         "type Str = string | undefined;\n";
         // the guard inspected the value the parameter held, not what the branch bound afterwards
-        expect(withKinds({ type: 'string?' }, written)).toContain('getIndexOf(type, "fee")');
+        expect(withKinds({ type: 'string?' }, written)).toContain('(type?.IndexOf("fee", StringComparison.Ordinal) ?? -1)');
     });
     test('a `Str` parameter and an `any` receiver keep the helper', () => {
         const input =

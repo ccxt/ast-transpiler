@@ -4311,6 +4311,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (this.csharpIndexOfReceiverIsDeclaredList(declared)) {
             return `((${declared})${name}).IndexOf(${parsedArg})`;
         }
+        // a `string?` local holds a string or null: `?.` answers the helper's -1 for null and
+        // skips the needle exactly as the helper does
+        if ((declared === 'string?') && ts.isIdentifier(receiver)) {
+            const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
+            if (needle !== undefined) {
+                return `(${name}?.IndexOf(${needle}, StringComparison.Ordinal) ?? -1)`;
+            }
+        }
         return undefined;
     }
 
