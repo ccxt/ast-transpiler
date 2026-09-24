@@ -14657,12 +14657,15 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const names = /* @__PURE__ */ new Map();
     const file = program.getSourceFiles().find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
-    const exchange = _optionalChain([file, 'optionalAccess', _1120 => _1120.statements, 'access', _1121 => _1121.find, 'call', _1122 => _1122((s) => _typescript2.default.isClassDeclaration(s) && _optionalChain([s, 'access', _1123 => _1123.name, 'optionalAccess', _1124 => _1124.text]) === "Exchange")]);
-    for (const member of _nullishCoalesce(_optionalChain([exchange, 'optionalAccess', _1125 => _1125.members]), () => ( []))) {
-      if (_typescript2.default.isMethodDeclaration(member) && member.body !== void 0 && _typescript2.default.isIdentifier(member.name)) {
-        const key = member.name.text;
-        names.set(key, (_nullishCoalesce(names.get(key), () => ( []))).concat([member]));
+    for (const className of ["BaseExchange", "Exchange"]) {
+      const cls = _optionalChain([file, 'optionalAccess', _1120 => _1120.statements, 'access', _1121 => _1121.find, 'call', _1122 => _1122((s) => _typescript2.default.isClassDeclaration(s) && _optionalChain([s, 'access', _1123 => _1123.name, 'optionalAccess', _1124 => _1124.text]) === className)]);
+      const own = /* @__PURE__ */ new Map();
+      for (const member of _nullishCoalesce(_optionalChain([cls, 'optionalAccess', _1125 => _1125.members]), () => ( []))) {
+        if (_typescript2.default.isMethodDeclaration(member) && member.body !== void 0 && _typescript2.default.isIdentifier(member.name)) {
+          own.set(member.name.text, (_nullishCoalesce(own.get(member.name.text), () => ( []))).concat([member]));
+        }
       }
+      own.forEach((methods, key) => names.has(key) || names.set(key, methods));
     }
     this._baseExchangeMethodsByName.set(program, names);
     return names;

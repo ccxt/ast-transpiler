@@ -14663,12 +14663,15 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const names = /* @__PURE__ */ new Map();
     const file = program.getSourceFiles().find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
-    const exchange = file?.statements.find((s) => ts6.isClassDeclaration(s) && s.name?.text === "Exchange");
-    for (const member of exchange?.members ?? []) {
-      if (ts6.isMethodDeclaration(member) && member.body !== void 0 && ts6.isIdentifier(member.name)) {
-        const key = member.name.text;
-        names.set(key, (names.get(key) ?? []).concat([member]));
+    for (const className of ["BaseExchange", "Exchange"]) {
+      const cls = file?.statements.find((s) => ts6.isClassDeclaration(s) && s.name?.text === className);
+      const own = /* @__PURE__ */ new Map();
+      for (const member of cls?.members ?? []) {
+        if (ts6.isMethodDeclaration(member) && member.body !== void 0 && ts6.isIdentifier(member.name)) {
+          own.set(member.name.text, (own.get(member.name.text) ?? []).concat([member]));
+        }
       }
+      own.forEach((methods, key) => names.has(key) || names.set(key, methods));
     }
     this._baseExchangeMethodsByName.set(program, names);
     return names;

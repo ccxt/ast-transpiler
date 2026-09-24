@@ -542,12 +542,17 @@ export class JavaTranspiler extends BaseTranspiler {
         const names = new Map<string, any[]>();
         const file = program.getSourceFiles()
             .find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
-        const exchange = file?.statements.find((s) => ts.isClassDeclaration(s) && s.name?.text === 'Exchange') as any;
-        for (const member of exchange?.members ?? []) {
-            if (ts.isMethodDeclaration(member) && member.body !== undefined && ts.isIdentifier(member.name)) {
-                const key = member.name.text;
-                names.set(key, (names.get(key) ?? []).concat([member]));
+        // the implementations live on BaseExchange; Exchange only adds its own tier, and a name
+        // the base class implements binds there (the receiver compiles against BaseExchange)
+        for (const className of ['BaseExchange', 'Exchange']) {
+            const cls = file?.statements.find((s) => ts.isClassDeclaration(s) && s.name?.text === className) as any;
+            const own = new Map<string, any[]>();
+            for (const member of cls?.members ?? []) {
+                if (ts.isMethodDeclaration(member) && member.body !== undefined && ts.isIdentifier(member.name)) {
+                    own.set(member.name.text, (own.get(member.name.text) ?? []).concat([member]));
+                }
             }
+            own.forEach((methods, key) => names.has(key) || names.set(key, methods));
         }
         this._baseExchangeMethodsByName.set(program, names);
         return names;
