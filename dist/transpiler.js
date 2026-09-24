@@ -7887,6 +7887,9 @@ var GoTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig4, config["parser"] ?? {});
     super(config);
+    // scopes are scanned many times per local; walking remote TS7 nodes is costly, so the
+    // preorder descendant list is built once per scope (same visit order and early stop)
+    this.goScopeDescendants = /* @__PURE__ */ new WeakMap();
     this.wrapCallMethods = [];
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     this.goLocalTypeResolution = /* @__PURE__ */ new Set();
@@ -8034,6 +8037,26 @@ var GoTranspiler = class extends BaseTranspiler {
     const checker = super.getChecker();
     memoizeGoCheckerCalls(checker);
     return checker;
+  }
+  goDescendantsOf(scope) {
+    let list = this.goScopeDescendants.get(scope);
+    if (list === void 0) {
+      list = [];
+      const out = list;
+      const visit = (n) => {
+        out.push(n);
+        n.forEachChild(visit);
+      };
+      scope.forEachChild(visit);
+      this.goScopeDescendants.set(scope, list);
+    }
+    return list;
+  }
+  hasNodeWhere(scope, predicate) {
+    if (scope === void 0) {
+      return false;
+    }
+    return this.goDescendantsOf(scope).some(predicate);
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {

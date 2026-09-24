@@ -757,6 +757,31 @@ export class GoTranspiler extends BaseTranspiler {
         return checker;
     }
 
+    // scopes are scanned many times per local; walking remote TS7 nodes is costly, so the
+    // preorder descendant list is built once per scope (same visit order and early stop)
+    goScopeDescendants = new WeakMap<object, any[]>();
+    goDescendantsOf(scope): any[] {
+        let list = this.goScopeDescendants.get(scope);
+        if (list === undefined) {
+            list = [];
+            const out = list;
+            const visit = (n: any) => {
+                out.push(n);
+                n.forEachChild(visit);
+            };
+            scope.forEachChild(visit);
+            this.goScopeDescendants.set(scope, list);
+        }
+        return list;
+    }
+
+    hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean {
+        if (scope === undefined) {
+            return false;
+        }
+        return this.goDescendantsOf(scope).some(predicate);
+    }
+
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];

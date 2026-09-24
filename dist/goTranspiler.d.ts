@@ -5,6 +5,9 @@ declare function alignGoTrailingComments(content: string): string;
 export { alignGoTrailingComments, };
 export declare class GoTranspiler extends BaseTranspiler {
     getChecker(): Checker;
+    goScopeDescendants: WeakMap<object, any[]>;
+    goDescendantsOf(scope: any): any[];
+    hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean;
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
