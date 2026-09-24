@@ -3118,7 +3118,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             const tempType = this.csharpDestructuringTempType(right);
             const tempExpression = this.printNode(right, 0);
 
-            let arrayBindingStatement = tempType ? `${tempType} ${syntheticName} = (${tempType})${tempExpression};\n` : `var ${syntheticName} = ${tempExpression};\n`;
+            const tempCast = (tempType && this.csharpDestructuringTempNeedsCast(right, tempExpression)) ? `(${tempType})` : '';
+            let arrayBindingStatement = tempType ? `${tempType} ${syntheticName} = ${tempCast}${tempExpression};\n` : `var ${syntheticName} = ${tempExpression};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
@@ -3622,6 +3623,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    // whether the typed holder needs the `(T)` cast on its printed initializer; a consumer that
+    // proves the printed call already returns T (or a subtype) answers false
+    csharpDestructuringTempNeedsCast(initializer, printedExpression: string): boolean {
+        return true;
+    }
+
     // `isTrue (x)` is the identity on a C# `bool`, and `x == true` is what it computes for a `bool?`
     // (null -> false), so in a condition the wrapper adds nothing. The hook answers the emitted
     // declaration's type (getCSharpLocalType, plus classifier retypes); unnamed operands keep isTrue.
@@ -3718,7 +3725,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             // typed holder (see csharpDestructuringTempType): same value, read without the re-cast
             const tempType = this.csharpDestructuringTempType(declaration.initializer);
             const tempExpression = this.printNode(declaration.initializer, 0);
-            const tempDeclaration = tempType ? `${tempType} ${syntheticName} = (${tempType})${tempExpression}` : `var ${syntheticName} = ${tempExpression}`;
+            const tempCast = (tempType && this.csharpDestructuringTempNeedsCast(declaration.initializer, tempExpression)) ? `(${tempType})` : '';
+            const tempDeclaration = tempType ? `${tempType} ${syntheticName} = ${tempCast}${tempExpression}` : `var ${syntheticName} = ${tempExpression}`;
 
             let arrayBindingStatement =  `${this.getIden(identation)}${tempDeclaration};\n`;
 
