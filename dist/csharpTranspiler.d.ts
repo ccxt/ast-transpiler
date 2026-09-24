@@ -20,6 +20,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     initConfig(): void;
     getBlockOpen(identation: any): string;
     printSuperCallInsideConstructor(node: any, identation: any): string;
+    csharpMethodOverrides: WeakMap<Node, Node>;
+    csharpClassMethodsByName: WeakMap<Node, Map<string, Node>>;
+    csharpMethodsByName(classDecl: any): Map<string, Node>;
+    getMethodOverride(node: Node): Node;
     printIdentifier(node: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printThisElementAccesssIfNeeded(node: any, identation: any): string;

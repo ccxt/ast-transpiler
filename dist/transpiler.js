@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -2988,6 +2988,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     // declaration node -> 'bool' | 'bool?' | '' (the printer cannot name it); see
     // csharpConditionOperandType — asked once per condition operand
     this.conditionOperandTypes = /* @__PURE__ */ new WeakMap();
+    // method node -> base-class method it overrides (null: none); see getMethodOverride
+    this.csharpMethodOverrides = /* @__PURE__ */ new WeakMap();
+    // class declaration -> member name -> its LAST method of that name (base scan order)
+    this.csharpClassMethodsByName = /* @__PURE__ */ new WeakMap();
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -3083,6 +3087,44 @@ var CSharpTranspiler = class extends BaseTranspiler {
   }
   printSuperCallInsideConstructor(node, identation) {
     return "";
+  }
+  csharpMethodsByName(classDecl) {
+    let byName = this.csharpClassMethodsByName.get(classDecl);
+    if (byName === void 0) {
+      byName = /* @__PURE__ */ new Map();
+      for (const elem of classDecl.members ?? []) {
+        if (isMethodDeclaration2(elem)) {
+          byName.set(elem.name.getText().trim(), elem);
+        }
+      }
+      this.csharpClassMethodsByName.set(classDecl, byName);
+    }
+    return byName;
+  }
+  // base getMethodOverride rescans every parent member with getText() on each call; the
+  // printer asks per method several times, so memoize it (same walk, same result)
+  getMethodOverride(node) {
+    if (node === void 0 || !isClassDeclaration2(node.parent) || !node.parent.heritageClauses) {
+      return void 0;
+    }
+    const cached = this.csharpMethodOverrides.get(node);
+    if (cached !== void 0) {
+      return cached ?? void 0;
+    }
+    let method = void 0;
+    let parentClass = getAllSuperTypeNodes(node.parent)[0];
+    while (parentClass !== void 0) {
+      const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+      if (parentClassDecl === void 0) {
+        this.warn(node, "Parent class", "Parent class not found");
+        method = void 0;
+        break;
+      }
+      method = this.csharpMethodsByName(parentClassDecl).get(node.name.text) ?? method;
+      parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? void 0;
+    }
+    this.csharpMethodOverrides.set(node, method ?? null);
+    return method;
   }
   printIdentifier(node) {
     let idValue = node.text ?? node.text;

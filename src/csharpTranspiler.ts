@@ -2,7 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
 import { IndexKind, TypeFlags, type Checker, type Symbol as TsSymbol, type UnionType } from 'typescript/unstable/sync';
 import { isArrayLiteralExpression, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isBreakStatement, isCallExpression, isClassDeclaration, isClassExpression, isClassLikeDeclaration, isContinueStatement, isDeleteExpression, isElementAccessExpression, isExpressionStatement, isForStatement, isFunctionExpression, isIdentifier, isIfStatement, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertySignatureDeclaration, isReturnStatement, isSourceFile, isSpreadAssignment, isSpreadElement, isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement } from 'typescript/unstable/ast/is';
-import { findAncestor, isFunctionLike } from './tsUtils.js';
+import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
@@ -567,6 +567,51 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     printSuperCallInsideConstructor(node, identation) {
         return ""; // csharp does not need super call inside constructor
+    }
+
+    // method node -> base-class method it overrides (null: none); see getMethodOverride
+    csharpMethodOverrides = new WeakMap<Node, Node | null>();
+    // class declaration -> member name -> its LAST method of that name (base scan order)
+    csharpClassMethodsByName = new WeakMap<Node, Map<string, Node>>();
+
+    csharpMethodsByName(classDecl): Map<string, Node> {
+        let byName = this.csharpClassMethodsByName.get(classDecl);
+        if (byName === undefined) {
+            byName = new Map();
+            for (const elem of classDecl.members ?? []) {
+                if (isMethodDeclaration(elem)) {
+                    byName.set(elem.name.getText().trim(), elem);
+                }
+            }
+            this.csharpClassMethodsByName.set(classDecl, byName);
+        }
+        return byName;
+    }
+
+    // base getMethodOverride rescans every parent member with getText() on each call; the
+    // printer asks per method several times, so memoize it (same walk, same result)
+    getMethodOverride(node: Node): Node {
+        if (node === undefined || !isClassDeclaration(node.parent) || !(node.parent as any).heritageClauses) {
+            return undefined;
+        }
+        const cached = this.csharpMethodOverrides.get(node);
+        if (cached !== undefined) {
+            return cached ?? undefined;
+        }
+        let method = undefined;
+        let parentClass = getAllSuperTypeNodes(node.parent)[0];
+        while (parentClass !== undefined) {
+            const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+            if (parentClassDecl === undefined) {
+                this.warn(node, "Parent class", "Parent class not found");
+                method = undefined;
+                break;
+            }
+            method = this.csharpMethodsByName(parentClassDecl).get((node as any).name.text) ?? method;
+            parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? undefined;
+        }
+        this.csharpMethodOverrides.set(node, method ?? null);
+        return method;
     }
 
     printIdentifier(node) {
