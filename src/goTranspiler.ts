@@ -1,10 +1,12 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind, getLeadingCommentRanges, type Node, type NodeArray, type Statement } from "typescript/unstable/ast";
-import { isArrowFunction, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration, isElementAccessExpression, isExpressionStatement, isFunctionDeclaration, isFunctionExpression, isIfStatement, isMethodDeclaration, isReturnStatement, isSourceFile, isStatement, isThrowStatement, isTryStatement } from "typescript/unstable/ast/is";
-import { IndexKind, SymbolFlags, TypeFlags, type Checker } from "typescript/unstable/sync";
-import { isFunctionLike } from "./tsUtils.js";
 import * as fs from "fs";
 import * as path from "path";
+import { SyntaxKind, getLeadingCommentRanges } from 'typescript/unstable/ast';
+import { isArrowFunction, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression, isExpressionStatement, isFunctionDeclaration, isFunctionExpression, isIfStatement, isMethodDeclaration, isReturnStatement, isSourceFile, isStatement as isStatementNode, isThrowStatement, isTryStatement } from 'typescript/unstable/ast/is';
+import { Checker, IndexKind, SymbolFlags, TypeFlags } from 'typescript/unstable/sync';
+import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
+import { getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
+
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
@@ -1097,7 +1099,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         };
         try {
             const parent = node?.parent;
-            if (parent && isClassDeclaration(parent)) {
+            if (parent && isClassDeclarationNode(parent)) {
                 parent.members.forEach((member: any) => remember(member?.name?.text));
             } else if (parent && isSourceFile(parent)) {
                 parent.statements.forEach((statement: any) => {
@@ -1212,7 +1214,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if (symbol && (symbol.flags & SymbolFlags.Alias)) {
                 symbol = this.getChecker().getAliasedSymbol(symbol);
             }
-            decls = symbol?.declarations;
+            decls = symbol?.declarations?.map((d) => d.resolve());
         } catch {
             return goName;
         }
@@ -1491,7 +1493,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // the concrete Go type of a `var x T = <init>` local, undefined for `any`
     goLocalStaticType(node): string | undefined {
-        const declaration: any = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+        const declaration: any = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
         }
@@ -1517,7 +1519,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (checker === undefined) {
             return undefined;
         }
-        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
+        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
         }
@@ -1552,7 +1554,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (checker === undefined) {
             return undefined;
         }
-        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
+        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
         if (declaration?.kind !== SyntaxKind.Parameter) {
             return undefined;
         }
@@ -1600,7 +1602,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         let declaration;
         try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
         } catch (e) {
             return false;
         }
@@ -2118,7 +2120,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (left?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration;
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
         if (decl?.kind !== SyntaxKind.VariableDeclaration) {
             return undefined;
         }
@@ -2310,14 +2312,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const isMarketInterface = (t) => {
-            const names = [ t?.symbol?.getName?.() ?? t?.symbol?.escapedName, t?.aliasSymbol?.getName?.() ];
+            const names = [ t?.getSymbol()?.name, t?.getAliasSymbol()?.name ];
             return (names.indexOf('MarketInterface') >= 0) || (names.indexOf('CurrencyInterface') >= 0);
         };
         if (isMarketInterface(type)) {
             return true;
         }
-        if ((typeof type.isUnion === 'function') && type.isUnion()) {
-            return type.types.some((t) => isMarketInterface(t));
+        if ((typeof type.isUnionType === 'function') && type.isUnionType()) {
+            return type.getTypes().some((t) => isMarketInterface(t));
         }
         return false;
     }
@@ -2361,7 +2363,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (symbol === undefined) {
             return true;
         }
-        const valueDeclaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+        const valueDeclaration = symbol.valueDeclaration?.resolve() ?? symbol.declarations?.map((d) => d.resolve())?.[0];
         return (valueDeclaration === undefined) || (valueDeclaration === declaration);
     }
 
@@ -2424,7 +2426,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goDeclarationOfIdentifier(node): any {
         try {
             const symbol = this.getChecker().getSymbolAtLocation(node);
-            const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+            const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
             if (declaration?.kind === SyntaxKind.VariableDeclaration) {
                 return declaration;
             }
@@ -2599,7 +2601,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     printVariableDeclarationList(node,identation) {
         const declaration = node.declarations[0];
         // const varToken = this.VAR_TOKEN ? this.VAR_TOKEN + " ": "";
-        // const name = declaration.name.escapedText;
+        // const name = declaration.name.text;
 
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const arrayBindingPattern = declaration.name;
@@ -2690,7 +2692,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // }
 
     // printObjectLiteralBody(node, identation) {
-    //     let objectName = node.parent?.name?.escapedText;
+    //     let objectName = node.parent?.name?.text;
     //     if (objectName === undefined) {
     //         objectName = "object";
     //     }
@@ -2942,7 +2944,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     printThisElementAccesssIfNeeded(node, identation) {
         // convert this[method] into this.call(method) or this.callAsync(method)
-        // const isAsync = node?.parent?.kind === ts.SyntaxKind.AwaitExpression;
+        // const isAsync = node?.parent?.kind === SyntaxKind.AwaitExpression;
         const isAsync = true; // setting to true for now, because there are some scenarios where we don't know
         // if the call is async or not, so we need to assume it is async
         // example Promise.all([this.unknownPropAsync()])
@@ -3004,7 +3006,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     printWrappedUnknownThisProperty(node, identation = 0) {
         const type = this.getChecker().getResolvedSignature(node);
-        if (type?.declaration === undefined) {
+        if (type?.declaration?.resolve() === undefined) {
             // the emitted call carries the property name as its first argument; arguments
             // print at the call's level so a multi-line literal keeps its nesting
             const argumentDepth = this.goExprDepth + ((node.arguments?.length > 0) ? 1 : 0);
@@ -3012,7 +3014,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             parsedArguments = parsedArguments ? parsedArguments : "";
             const propName = node.expression?.name.text;
             // const isAsyncDecl = true;
-            // const isAsyncDecl = node?.parent?.kind === ts.SyntaxKind.AwaitExpression;
+            // const isAsyncDecl = node?.parent?.kind === SyntaxKind.AwaitExpression;
             // const isAsyncDecl = false;
             // const open = isAsyncDecl ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
             // const close = this.UNKOWN_PROP_WRAPPER_CLOSE;
@@ -3338,7 +3340,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
         // x = y
         // cast y to x type when y is unknown
-        // if (op === ts.SyntaxKind.EqualsToken) {
+        // if (op === SyntaxKind.EqualsToken) {
         //     const leftType = this.getChecker().getTypeAtLocation(left);
         //     const rightType = this.getChecker().getTypeAtLocation(right);
 
@@ -3364,7 +3366,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (checker === undefined) {
                 decl = undefined;
             }
-            decl = checker.getSymbolAtLocation(node)?.valueDeclaration;
+            decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
             if (this.goAnyLocalHoldsPointer(decl)) {
                 return undefined;
             }
@@ -3401,7 +3403,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (checker === undefined) {
             return false;
         }
-        if (checker.getSymbolAtLocation(node)?.valueDeclaration?.kind !== SyntaxKind.Parameter) {
+        if (checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve()?.kind !== SyntaxKind.Parameter) {
             return false;
         }
         return this.goTypeIsNilComparableObject(checker.getTypeAtLocation(node));
@@ -3416,7 +3418,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         if (type.flags & TypeFlags.Union) {
             let seen = false;
-            for (const member of type.types) {
+            for (const member of type.getTypes()) {
                 if (member.flags & (TypeFlags.Undefined | TypeFlags.Null | TypeFlags.Void)) {
                     continue;
                 }
@@ -3433,7 +3435,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) {
             return false;
         }
-        const declaration = type.symbol?.valueDeclaration ?? type.symbol?.declarations?.[0];
+        const declaration = type.getSymbol()?.valueDeclaration?.resolve() ?? type.getSymbol()?.declarations?.map((d) => d.resolve())?.[0];
         return declaration?.kind !== SyntaxKind.ClassDeclaration;
     }
 
@@ -3461,7 +3463,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return false;
             }
             const symbol = checker.getSymbolAtLocation(node);
-            const decl = symbol?.valueDeclaration;
+            const decl = symbol?.valueDeclaration?.resolve();
             const isBinding = (decl?.kind === SyntaxKind.Parameter)
                 || (decl?.kind === SyntaxKind.VariableDeclaration);
             if (!isBinding) {
@@ -3598,7 +3600,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const symbol = checker.getSymbolAtLocation(nameNode);
-        const declarations = symbol?.declarations;
+        const declarations = symbol?.declarations?.map((d) => d.resolve());
         if (!declarations || declarations.length === 0) {
             return false;
         }
@@ -3697,7 +3699,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        return symbol?.valueDeclaration;
+        return symbol?.valueDeclaration?.resolve();
     }
 
     // true when this identifier is a parameter bound by `x := GetArg(optionalArgs, i, default)`:
@@ -3712,7 +3714,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const decl = symbol?.valueDeclaration;
+        const decl = symbol?.valueDeclaration?.resolve();
         // a parameter without a default keeps the caller's value as-is in a plain `any`
         // parameter, where a *int64 handed over by another method stays a pointer
         if (decl?.kind !== SyntaxKind.Parameter || decl.initializer === undefined) {
@@ -3797,7 +3799,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // Str/Int/Num/Bool are nullable aliases of `string | undefined` & friends;
         // their Go representation is still `any`, so they never inline — unless the
         // caller is asking about the value the `any` box holds (allowNil)
-        const alias = type.aliasSymbol?.escapedName;
+        const alias = type.getAliasSymbol()?.escapedName;
         if (!allowNil) {
             switch (alias) {
             case 'Str':
@@ -3810,7 +3812,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const flags = type.flags;
         if (flags & TypeFlags.Union) {
             const families = new Set<string>();
-            for (const member of type.types) {
+            for (const member of type.getTypes()) {
                 const family = this.goScalarFamilyOfType(member, allowNil);
                 if (family === undefined) {
                     return undefined;
@@ -3919,7 +3921,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     symbol = undefined;
                 }
                 const binary: any = n.parent;
-                if ((symbol?.valueDeclaration === param) && (binary?.kind === SyntaxKind.BinaryExpression)
+                if ((symbol?.valueDeclaration?.resolve() === param) && (binary?.kind === SyntaxKind.BinaryExpression)
                     && ((binary.left === n) || (binary.right === n))) {
                     const op = binary.operatorToken?.kind;
                     if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
@@ -3976,7 +3978,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (type === undefined) {
             return [];
         }
-        let parts = ((typeof type.isUnion === 'function') && type.isUnion()) ? type.types.slice() : [type];
+        let parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes().slice() : [type];
         parts = parts.filter(p => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
         if (parts.length !== 1) {
             return [];
@@ -4125,7 +4127,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         for (const call of (index.get(name) ?? [])) {
             let declaration;
             try {
-                declaration = checker.getResolvedSignature(call)?.declaration;
+                declaration = checker.getResolvedSignature(call)?.declaration?.resolve();
             } catch (e) {
                 declaration = undefined;
             }
@@ -4287,7 +4289,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const decl = symbol?.valueDeclaration;
+        const decl = symbol?.valueDeclaration?.resolve();
         if (decl === undefined) {
             return undefined;
         }
@@ -4413,7 +4415,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const decl = symbol?.valueDeclaration;
+        const decl = symbol?.valueDeclaration?.resolve();
         if (decl === undefined || decl.kind !== SyntaxKind.VariableDeclaration || decl.name?.kind !== SyntaxKind.Identifier) {
             return false;
         }
@@ -4802,7 +4804,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         let declaration;
         try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
         } catch (e) {
             return undefined;
         }
@@ -5091,7 +5093,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             this.className = "undefined";
             return this.printSourceFileStatements(node, identation);
         }
-        const isStatement = node !== undefined && isStatement(node) && node.kind !== SyntaxKind.Block;
+        const isStatement = node !== undefined && isStatementNode(node) && node.kind !== SyntaxKind.Block;
         const previousLevel = this.goStatementLevel;
         if (isStatement) {
             this.goStatementLevel = identation;
@@ -5225,7 +5227,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const declaration = symbol?.valueDeclaration;
+        const declaration = symbol?.valueDeclaration?.resolve();
         if (declaration?.kind !== SyntaxKind.Parameter) {
             return false;
         }
@@ -5415,7 +5417,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const declaration = symbol?.valueDeclaration;
+        const declaration = symbol?.valueDeclaration?.resolve();
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
         }
@@ -5662,7 +5664,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (checker === undefined) {
             return false;
         }
-        const declaration = checker.getSymbolAtLocation(ident)?.valueDeclaration;
+        const declaration = checker.getSymbolAtLocation(ident)?.valueDeclaration?.resolve();
         if (this.goLocalIsRebound(this.goEnclosingFunction(declaration ?? ident), ident)) {
             return false;
         }
@@ -5955,7 +5957,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 continue;
             }
             for (const expr of (clause.types ?? [])) {
-                const baseDecl: any = checker.getTypeAtLocation(expr)?.getProperty?.(name)?.valueDeclaration;
+                const baseDecl: any = checker.getTypeAtLocation(expr)?.getProperty?.(name)?.valueDeclaration?.resolve();
                 const baseParam: any = baseDecl?.parameters?.[index];
                 if (baseParam === undefined) {
                     return false;
@@ -6115,7 +6117,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 } catch (e) {
                     symbol = undefined;
                 }
-                if (symbol?.valueDeclaration === param) {
+                if (symbol?.valueDeclaration?.resolve() === param) {
                     const parent: any = n.parent;
                     if (parent === param) {
                         return;                     // the parameter's own name is not a use
@@ -6312,7 +6314,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         let decl: any;
         try {
-            decl = this.checkerOrUndefined()?.getSymbolAtLocation(leftElement)?.valueDeclaration;
+            decl = this.checkerOrUndefined()?.getSymbolAtLocation(leftElement)?.valueDeclaration?.resolve();
         } catch (e) {
             decl = undefined;
         }
@@ -6346,7 +6348,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         let decl: any;
         try {
-            decl = this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration;
+            decl = this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration?.resolve();
         } catch (e) {
             decl = undefined;
         }
@@ -6367,7 +6369,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         } catch (e) {
             symbol = undefined;
         }
-        const decl: any = symbol?.valueDeclaration;
+        const decl: any = symbol?.valueDeclaration?.resolve();
         const params: any[] = decl?.parameters ?? [];
         const param: any = params[argIndex];
         const initializer: any = param?.initializer;
@@ -6445,7 +6447,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 functionBody = super.printFunctionBody(node, identation);
             } else {
                 functionBody = node.body.statements.map(statement => {
-                    // if (statement.kind === ts.SyntaxKind.ReturnStatement) {
+                    // if (statement.kind === SyntaxKind.ReturnStatement) {
                     //     if (statement?.expression) {
                     //         return this.getIden(identation) + "ch <-" + this.printNode(statement.expression) + '\n' + this.getIden(identation) + "return " + this.printNode(statement.expression);
                     //     }
@@ -6601,7 +6603,7 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     printReturnStatement(node, identation) {
 
         const isAsyncFunction = this.isInsideAsyncFunction(node);
-        // if (node?.expression?.kind !== ts.SyntaxKind.AwaitExpression) {
+        // if (node?.expression?.kind !== SyntaxKind.AwaitExpression) {
         //     return super.printReturnStatement(node, identation);
         // }
         if (!isAsyncFunction) {
@@ -6673,10 +6675,10 @@ ${this.getIden(identation)}${returnStatement}`;
         }
 
         if (type.kind === SyntaxKind.ArrayType) {
-            // if (type.elementType.kind === ts.SyntaxKind.AnyKeyword) {
+            // if (type.elementType.kind === SyntaxKind.AnyKeyword) {
             //     return `(IList<object>)(${this.printNode(node.expression, identation)})`;
             // }
-            // if (type.elementType.kind === ts.SyntaxKind.StringKeyword) {
+            // if (type.elementType.kind === SyntaxKind.StringKeyword) {
             //     return `(IList<string>)(${this.printNode(node.expression, identation)})`;
             // }
         }
@@ -6806,7 +6808,7 @@ ${this.getIden(identation)}${returnStatement}`;
             return false;
         }
         const symbol = checker.getSymbolAtLocation(nameNode);
-        const declaration: any = symbol?.valueDeclaration;
+        const declaration: any = symbol?.valueDeclaration?.resolve();
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
             return false;
         }
@@ -7319,14 +7321,14 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printLengthProperty(node, identation, name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        // const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
+        // const type = (this.getChecker() as Checker).getTypeAtLocation(node.expression); // eslint-disable-line
         // this.warnIfAnyType(node, type.flags, leftSide, "length");
         return `GetLength(${leftSide})`;
     }
 
     // printPostFixUnaryExpression(node, identation) {
     //     const {operand, operator} = node;
-    //     if (operand.kind === ts.SyntaxKind.NumericLiteral) {
+    //     if (operand.kind === SyntaxKind.NumericLiteral) {
     //         return super.printPostFixUnaryExpression(node, identation);
     //     }
     //     const leftSide = this.printNode(operand, 0);
@@ -7339,15 +7341,15 @@ ${this.getIden(identation)}${returnStatement}`;
 
     // printPrefixUnaryExpression(node, identation) {
     //     const {operand, operator} = node;
-    //     if (operand.kind === ts.SyntaxKind.NumericLiteral) {
+    //     if (operand.kind === SyntaxKind.NumericLiteral) {
     //         return super.printPrefixUnaryExpression(node, identation);
     //     }
-    //     if (operator === ts.SyntaxKind.ExclamationToken) {
+    //     if (operator === SyntaxKind.ExclamationToken) {
     //         // not branch check falsy/turthy values if needed;
     //         return  this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
     //     }
     //     const leftSide = this.printNode(operand, 0);
-    //     if (operator === ts.SyntaxKind.PlusToken) {
+    //     if (operator === SyntaxKind.PlusToken) {
     //         return `prefixUnaryPlus(ref ${leftSide})`;
     //     } else {
     //         return `prefixUnaryNeg(ref ${leftSide})`;
@@ -7393,10 +7395,10 @@ ${this.getIden(identation)}${returnStatement}`;
                 const id = expression.expression;
                 const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
-                    const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                    const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).getSymbol()?.declarations?.map((d) => d.resolve()) ?? [];
                     const isClassDeclaration = declarations.find(l => l.kind === SyntaxKind.InterfaceDeclaration ||  l.kind === SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
-                        // return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.escapedText} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
+                        // return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${id.text} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
                     } else {
                         // Go has no statement terminator: the two statements go on
                         // their own lines (gofmt splits `a; b` exactly like this)
@@ -7410,7 +7412,7 @@ ${this.getIden(identation)}${returnStatement}`;
             return super.printThrowStatement(node, identation);
         }
         // const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
-        // const newExpression = node.expression?.expression?.escapedText;
+        // const newExpression = node.expression?.expression?.text;
         // // newExpression = newExpression ? newExpression : this.printNode(node.expression.expression, 0); // new Exception or new exact[string] check this out
         // // const args = node.expression?.arguments.map(n => this.printNode(n, 0)).join(",");
         // // const throwExpression = ` ${newToken}${newExpression}${this.LEFT_PARENTHESIS}((string)${args})${this.RIGHT_PARENTHESIS}`;
@@ -7981,7 +7983,7 @@ ${tryBodyBlock}
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const declaration: any = symbol?.valueDeclaration;
+        const declaration: any = symbol?.valueDeclaration?.resolve();
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
             return false;
         }
@@ -8004,7 +8006,7 @@ ${tryBodyBlock}
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const declaration: any = symbol?.valueDeclaration;
+        const declaration: any = symbol?.valueDeclaration?.resolve();
         return (declaration?.kind === SyntaxKind.VariableDeclaration)
             && (this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE);
     }
@@ -8104,7 +8106,7 @@ ${tryBodyBlock}
     isInsideVoidFunction(node: Node): boolean {
         for (let cur = node.parent; cur; cur = cur.parent) {
             if (isFunctionLike(cur)) {
-                return cur.type === undefined || cur.type.kind === SyntaxKind.VoidKeyword;
+                return (cur as any).type === undefined || (cur as any).type.kind === SyntaxKind.VoidKeyword;
             }
         }
         return true;          // default-to-void if uncertain
@@ -8172,8 +8174,8 @@ ${tryBodyBlock}
 
 
 // get class decl node
-// Use the ts.getAllSuperTypeNodes function to get the base classes for the MyClass
-// const baseClasses = ts.getAllSuperTypeNodes(classDeclaration);
+// Use the getAllSuperTypeNodes function to get the base classes for the MyClass
+// const baseClasses = getAllSuperTypeNodes(classDeclaration);
 
 // // Create a type checker
 // const typeChecker = ts.createTypeChecker(sourceFile.context.program, sourceFile.context.checker);
@@ -8182,7 +8184,7 @@ ${tryBodyBlock}
 // const baseClassType = typeChecker.getTypeAtLocation(baseClasses[0]);
 
 // // Get the class declaration for the base class
-// const baseClassDeclaration = baseClassType.symbol.valueDeclaration;
+// const baseClassDeclaration = baseClassType.symbol.valueDeclaration?.resolve();
 
 // console.log(baseClassDeclaration);
 
