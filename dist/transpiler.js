@@ -25899,6 +25899,9 @@ var Transpiler = class _Transpiler {
     return this.createProgramByPathAndSetContext(path3);
   }
   checkFileDiagnostics(context = this.context) {
+    if (!Logger.verbose) {
+      return;
+    }
     const fileName = context.src.fileName;
     const programWide = getProgramWideDiagnostics(context.program);
     const diagnostics = [
@@ -26120,8 +26123,7 @@ var TranspileProgramBatch = class {
     return this.program;
   }
   // point the owning Transpiler at one file of this batch, then run the same
-  // diagnostics pass the single-file path runs — the printers read checker state
-  // back from it, so it is not optional
+  // diagnostics pass the single-file path runs
   setContextForPath(filePath) {
     const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path2.resolve(filePath));
     if (src === void 0) {

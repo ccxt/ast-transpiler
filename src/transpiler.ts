@@ -405,6 +405,11 @@ export default class Transpiler {
     }
 
     checkFileDiagnostics(context: ITranspileContext = this.context) {
+        // the pass only produces a Logger warning; on TS7 getGlobalDiagnostics forces a
+        // whole-program check in tsgo, so skip it when nothing would be printed
+        if (!Logger.verbose) {
+            return;
+        }
         const fileName = context.src.fileName;
         const programWide = getProgramWideDiagnostics(context.program);
         const diagnostics = [
@@ -693,8 +698,7 @@ class TranspileProgramBatch {
     }
 
     // point the owning Transpiler at one file of this batch, then run the same
-    // diagnostics pass the single-file path runs — the printers read checker state
-    // back from it, so it is not optional
+    // diagnostics pass the single-file path runs
     setContextForPath(filePath: string): ITranspileContext {
         const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path.resolve(filePath));
         if (src === undefined) {
