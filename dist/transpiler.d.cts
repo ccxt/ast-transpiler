@@ -1433,6 +1433,11 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
+    javaComparisonOperand(node: any): {
+        kind: string;
+        boxed: boolean;
+    } | undefined;
+    printDeclaredNumericComparison(left: any, right: any, op: any): string | undefined;
     javaBaseTimeLongCall(node: any): boolean;
     javaBaseIntCall(node: any): boolean;
     javaIntForCounter(node: any): boolean;

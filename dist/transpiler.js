@@ -16783,6 +16783,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (leftKind !== void 0 && rightKind !== void 0 && orderingSafe) {
         return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
       }
+      const declaredCompare = this.printDeclaredNumericComparison(left, right, op);
+      if (declaredCompare !== void 0) {
+        return declaredCompare;
+      }
     }
     if (op === ts6.SyntaxKind.PlusEqualsToken || op === ts6.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
       const leftText = this.printNode(left, 0);
@@ -17499,6 +17503,63 @@ var JavaTranspiler = class extends BaseTranspiler {
       return leftKind === rightKind ? leftKind : void 0;
     }
     return hasDouble ? "double" : "long";
+  }
+  // ---- ordered comparison over declared numeric locals ----
+  // Helpers.isGreaterThan answers its own predicate when an operand is null (GT: a != null && b == null;
+  // LT = !GT && !EQ; GE = GT || EQ; LE = LT || EQ), so a Long/Integer/Double box compares natively
+  // inside that exact null table. `>` is a toDouble compare for every numeric pair; `>= < <=` also go
+  // through isEqual, so they stay native only for integral pairs (no NaN / BigDecimal rounding arm).
+  // 'long' | 'double' for an operand the printer proves: a primitive-printing expression, or an
+  // identifier whose printed declaration is a numeric type (boxed = may be null)
+  javaComparisonOperand(node) {
+    let inner = node;
+    while (inner !== void 0 && inner.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner === void 0) {
+      return void 0;
+    }
+    const primitive = this.javaPrimitiveOperandKind(inner);
+    if (primitive !== void 0) {
+      return { kind: primitive === "double" ? "double" : "long", boxed: false };
+    }
+    if (!ts6.isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
+      return void 0;
+    }
+    const declared = this.javaDeclaredNumericFamily(inner);
+    if (declared === void 0) {
+      return void 0;
+    }
+    const kind = declared === "Double" || declared === "double" ? "double" : "long";
+    return { kind, boxed: JAVA_BOXED_NUMERIC_TYPES.has(declared) };
+  }
+  printDeclaredNumericComparison(left, right, op) {
+    const l = this.javaComparisonOperand(left);
+    const r = this.javaComparisonOperand(right);
+    if (l === void 0 || r === void 0 || !l.boxed && !r.boxed) {
+      return void 0;
+    }
+    if (op !== ts6.SyntaxKind.GreaterThanToken && (l.kind !== "long" || r.kind !== "long")) {
+      return void 0;
+    }
+    const a = this.printNode(left, 0);
+    const b = this.printNode(right, 0);
+    const cmp = `${a} ${this.SupportedKindNames[op]} ${b}`;
+    const aNull = `${a} == null`;
+    const aSet = `${a} != null`;
+    const bNull = `${b} == null`;
+    const bSet = `${b} != null`;
+    switch (op) {
+      case ts6.SyntaxKind.GreaterThanToken:
+        return `(${[l.boxed ? aSet : void 0, r.boxed ? `(${bNull} || ${cmp})` : cmp].filter((x) => x !== void 0).join(" && ")})`;
+      case ts6.SyntaxKind.LessThanToken:
+        return `(${[r.boxed ? bSet : void 0, l.boxed ? `(${aNull} || ${cmp})` : cmp].filter((x) => x !== void 0).join(" && ")})`;
+      case ts6.SyntaxKind.GreaterThanEqualsToken:
+        return `(${[r.boxed ? bNull : void 0, l.boxed ? `(${aSet} && ${cmp})` : cmp].filter((x) => x !== void 0).join(" || ")})`;
+      case ts6.SyntaxKind.LessThanEqualsToken:
+        return `(${[l.boxed ? aNull : void 0, r.boxed ? `(${bSet} && ${cmp})` : cmp].filter((x) => x !== void 0).join(" || ")})`;
+    }
+    return void 0;
   }
   // ---- widened native add (`+` only) ----
   // Helpers.add normalizes Integer to Long, boxes Long for integral operands and Double otherwise
