@@ -112,6 +112,21 @@ function getModifiers(node) {
   const filtered = _optionalChain([modifiers, 'optionalAccess', _ => _.filter, 'call', _2 => _2((m) => m.kind !== _ast.SyntaxKind.Decorator)]);
   return filtered && filtered.length > 0 ? filtered : void 0;
 }
+function symbolDeclarations(symbol) {
+  return (_nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _3 => _3.declarations]), () => ( []))).map((d) => d.resolve()).filter((d) => d !== void 0);
+}
+function symbolValueDeclaration(symbol) {
+  return _optionalChain([symbol, 'optionalAccess', _4 => _4.valueDeclaration, 'optionalAccess', _5 => _5.resolve, 'call', _6 => _6()]);
+}
+function signatureDeclaration(signature) {
+  return _optionalChain([signature, 'optionalAccess', _7 => _7.declaration, 'optionalAccess', _8 => _8.resolve, 'call', _9 => _9()]);
+}
+function typeParts(type) {
+  return _optionalChain([type, 'optionalAccess', _10 => _10.isUnionType, 'optionalCall', _11 => _11()]) || _optionalChain([type, 'optionalAccess', _12 => _12.isIntersectionType, 'optionalCall', _13 => _13()]) ? type.getTypes() : void 0;
+}
+function typeTarget(type) {
+  return _optionalChain([type, 'optionalAccess', _14 => _14.target]) !== void 0 ? type.getTarget() : void 0;
+}
 
 
 
@@ -126,5 +141,10 @@ function getModifiers(node) {
 
 
 
-exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers;
-//# sourceMappingURL=chunk-7MJW4M2G.cjs.map
+
+
+
+
+
+exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers; exports.symbolDeclarations = symbolDeclarations; exports.symbolValueDeclaration = symbolValueDeclaration; exports.signatureDeclaration = signatureDeclaration; exports.typeParts = typeParts; exports.typeTarget = typeTarget;
+//# sourceMappingURL=chunk-4FDYB2TT.cjs.map

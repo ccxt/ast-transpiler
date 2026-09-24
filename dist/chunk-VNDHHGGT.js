@@ -118,6 +118,21 @@ function getModifiers(node) {
   const filtered = modifiers?.filter((m) => m.kind !== SyntaxKind.Decorator);
   return filtered && filtered.length > 0 ? filtered : void 0;
 }
+function symbolDeclarations(symbol) {
+  return (symbol?.declarations ?? []).map((d) => d.resolve()).filter((d) => d !== void 0);
+}
+function symbolValueDeclaration(symbol) {
+  return symbol?.valueDeclaration?.resolve();
+}
+function signatureDeclaration(signature) {
+  return signature?.declaration?.resolve();
+}
+function typeParts(type) {
+  return type?.isUnionType?.() || type?.isIntersectionType?.() ? type.getTypes() : void 0;
+}
+function typeTarget(type) {
+  return type?.target !== void 0 ? type.getTarget() : void 0;
+}
 
 export {
   __commonJS,
@@ -132,6 +147,11 @@ export {
   getAllSuperTypeNodes,
   getCombinedNodeFlags,
   canHaveModifiers,
-  getModifiers
+  getModifiers,
+  symbolDeclarations,
+  symbolValueDeclaration,
+  signatureDeclaration,
+  typeParts,
+  typeTarget
 };
-//# sourceMappingURL=chunk-NFJ3NSKG.js.map
+//# sourceMappingURL=chunk-VNDHHGGT.js.map

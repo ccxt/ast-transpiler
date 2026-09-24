@@ -92,3 +92,28 @@ export {
     canHaveModifiers,
     getModifiers,
 };
+
+// TS7 symbols/signatures carry NodeHandles and types carry ids; these return live nodes/types like TS6 fields did
+function symbolDeclarations(symbol: any): Node[] {
+    return (symbol?.declarations ?? []).map((d: any) => d.resolve()).filter((d: Node | undefined) => d !== undefined);
+}
+
+function symbolValueDeclaration(symbol: any): any {
+    return symbol?.valueDeclaration?.resolve();
+}
+
+function signatureDeclaration(signature: any): Node | undefined {
+    return signature?.declaration?.resolve();
+}
+
+// TS6 `type.types` for unions/intersections, undefined otherwise
+function typeParts(type: any): any[] | undefined {
+    return type?.isUnionType?.() || type?.isIntersectionType?.() ? type.getTypes() : undefined;
+}
+
+// TS6 `type.target` for type references, undefined otherwise
+function typeTarget(type: any): any {
+    return type?.target !== undefined ? type.getTarget() : undefined;
+}
+
+export { symbolDeclarations, symbolValueDeclaration, signatureDeclaration, typeParts, typeTarget };

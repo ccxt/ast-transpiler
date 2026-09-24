@@ -7,8 +7,13 @@ import {
   getModifiers,
   isClassLike,
   isFunctionLike,
-  isStringLiteralLike
-} from "./chunk-NFJ3NSKG.js";
+  isStringLiteralLike,
+  signatureDeclaration,
+  symbolDeclarations,
+  symbolValueDeclaration,
+  typeParts,
+  typeTarget
+} from "./chunk-VNDHHGGT.js";
 export {
   ModifierFlags,
   canHaveModifiers,
@@ -18,6 +23,11 @@ export {
   getModifiers,
   isClassLike,
   isFunctionLike,
-  isStringLiteralLike
+  isStringLiteralLike,
+  signatureDeclaration,
+  symbolDeclarations,
+  symbolValueDeclaration,
+  typeParts,
+  typeTarget
 };
 //# sourceMappingURL=tsUtils.js.map

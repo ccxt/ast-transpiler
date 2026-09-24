@@ -2,7 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
 import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol, type Type } from "typescript/unstable/sync";
-import { findAncestor, isFunctionLike } from "./tsUtils.js";
+import { findAncestor, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
@@ -398,7 +398,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (flags & TypeFlags.Union) {
             let kind = undefined;
-            for (const member of type.types ?? []) {
+            for (const member of typeParts(type) ?? []) {
                 if (member.flags & (TypeFlags.Undefined | TypeFlags.Null)) {
                     continue;
                 }
@@ -423,7 +423,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         if (type.flags & TypeFlags.Union) {
-            const members: Type[] = (type as any).types ?? [];
+            const members: Type[] = typeParts(type) ?? [];
             return members.length > 0 && members.every((member) => this.isBooleanValueType(member));
         }
         return (type.flags & (TypeFlags.Boolean | TypeFlags.BooleanLiteral)) !== 0;
@@ -435,7 +435,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (type === undefined) {
             return false;
         }
-        const members: Type[] = (type.flags & TypeFlags.Union) ? ((type as any).types ?? []) : [type];
+        const members: Type[] = (type.flags & TypeFlags.Union) ? (typeParts(type) ?? []) : [type];
         if (members.length === 0) {
             return false;
         }
@@ -652,7 +652,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const symbol: any = this.getChecker().getSymbolAtLocation(node);
-        const declarations: any[] = symbol?.declarations ?? [];
+        const declarations: any[] = symbolDeclarations(symbol);
         if (declarations.length === 0) {
             return false;
         }
@@ -669,7 +669,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         if (type.flags & TypeFlags.Union) {
-            const members: any[] = (type as any).types ?? [];
+            const members: any[] = typeParts(type) ?? [];
             return members.length > 0 && members.every((member) => this.rustBooleanComparableType(member));
         }
         if (type.flags & (TypeFlags.Boolean | TypeFlags.BooleanLiteral)) {
@@ -770,7 +770,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         if (type.flags & TypeFlags.Union) {
-            const parts: Type[] = (type as any).types ?? [];
+            const parts: Type[] = typeParts(type) ?? [];
             return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
         }
         // A `null`/`undefined` member boxes as `Value::Null`, whose `len()` is
@@ -892,7 +892,7 @@ export class RustTranspiler extends BaseTranspiler {
     // as Rust items rather than as values, so they keep the helper.
     isDeclaredValueIdentifier(node): boolean {
         const symbol = (this.getChecker() as any).getSymbolAtLocation(node);
-        const declarations = symbol?.declarations ?? [];
+        const declarations = symbolDeclarations(symbol);
         if (declarations.length === 0) {
             return false;
         }
@@ -949,7 +949,7 @@ export class RustTranspiler extends BaseTranspiler {
             // `Market | undefined` style aliases: a nullish member carries no
             // value, so only the value-carrying members have to be dict-shaped.
             // `in_op` and the native insert both answer false / no-op on Null.
-            const parts: Type[] = (type as any).types ?? [];
+            const parts: Type[] = typeParts(type) ?? [];
             const valueParts = parts.filter((part) => !this.rustTypeIsNullish(part));
             return parts.length > valueParts.length && valueParts.length > 0
                 && valueParts.every((part) => this.isDictShapedType(part));
@@ -1257,7 +1257,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (checker === undefined) {
             return undefined;
         }
-        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
+        const declarations = symbolDeclarations(checker.getSymbolAtLocation(ident));
         if (declarations.length !== 1) {
             return undefined;
         }
@@ -1276,7 +1276,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         if (type.flags & TypeFlags.Union) {
-            const parts: any[] = (type as any).types ?? [];
+            const parts: any[] = typeParts(type) ?? [];
             return parts.length > 0 && parts.every((part) => this.rustWriteDictShape(part));
         }
         if (type.flags & (TypeFlags.Undefined | TypeFlags.Void)) {
@@ -1289,7 +1289,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
             return false;
         }
-        const target: any = (type as any).target ?? type;
+        const target: any = typeTarget(type) ?? type;
         if (target.objectFlags & ObjectFlags.Class) {
             return false;
         }
@@ -1308,7 +1308,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (checker === undefined) {
             return false;
         }
-        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
+        const declarations = symbolDeclarations(checker.getSymbolAtLocation(ident));
         if (declarations.length !== 1) {
             return false;
         }
@@ -1626,8 +1626,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (type.flags === TypeFlags.Number || type.flags === TypeFlags.NumberLiteral) {
             return true;
         }
-        if (type.flags === TypeFlags.Union && Array.isArray(type.types)) {
-            return type.types.length > 0 && type.types.every((member: any) => this.isNumberLikeType(member));
+        if (type.flags === TypeFlags.Union && Array.isArray(typeParts(type))) {
+            return typeParts(type).length > 0 && typeParts(type).every((member: any) => this.isNumberLikeType(member));
         }
         return false;
     }
@@ -1639,8 +1639,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (type.flags === TypeFlags.String || type.flags === TypeFlags.StringLiteral) {
             return true;
         }
-        if (type.flags === TypeFlags.Union && Array.isArray(type.types)) {
-            return type.types.length > 0 && type.types.every((member: any) => this.isStringLikeType(member));
+        if (type.flags === TypeFlags.Union && Array.isArray(typeParts(type))) {
+            return typeParts(type).length > 0 && typeParts(type).every((member: any) => this.isStringLikeType(member));
         }
         return false;
     }
@@ -1662,8 +1662,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_CONCAT_SAFE_FLAGS.has(type.flags)) {
             return true;
         }
-        if (type.flags === TypeFlags.Union && Array.isArray(type.types)) {
-            return type.types.length > 0 && type.types.every((member: any) => this.isStringOrNullishType(member));
+        if (type.flags === TypeFlags.Union && Array.isArray(typeParts(type))) {
+            return typeParts(type).length > 0 && typeParts(type).every((member: any) => this.isStringOrNullishType(member));
         }
         return false;
     }
@@ -2365,7 +2365,7 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
-        const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        const declaration = symbolValueDeclaration(symbol) ?? symbolDeclarations(symbol)[0];
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
             return false;
         }
@@ -2525,7 +2525,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         let declaration: Node;
         try {
-            declaration = (this.getChecker() as any).getResolvedSignature(node)?.declaration;
+            declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(node));
         } catch (e) {
             return undefined;
         }
@@ -3279,13 +3279,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     typeSymbolOf(type: Type): Symbol | undefined {
         if (type === undefined || type === null) return undefined;
-        return (type as any).getSymbol?.() ?? (type as any).symbol ?? (type as any).aliasSymbol;
+        return type?.getSymbol() ?? type?.getAliasSymbol();
     }
 
     /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
      *  backed by a plain `Value` map in the rust port. */
     isLibDeclaredType(type: Type): boolean {
-        const declarations: any[] = (this.typeSymbolOf(type) as any)?.declarations ?? [];
+        const declarations: any[] = symbolDeclarations(this.typeSymbolOf(type));
         return declarations.some(d => {
             const file = d?.getSourceFile?.()?.fileName ?? '';
             return /[\\/]lib\.[^\\/]*\.d\.ts$/.test(file) || /[\\/]node_modules[\\/]typescript[\\/]/.test(file);
@@ -3295,11 +3295,11 @@ export class RustTranspiler extends BaseTranspiler {
     isClassInstanceType(type: Type): boolean {
         if (type === undefined) return false;
         if (type.flags & (TypeFlags.Union | TypeFlags.Intersection)) {
-            return ((type as any).types ?? []).some((member) => this.isClassInstanceType(member));
+            return (typeParts(type) ?? []).some((member) => this.isClassInstanceType(member));
         }
-        const symbol: any = this.typeSymbolOf(type) ?? type.aliasSymbol;
+        const symbol: any = this.typeSymbolOf(type) ?? type.getAliasSymbol();
         if (symbol?.flags & SymbolFlags.Class) return true;
-        const declarations: any[] = symbol?.declarations ?? [];
+        const declarations: any[] = symbolDeclarations(symbol);
         return declarations.some(d => isClassDeclaration(d) || isClassExpression(d));
     }
 
@@ -3312,11 +3312,11 @@ export class RustTranspiler extends BaseTranspiler {
     isProvenListType(type: Type): boolean {
         if (!(type.flags & TypeFlags.Object)) return false;
         // Tuple references carry the Tuple flag on their target.
-        const objectFlags = ((type as any).objectFlags ?? 0) | (((type as any).target?.objectFlags) ?? 0);
+        const objectFlags = ((type as any).objectFlags ?? 0) | ((typeTarget(type)?.objectFlags) ?? 0);
         if (objectFlags & ObjectFlags.Tuple) return true;
-        const name = (this.typeSymbolOf(type) as any)?.getName?.();
+        const name = (this.typeSymbolOf(type) as any)?.name;
         if (name === 'Array' || name === 'ReadonlyArray') return true;
-        const targetName = (this.typeSymbolOf((type as any).target) as any)?.getName?.();
+        const targetName = (this.typeSymbolOf(typeTarget(type)) as any)?.name;
         return targetName === 'Array' || targetName === 'ReadonlyArray';
     }
 
@@ -3328,7 +3328,7 @@ export class RustTranspiler extends BaseTranspiler {
             // `Market` / `Currency` / `Order | undefined` style aliases: the runtime value is the dict (or
             // Null), so a map receiver is proven once every value-carrying member is a proven map. An
             // all-dict union without a nullish member stays on the strict path (a class may hide behind it).
-            const parts: Type[] = (type as any).types ?? [];
+            const parts: Type[] = typeParts(type) ?? [];
             const nullish = parts.filter((p) => this.rustTypeIsNullish(p));
             const valueParts = parts.filter((p) => !this.rustTypeIsNullish(p));
             return nullish.length > 0 && valueParts.length > 0 && valueParts.every((p) => this.isProvenMapType(p));
@@ -3400,7 +3400,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isPropertyAccessExpression((node as any).expression)) return undefined;
         try {
             const signature: any = (this.getChecker() as any).getResolvedSignature(node);
-            return signature?.declaration ?? undefined;
+            return signatureDeclaration(signature);
         } catch (e) {
             return undefined;
         }
@@ -3573,7 +3573,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustKeyIsProvenString(node: Node): boolean {
         const type = this.getCheckedTypeOf(node);
         if (type === undefined) return false;
-        const parts: Type[] = (type.flags & TypeFlags.Union) ? ((type as any).types ?? []) : [type];
+        const parts: Type[] = (type.flags & TypeFlags.Union) ? (typeParts(type) ?? []) : [type];
         let strings = 0;
         for (const part of parts) {
             if (part.flags & (TypeFlags.String | TypeFlags.StringLiteral)) {
@@ -3772,13 +3772,13 @@ export class RustTranspiler extends BaseTranspiler {
     isProvenShadowListType(type: Type): boolean {
         if (type === undefined) return false;
         if (!(type.flags & TypeFlags.Object)) return false;
-        const objectFlags = ((type as any).objectFlags ?? 0) | (((type as any).target?.objectFlags) ?? 0);
+        const objectFlags = ((type as any).objectFlags ?? 0) | ((typeTarget(type)?.objectFlags) ?? 0);
         if (objectFlags & ObjectFlags.Tuple) return false;
         if (this.hasCallableShape(type)) return false;
         if (this.isClassInstanceType(type)) return false;
-        const name = (this.typeSymbolOf(type) as any)?.getName?.();
+        const name = (this.typeSymbolOf(type) as any)?.name;
         if (name === 'Array' || name === 'ReadonlyArray') return true;
-        const targetName = (this.typeSymbolOf((type as any).target) as any)?.getName?.();
+        const targetName = (this.typeSymbolOf(typeTarget(type)) as any)?.name;
         return targetName === 'Array' || targetName === 'ReadonlyArray';
     }
 
@@ -4179,7 +4179,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node)) return undefined;
         try {
             const symbol: any = this.getChecker().getSymbolAtLocation(node);
-            return symbol?.valueDeclaration;
+            return symbolValueDeclaration(symbol);
         } catch (e) {
             return undefined;
         }
@@ -4287,7 +4287,7 @@ export class RustTranspiler extends BaseTranspiler {
         const named = (type: Type | undefined): boolean => {
             if (type === undefined) return false;
             const symbol: any = this.typeSymbolOf(type);
-            const declarations: any[] = symbol?.declarations ?? [];
+            const declarations: any[] = symbolDeclarations(symbol);
             return declarations.some((d) => {
                 if (!isClassDeclaration(d) || d.name === undefined || d.name.text !== 'Client') return false;
                 const file = String(d.getSourceFile().fileName).replace(/\\/g, '/');
@@ -4296,7 +4296,7 @@ export class RustTranspiler extends BaseTranspiler {
         };
         const type = this.getCheckedTypeOf(declaration.name);
         if (named(type)) return true;
-        return ((type as any)?.types ?? []).some((member: Type) => named(member));
+        return (typeParts(type) ?? []).some((member: Type) => named(member));
     }
 
     /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
@@ -4878,7 +4878,7 @@ export class RustTranspiler extends BaseTranspiler {
         const lines = node.properties.map(p => {
             // Shorthand: { foo }  →  m.insert("foo", foo.clone());
             if (isShorthandPropertyAssignment(p)) {
-                const name = p.name.text;
+                const name = (p.name as Identifier).text;
                 return `${this.getIden(identation + 2)}m.insert("${escapeKey(name)}".to_string(), ${name}.clone());`;
             }
             const { name, initializer } = p;

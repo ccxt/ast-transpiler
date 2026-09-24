@@ -7,8 +7,13 @@ import {
   getCombinedNodeFlags,
   init_esm_shims,
   isClassLike,
-  isFunctionLike
-} from "./chunk-NFJ3NSKG.js";
+  isFunctionLike,
+  signatureDeclaration,
+  symbolDeclarations,
+  symbolValueDeclaration,
+  typeParts,
+  typeTarget
+} from "./chunk-VNDHHGGT.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -20450,7 +20455,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (flags & TypeFlags6.Union) {
       let kind = void 0;
-      for (const member of type.types ?? []) {
+      for (const member of typeParts(type) ?? []) {
         if (member.flags & (TypeFlags6.Undefined | TypeFlags6.Null)) {
           continue;
         }
@@ -20473,7 +20478,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     if (type.flags & TypeFlags6.Union) {
-      const members = type.types ?? [];
+      const members = typeParts(type) ?? [];
       return members.length > 0 && members.every((member) => this.isBooleanValueType(member));
     }
     return (type.flags & (TypeFlags6.Boolean | TypeFlags6.BooleanLiteral)) !== 0;
@@ -20484,7 +20489,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (type === void 0) {
       return false;
     }
-    const members = type.flags & TypeFlags6.Union ? type.types ?? [] : [type];
+    const members = type.flags & TypeFlags6.Union ? typeParts(type) ?? [] : [type];
     if (members.length === 0) {
       return false;
     }
@@ -20683,7 +20688,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declarations = symbol?.declarations ?? [];
+    const declarations = symbolDeclarations(symbol);
     if (declarations.length === 0) {
       return false;
     }
@@ -20697,7 +20702,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     if (type.flags & TypeFlags6.Union) {
-      const members = type.types ?? [];
+      const members = typeParts(type) ?? [];
       return members.length > 0 && members.every((member) => this.rustBooleanComparableType(member));
     }
     if (type.flags & (TypeFlags6.Boolean | TypeFlags6.BooleanLiteral)) {
@@ -20791,7 +20796,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     if (type.flags & TypeFlags6.Union) {
-      const parts = type.types ?? [];
+      const parts = typeParts(type) ?? [];
       return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
     }
     return (type.flags & (TypeFlags6.Undefined | TypeFlags6.Null | TypeFlags6.Void)) !== 0 || this.getChecker().isArrayType(type) || this.getChecker().isTupleType(type) || this.isStringType(type.flags);
@@ -20882,7 +20887,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // as Rust items rather than as values, so they keep the helper.
   isDeclaredValueIdentifier(node) {
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declarations = symbol?.declarations ?? [];
+    const declarations = symbolDeclarations(symbol);
     if (declarations.length === 0) {
       return false;
     }
@@ -20928,7 +20933,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     if (type.flags & TypeFlags6.Union) {
-      const parts = type.types ?? [];
+      const parts = typeParts(type) ?? [];
       const valueParts = parts.filter((part) => !this.rustTypeIsNullish(part));
       return parts.length > valueParts.length && valueParts.length > 0 && valueParts.every((part) => this.isDictShapedType(part));
     }
@@ -21194,7 +21199,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (checker === void 0) {
       return void 0;
     }
-    const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
+    const declarations = symbolDeclarations(checker.getSymbolAtLocation(ident));
     if (declarations.length !== 1) {
       return void 0;
     }
@@ -21212,7 +21217,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     if (type.flags & TypeFlags6.Union) {
-      const parts = type.types ?? [];
+      const parts = typeParts(type) ?? [];
       return parts.length > 0 && parts.every((part) => this.rustWriteDictShape(part));
     }
     if (type.flags & (TypeFlags6.Undefined | TypeFlags6.Void)) {
@@ -21225,7 +21230,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
       return false;
     }
-    const target = type.target ?? type;
+    const target = typeTarget(type) ?? type;
     if (target.objectFlags & ObjectFlags.Class) {
       return false;
     }
@@ -21243,7 +21248,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (checker === void 0) {
       return false;
     }
-    const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
+    const declarations = symbolDeclarations(checker.getSymbolAtLocation(ident));
     if (declarations.length !== 1) {
       return false;
     }
@@ -21521,8 +21526,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (type.flags === TypeFlags6.Number || type.flags === TypeFlags6.NumberLiteral) {
       return true;
     }
-    if (type.flags === TypeFlags6.Union && Array.isArray(type.types)) {
-      return type.types.length > 0 && type.types.every((member) => this.isNumberLikeType(member));
+    if (type.flags === TypeFlags6.Union && Array.isArray(typeParts(type))) {
+      return typeParts(type).length > 0 && typeParts(type).every((member) => this.isNumberLikeType(member));
     }
     return false;
   }
@@ -21533,8 +21538,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (type.flags === TypeFlags6.String || type.flags === TypeFlags6.StringLiteral) {
       return true;
     }
-    if (type.flags === TypeFlags6.Union && Array.isArray(type.types)) {
-      return type.types.length > 0 && type.types.every((member) => this.isStringLikeType(member));
+    if (type.flags === TypeFlags6.Union && Array.isArray(typeParts(type))) {
+      return typeParts(type).length > 0 && typeParts(type).every((member) => this.isStringLikeType(member));
     }
     return false;
   }
@@ -21545,8 +21550,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (_RustTranspiler.RUST_CONCAT_SAFE_FLAGS.has(type.flags)) {
       return true;
     }
-    if (type.flags === TypeFlags6.Union && Array.isArray(type.types)) {
-      return type.types.length > 0 && type.types.every((member) => this.isStringOrNullishType(member));
+    if (type.flags === TypeFlags6.Union && Array.isArray(typeParts(type))) {
+      return typeParts(type).length > 0 && typeParts(type).every((member) => this.isStringOrNullishType(member));
     }
     return false;
   }
@@ -22138,7 +22143,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     const symbol = checker.getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbolValueDeclaration(symbol) ?? symbolDeclarations(symbol)[0];
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration) {
       return false;
     }
@@ -22277,7 +22282,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = signatureDeclaration(this.getChecker().getResolvedSignature(node));
     } catch (e) {
       return void 0;
     }
@@ -22873,12 +22878,12 @@ ${classMethods}
   typeSymbolOf(type) {
     if (type === void 0 || type === null)
       return void 0;
-    return type.getSymbol?.() ?? type.symbol ?? type.aliasSymbol;
+    return type?.getSymbol() ?? type?.getAliasSymbol();
   }
   /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
    *  backed by a plain `Value` map in the rust port. */
   isLibDeclaredType(type) {
-    const declarations = this.typeSymbolOf(type)?.declarations ?? [];
+    const declarations = symbolDeclarations(this.typeSymbolOf(type));
     return declarations.some((d) => {
       const file = d?.getSourceFile?.()?.fileName ?? "";
       return /[\\/]lib\.[^\\/]*\.d\.ts$/.test(file) || /[\\/]node_modules[\\/]typescript[\\/]/.test(file);
@@ -22888,12 +22893,12 @@ ${classMethods}
     if (type === void 0)
       return false;
     if (type.flags & (TypeFlags6.Union | TypeFlags6.Intersection)) {
-      return (type.types ?? []).some((member) => this.isClassInstanceType(member));
+      return (typeParts(type) ?? []).some((member) => this.isClassInstanceType(member));
     }
-    const symbol = this.typeSymbolOf(type) ?? type.aliasSymbol;
+    const symbol = this.typeSymbolOf(type) ?? type.getAliasSymbol();
     if (symbol?.flags & SymbolFlags3.Class)
       return true;
-    const declarations = symbol?.declarations ?? [];
+    const declarations = symbolDeclarations(symbol);
     return declarations.some((d) => isClassDeclaration5(d) || isClassExpression2(d));
   }
   hasCallableShape(type) {
@@ -22903,13 +22908,13 @@ ${classMethods}
   isProvenListType(type) {
     if (!(type.flags & TypeFlags6.Object))
       return false;
-    const objectFlags = (type.objectFlags ?? 0) | (type.target?.objectFlags ?? 0);
+    const objectFlags = (type.objectFlags ?? 0) | (typeTarget(type)?.objectFlags ?? 0);
     if (objectFlags & ObjectFlags.Tuple)
       return true;
-    const name = this.typeSymbolOf(type)?.getName?.();
+    const name = this.typeSymbolOf(type)?.name;
     if (name === "Array" || name === "ReadonlyArray")
       return true;
-    const targetName = this.typeSymbolOf(type.target)?.getName?.();
+    const targetName = this.typeSymbolOf(typeTarget(type))?.name;
     return targetName === "Array" || targetName === "ReadonlyArray";
   }
   /** True only for object types the rust port represents as `Value::Dict`
@@ -22918,7 +22923,7 @@ ${classMethods}
     if (type === void 0)
       return false;
     if (type.flags & TypeFlags6.Union) {
-      const parts = type.types ?? [];
+      const parts = typeParts(type) ?? [];
       const nullish = parts.filter((p) => this.rustTypeIsNullish(p));
       const valueParts = parts.filter((p) => !this.rustTypeIsNullish(p));
       return nullish.length > 0 && valueParts.length > 0 && valueParts.every((p) => this.isProvenMapType(p));
@@ -22992,7 +22997,7 @@ ${classMethods}
       return void 0;
     try {
       const signature = this.getChecker().getResolvedSignature(node);
-      return signature?.declaration ?? void 0;
+      return signatureDeclaration(signature);
     } catch (e) {
       return void 0;
     }
@@ -23167,7 +23172,7 @@ ${classMethods}
     const type = this.getCheckedTypeOf(node);
     if (type === void 0)
       return false;
-    const parts = type.flags & TypeFlags6.Union ? type.types ?? [] : [type];
+    const parts = type.flags & TypeFlags6.Union ? typeParts(type) ?? [] : [type];
     let strings = 0;
     for (const part of parts) {
       if (part.flags & (TypeFlags6.String | TypeFlags6.StringLiteral)) {
@@ -23371,17 +23376,17 @@ ${classMethods}
       return false;
     if (!(type.flags & TypeFlags6.Object))
       return false;
-    const objectFlags = (type.objectFlags ?? 0) | (type.target?.objectFlags ?? 0);
+    const objectFlags = (type.objectFlags ?? 0) | (typeTarget(type)?.objectFlags ?? 0);
     if (objectFlags & ObjectFlags.Tuple)
       return false;
     if (this.hasCallableShape(type))
       return false;
     if (this.isClassInstanceType(type))
       return false;
-    const name = this.typeSymbolOf(type)?.getName?.();
+    const name = this.typeSymbolOf(type)?.name;
     if (name === "Array" || name === "ReadonlyArray")
       return true;
-    const targetName = this.typeSymbolOf(type.target)?.getName?.();
+    const targetName = this.typeSymbolOf(typeTarget(type))?.name;
     return targetName === "Array" || targetName === "ReadonlyArray";
   }
   /** Every reference to the parameter must be a printable read, and at least
@@ -23768,7 +23773,7 @@ ${ind}let ${view}: &${map} = &${arc};
       return void 0;
     try {
       const symbol = this.getChecker().getSymbolAtLocation(node);
-      return symbol?.valueDeclaration;
+      return symbolValueDeclaration(symbol);
     } catch (e) {
       return void 0;
     }
@@ -23873,7 +23878,7 @@ ${ind}let ${view}: &${map} = &${arc};
       if (type2 === void 0)
         return false;
       const symbol = this.typeSymbolOf(type2);
-      const declarations = symbol?.declarations ?? [];
+      const declarations = symbolDeclarations(symbol);
       return declarations.some((d) => {
         if (!isClassDeclaration5(d) || d.name === void 0 || d.name.text !== "Client")
           return false;
@@ -23884,7 +23889,7 @@ ${ind}let ${view}: &${map} = &${arc};
     const type = this.getCheckedTypeOf(declaration.name);
     if (named(type))
       return true;
-    return (type?.types ?? []).some((member) => named(member));
+    return (typeParts(type) ?? []).some((member) => named(member));
   }
   /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
    *  `str::parse` would; undefined when the fold is not obviously exact. */
