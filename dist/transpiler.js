@@ -14533,7 +14533,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       let inOptionalTail = false;
       if (isNullish) {
         const signature = this.getChecker().getResolvedSignature(node);
-        const declaration = signature?.declaration;
+        const declaration = signature?.declaration?.resolve();
         if (declaration !== void 0) {
           inOptionalTail = args.length > this.countRequiredParameters(declaration);
         }
@@ -14572,7 +14572,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
     } catch (e) {
       return void 0;
     }
@@ -14593,7 +14593,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getSymbolAtLocation(arg)?.valueDeclaration;
+      declaration = this.getChecker().getSymbolAtLocation(arg)?.valueDeclaration?.resolve();
     } catch (e) {
       return false;
     }
@@ -14713,7 +14713,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     let declaration;
     try {
       const symbol = this.getChecker().getSymbolAtLocation(reference.name);
-      declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+      declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     } catch (e) {
       return void 0;
     }
@@ -14754,7 +14754,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker === void 0) {
       return [];
     }
-    const declaration = checker.getResolvedSignature(node)?.declaration;
+    const declaration = checker.getResolvedSignature(node)?.declaration?.resolve();
     const parameters = declaration?.parameters;
     if (parameters === void 0) {
       return [];
@@ -14921,9 +14921,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     const isCallOrPropertyAccess = node?.parent?.kind === SyntaxKind6.PropertyAccessExpression || node?.parent?.kind === SyntaxKind6.ElementAccessExpression;
     if (!isLeftSide && !isCallOrPropertyAccess && !isInsideCatch && !isInsideNewExpression) {
       const type = this.getChecker().getTypeAtLocation(node);
-      const typeSymbol = type?.symbol;
+      const typeSymbol = type?.getSymbol?.();
       if (typeSymbol !== void 0) {
-        const decl = typeSymbol?.declarations ?? [];
+        const decl = (typeSymbol?.declarations ?? []).map((d) => d.resolve());
         let isBuiltIn = void 0;
         if (decl.length > 0) {
           isBuiltIn = decl[0].getSourceFile().fileName.indexOf("typescript") > -1;
@@ -14932,13 +14932,13 @@ var JavaTranspiler = class extends BaseTranspiler {
           const symbol = this.getChecker().getSymbolAtLocation(node);
           let isClassDeclaration6 = false;
           if (symbol) {
-            const first = symbol.declarations[0];
+            const first = symbol.declarations[0]?.resolve();
             if (first.kind === SyntaxKind6.ClassDeclaration) {
               isClassDeclaration6 = true;
             }
             if (first.kind === SyntaxKind6.ImportSpecifier) {
               const importedSymbol = this.getChecker().getAliasedSymbol(symbol);
-              if (importedSymbol?.declarations[0]?.kind === SyntaxKind6.ClassDeclaration) {
+              if (importedSymbol?.declarations[0]?.resolve()?.kind === SyntaxKind6.ClassDeclaration) {
                 isClassDeclaration6 = true;
               }
             }
@@ -15170,7 +15170,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (flags & TypeFlags5.Boolean) {
         return "boolean";
       }
-      const families = new Set((type.types ?? []).map((t) => this.equalityOperandFamily(t)));
+      const families = new Set((type.getTypes?.() ?? []).map((t) => this.equalityOperandFamily(t)));
       families.delete(void 0);
       families.delete("null");
       return families.size === 1 ? families.values().next().value : void 0;
@@ -15227,7 +15227,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const checker = this.getChecker();
     const symbol = checker.getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (!declaration || declaration.kind !== SyntaxKind6.VariableDeclaration || !isIdentifier2(declaration.name)) {
       return false;
     }
@@ -15254,7 +15254,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (!declaration || declaration.kind !== SyntaxKind6.VariableDeclaration || !isIdentifier2(declaration.name)) {
       return void 0;
     }
@@ -15471,7 +15471,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const symbol = checker.getSymbolAtLocation(container);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (!declaration || declaration.kind !== SyntaxKind6.VariableDeclaration || !declaration.initializer) {
       return false;
     }
@@ -15541,7 +15541,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     } catch (e) {
       return false;
     }
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (!declaration || declaration.kind !== SyntaxKind6.MethodDeclaration && declaration.kind !== SyntaxKind6.FunctionDeclaration) {
       return false;
     }
@@ -15597,7 +15597,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (checker.isArrayType(type) || checker.isTupleType(type)) {
         return false;
       }
-      const declarations = type.getSymbol()?.declarations ?? [];
+      const declarations = (type.getSymbol()?.declarations ?? []).map((d) => d.resolve());
       if (declarations.some((d) => d.kind === SyntaxKind6.ClassDeclaration)) {
         return false;
       }
@@ -15624,7 +15624,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const flags = type.flags;
     if (flags & TypeFlags5.Union) {
-      const parts = type.types ?? [];
+      const parts = type.getTypes?.() ?? [];
       return parts.length > 0 && parts.every((t) => this.isDictionaryTsType(t, checker, depth + 1));
     }
     if (!(flags & TypeFlags5.Object)) {
@@ -15664,7 +15664,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (!declaration) {
       return false;
     }
@@ -15687,7 +15687,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker.isArrayType(type) || checker.isTupleType(type)) {
       return true;
     }
-    return type.target?.symbol?.escapedName === "ReadonlyArray";
+    return type.isTypeReference?.() === true && type.getTarget().getSymbol()?.escapedName === "ReadonlyArray";
   }
   // `.length` is a Java int for exactly these receivers; every other receiver keeps
   // Helpers.getArrayLength, whose result type is not proven
@@ -15716,7 +15716,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     if ((type.flags & TypeFlags5.Union) !== 0) {
-      return type.types.length > 0 && type.types.every((member) => this.isJavaListValueType(member));
+      return type.getTypes().length > 0 && type.getTypes().every((member) => this.isJavaListValueType(member));
     }
     return this.isJavaListType(type) || this.isJavaListBackedClassType(type);
   }
@@ -15726,24 +15726,24 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!type || (type.flags & TypeFlags5.Object) === 0) {
       return false;
     }
-    let current = type.target ?? type;
+    let current = type.isTypeReference?.() ? type.getTarget() : type;
     for (let depth = 0; current && depth < 8; depth++) {
-      const name = current.symbol?.escapedName;
+      const name = current.getSymbol?.()?.escapedName;
       if (name !== void 0 && JAVA_LIST_BACKED_TS_CLASSES.has(name)) {
         return true;
       }
       const bases = current.getBaseTypes?.() ?? [];
-      current = bases.length > 0 ? bases[0].target ?? bases[0] : void 0;
+      current = bases.length > 0 ? bases[0].isTypeReference?.() ? bases[0].getTarget() : bases[0] : void 0;
     }
     return false;
   }
   // union of one accepted member family plus null/undefined: the emitted guard is the
   // helper's answer for the nullish case and the native read otherwise
   isJavaNullishUnion(type, isMember) {
-    if (!type || (type.flags & TypeFlags5.Union) === 0 || type.types.length === 0) {
+    if (!type || (type.flags & TypeFlags5.Union) === 0 || type.getTypes().length === 0) {
       return false;
     }
-    return type.types.every((member) => isMember(member) || (member.flags & (TypeFlags5.Undefined | TypeFlags5.Null)) !== 0);
+    return type.getTypes().every((member) => isMember(member) || (member.flags & (TypeFlags5.Undefined | TypeFlags5.Null)) !== 0);
   }
   // shared by printLengthProperty and transformPropertyAcessExpressionIfNeeded
   printJavaLength(expression, leftSide) {
@@ -15914,7 +15914,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type.getCallSignatures().length > 0) {
       return false;
     }
-    const declarations = type.getSymbol()?.declarations ?? [];
+    const declarations = (type.getSymbol()?.declarations ?? []).map((d) => d.resolve());
     return !declarations.some((declaration) => declaration.kind === SyntaxKind6.ClassDeclaration || declaration.getSourceFile().fileName.indexOf("typescript") > -1);
   }
   // string keys (plain, literal or a union of literals) print as Java Strings
@@ -15928,7 +15928,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if ((type.flags & TypeFlags5.Union) === 0) {
       return false;
     }
-    return type.types.every((member) => this.isStringType(member.flags));
+    return type.getTypes().every((member) => this.isStringType(member.flags));
   }
   // `Dictionary | undefined` (what a no-overload safe* signature widens to): the helper
   // answers false for the nullish arm and the guarded emission keeps exactly that; every
@@ -15937,7 +15937,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0 || (type.flags & TypeFlags5.Union) === 0) {
       return false;
     }
-    const members = type.types ?? [];
+    const members = type.getTypes?.() ?? [];
     let maps = 0;
     for (const member of members) {
       if ((member.flags & (TypeFlags5.Undefined | TypeFlags5.Null)) !== 0) {
@@ -16039,7 +16039,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const names = /* @__PURE__ */ new Set();
     try {
-      const file = this.getProgram().getSourceFiles().find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
+      const program = this.getProgram();
+      const fileName = program.getSourceFileNames().find((f) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(f));
+      const file = fileName !== void 0 ? program.getSourceFile(fileName) : void 0;
       const collect = (node) => {
         if (isClassDeclaration4(node) && node.name?.text === "Exchange") {
           for (const member of node.members) {
@@ -16159,13 +16161,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (name === void 0 || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === void 0) {
       return void 0;
     }
-    const declaration = symbol?.declarations?.[0];
+    const declaration = symbol?.declarations?.[0]?.resolve();
     const fileName = declaration?.getSourceFile?.()?.fileName;
     return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? "") ? JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] : void 0;
   }
   // a `string[]` annotation (optionally `| undefined`), the unaliased spelling of `Strings`
   javaIsStringArrayType(checker, type) {
-    const members = type.isUnion?.() ? type.types : [type];
+    const members = type.isUnionType?.() ? type.getTypes() : [type];
     let arrays = 0;
     for (const member of members) {
       if (member.flags & (TypeFlags5.Undefined | TypeFlags5.Null)) {
@@ -16361,10 +16363,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return void 0;
     }
-    const aliasSymbol = type.aliasSymbol;
+    const aliasSymbol = type.getAliasSymbol?.();
     if (aliasSymbol !== void 0) {
       const name = aliasSymbol.name;
-      const fileName = aliasSymbol.declarations?.[0]?.getSourceFile?.()?.fileName;
+      const fileName = aliasSymbol.declarations?.[0]?.resolve()?.getSourceFile?.()?.fileName;
       if (fileName !== void 0 && JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName)) {
         if (name === "Str") {
           return "String";
@@ -16484,7 +16486,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
     } catch (e) {
       return void 0;
     }
@@ -16509,7 +16511,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
     } catch (e) {
       return false;
     }
@@ -16522,7 +16524,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // the alias a parameter's annotation names; `OrderType` ('limit' | 'market' | string) reduces
   // to plain `string` and keeps no aliasSymbol, so read the annotation's type reference instead
   javaParameterAliasSymbol(node, type, checker) {
-    const symbol = type.aliasSymbol ?? type.symbol;
+    const symbol = type.getAliasSymbol?.() ?? type.getSymbol?.();
     if (symbol !== void 0 || node.type === void 0 || !isTypeReferenceNode(node.type)) {
       return symbol;
     }
@@ -16559,7 +16561,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(node))) {
       return void 0;
     }
-    const declaration = symbol?.declarations?.[0];
+    const declaration = symbol?.declarations?.[0]?.resolve();
     const fileName = declaration?.getSourceFile?.()?.fileName;
     return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? "") ? JAVA_NATIVE_PARAMETER_TYPES[name] : void 0;
   }
@@ -16742,8 +16744,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type.getStringIndexType() !== void 0) {
       return true;
     }
-    const symbol = type.aliasSymbol ?? type.symbol;
-    const declaration = symbol?.declarations?.[0];
+    const symbol = type.getAliasSymbol?.() ?? type.getSymbol?.();
+    const declaration = symbol?.declarations?.[0]?.resolve();
     const fileName = declaration?.getSourceFile?.()?.fileName;
     return fileName !== void 0 && /(^|\/)ts\/src\/base\/types\.ts$/.test(fileName);
   }
@@ -16761,7 +16763,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     return this.getChecker().isTupleType(type);
   }
   tupleRequiredElementCount(type) {
-    const flags = type?.target?.elementFlags ?? type?.elementFlags ?? [];
+    const flags = (type?.isTypeReference?.() ? type.getTarget().elementFlags : void 0) ?? type?.elementFlags ?? [];
     let required = 0;
     for (const flag of flags) {
       if (flag !== ElementFlags.Optional && flag !== ElementFlags.Rest) {
@@ -16814,7 +16816,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!isIdentifier2(node)) {
       return false;
     }
-    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
     if (declaration === void 0 || !isVariableDeclaration2(declaration)) {
       return false;
     }
@@ -16847,7 +16849,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const symbol = checker.getSymbolAtLocation(expression);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (declaration === void 0) {
       return void 0;
     }
@@ -16947,7 +16949,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const target = this.printNode(node.expression, 0);
     const keyText = this.printNode(key, 0);
-    if (keyType.aliasSymbol === void 0 && keyType.flags === TypeFlags5.String) {
+    if (keyType.getAliasSymbol?.() === void 0 && keyType.flags === TypeFlags5.String) {
       return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
     }
     return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
@@ -17087,7 +17089,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const type = checker.getTypeAtLocation(node);
-    if (type === void 0 || type.aliasSymbol !== void 0) {
+    if (type === void 0 || type.getAliasSymbol?.() !== void 0) {
       return void 0;
     }
     const flags = type.flags;
@@ -17220,8 +17222,8 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (t === void 0 || t.flags === 0) {
         return false;
       }
-      if (t.isUnion?.()) {
-        return t.types.every(notNumeric);
+      if (t.isUnionType?.()) {
+        return t.getTypes().every(notNumeric);
       }
       return (t.flags & ~notNumber) === 0;
     };
@@ -17251,7 +17253,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker === void 0) {
       declaration = void 0;
     }
-    declaration = checker.getResolvedSignature(node)?.declaration;
+    declaration = checker.getResolvedSignature(node)?.declaration?.resolve();
     const fileName = declaration?.getSourceFile?.().fileName;
     if (typeof fileName !== "string") {
       return void 0;
@@ -17359,7 +17361,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker === void 0) {
       return false;
     }
-    const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration;
+    const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
     if (declaration === void 0 || declaration.kind !== SyntaxKind6.VariableDeclaration && !isParameterDeclaration2(declaration)) {
       return false;
     }
@@ -17373,7 +17375,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const type = checker.getTypeAtLocation(node);
-    return type !== void 0 && type.aliasSymbol === void 0 && (type.flags === TypeFlags5.Number || type.flags === TypeFlags5.NumberLiteral);
+    return type !== void 0 && type.getAliasSymbol?.() === void 0 && (type.flags === TypeFlags5.Number || type.flags === TypeFlags5.NumberLiteral);
   }
   // the kind of the native arithmetic this rule prints for `+ - * /`, or undefined when
   // the node keeps the helper. Mirrors printInlineHelperArithmetic operand-for-operand
@@ -17439,7 +17441,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker === void 0) {
       declaration = void 0;
     }
-    declaration = checker.getResolvedSignature(node)?.declaration;
+    declaration = checker.getResolvedSignature(node)?.declaration?.resolve();
     if (declaration === void 0) {
       return false;
     }
@@ -17462,7 +17464,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
     } catch (e) {
       declaration = void 0;
     }
@@ -17480,7 +17482,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration;
+    const declaration = symbol?.valueDeclaration?.resolve();
     if (declaration === void 0 || !isVariableDeclaration2(declaration)) {
       return false;
     }
@@ -17664,7 +17666,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (!declaration || declaration.kind !== SyntaxKind6.VariableDeclaration) {
       return false;
     }
@@ -18238,7 +18240,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       try {
         const checker = this.getChecker();
         const sym = checker?.getSymbolAtLocation?.(n);
-        const decl = sym?.declarations?.[0] ?? sym?.valueDeclaration;
+        const decl = sym?.declarations?.[0]?.resolve() ?? sym?.valueDeclaration?.resolve();
         if (decl)
           return `s:${decl.pos}:${decl.end}`;
       } catch {
@@ -18466,7 +18468,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   recordFinalVarMutation(node) {
     this.finalVarMutations.push({
       node,
-      escapedText: node.escapedText,
+      text: node.text,
       ownGetFullText: Object.prototype.hasOwnProperty.call(node, "getFullText"),
       getFullText: node.getFullText
     });
@@ -18476,7 +18478,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   restoreFinalVarMutations() {
     for (let i = this.finalVarMutations.length - 1; i >= 0; i--) {
       const mutation = this.finalVarMutations[i];
-      mutation.node.escapedText = mutation.text;
+      Object.defineProperty(mutation.node, "text", { value: mutation.text, configurable: true, writable: true });
       if (mutation.ownGetFullText) {
         mutation.node.getFullText = mutation.getFullText;
       } else {
@@ -18525,7 +18527,7 @@ var JavaTranspiler = class extends BaseTranspiler {
             const finalName = finalNameFor(n, name);
             res.push({ orig: name, final: finalName });
             this.recordFinalVarMutation(n);
-            n.escapedText = finalName;
+            Object.defineProperty(n, "text", { value: finalName, configurable: true, writable: true });
             n.getFullText = () => finalName;
           }
         }
@@ -19060,7 +19062,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const flags = type.flags;
     if (flags & TypeFlags5.Union) {
-      const parts = type.types ?? [];
+      const parts = type.getTypes?.() ?? [];
       return parts.length > 0 && parts.every((part) => this.javaScalarType(part, depth + 1));
     }
     return (flags & JAVA_SCALAR_TYPE_FLAGS) !== 0;
@@ -19073,7 +19075,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     const flags = type.flags;
     if (flags & TypeFlags5.Union) {
-      const parts = type.types ?? [];
+      const parts = type.getTypes?.() ?? [];
       return parts.length > 0 && parts.every((part) => this.javaNonArrayType(part, depth + 1));
     }
     if ((flags & JAVA_NULLISH_TYPE_FLAGS) !== 0) {
@@ -19157,7 +19159,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (node.kind !== SyntaxKind6.Identifier) {
       return false;
     }
-    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration;
+    const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
     return declaration?.kind === SyntaxKind6.VariableDeclaration && (getCombinedNodeFlags(declaration) & NodeFlags.Const) === NodeFlags.Const;
   }
   printPromiseAllCall(node, identation, parsedArg = void 0) {
@@ -19206,7 +19208,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.isJavaListType(receiverType) && !this.isVarargsArrayReference(receiver)) {
       return `((java.util.List<?>)${name}).indexOf(${parsedArg})`;
     }
-    if (receiverType.aliasSymbol !== void 0 || !this.isStringType(receiverType.flags)) {
+    if (receiverType.getAliasSymbol?.() !== void 0 || !this.isStringType(receiverType.flags)) {
       return void 0;
     }
     const arg = node.arguments?.[0];
@@ -19222,7 +19224,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     } catch (e) {
       return void 0;
     }
-    if (argType.aliasSymbol === void 0 && this.isStringType(argType.flags) && (isIdentifier2(arg) || isPropertyAccessExpression2(arg))) {
+    if (argType.getAliasSymbol?.() === void 0 && this.isStringType(argType.flags) && (isIdentifier2(arg) || isPropertyAccessExpression2(arg))) {
       return `((String)${name}).indexOf(((String)${parsedArg}))`;
     }
     return void 0;
@@ -19442,7 +19444,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
     if (declaration === void 0 || !isVariableDeclaration2(declaration) || !isIdentifier2(declaration.name)) {
       return false;
     }
@@ -19525,7 +19527,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (node.kind !== SyntaxKind6.CallExpression || node.expression.kind !== SyntaxKind6.PropertyAccessExpression || node.expression.expression.kind !== SyntaxKind6.Identifier || node.expression.expression.text !== "Precise" || !JAVA_PRECISE_BOOLEAN_STATICS.has(node.expression.name.text)) {
       return false;
     }
-    const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    const declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
     if (declaration === void 0 || declaration.kind !== SyntaxKind6.MethodDeclaration || declaration.parent?.kind !== SyntaxKind6.ClassDeclaration || declaration.parent.name?.text !== "Precise" || !declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind6.StaticKeyword)) {
       return false;
     }
@@ -19543,7 +19545,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if ((flags & TypeFlags5.Union) === 0) {
       return void 0;
     }
-    const members = type.types ?? [];
+    const members = type.getTypes?.() ?? [];
     const booleanishMembers = TypeFlags5.BooleanLike | TypeFlags5.Null | TypeFlags5.Undefined | TypeFlags5.Void;
     const allBooleanish = members.length > 0 && members.every((member) => ((member.flags ?? 0) & booleanishMembers) !== 0);
     return allBooleanish ? "nullableBoolean" : void 0;
@@ -19601,7 +19603,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type === void 0) {
       return false;
     }
-    if (type.aliasSymbol !== void 0) {
+    if (type.getAliasSymbol?.() !== void 0) {
       return false;
     }
     const flags = type.flags ?? 0;
@@ -19663,7 +19665,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker === void 0) {
       return false;
     }
-    const declaration = checker.getResolvedSignature(node)?.declaration;
+    const declaration = checker.getResolvedSignature(node)?.declaration?.resolve();
     if (declaration === void 0 || declaration.kind !== SyntaxKind6.MethodDeclaration || declaration.body === void 0 || seen.has(declaration)) {
       return false;
     }
@@ -19740,7 +19742,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (checker === void 0) {
       declaration = void 0;
     }
-    declaration = checker.getSymbolAtLocation(node.name)?.valueDeclaration;
+    declaration = checker.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
     const type = this.javaTypeOfDeclaration(declaration) ?? this.javaTypeOfNode(node);
     return this.javaBooleanBoxType(type) ? printed : void 0;
   }
@@ -19756,7 +19758,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const symbol = checker.getSymbolAtLocation(node);
-    const decl = symbol?.valueDeclaration;
+    const decl = symbol?.valueDeclaration?.resolve();
     if (decl === void 0) {
       return void 0;
     }
@@ -19864,7 +19866,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if ((flags & TypeFlags5.Union) === 0) {
       return false;
     }
-    const members = type.types ?? [];
+    const members = type.getTypes?.() ?? [];
     if (members.length === 0) {
       return false;
     }
@@ -19914,7 +19916,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!JAVA_BOOLEAN_BOX_TUPLE_METHODS.has(name)) {
       return false;
     }
-    const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    const declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
     if (declaration?.name?.text !== name) {
       return false;
     }
@@ -20001,7 +20003,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const symbol = checker.getSymbolAtLocation(node);
-    const declaration = symbol?.valueDeclaration;
+    const declaration = symbol?.valueDeclaration?.resolve();
     if (declaration === void 0 || declaration.name?.text !== node.text) {
       return void 0;
     }
@@ -20098,7 +20100,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         const exceptionName = id.text === "Error" ? "RuntimeException" : id.text;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+          const declarations = (this.getChecker().getDeclaredTypeOfSymbol(symbol).getSymbol()?.declarations ?? []).map((d) => d.resolve());
           const isClassDeclaration6 = declarations.find(
             (l) => l.kind === SyntaxKind6.InterfaceDeclaration || l.kind === SyntaxKind6.ClassDeclaration
           );
