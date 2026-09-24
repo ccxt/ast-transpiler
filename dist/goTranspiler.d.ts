@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type Node, type NodeArray, type Statement } from "typescript/unstable/ast";
+import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
 declare function alignGoTrailingComments(content: string): string;
 export { alignGoTrailingComments, };
 export declare class GoTranspiler extends BaseTranspiler {
