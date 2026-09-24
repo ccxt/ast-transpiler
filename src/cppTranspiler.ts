@@ -735,7 +735,7 @@ export class CppTranspiler extends BaseTranspiler {
                 const id = expression.expression;
                 const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
-                    const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                    const declarations = (this.getChecker().getDeclaredTypeOfSymbol(symbol).getSymbol()?.declarations ?? []).map((d) => d.resolve());
                     const isClassDeclaration = declarations.find(l => l.kind === SyntaxKind.InterfaceDeclaration ||  l.kind === SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
                         return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;

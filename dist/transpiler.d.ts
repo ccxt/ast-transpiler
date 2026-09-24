@@ -1,4 +1,5 @@
-import { type Checker, type Program, type Snapshot } from "typescript/unstable/sync";
+import { SyntaxKind } from "typescript/unstable/ast";
+import { CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type Program, type Snapshot } from "typescript/unstable/sync";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
 import { CSharpTranspiler } from './csharpTranspiler.js';
@@ -28,6 +29,8 @@ export default class Transpiler {
     private setSnapshotContext;
     createProgramInMemoryAndSetContext(content: any): ITranspileContext;
     createProgramByPathAndSetContext(filePath: any): ITranspileContext;
+    setSharedProgram(paths: string[]): void;
+    private findSharedProgramFile;
     createProgramBatch(paths: string[]): TranspileProgramBatch;
     setContext(context: ITranspileContext): ITranspileContext;
     /** @deprecated renamed to createProgramInMemoryAndSetContext */
@@ -81,5 +84,5 @@ declare class TranspileProgramBatch {
     transpileRustByPath(filePath: string): ITranspiledFile;
     transpileCppByPath(filePath: string): ITranspiledFile;
 }
-export { Transpiler, TranspileProgramBatch, alignGoTrailingComments, RUST_DECLARED_DICT_LOCALS, };
+export { Transpiler, TranspileProgramBatch, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, SyntaxKind, alignGoTrailingComments, RUST_DECLARED_DICT_LOCALS, };
 export type { RustDeclaredDictLocalEntry };

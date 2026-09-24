@@ -7239,10 +7239,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
 
 // src/transpiler.ts
 var _path = require('path'); var path2 = _interopRequireWildcard(_path); var path = _interopRequireWildcard(_path);
+var _fs = require('fs'); var fs2 = _interopRequireWildcard(_fs); var fs = _interopRequireWildcard(_fs);
 
 // src/goTranspiler.ts
 _chunk4FDYB2TTcjs.init_cjs_shims.call(void 0, );
-var _fs = require('fs'); var fs = _interopRequireWildcard(_fs);
+
 
 
 
@@ -25584,7 +25585,7 @@ var CppTranspiler = class extends BaseTranspiler {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1994 => _1994.getChecker, 'call', _1995 => _1995(), 'access', _1996 => _1996.getDeclaredTypeOfSymbol, 'call', _1997 => _1997(symbol), 'access', _1998 => _1998.symbol, 'optionalAccess', _1999 => _1999.declarations]), () => ( []));
+          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _1994 => _1994.getChecker, 'call', _1995 => _1995(), 'access', _1996 => _1996.getDeclaredTypeOfSymbol, 'call', _1997 => _1997(symbol), 'access', _1998 => _1998.getSymbol, 'call', _1999 => _1999(), 'optionalAccess', _2000 => _2000.declarations]), () => ( []))).map((d) => d.resolve());
           const isClassDeclaration5 = declarations.find((l) => l.kind === _ast.SyntaxKind.InterfaceDeclaration || l.kind === _ast.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration5) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -25643,33 +25644,104 @@ declare var atob: any;
 declare var btoa: any;
 `;
 var globalsShimPath = path2.resolve(path2.join(__dirname_mock, "__globals-shim.d.ts"));
-var NO_SYMBOL_SENTINEL = Symbol("noSymbol");
+var UNDEFINED_SENTINEL = Symbol("undefined");
+var MEMOIZED_UNARY_CHECKER_METHODS = [
+  "getTypeAtLocation",
+  "getSymbolAtLocation",
+  "getResolvedSignature",
+  "getContextualType",
+  "getSignaturesOfType",
+  "getSymbolOfType",
+  "getReturnTypeOfSignature",
+  "getSignatureFromDeclaration",
+  "isArrayType",
+  "isArrayLikeType",
+  "isTupleType",
+  "getTypeArguments",
+  "getTypeFromTypeNode",
+  "getDeclaredTypeOfSymbol",
+  "getTypeOfSymbol",
+  "getAliasedSymbol",
+  "getBaseTypeOfLiteralType",
+  "getApparentType",
+  "getPropertiesOfType",
+  "getNonNullableType",
+  "getIndexInfosOfType"
+];
 function memoizeCheckerCalls(checker) {
   if (checker.__astTranspilerMemoized) {
     return;
   }
   checker.__astTranspilerMemoized = true;
-  const typeCache = /* @__PURE__ */ new WeakMap();
-  const originalGetTypeAtLocation = checker.getTypeAtLocation;
-  Object.defineProperty(checker, "getTypeAtLocation", { value: (node) => {
-    let type = typeCache.get(node);
-    if (type === void 0) {
-      type = originalGetTypeAtLocation(node);
-      typeCache.set(node, type);
+  for (const name of MEMOIZED_UNARY_CHECKER_METHODS) {
+    memoizeUnaryMethod(checker, name);
+  }
+  memoizeUnaryMethod(checker, "typeToString");
+  memoizeBinaryKindMethod(checker, "getSignaturesOfType");
+  memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
+  memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+}
+function memoizeUnaryMethod(owner, name) {
+  const original = owner[name];
+  if (typeof original !== "function") {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const wrapped = function(...args) {
+    const key = args[0];
+    if (args.length !== 1 || key === null || typeof key !== "object" || Array.isArray(key)) {
+      return original.apply(owner, args);
     }
-    return type;
-  } });
-  const symbolCache = /* @__PURE__ */ new WeakMap();
-  const originalGetSymbolAtLocation = checker.getSymbolAtLocation;
-  Object.defineProperty(checker, "getSymbolAtLocation", { value: (node) => {
-    const cached = symbolCache.get(node);
+    const cached = cache.get(key);
     if (cached !== void 0) {
-      return cached === NO_SYMBOL_SENTINEL ? void 0 : cached;
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
     }
-    const symbol = originalGetSymbolAtLocation(node);
-    symbolCache.set(node, symbol === void 0 ? NO_SYMBOL_SENTINEL : symbol);
-    return symbol;
-  } });
+    const result = original.call(owner, key);
+    cache.set(key, result === void 0 ? UNDEFINED_SENTINEL : result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  wrapped.original = original;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+function memoizeBinaryKindMethod(owner, name) {
+  const unary = owner[name];
+  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2001 => _2001.original]), () => ( unary));
+  if (typeof original !== "function") {
+    return;
+  }
+  const caches = /* @__PURE__ */ new Map();
+  const wrapped = function(...args) {
+    const key = args[0];
+    if (args.length === 1) {
+      return unary.call(owner, key);
+    }
+    if (args.length !== 2 || key === null || typeof key !== "object" || typeof args[1] !== "number") {
+      return original.apply(owner, args);
+    }
+    let cache = caches.get(args[1]);
+    if (cache === void 0) {
+      caches.set(args[1], cache = /* @__PURE__ */ new WeakMap());
+    }
+    const cached = cache.get(key);
+    if (cached !== void 0) {
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
+    }
+    const result = original.call(owner, key, args[1]);
+    cache.set(key, result === void 0 ? UNDEFINED_SENTINEL : result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+var programDiagnosticsCache = /* @__PURE__ */ new WeakMap();
+function getProgramWideDiagnostics(program) {
+  let diagnostics = programDiagnosticsCache.get(program);
+  if (diagnostics === void 0) {
+    diagnostics = { program: program.getProgramDiagnostics(), global: program.getGlobalDiagnostics() };
+    programDiagnosticsCache.set(program, diagnostics);
+  }
+  return diagnostics;
 }
 var processApi;
 function getApi(cache) {
@@ -25679,7 +25751,7 @@ function getApi(cache) {
 function createSnapshotProgram(cache, rootFiles, files) {
   const snapshot = getApi(cache).createSnapshot({
     fileSystem: { kind: "layer", files },
-    createPrograms: [{ rootFiles, compilerOptions: fastCompilerOptions }]
+    createPrograms: [{ rootFiles: rootFiles.map((f) => path2.resolve(f)), compilerOptions: fastCompilerOptions }]
   });
   const program = snapshot.operation.createdPrograms[0];
   const checker = snapshot.getProjects().find((p) => p.program === program).checker;
@@ -25734,10 +25806,10 @@ var Transpiler = class _Transpiler {
   }
   // single-file snapshots are released when the next one replaces them; batches own theirs
   setSnapshotContext(snapshot, program, checker, fileName) {
-    const src = program.getSourceFile(fileName);
+    const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path2.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _2000 => _2000.dispose, 'call', _2001 => _2001()]);
+    _optionalChain([previous, 'optionalAccess', _2002 => _2002.dispose, 'call', _2003 => _2003()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -25749,8 +25821,36 @@ var Transpiler = class _Transpiler {
     return this.setSnapshotContext(snapshot, program, checker, inMemoryFilePath);
   }
   createProgramByPathAndSetContext(filePath) {
+    const shared = this.findSharedProgramFile(filePath);
+    if (shared !== void 0) {
+      return this.setContext(shared);
+    }
     const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
     return this.setSnapshotContext(snapshot, program, checker, filePath);
+  }
+  // One snapshot/program for a whole run: later ByPath transpiles of any root (or
+  // imported file) of `paths` reuse it instead of building a program per file, as
+  // long as the file's text on disk still equals the snapshot's. Replaces any
+  // previous shared program; pass [] to drop it.
+  setSharedProgram(paths) {
+    _optionalChain([this, 'access', _2004 => _2004.programCache, 'access', _2005 => _2005.shared, 'optionalAccess', _2006 => _2006.snapshot, 'access', _2007 => _2007.dispose, 'call', _2008 => _2008()]);
+    this.programCache.shared = void 0;
+    if (paths.length === 0) {
+      return;
+    }
+    const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [...paths, globalsShimPath], { [globalsShimPath]: globalsShim });
+    this.programCache.shared = { snapshot, program, checker };
+  }
+  findSharedProgramFile(filePath) {
+    const shared = this.programCache.shared;
+    if (shared === void 0) {
+      return void 0;
+    }
+    const src = shared.program.getSourceFile(path2.resolve(filePath));
+    if (src === void 0 || !fs2.existsSync(filePath) || fs2.readFileSync(filePath, "utf8") !== src.text) {
+      return void 0;
+    }
+    return { src, checker: shared.checker, program: shared.program };
   }
   // One program over N root files, so the bind/check work behind the diagnostics
   // pass is paid once for the whole set; files importing each other are fine as
@@ -25783,10 +25883,11 @@ var Transpiler = class _Transpiler {
   }
   checkFileDiagnostics(context = this.context) {
     const fileName = context.src.fileName;
+    const programWide = getProgramWideDiagnostics(context.program);
     const diagnostics = [
-      ...context.program.getProgramDiagnostics(),
+      ...programWide.program,
       ...context.program.getSyntacticDiagnostics(fileName),
-      ...context.program.getGlobalDiagnostics(),
+      ...programWide.global,
       ...context.program.getSemanticDiagnostics(fileName)
     ];
     if (diagnostics.length > 0) {
@@ -26041,5 +26142,14 @@ var TranspileProgramBatch = class {
 
 
 
-exports.RUST_DECLARED_DICT_LOCALS = RUST_DECLARED_DICT_LOCALS; exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.alignGoTrailingComments = alignGoTrailingComments; exports.default = Transpiler;
+
+
+
+
+
+
+
+
+
+exports.CheckFlags = _sync.CheckFlags; exports.ElementFlags = _sync.ElementFlags; exports.IndexKind = _sync.IndexKind; exports.ObjectFlags = _sync.ObjectFlags; exports.RUST_DECLARED_DICT_LOCALS = RUST_DECLARED_DICT_LOCALS; exports.SignatureKind = _sync.SignatureKind; exports.SymbolFlags = _sync.SymbolFlags; exports.SyntaxKind = _ast.SyntaxKind; exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.TypeFlags = _sync.TypeFlags; exports.TypeFormatFlags = _sync.TypeFormatFlags; exports.alignGoTrailingComments = alignGoTrailingComments; exports.default = Transpiler;
 //# sourceMappingURL=transpiler.cjs.map
