@@ -1,4 +1,5 @@
-import ts from 'typescript';
+import { ScriptTarget, type Node, type SourceFile } from "typescript/unstable/ast";
+import { API, type Checker, type CompilerOptions, type Program, type Snapshot, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
@@ -21,8 +22,8 @@ const __dirname_mock = currentPath;
 // with the es-only lib chain. Neither dom nor @types globals affect transpilation
 // output, but they dominate program creation time (~10x) and make the type
 // environment depend on whatever @types happen to be installed in the host project.
-const fastCompilerOptions: ts.CompilerOptions = {
-    target: ts.ScriptTarget.Latest,
+const fastCompilerOptions: CompilerOptions = {
+    target: ScriptTarget.Latest,
     lib: ["lib.esnext.d.ts"],
     types: [],
 };
@@ -59,50 +60,32 @@ declare var btoa: any;
 `;
 const globalsShimPath = path.resolve(path.join(__dirname_mock, "__globals-shim.d.ts"));
 
-function overrideHostForVirtualFiles(host: ts.CompilerHost, files: Map<string, ts.SourceFile>) {
-    const originalGetSourceFile = host.getSourceFile.bind(host);
-    const originalReadFile = host.readFile.bind(host);
-    const originalFileExists = host.fileExists.bind(host);
-    // resolve paths because typescript will normalize them
-    // to forward slashes on windows
-    host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-        const virtual = files.get(path.resolve(fileName));
-        return virtual !== undefined ? virtual : originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-    };
-    host.readFile = (fileName: string) => {
-        const virtual = files.get(path.resolve(fileName));
-        return virtual !== undefined ? virtual.text : originalReadFile(fileName);
-    };
-    host.fileExists = (fileName: string) => {
-        return files.has(path.resolve(fileName)) || originalFileExists(fileName);
-    };
-}
-
 // transpiling one file to several languages queries the checker repeatedly for the
 // same nodes (identifiers, binary operands, conditions). Types and symbols are
 // deterministic per (checker, node), so memoize the two hot lookups on the checker
 // instance itself — the caches die with the checker when a new program is created
 const NO_SYMBOL_SENTINEL = Symbol("noSymbol");
-function memoizeCheckerCalls(checker: ts.TypeChecker): void {
+function memoizeCheckerCalls(checker: Checker): void {
     if ((checker as any).__astTranspilerMemoized) {
         return;
     }
     (checker as any).__astTranspilerMemoized = true;
 
-    const typeCache = new WeakMap<ts.Node, ts.Type>();
-    const originalGetTypeAtLocation = checker.getTypeAtLocation.bind(checker);
-    checker.getTypeAtLocation = (node: ts.Node): ts.Type => {
+    // the TS7 checker exposes its methods as prototype getters: shadow them on the instance
+    const typeCache = new WeakMap<Node, Type>();
+    const originalGetTypeAtLocation = checker.getTypeAtLocation;
+    Object.defineProperty(checker, "getTypeAtLocation", { value: (node: Node): Type => {
         let type = typeCache.get(node);
         if (type === undefined) {
             type = originalGetTypeAtLocation(node);
             typeCache.set(node, type);
         }
         return type;
-    };
+    } });
 
-    const symbolCache = new WeakMap<ts.Node, ts.Symbol | typeof NO_SYMBOL_SENTINEL>();
-    const originalGetSymbolAtLocation = checker.getSymbolAtLocation.bind(checker);
-    checker.getSymbolAtLocation = (node: ts.Node): ts.Symbol | undefined => {
+    const symbolCache = new WeakMap<Node, TsSymbol | typeof NO_SYMBOL_SENTINEL>();
+    const originalGetSymbolAtLocation = checker.getSymbolAtLocation;
+    Object.defineProperty(checker, "getSymbolAtLocation", { value: (node: Node): TsSymbol | undefined => {
         const cached = symbolCache.get(node);
         if (cached !== undefined) {
             return cached === NO_SYMBOL_SENTINEL ? undefined : cached;
@@ -110,57 +93,26 @@ function memoizeCheckerCalls(checker: ts.TypeChecker): void {
         const symbol = originalGetSymbolAtLocation(node);
         symbolCache.set(node, symbol === undefined ? NO_SYMBOL_SENTINEL : symbol);
         return symbol;
-    };
+    } });
 }
 
-function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, options: any = {}, cache?: ITranspileProgramCache): [any,any,any]  {
-    options = options || ts.getDefaultCompilerOptions();
-    const inMemoryFilePath = path.resolve(path.join(rootDir, "__dummy-file.ts"));
-    const textAst = ts.createSourceFile(inMemoryFilePath, text, options.target || ts.ScriptTarget.Latest);
-    const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, options.target || ts.ScriptTarget.Latest);
-    const host = ts.createCompilerHost(options, true);
+// one TS7 API server per isolate unless a cache brings its own
+let processApi: API | undefined;
+function getApi(cache: ITranspileProgramCache): API {
+    cache.api ??= (processApi ??= new API({ cwd: process.cwd() }));
+    return cache.api;
+}
 
-    overrideHostForVirtualFiles(host, new Map([
-        [inMemoryFilePath, textAst],
-        [globalsShimPath, shimAst],
-    ]));
-
-    if (cache !== undefined) {
-        // the dummy file changes every call, but the es lib chain behind it does not:
-        // serve those from the shared cache so they are parsed once per cache
-        const originalGetSourceFile = host.getSourceFile.bind(host);
-        host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-            const resolved = path.resolve(fileName);
-            if (resolved === inMemoryFilePath) {
-                return textAst;
-            }
-            const cached = cache.sourceFiles.get(resolved);
-            if (cached !== undefined && !shouldCreateNewSourceFile) {
-                return cached.sourceFile;
-            }
-            const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-            if (sourceFile !== undefined) {
-                cache.sourceFiles.set(resolved, { mtimeMs: 0, sourceFile });
-            }
-            return sourceFile;
-        };
-    }
-
-    const program = ts.createProgram({
-        options,
-        rootNames: [inMemoryFilePath, globalsShimPath],
-        host,
-        oldProgram: cache?.memoryOldProgram,
+// a snapshot with one synthetic program over rootFiles; `files` overlays virtual file contents
+function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[], files: Record<string, string>): [Snapshot, Program, Checker] {
+    const snapshot = getApi(cache).createSnapshot({
+        fileSystem: { kind: "layer", files },
+        createPrograms: [{ rootFiles, compilerOptions: fastCompilerOptions }],
     });
-    if (cache !== undefined) {
-        cache.memoryOldProgram = program;
-    }
-
-    const typeChecker = program.getTypeChecker();
-    memoizeCheckerCalls(typeChecker);
-    const sourceFile = program.getSourceFile(inMemoryFilePath);
-
-    return [ program, typeChecker, sourceFile];
+    const program = snapshot.operation.createdPrograms[0];
+    const checker = snapshot.getProjects().find((p) => p.program === program).checker;
+    memoizeCheckerCalls(checker);
+    return [snapshot, program, checker];
 }
 
 export default class Transpiler {
@@ -180,6 +132,8 @@ export default class Transpiler {
     private programCache: ITranspileProgramCache;
     // typescript state of the transpilation in flight, shared with the language printers
     private context: ITranspileContext | undefined;
+    // the snapshot behind the current single-file context
+    private snapshot: Snapshot | undefined;
 
     // A program cache holds parsed typescript SourceFiles and the last program built
     // from them. Hand the same cache to several Transpiler instances to reuse one
@@ -189,7 +143,7 @@ export default class Transpiler {
     // Same-thread only: these are live V8 objects, so a cache cannot be posted to a
     // worker_threads isolate — give each worker its own long-lived cache instead.
     static createProgramCache(): ITranspileProgramCache {
-        return { sourceFiles: new Map() };
+        return {};
     }
 
     constructor(config = {}, programCache?: ITranspileProgramCache) {
@@ -233,84 +187,35 @@ export default class Transpiler {
         return new Transpiler(config, this.programCache);
     }
 
+    // single-file snapshots are released when the next one replaces them; batches own theirs
+    private setSnapshotContext(snapshot: Snapshot, program: Program, checker: Checker, fileName: string): ITranspileContext {
+        const src = program.getSourceFile(fileName);
+        const previous = this.snapshot;
+        this.snapshot = snapshot;
+        previous?.dispose();
+        return this.setContext({ src, checker, program });
+    }
+
     createProgramInMemoryAndSetContext(content): ITranspileContext {
-        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions, this.programCache);
-        return this.setContext({
-            src: memSource,
-            checker: memType as ts.TypeChecker,
-            program: memProgram,
+        const inMemoryFilePath = path.resolve(path.join(__dirname_mock, "__dummy-file.ts"));
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [inMemoryFilePath, globalsShimPath], {
+            [inMemoryFilePath]: content,
+            [globalsShimPath]: globalsShim,
         });
+        return this.setSnapshotContext(snapshot, program, checker, inMemoryFilePath);
     }
 
-    getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost {
-        if (this.programCache.byPathHost === undefined) {
-            const host = ts.createCompilerHost(options, true);
-            const originalGetSourceFile = host.getSourceFile.bind(host);
-            const cache = this.programCache.sourceFiles;
-            host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-                let mtimeMs = 0;
-                try {
-                    mtimeMs = fs.statSync(fileName).mtimeMs;
-                } catch (e) {
-                    // e.g. synthetic lib paths — fall through with mtime 0
-                }
-                const cached = cache.get(fileName);
-                if (cached && cached.mtimeMs === mtimeMs && !shouldCreateNewSourceFile) {
-                    return cached.sourceFile;
-                }
-                const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-                if (sourceFile !== undefined) {
-                    cache.set(fileName, { mtimeMs, sourceFile });
-                }
-                return sourceFile;
-            };
-            const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, ts.ScriptTarget.Latest);
-            overrideHostForVirtualFiles(host, new Map([[globalsShimPath, shimAst]]));
-            this.programCache.byPathHost = host;
-        }
-        return this.programCache.byPathHost;
+    createProgramByPathAndSetContext(filePath): ITranspileContext {
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
+        return this.setSnapshotContext(snapshot, program, checker, filePath);
     }
 
-    createProgramByPathAndSetContext(path): ITranspileContext {
-        const options: ts.CompilerOptions = fastCompilerOptions;
-        const host = this.getByPathCompilerHost(options);
-        // passing the previous program lets typescript reuse its internal state where
-        // possible; the cached host makes every already-seen dependency parse-free
-        const program = ts.createProgram([path, globalsShimPath], options, host, this.programCache.byPathOldProgram);
-        this.programCache.byPathOldProgram = program;
-        const sourceFile = program.getSourceFile(path);
-        const typeChecker = program.getTypeChecker();
-        memoizeCheckerCalls(typeChecker);
-
-        return this.setContext({
-            src: sourceFile,
-            checker: typeChecker,
-            program,
-        });
-    }
-
-    // One program over N root files, instead of one program per file. Every
-    // transpile*ByPath call pays for a full program: even with the SourceFile cache
-    // making the ~340-file import closure parse-free, the binder/checker work behind
-    // getPreEmitDiagnostics is redone per file. Batching N files into one program
-    // pays it once for the whole set.
-    //
-    // Files that import each other (a derived exchange and its parent) are fine in
-    // one batch — they are separate root files of the same program, exactly as
-    // typescript would compile a project.
-    //
-    // The batch deliberately does not become the cache's byPathOldProgram: an N-file
-    // program never structurally reuses a program built from a different root set, so
-    // there is nothing to gain, and keeping the previous chunk's checker alive while
-    // the next one is built would double peak memory — the opposite of why callers
-    // chunk. The cross-batch saving comes from the shared host + SourceFile cache.
+    // One program over N root files, so the bind/check work behind the diagnostics
+    // pass is paid once for the whole set; files importing each other are fine as
+    // separate roots. The batch owns its snapshot until dispose().
     createProgramBatch(paths: string[]): TranspileProgramBatch {
-        const options: ts.CompilerOptions = fastCompilerOptions;
-        const host = this.getByPathCompilerHost(options);
-        const program = ts.createProgram([...paths, globalsShimPath], options, host);
-        const checker = program.getTypeChecker();
-        memoizeCheckerCalls(checker);
-        return new TranspileProgramBatch(this, program, checker);
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [...paths, globalsShimPath], { [globalsShimPath]: globalsShim });
+        return new TranspileProgramBatch(this, snapshot, program, checker);
     }
 
     // the language printers read the typescript state (source file, checker, program)
@@ -339,11 +244,16 @@ export default class Transpiler {
     }
 
     checkFileDiagnostics(context: ITranspileContext = this.context) {
-        const diagnostics = ts.getPreEmitDiagnostics(context.program, context.src);
+        const fileName = context.src.fileName;
+        const diagnostics = [
+            ...context.program.getProgramDiagnostics(),
+            ...context.program.getSyntacticDiagnostics(fileName), ...context.program.getGlobalDiagnostics(),
+            ...context.program.getSemanticDiagnostics(fileName),
+        ];
         if (diagnostics.length > 0) {
             let errorMessage = "Errors found in the typescript code. Transpilation might produce invalid results:\n";
             diagnostics.forEach( msg => {
-                errorMessage+= "  - " + msg.messageText + "\n";
+                errorMessage+= "  - " + msg.text + "\n";
             });
             Logger.warning(errorMessage);
         }
@@ -596,16 +506,23 @@ export default class Transpiler {
 // cloneSharingProgramCache() for a second, independent driver.
 class TranspileProgramBatch {
     private readonly transpiler: Transpiler;
-    private readonly program: ts.Program;
-    private readonly checker: ts.TypeChecker;
+    private readonly snapshot: Snapshot;
+    private readonly program: Program;
+    private readonly checker: Checker;
 
-    constructor(transpiler: Transpiler, program: ts.Program, checker: ts.TypeChecker) {
+    constructor(transpiler: Transpiler, snapshot: Snapshot, program: Program, checker: Checker) {
         this.transpiler = transpiler;
+        this.snapshot = snapshot;
         this.program = program;
         this.checker = checker;
     }
 
-    getProgram(): ts.Program {
+    // releases the batch's snapshot on the TS7 server; the batch is unusable afterwards
+    dispose(): void {
+        this.snapshot.dispose();
+    }
+
+    getProgram(): Program {
         return this.program;
     }
 

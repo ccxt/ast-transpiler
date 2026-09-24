@@ -1,5 +1,8 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import ts, { TypeChecker } from 'typescript';
+import { SyntaxKind } from "typescript/unstable/ast";
+import { isCallExpression, isExpressionStatement } from "typescript/unstable/ast/is";
+import { type Checker } from "typescript/unstable/sync";
+import { isFunctionLike } from "./tsUtils.js";
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
@@ -125,19 +128,19 @@ export class CppTranspiler extends BaseTranspiler {
         };
 
         this.binaryExpressionsWrappers = {
-            [ts.SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
-            [ts.SyntaxKind.EqualsEqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
-            [ts.SyntaxKind.ExclamationEqualsToken]: [this.DIFFERENT_WRAPPER_OPEN, this.DIFFERENT_WRAPPER_CLOSE],
-            [ts.SyntaxKind.ExclamationEqualsEqualsToken]: [this.DIFFERENT_WRAPPER_OPEN, this.DIFFERENT_WRAPPER_CLOSE],
-            [ts.SyntaxKind.GreaterThanToken]: [this.GREATER_THAN_WRAPPER_OPEN, this.GREATER_THAN_WRAPPER_CLOSE],
-            [ts.SyntaxKind.GreaterThanEqualsToken]: [this.GREATER_THAN_EQUALS_WRAPPER_OPEN, this.GREATER_THAN_EQUALS_WRAPPER_CLOSE],
-            [ts.SyntaxKind.LessThanToken]: [this.LESS_THAN_WRAPPER_OPEN, this.LESS_THAN_WRAPPER_CLOSE],
-            [ts.SyntaxKind.LessThanEqualsToken]: [this.LESS_THAN_EQUALS_WRAPPER_OPEN, this.LESS_THAN_EQUALS_WRAPPER_CLOSE],
-            [ts.SyntaxKind.PlusToken]: [this.PLUS_WRAPPER_OPEN, this.PLUS_WRAPPER_CLOSE],
-            [ts.SyntaxKind.MinusToken]: [this.MINUS_WRAPPER_OPEN, this.MINUS_WRAPPER_CLOSE],
-            [ts.SyntaxKind.AsteriskToken]: [this.MULTIPLY_WRAPPER_OPEN, this.MULTIPLY_WRAPPER_CLOSE],
-            [ts.SyntaxKind.PercentToken]: [this.MOD_WRAPPER_OPEN, this.MOD_WRAPPER_CLOSE],
-            [ts.SyntaxKind.SlashToken]: [this.DIVIDE_WRAPPER_OPEN, this.DIVIDE_WRAPPER_CLOSE],
+            [SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
+            [SyntaxKind.EqualsEqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
+            [SyntaxKind.ExclamationEqualsToken]: [this.DIFFERENT_WRAPPER_OPEN, this.DIFFERENT_WRAPPER_CLOSE],
+            [SyntaxKind.ExclamationEqualsEqualsToken]: [this.DIFFERENT_WRAPPER_OPEN, this.DIFFERENT_WRAPPER_CLOSE],
+            [SyntaxKind.GreaterThanToken]: [this.GREATER_THAN_WRAPPER_OPEN, this.GREATER_THAN_WRAPPER_CLOSE],
+            [SyntaxKind.GreaterThanEqualsToken]: [this.GREATER_THAN_EQUALS_WRAPPER_OPEN, this.GREATER_THAN_EQUALS_WRAPPER_CLOSE],
+            [SyntaxKind.LessThanToken]: [this.LESS_THAN_WRAPPER_OPEN, this.LESS_THAN_WRAPPER_CLOSE],
+            [SyntaxKind.LessThanEqualsToken]: [this.LESS_THAN_EQUALS_WRAPPER_OPEN, this.LESS_THAN_EQUALS_WRAPPER_CLOSE],
+            [SyntaxKind.PlusToken]: [this.PLUS_WRAPPER_OPEN, this.PLUS_WRAPPER_CLOSE],
+            [SyntaxKind.MinusToken]: [this.MINUS_WRAPPER_OPEN, this.MINUS_WRAPPER_CLOSE],
+            [SyntaxKind.AsteriskToken]: [this.MULTIPLY_WRAPPER_OPEN, this.MULTIPLY_WRAPPER_CLOSE],
+            [SyntaxKind.PercentToken]: [this.MOD_WRAPPER_OPEN, this.MOD_WRAPPER_CLOSE],
+            [SyntaxKind.SlashToken]: [this.DIVIDE_WRAPPER_OPEN, this.DIVIDE_WRAPPER_CLOSE],
         };
     }
 
@@ -162,12 +165,12 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printClassDefinition(node, identation) {
-        const className = node.name.escapedText;
+        const className = node.name.text;
         const heritageClauses = node.heritageClauses;
 
         let classInit = "";
         if (heritageClauses !== undefined) {
-            const classExtends = heritageClauses[0].types[0].expression.escapedText;
+            const classExtends = heritageClauses[0].types[0].expression.text;
             classInit = this.getIden(identation) + "class " + className + " : public " + classExtends;
         } else {
             classInit = this.getIden(identation) + "class " + className;
@@ -186,9 +189,9 @@ export class CppTranspiler extends BaseTranspiler {
         let superCallParams = '';
         let hasSuperCall = false;
         node.body?.statements.forEach(statement => {
-            if (ts.isExpressionStatement(statement)) {
+            if (isExpressionStatement(statement)) {
                 const expression = statement.expression;
-                if (ts.isCallExpression(expression)) {
+                if (isCallExpression(expression)) {
                     const expressionText = expression.expression.getText().trim();
                     if (expressionText === 'super') {
                         hasSuperCall = true;
@@ -201,7 +204,7 @@ export class CppTranspiler extends BaseTranspiler {
         });
 
         if (hasSuperCall) {
-            const parentClassName = classNode.heritageClauses[0].types[0].expression.escapedText;
+            const parentClassName = classNode.heritageClauses[0].types[0].expression.text;
             return this.getIden(identation) + className +
                 `(${args}) : ${parentClassName}(${superCallParams})` +
                 constructorBody;
@@ -236,7 +239,7 @@ export class CppTranspiler extends BaseTranspiler {
         // runs in a lambda returning std::any
         if (this.asyncTranspiling && !node.expression) {
             let fn = node.parent;
-            while (fn !== undefined && !ts.isFunctionLike(fn)) {
+            while (fn !== undefined && !isFunctionLike(fn)) {
                 fn = fn.parent;
             }
             if (fn !== undefined && this.isAsyncFunction(fn)) {
@@ -256,7 +259,7 @@ export class CppTranspiler extends BaseTranspiler {
             // the lambda returns std::any, so a body that can flow off the end
             // needs a fallback return
             const lastStatement = bodyStatements.length > 0 ? bodyStatements[bodyStatements.length - 1] : undefined;
-            const endsWithReturn = lastStatement !== undefined && lastStatement.kind === ts.SyntaxKind.ReturnStatement;
+            const endsWithReturn = lastStatement !== undefined && lastStatement.kind === SyntaxKind.ReturnStatement;
             const fallbackReturn = endsWithReturn ? "" : this.getIden(innerIdentation) + "return std::any{};\n";
             return this.getBlockOpen(identation) +
                 this.getIden(identation + 1) + "return std::async(std::launch::async, [=]() -> std::any {\n" +
@@ -273,7 +276,7 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {
-        if (node.expression.kind === ts.SyntaxKind.PropertyAccessExpression) {
+        if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const expressionText = node.expression.getText().trim();
             const args = node.arguments;
             if (args.length === 1) {
@@ -304,7 +307,7 @@ export class CppTranspiler extends BaseTranspiler {
         const op = node.operatorToken.kind;
         const expression = node.left.expression;
 
-        const isDifferentOperator = op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+        const isDifferentOperator = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
         const notOperator = isDifferentOperator ? this.NOT_TOKEN : "";
 
         const target = this.printNode(expression, 0);
@@ -330,7 +333,7 @@ export class CppTranspiler extends BaseTranspiler {
 
         const op = node.operatorToken.kind;
 
-        if (left.kind === ts.SyntaxKind.TypeOfExpression) {
+        if (left.kind === SyntaxKind.TypeOfExpression) {
             const typeOfExpression = this.handleTypeOfInsideBinaryExpression(node, identation);
             if (typeOfExpression) {
                 return typeOfExpression;
@@ -338,7 +341,7 @@ export class CppTranspiler extends BaseTranspiler {
         }
 
         // handle: [x,d] = this.method()
-        if (op === ts.SyntaxKind.EqualsToken && left.kind === ts.SyntaxKind.ArrayLiteralExpression) {
+        if (op === SyntaxKind.EqualsToken && left.kind === SyntaxKind.ArrayLiteralExpression) {
             const arrayBindingPatternElements = left.elements;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e, 0));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
@@ -358,24 +361,24 @@ export class CppTranspiler extends BaseTranspiler {
             return arrayBindingStatement;
         }
 
-        if (op === ts.SyntaxKind.InKeyword) {
+        if (op === SyntaxKind.InKeyword) {
             return `inOp(${this.printNode(right, 0)}, ${this.printNode(left, 0)})`;
         }
 
         const leftText = this.printNode(left, 0);
         const rightText = this.printNode(right, 0);
 
-        if (op === ts.SyntaxKind.PlusEqualsToken) {
+        if (op === SyntaxKind.PlusEqualsToken) {
             return `${leftText} = add(${leftText}, ${rightText})`;
         }
 
-        if (op === ts.SyntaxKind.MinusEqualsToken) {
+        if (op === SyntaxKind.MinusEqualsToken) {
             return `${leftText} = subtract(${leftText}, ${rightText})`;
         }
 
-        if (op === ts.SyntaxKind.EqualsToken) {
+        if (op === SyntaxKind.EqualsToken) {
             // handle dict['a'] = 3 and list[0] = 3
-            if (left.kind === ts.SyntaxKind.ElementAccessExpression) {
+            if (left.kind === SyntaxKind.ElementAccessExpression) {
                 const elementAccess = left;
                 const target = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
@@ -398,7 +401,7 @@ export class CppTranspiler extends BaseTranspiler {
 
         // handle array binding : input: const [a,b] = this.method()
         // output: std::any abVariable = this.method(); std::any a = getValue(abVariable, 0); ...
-        if (declaration?.name.kind === ts.SyntaxKind.ArrayBindingPattern) {
+        if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const arrayBindingPattern = declaration.name;
             const arrayBindingPatternElements = arrayBindingPattern.elements;
             const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -419,10 +422,10 @@ export class CppTranspiler extends BaseTranspiler {
             return arrayBindingStatement;
         }
 
-        const isNew = declaration.initializer && (declaration.initializer.kind === ts.SyntaxKind.NewExpression);
+        const isNew = declaration.initializer && (declaration.initializer.kind === SyntaxKind.NewExpression);
         let className = undefined;
         if (isNew) {
-            className = declaration.initializer.expression.escapedText;
+            className = declaration.initializer.expression.text;
         }
         const varToken = isNew ? className + ' ' : this.VAR_TOKEN + ' ' ;
 
@@ -435,7 +438,7 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printFunctionDefinition(node, identation) {
-        let name = node.name.escapedText;
+        let name = node.name.text;
         name = this.transformFunctionNameIfNeeded(name);
 
         const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
@@ -451,7 +454,7 @@ export class CppTranspiler extends BaseTranspiler {
 
     printInstanceOfExpression(node, identation) {
         const left = this.printNode(node.left, 0);
-        const right = node.right.escapedText;
+        const right = node.right.text;
         return this.getIden(identation) + `(dynamic_cast<const ${right}*>(&(${left})) != nullptr)`;
     }
 
@@ -489,7 +492,7 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printMethodDefinition(node, identation) {
-        let name = node.name.escapedText;
+        let name = node.name.text;
         name = this.transformMethodNameIfNeeded(name);
 
         let returnType = this.printFunctionType(node);
@@ -668,14 +671,14 @@ export class CppTranspiler extends BaseTranspiler {
 
     printLengthProperty(node, identation, name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
+        const type = (this.getChecker() as Checker).getTypeAtLocation(node.expression); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSide, "length");
         return this.isStringType(type.flags) ? `getStringLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`;
     }
 
     printPostFixUnaryExpression(node, identation) {
         const {operand, operator} = node;
-        if (operand.kind === ts.SyntaxKind.NumericLiteral) {
+        if (operand.kind === SyntaxKind.NumericLiteral) {
             return super.printPostFixUnaryExpression(node, identation);
         }
         const leftSide = this.printNode(operand, 0);
@@ -688,15 +691,15 @@ export class CppTranspiler extends BaseTranspiler {
 
     printPrefixUnaryExpression(node, identation) {
         const {operand, operator} = node;
-        if (operand.kind === ts.SyntaxKind.NumericLiteral) {
+        if (operand.kind === SyntaxKind.NumericLiteral) {
             return super.printPrefixUnaryExpression(node, identation);
         }
-        if (operator === ts.SyntaxKind.ExclamationToken) {
+        if (operator === SyntaxKind.ExclamationToken) {
             // not branch check falsy/truthy values if needed;
             return  this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
         }
         const leftSide = this.printNode(operand, 0);
-        if (operator === ts.SyntaxKind.PlusToken) {
+        if (operator === SyntaxKind.PlusToken) {
             return `prefixUnaryPlus(${leftSide})`;
         } else {
             return `prefixUnaryNeg(${leftSide})`;
@@ -719,28 +722,28 @@ export class CppTranspiler extends BaseTranspiler {
     }
 
     printThrowStatement(node, identation) {
-        if (node.expression.kind === ts.SyntaxKind.Identifier) {
+        if (node.expression.kind === SyntaxKind.Identifier) {
             return this.getIden(identation) + this.THROW_TOKEN + ' ' + this.printNode(node.expression, 0) + this.LINE_TERMINATOR;
         }
-        if (node.expression.kind === ts.SyntaxKind.NewExpression) {
+        if (node.expression.kind === SyntaxKind.NewExpression) {
             const expression = node.expression;
             // handle throw new Error (message) and throw new x[a] (message)
             const argumentsExp = expression?.arguments ?? [];
             const parsedArg = argumentsExp.map(n => this.printNode(n, 0)).join(", ") ?? '';
             const newExpression =  this.printNode(expression.expression, 0);
-            if (expression.expression.kind === ts.SyntaxKind.Identifier) {
+            if (expression.expression.kind === SyntaxKind.Identifier) {
                 const id = expression.expression;
                 const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
                     const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
-                    const isClassDeclaration = declarations.find(l => l.kind === ts.SyntaxKind.InterfaceDeclaration ||  l.kind === ts.SyntaxKind.ClassDeclaration);
+                    const isClassDeclaration = declarations.find(l => l.kind === SyntaxKind.InterfaceDeclaration ||  l.kind === SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
-                        return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
+                        return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
                     }
-                    return this.getIden(identation) + `throwDynamicException(${id.escapedText}, ${parsedArg})${this.LINE_TERMINATOR}`;
+                    return this.getIden(identation) + `throwDynamicException(${id.text}, ${parsedArg})${this.LINE_TERMINATOR}`;
                 }
                 return this.getIden(identation) + `${this.THROW_TOKEN} ${newExpression}(${parsedArg})${this.LINE_TERMINATOR}`;
-            } else if (expression.expression.kind === ts.SyntaxKind.ElementAccessExpression) {
+            } else if (expression.expression.kind === SyntaxKind.ElementAccessExpression) {
                 return this.getIden(identation) + `throwDynamicException(${newExpression}, ${parsedArg})${this.LINE_TERMINATOR}`;
             }
             return super.printThrowStatement(node, identation);

@@ -1,8 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { regexAll } from "./utils.js";
-import ts from 'typescript';
-
-const SyntaxKind = ts.SyntaxKind;
+import { SyntaxKind } from "typescript/unstable/ast";
 
 const parserConfig = {
     'STATIC_TOKEN': '', // to do static decorator
@@ -235,7 +233,7 @@ export class PythonTranspiler extends BaseTranspiler {
 
 
     printForStatement(node, identation) {
-        const varName = node.initializer.declarations[0].name.escapedText;
+        const varName = node.initializer.declarations[0].name.text;
         const initValue = this.printNode(node.initializer.declarations[0].initializer, 0);
         const roofValue = this.printNode(node.condition.right,0);
 
@@ -281,7 +279,7 @@ export class PythonTranspiler extends BaseTranspiler {
     transformPropertyAcessExpressionIfNeeded(node: any) {
         const expression = node.expression;
         const leftSide = this.printNode(expression, 0);
-        const rightSide = node.name.escapedText;
+        const rightSide = node.name.text;
 
         let rawExpression = undefined;
 
@@ -294,12 +292,12 @@ export class PythonTranspiler extends BaseTranspiler {
     }
 
     printClassDefinition(node: any, identation: any): string {
-        const className = node.name.escapedText;
+        const className = node.name.text;
         const heritageClauses = node.heritageClauses;
 
         let classInit = "";
         if (heritageClauses !== undefined) {
-            const classExtends = heritageClauses[0].types[0].expression.escapedText;
+            const classExtends = heritageClauses[0].types[0].expression.text;
             classInit = this.getIden(identation) + "class " + className + "(" + classExtends + "):\n";
         } else {
             classInit = this.getIden(identation) + "class " + className + ":\n";
@@ -356,7 +354,7 @@ export class PythonTranspiler extends BaseTranspiler {
         const op = node.operatorToken.kind;
 
         // Fix E712 comparison: if cond == True -> if cond:
-        if ((op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsEqualsToken) && node.right.kind === ts.SyntaxKind.TrueKeyword) {
+        if ((op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) && node.right.kind === SyntaxKind.TrueKeyword) {
             return this.getIden(identation) + this.printNode(node.left, 0);
         }
 
@@ -404,13 +402,13 @@ export class PythonTranspiler extends BaseTranspiler {
         const isUndefined = rightText === "undefined";
         if (isUndefined) {
             switch (operator.kind) {
-            case ts.SyntaxKind.EqualsEqualsToken:
+            case SyntaxKind.EqualsEqualsToken:
                 return "is";
-            case ts.SyntaxKind.ExclamationEqualsToken:
+            case SyntaxKind.ExclamationEqualsToken:
                 return "is not";
-            case ts.SyntaxKind.ExclamationEqualsEqualsToken:
+            case SyntaxKind.ExclamationEqualsEqualsToken:
                 return "is not";
-            case ts.SyntaxKind.EqualsEqualsEqualsToken:
+            case SyntaxKind.EqualsEqualsEqualsToken:
                 return "is";
             }
         }

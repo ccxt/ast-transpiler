@@ -1,4 +1,5 @@
-import ts from 'typescript';
+import { type SourceFile } from "typescript/unstable/ast";
+import { type API, type Checker, type Program } from "typescript/unstable/sync";
 
 interface IInput {
     language: Languages;
@@ -9,21 +10,15 @@ interface IInput {
 // Transpiler instance and handed to the language printers) instead of process
 // globals keeps concurrent/nested transpilations from clobbering each other.
 interface ITranspileContext {
-    src: ts.SourceFile;
-    checker: ts.TypeChecker;
-    program: ts.Program;
+    src: SourceFile;
+    checker: Checker;
+    program: Program;
 }
 
-// Parsed SourceFiles (the es lib chain plus the import closure of everything
-// transpiled so far) and the last program built from them, so the next program
-// reuses that work instead of re-parsing it. Shareable between Transpiler
-// instances running on the same thread; these are plain V8 heap objects, so a
-// worker_threads isolate cannot receive one and needs a cache of its own.
+// The TS7 API server the programs are created on. Shareable between Transpiler
+// instances on the same thread; a worker_threads isolate needs its own.
 interface ITranspileProgramCache {
-    sourceFiles: Map<string, { mtimeMs: number, sourceFile: ts.SourceFile }>;
-    byPathHost?: ts.CompilerHost;
-    byPathOldProgram?: ts.Program;
-    memoryOldProgram?: ts.Program;
+    api?: API;
 }
 
 

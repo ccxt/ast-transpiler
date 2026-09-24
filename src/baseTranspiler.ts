@@ -1,4 +1,8 @@
-import ts from 'typescript';
+import { SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type ClassDeclaration, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/unstable/ast";
+import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment, isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/unstable/ast/is";
+import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/unstable/ast/factory";
+import { SignatureKind, TypeFlags, type Checker, type Program } from "typescript/unstable/sync";
+import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from "./tsUtils.js";
 import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType, ITranspileContext } from './types.js';
 import { unCamelCase } from "./utils.js";
 import { Logger } from "./logger.js";
@@ -222,12 +226,12 @@ class BaseTranspiler {
         this.context = context;
     }
 
-    getSrc(): ts.SourceFile {
+    getSrc(): SourceFile {
         if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
         return this.context.src;
     }
 
-    getChecker(): ts.TypeChecker {
+    getChecker(): Checker {
         if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
         return this.context.checker;
     }
@@ -236,7 +240,7 @@ class BaseTranspiler {
     // program without one keeps every helper the checker would have proven away)
     // true when some node under `scope` (excluding `scope` itself) satisfies `predicate`;
     // the walk stops at the first hit and does not descend below it
-    hasNodeWhere(scope: ts.Node | undefined, predicate: (n: any) => boolean): boolean {
+    hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean {
         if (scope === undefined) {
             return false;
         }
@@ -249,74 +253,74 @@ class BaseTranspiler {
                 found = true;
                 return;
             }
-            ts.forEachChild(n, visit);
+            n.forEachChild(visit);
         };
-        ts.forEachChild(scope, visit);
+        scope.forEachChild(visit);
         return found;
     }
 
-    checkerOrUndefined(): ts.TypeChecker | undefined {
+    checkerOrUndefined(): Checker | undefined {
         return this.context?.checker;
     }
 
-    getProgram(): ts.Program {
+    getProgram(): Program {
         if (this.context === undefined) throw new Error(NO_CONTEXT_ERROR);
         return this.context.program;
     }
 
     initOperators() {
         this.SupportedKindNames = {
-            [ts.SyntaxKind.StringLiteral]: this.STRING_LITERAL_KEYWORD,
-            [ts.SyntaxKind.StringKeyword]: this.STRING_KEYWORD,
+            [SyntaxKind.StringLiteral]: this.STRING_LITERAL_KEYWORD,
+            [SyntaxKind.StringKeyword]: this.STRING_KEYWORD,
             // [ts.SyntaxKind.NumberKeyword]: this.NUMBER_KEYWORD,
-            [ts.SyntaxKind.NumberKeyword]: this.DEFAULT_TYPE,
-            [ts.SyntaxKind.MinusMinusToken]: this.MINUS_MINUS_TOKEN,
-            [ts.SyntaxKind.MinusToken]: this.MINUS_TOKEN,
-            [ts.SyntaxKind.SlashToken]: this.SLASH_TOKEN,
-            [ts.SyntaxKind.AsteriskToken]: this.ASTERISK_TOKEN,
-            [ts.SyntaxKind.InKeyword]: this.IN_TOKEN,
-            [ts.SyntaxKind.PlusToken]: this.PLUS_TOKEN,
-            [ts.SyntaxKind.PercentToken]: this.PERCENT_TOKEN,
-            [ts.SyntaxKind.LessThanToken]: this.LESS_THAN_TOKEN,
-            [ts.SyntaxKind.LessThanEqualsToken]: this.LESS_THAN_EQUALS_TOKEN,
-            [ts.SyntaxKind.GreaterThanToken]: this.GREATER_THAN_TOKEN,
-            [ts.SyntaxKind.GreaterThanEqualsToken]: this.GREATER_THAN_EQUALS_TOKEN,
-            [ts.SyntaxKind.EqualsEqualsToken]: this.EQUALS_EQUALS_TOKEN,
-            [ts.SyntaxKind.EqualsEqualsEqualsToken]: this.EQUALS_EQUALS_EQUALS_TOKEN,
-            [ts.SyntaxKind.EqualsToken]: this.EQUALS_TOKEN,
-            [ts.SyntaxKind.PlusEqualsToken]: this.PLUS_EQUALS,
-            [ts.SyntaxKind.BarBarToken]: this.BAR_BAR_TOKEN,
-            [ts.SyntaxKind.AmpersandAmpersandToken]: this.AMPERSTAND_APERSAND_TOKEN,
-            [ts.SyntaxKind.ExclamationEqualsEqualsToken]: this.EXCLAMATION_EQUALS_EQUALS_TOKEN,
-            [ts.SyntaxKind.ExclamationEqualsToken]: this.EXCLAMATION_EQUALS_TOKEN,
-            [ts.SyntaxKind.AsyncKeyword]: this.ASYNC_TOKEN,
-            [ts.SyntaxKind.AwaitKeyword]: this.AWAIT_TOKEN,
-            [ts.SyntaxKind.StaticKeyword]: this.STATIC_TOKEN,
-            [ts.SyntaxKind.PublicKeyword]: this.PUBLIC_KEYWORD,
-            [ts.SyntaxKind.PrivateKeyword]: this.PRIVATE_KEYWORD,
-            [ts.SyntaxKind.VoidKeyword]: this.VOID_KEYWORD,
-            [ts.SyntaxKind.BooleanKeyword]: this.BOOLEAN_KEYWORD,
+            [SyntaxKind.NumberKeyword]: this.DEFAULT_TYPE,
+            [SyntaxKind.MinusMinusToken]: this.MINUS_MINUS_TOKEN,
+            [SyntaxKind.MinusToken]: this.MINUS_TOKEN,
+            [SyntaxKind.SlashToken]: this.SLASH_TOKEN,
+            [SyntaxKind.AsteriskToken]: this.ASTERISK_TOKEN,
+            [SyntaxKind.InKeyword]: this.IN_TOKEN,
+            [SyntaxKind.PlusToken]: this.PLUS_TOKEN,
+            [SyntaxKind.PercentToken]: this.PERCENT_TOKEN,
+            [SyntaxKind.LessThanToken]: this.LESS_THAN_TOKEN,
+            [SyntaxKind.LessThanEqualsToken]: this.LESS_THAN_EQUALS_TOKEN,
+            [SyntaxKind.GreaterThanToken]: this.GREATER_THAN_TOKEN,
+            [SyntaxKind.GreaterThanEqualsToken]: this.GREATER_THAN_EQUALS_TOKEN,
+            [SyntaxKind.EqualsEqualsToken]: this.EQUALS_EQUALS_TOKEN,
+            [SyntaxKind.EqualsEqualsEqualsToken]: this.EQUALS_EQUALS_EQUALS_TOKEN,
+            [SyntaxKind.EqualsToken]: this.EQUALS_TOKEN,
+            [SyntaxKind.PlusEqualsToken]: this.PLUS_EQUALS,
+            [SyntaxKind.BarBarToken]: this.BAR_BAR_TOKEN,
+            [SyntaxKind.AmpersandAmpersandToken]: this.AMPERSTAND_APERSAND_TOKEN,
+            [SyntaxKind.ExclamationEqualsEqualsToken]: this.EXCLAMATION_EQUALS_EQUALS_TOKEN,
+            [SyntaxKind.ExclamationEqualsToken]: this.EXCLAMATION_EQUALS_TOKEN,
+            [SyntaxKind.AsyncKeyword]: this.ASYNC_TOKEN,
+            [SyntaxKind.AwaitKeyword]: this.AWAIT_TOKEN,
+            [SyntaxKind.StaticKeyword]: this.STATIC_TOKEN,
+            [SyntaxKind.PublicKeyword]: this.PUBLIC_KEYWORD,
+            [SyntaxKind.PrivateKeyword]: this.PRIVATE_KEYWORD,
+            [SyntaxKind.VoidKeyword]: this.VOID_KEYWORD,
+            [SyntaxKind.BooleanKeyword]: this.BOOLEAN_KEYWORD,
         };
 
         this.PostFixOperators = {
-            [ts.SyntaxKind.PlusPlusToken]: this.PLUS_PLUS_TOKEN,
-            [ts.SyntaxKind.MinusMinusToken]: this.MINUS_MINUS_TOKEN,
+            [SyntaxKind.PlusPlusToken]: this.PLUS_PLUS_TOKEN,
+            [SyntaxKind.MinusMinusToken]: this.MINUS_MINUS_TOKEN,
         };
 
         this.PrefixFixOperators = {
-            [ts.SyntaxKind.ExclamationToken]: this.NOT_TOKEN,
-            [ts.SyntaxKind.MinusToken]: this.MINUS_TOKEN,
+            [SyntaxKind.ExclamationToken]: this.NOT_TOKEN,
+            [SyntaxKind.MinusToken]: this.MINUS_TOKEN,
         };
 
         this.FunctionDefSupportedKindNames = {
-            [ts.SyntaxKind.StringKeyword]: this.STRING_KEYWORD
+            [SyntaxKind.StringKeyword]: this.STRING_KEYWORD
         };
 
         this.FuncModifiers = {
-            [ts.SyntaxKind.AsyncKeyword]: this.ASYNC_TOKEN,
-            [ts.SyntaxKind.PublicKeyword]: this.PUBLIC_KEYWORD,
-            [ts.SyntaxKind.PrivateKeyword]: this.PRIVATE_KEYWORD,
-            [ts.SyntaxKind.StaticKeyword]: this.STATIC_TOKEN,
+            [SyntaxKind.AsyncKeyword]: this.ASYNC_TOKEN,
+            [SyntaxKind.PublicKeyword]: this.PUBLIC_KEYWORD,
+            [SyntaxKind.PrivateKeyword]: this.PRIVATE_KEYWORD,
+            [SyntaxKind.StaticKeyword]: this.STATIC_TOKEN,
         };
     }
 
@@ -343,12 +347,12 @@ class BaseTranspiler {
         return line.startsWith("//") || line.startsWith("/*") || line.startsWith("*");
     }
 
-    isStringType(flags: ts.TypeFlags) {
-        return flags === ts.TypeFlags.String || flags === ts.TypeFlags.StringLiteral;
+    isStringType(flags: TypeFlags) {
+        return flags === TypeFlags.String || flags === TypeFlags.StringLiteral;
     }
 
-    isAnyType(flags: ts.TypeFlags) {
-        return flags === ts.TypeFlags.Any;
+    isAnyType(flags: TypeFlags) {
+        return flags === TypeFlags.Any;
     }
 
     warnIfAnyType(node, flags, variable, target) {
@@ -364,7 +368,7 @@ class BaseTranspiler {
     }
 
     hasAsyncModifier(node) {
-        return (node.modifiers ?? []).some(mod => mod.kind === ts.SyntaxKind.AsyncKeyword);
+        return (node.modifiers ?? []).some(mod => mod.kind === SyntaxKind.AsyncKeyword);
     }
 
     isPromiseType(type) {
@@ -376,7 +380,7 @@ class BaseTranspiler {
         // directly, ie: `watchTicker (symbol: string): Promise<Ticker> { return this.watch (...); }`
         // (a common fast-path in JS for pure delegator/pass-through methods);
         // target languages without that distinction transpile it as if it were `async`
-        if (!this.implicitAsyncTranspiling || !ts.isFunctionLike(node) || this.hasAsyncModifier(node)) {
+        if (!this.implicitAsyncTranspiling || !isFunctionLike(node) || this.hasAsyncModifier(node)) {
             return false;
         }
         const signature = this.getChecker().getSignatureFromDeclaration(node);
@@ -387,7 +391,7 @@ class BaseTranspiler {
         return this.hasAsyncModifier(node) || this.isImplicitAsyncFunction(node);
     }
 
-    getMethodOverride(node: ts.Node): ts.Node {
+    getMethodOverride(node: Node): Node {
         /////
         //// Warning: Only takes into consideration 1 level of heritage
         //// might be costly, try to improve its performance later
@@ -396,12 +400,12 @@ class BaseTranspiler {
         if (node === undefined) {
             return undefined;
         }
-        if (!ts.isClassDeclaration(node.parent)) {
+        if (!isClassDeclaration(node.parent)) {
             return undefined;
         }
 
         // Get the class declaration
-        const classDeclaration = node.parent as ts.ClassDeclaration;
+        const classDeclaration = node.parent as ClassDeclaration;
 
         // Check if the class has a base class
         if (!classDeclaration.heritageClauses) {
@@ -410,11 +414,11 @@ class BaseTranspiler {
 
         let method = undefined;
 
-        let parentClass = (ts as any).getAllSuperTypeNodes(node.parent)[0];
+        let parentClass = getAllSuperTypeNodes(node.parent)[0];
 
         while (parentClass !== undefined) {
             const parentClassType = this.getChecker().getTypeAtLocation(parentClass);
-            const parentClassDecl = parentClassType?.symbol?.valueDeclaration;
+            const parentClassDecl = parentClassType?.getSymbol()?.valueDeclaration?.resolve();
 
             if (parentClassDecl === undefined) {
                 this.warn(node, "Parent class", "Parent class not found");
@@ -424,16 +428,16 @@ class BaseTranspiler {
             const parentClassMembers = (parentClassDecl as any).members ?? [];
 
             parentClassMembers.forEach(elem=> {
-                if (ts.isMethodDeclaration(elem)) {
+                if (isMethodDeclaration(elem)) {
 
                     const name = elem.name.getText().trim();
-                    if ((node as any).name.escapedText === name) {
+                    if ((node as any).name.text === name) {
                         method = elem;
                     }
                 }
             });
 
-            parentClass = (ts as any).getAllSuperTypeNodes(parentClassDecl)[0] ?? undefined;
+            parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? undefined;
         }
 
 
@@ -484,7 +488,7 @@ class BaseTranspiler {
     }
 
     printIdentifier(node) {
-        let idValue = node.text ?? node.escapedText;
+        let idValue = node.text ?? node.text;
 
         if (this.ReservedKeywordsReplacements[idValue]) {
             idValue = this.ReservedKeywordsReplacements[idValue];
@@ -497,7 +501,7 @@ class BaseTranspiler {
     }
 
     shouldRemoveParenthesisFromCallExpression(node) {
-        if (node.expression.kind === ts.SyntaxKind.PropertyAccessExpression) {
+        if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             return this.PropertyAccessRequiresParenthesisRemoval.includes(node.expression.name.text);
         }
         return false;
@@ -506,8 +510,8 @@ class BaseTranspiler {
     printInstanceOfExpression(node, identation) {
         // const left = this.printNode(node.left, 0);
         // const right = this.printNode(node.right, 0);
-        const left = node.left.escapedText;
-        const right = node.right.escapedText;
+        const left = node.left.text;
+        const right = node.right.text;
         return this.getIden(identation) + `${left} instanceof ${right}`;
     }
 
@@ -528,7 +532,7 @@ class BaseTranspiler {
             return customBinaryExp;
         }
 
-        if (operatorToken.kind == ts.SyntaxKind.InstanceOfKeyword) {
+        if (operatorToken.kind == SyntaxKind.InstanceOfKeyword) {
             return this.printInstanceOfExpression(node, identation);
         }
 
@@ -539,7 +543,7 @@ class BaseTranspiler {
         let rightVar = undefined;
 
         // c# wrapper
-        if (operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken || operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken) {
+        if (operatorToken.kind === SyntaxKind.EqualsEqualsToken || operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken) {
             if (this.COMPARISON_WRAPPER_OPEN) {
                 leftVar = this.printNode(left, 0);
                 rightVar = this.printNode(right, identation);
@@ -548,7 +552,7 @@ class BaseTranspiler {
         }
         let prefixes = "";
         // check if boolean operators || and && because of the falsy values
-        if (operatorToken.kind === ts.SyntaxKind.BarBarToken || operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+        if (operatorToken.kind === SyntaxKind.BarBarToken || operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) {
             leftVar = this.printCondition(left, 0);
             rightVar = this.printCondition(right, identation);
         }  else {
@@ -598,8 +602,8 @@ class BaseTranspiler {
             return this.getIden(identation) + transformedProperty;
         }
 
-        let leftSide = node.expression.escapedText;
-        let rightSide = node.name.escapedText;
+        let leftSide = node.expression.text;
+        let rightSide = node.name.text;
 
         switch (rightSide) {
         case "length":
@@ -678,7 +682,7 @@ class BaseTranspiler {
         modifiers = modifiers.filter(mod => this.FuncModifiers[mod.kind]);
 
         if (!this.asyncTranspiling) {
-            modifiers = modifiers.filter(mod => mod.kind !== ts.SyntaxKind.AsyncKeyword);
+            modifiers = modifiers.filter(mod => mod.kind !== SyntaxKind.AsyncKeyword);
         }
         let res = modifiers.map(modifier => this.FuncModifiers[modifier.kind]).join(" ");
 
@@ -701,7 +705,7 @@ class BaseTranspiler {
 
     printLeadingComments(node, identation) {
         const fullText = this.getSrc().getFullText();
-        const commentsRangeList = ts.getLeadingCommentRanges(fullText, node.pos);
+        const commentsRangeList = getLeadingCommentRanges(fullText, node.pos);
         const commentsRange = commentsRangeList ? commentsRangeList : undefined;
         let res = "";
         if (commentsRange) {
@@ -721,7 +725,7 @@ class BaseTranspiler {
 
     printTraillingComment(node, identation) {
         const fullText = this.getSrc().getFullText();
-        const commentsRangeList = ts.getTrailingCommentRanges(fullText, node.end);
+        const commentsRangeList = getTrailingCommentRanges(fullText, node.end);
         const commentsRange = commentsRangeList ? commentsRangeList : undefined;
         let res = "";
         if (commentsRange) {
@@ -745,15 +749,15 @@ class BaseTranspiler {
         // try to get type from declared type, example: x: string = "foo"
         const type = node.type;
         if (type) {
-            if (type.kind === ts.SyntaxKind.TypeReference) {
-                const typeRef = type.typeName.escapedText;
+            if (type.kind === SyntaxKind.TypeReference) {
+                const typeRef = type.typeName.text;
                 if (typeRef === "Promise") {
-                    const typeArgs = type.typeArguments.filter(t => t.kind !== ts.SyntaxKind.VoidKeyword);
+                    const typeArgs = type.typeArguments.filter(t => t.kind !== SyntaxKind.VoidKeyword);
                     const insideTypes = typeArgs.map(type => {
                         if (this.SupportedKindNames.hasOwnProperty(type.kind)) {  // eslint-disable-line
                             return this.SupportedKindNames[type.kind];
                         } else {
-                            return type.escapedText;
+                            return type.text;
                         }
                     }).join(",");
 
@@ -762,7 +766,7 @@ class BaseTranspiler {
                     }
                     return this.PROMISE_TYPE_KEYWORD;
                 }
-                return type.typeName.escapedText;
+                return type.typeName.text;
             } else if (this.SupportedKindNames.hasOwnProperty(type.kind)) { // eslint-disable-line
                 return this.SupportedKindNames[type.kind];
             }
@@ -772,16 +776,16 @@ class BaseTranspiler {
         // can we use the type checker here?
         const initializer = node.initializer;
         if (initializer) {
-            if (ts.isArrayLiteralExpression(initializer)) {
+            if (isArrayLiteralExpression(initializer)) {
                 return this.ARRAY_KEYWORD;
             }
-            if ((ts as any).isBooleanLiteral(initializer)) {
+            if (isBooleanLiteral(initializer)) {
                 return this.BOOLEAN_KEYWORD;
             }
-            if (ts.isObjectLiteralExpression(initializer)) {
+            if (isObjectLiteralExpression(initializer)) {
                 return this.OBJECT_KEYWORD;
             }
-            if (ts.isNumericLiteral(initializer)) {
+            if (isNumericLiteral(initializer)) {
                 // return this.NUMBER_TYPE_TOKEN;
                 // const value = initializer.text;
                 // const num = Number(value);
@@ -791,7 +795,7 @@ class BaseTranspiler {
                 // return this.NUMBER_KEYWORD;
                 return this.DEFAULT_TYPE; // int and number to object
             }
-            if (ts.isStringLiteralLike(initializer)) {
+            if (isStringLiteralLikeNode(initializer)) {
                 return this.STRING_KEYWORD;
             }
         }
@@ -800,18 +804,18 @@ class BaseTranspiler {
 
     getTypeFromRawType(type) {
         // check for primitive types
-        if (type.flags === ts.TypeFlags.Any) {
+        if (type.flags === TypeFlags.Any) {
             return undefined;
         }
-        if (type.flags === ts.TypeFlags.Void) {
+        if (type.flags === TypeFlags.Void) {
             return this.VOID_KEYWORD;
         }
-        if (type.flags === ts.TypeFlags.Number) {
+        if (type.flags === TypeFlags.Number) {
             // return this.NUMBER_KEYWORD;
             return this.DEFAULT_TYPE;
         }
 
-        if (type.flags === ts.TypeFlags.String) {
+        if (type.flags === TypeFlags.String) {
             return this.STRING_KEYWORD;
         }
         // if (type.flags === ts.TypeFlags.Boolean) {
@@ -820,22 +824,22 @@ class BaseTranspiler {
 
         // check for array or object
 
-        if (type?.symbol?.escapedName === 'Array') {
+        if (type?.getSymbol()?.escapedName === 'Array') {
             return this.ARRAY_KEYWORD;
         }
-        if (type?.symbol?.escapedName === '__object') {
+        if (type?.getSymbol()?.escapedName === '__object') {
             return this.OBJECT_KEYWORD;
         }
 
         // check this out, trying to resolve Promise<{}>
-        if (type?.symbol?.escapedName === '__type') {
+        if (type?.getSymbol()?.escapedName === '__type') {
             return this.OBJECT_KEYWORD;
             // return this.DEFAULT_TYPE;
         }
 
         // check for promise type
 
-        if (type?.symbol?.escapedName === 'Promise') {
+        if (type?.getSymbol()?.escapedName === 'Promise') {
             return this.PROMISE_TYPE_KEYWORD;
         }
 
@@ -857,11 +861,11 @@ class BaseTranspiler {
         const parsedTtype = this.getTypeFromRawType(type);
 
         if (parsedTtype === this.PROMISE_TYPE_KEYWORD) {
-            const resolvedTypeArguments = (type as any).resolvedTypeArguments; // internal typescript property
+            const resolvedTypeArguments = this.getChecker().getTypeArguments(type as any);
             if (resolvedTypeArguments.length === 0) {
                 return this.PROMISE_TYPE_KEYWORD;
             }
-            if (resolvedTypeArguments.length === 1 && resolvedTypeArguments[0].flags === ts.TypeFlags.Void) {
+            if (resolvedTypeArguments.length === 1 && resolvedTypeArguments[0].flags === TypeFlags.Void) {
                 return this.PROMISE_TYPE_KEYWORD;
             }
 
@@ -922,7 +926,7 @@ class BaseTranspiler {
 
 
     printFunctionDefinition(node, identation) {
-        let name = node.name?.escapedText ?? "";
+        let name = node.name?.text ?? "";
         name = this.transformFunctionNameIfNeeded(name);
 
         // const parsedArgs = node.parameters.map(param => this.printParameter(param)).join(", ");
@@ -940,11 +944,11 @@ class BaseTranspiler {
         returnType = returnType ? returnType + " " : returnType;
 
         const fnKeyword = this.FUNCTION_TOKEN ? this.FUNCTION_TOKEN + " " : "";
-        if (!fnKeyword && ts.isFunctionDeclaration(node)){
+        if (!fnKeyword && isFunctionDeclaration(node)){
             modifiers = modifiers + "public ";
         }
         let functionDef = this.getIden(identation) + modifiers + returnType + fnKeyword;
-        if (this.includeFunctionNameInFunctionExpressionDeclaration ||  !ts.isFunctionExpression(node)) {
+        if (this.includeFunctionNameInFunctionExpressionDeclaration ||  !isFunctionExpression(node)) {
             functionDef += name;
         }
         functionDef += "(" + parsedArgs + ")";
@@ -957,7 +961,7 @@ class BaseTranspiler {
     }
 
     printFunctionDeclaration(node, identation) {
-        if (ts.isArrowFunction(node)) {
+        if (isArrowFunction(node)) {
             const parameters = node.parameters.map(param => this.printParameter(param)).join(", ");
             const body = this.printNode(node.body);
             return `(${parameters}) => ${body}`;
@@ -978,7 +982,7 @@ class BaseTranspiler {
     }
 
     printMethodDefinition(node, identation) {
-        let name = node.name.escapedText;
+        let name = node.name.text;
         name = this.transformMethodNameIfNeeded(name);
 
         let returnType = this.printFunctionType(node);
@@ -1048,7 +1052,7 @@ class BaseTranspiler {
         const declaration = node.declarations[0];
         const varToken = this.VAR_TOKEN ? this.VAR_TOKEN + " ": "";
 
-        if (this.removeVariableDeclarationForFunctionExpression && declaration?.initializer && (ts.isFunctionExpression(declaration.initializer) || ts.isArrowFunction(declaration.initializer))) {
+        if (this.removeVariableDeclarationForFunctionExpression && declaration?.initializer && (isFunctionExpression(declaration.initializer) || isArrowFunction(declaration.initializer))) {
             return this.printNode(declaration.initializer, identation).trimEnd();
         }
         // const name = declaration.name.escapedText;
@@ -1082,8 +1086,8 @@ class BaseTranspiler {
 
     isBuiltInFunctionCall(node) {
         const symbol = this.getChecker().getSymbolAtLocation(node);
-        const isInLibFiles = symbol?.getDeclarations()
-            ?.some(s => s.getSourceFile().fileName.includes("/node_modules/typescript/lib/"))
+        const isInLibFiles = symbol?.declarations
+            ?.some(d => /\/node_modules\/(typescript|@typescript\/typescript-[^/]+)\/lib\//.test(d.path))
             ?? false;
 
 
@@ -1091,10 +1095,10 @@ class BaseTranspiler {
     }
 
     getTypesFromCallExpressionParameters(node) {
-        const resolvedParams = this.getChecker().getResolvedSignature(node).parameters;
+        const resolvedParams = this.getChecker().getResolvedSignature(node).getParameters();
         const parsedTypes = [];
         resolvedParams.forEach((p) => {
-            const decl = p.declarations[0];
+            const decl = p.declarations[0].resolve();
             const type = this.getChecker().getTypeAtLocation(decl);
             const parsedType = this.getTypeFromRawType(type);
             parsedTypes.push(parsedType);
@@ -1263,7 +1267,7 @@ class BaseTranspiler {
         }
 
         // check propertyAccessExpression for built in functions calls like Json.parse
-        if (node.expression.kind === ts.SyntaxKind.PropertyAccessExpression) {
+        if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const expressionText = node.expression.getText().trim();
             const args = node.arguments ?? [];
 
@@ -1299,7 +1303,7 @@ class BaseTranspiler {
                     return this.printNumberIsIntegerCall(node, identation, parsedArg);
                 }
             }
-            const rightSide = node.expression.name?.escapedText;
+            const rightSide = node.expression.name?.text;
             const leftSide = node.expression?.expression;
 
             if (args.length === 0 && rightSide !== undefined && leftSide !== undefined) {
@@ -1373,17 +1377,17 @@ class BaseTranspiler {
             // handle functions like assert
             const args = node.arguments ?? [];
             if (args.length === 2) {
-                if ( expression.escapedText === "assert") {
+                if ( expression.text === "assert") {
                     return this.printAssertCall(node, identation, parsedArgs);
                 }
-                if (expression.escapedText === "padEnd") {
+                if (expression.text === "padEnd") {
                     // check this
                 }
             }
         }
 
         // print super() call inside constructor
-        if (expression.kind === ts.SyntaxKind.SuperKeyword) {
+        if (expression.kind === SyntaxKind.SuperKeyword) {
             return this.printSuperCallInsideConstructor(node, identation);
         }
 
@@ -1391,8 +1395,8 @@ class BaseTranspiler {
         if (this.CallExpressionReplacements.hasOwnProperty(expression.getText())) { // eslint-disable-line
             parsedExpression = this.CallExpressionReplacements[expression.getText()];
         } else {
-            if (expression.kind === ts.SyntaxKind.Identifier) {
-                const idValue = expression.text ?? expression.escapedText;
+            if (expression.kind === SyntaxKind.Identifier) {
+                const idValue = expression.text ?? expression.text;
                 parsedExpression = this.transformCallExpressionName(this.unCamelCaseIfNeeded(idValue), expression);
             } else {
                 parsedExpression = this.printNode(expression, 0);
@@ -1413,7 +1417,7 @@ class BaseTranspiler {
         const parsedMembers = [];
         node.members.forEach( (m, index) => {
             const parsedNode = this.printNode(m, identation+1);
-            if (m.kind  === ts.SyntaxKind.PropertyDeclaration || index === 0) {
+            if (m.kind  === SyntaxKind.PropertyDeclaration || index === 0) {
                 parsedMembers.push(parsedNode);
             } else {
                 parsedMembers.push("\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode);
@@ -1423,7 +1427,7 @@ class BaseTranspiler {
     }
 
     getCustomClassName(node) {
-        return node.name.escapedText;
+        return node.name.text;
     }
 
     getClassModifier(node) {
@@ -1439,7 +1443,7 @@ class BaseTranspiler {
         let classInit = "";
         const classOpening = this.getBlockOpen(identation);
         if (heritageClauses !== undefined) {
-            const classExtends = heritageClauses[0].types[0].expression.escapedText;
+            const classExtends = heritageClauses[0].types[0].expression.text;
             classInit = this.getIden(identation) + classModifier + "class " + className + " " + this.EXTENDS_TOKEN + " " + classExtends + classOpening;
         } else {
             classInit = this.getIden(identation) + classModifier + "class " + className + classOpening;
@@ -1505,7 +1509,7 @@ class BaseTranspiler {
 
     printPrefixUnaryExpression(node, identation) {
         const {operand, operator} = node;
-        if (operator === ts.SyntaxKind.ExclamationToken) {
+        if (operator === SyntaxKind.ExclamationToken) {
             // not branch check falsy/turthy values if needed;
             return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printCondition(node.operand, 0);
         }
@@ -1577,8 +1581,8 @@ class BaseTranspiler {
         // Examples:
         // x["a"] = x["b"] : binary expression
         // const a = x["b"] : variable declaration
-        const isLeftSideOfAssignment = node.parent?.kind === ts.SyntaxKind.BinaryExpression &&
-                            (node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken || node.parent.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) &&
+        const isLeftSideOfAssignment = node.parent?.kind === SyntaxKind.BinaryExpression &&
+                            (node.parent.operatorToken.kind === SyntaxKind.EqualsToken || node.parent.operatorToken.kind === SyntaxKind.PlusEqualsToken) &&
                             node.parent?.left === node;
         // to do; check nested accesses
         // const newNode = node.parent;
@@ -1606,14 +1610,14 @@ class BaseTranspiler {
             const isString = this.isStringType(type.flags);
 
             let isUnionString = false; // handle unions later
-            if (type.flags === ts.TypeFlags.Union) {
-                isUnionString = this.isStringType((type as any)?.types[0].flags);
+            if (type.flags === TypeFlags.Union) {
+                isUnionString = this.isStringType((type as any).getTypes()[0].flags);
             }
 
-            if (isString || isUnionString || type.flags === ts.TypeFlags.Any) { // default to string when unknown
+            if (isString || isUnionString || type.flags === TypeFlags.Any) { // default to string when unknown
                 // to do refactor and move this to the derived classes
                 if (this.id === "C#") {
-                    const cast = ts.isStringLiteralLike(argumentExpression) ? "" : '(string)';
+                    const cast = isStringLiteralLikeNode(argumentExpression) ? "" : '(string)';
                     // a receiver the C# classifier declared as a concrete dictionary needs no
                     // interface cast (see csharpDictionaryIndexWriteNeedsNoCast); the key keeps
                     // its own spelling, so only the receiver's cast is dropped
@@ -1648,7 +1652,7 @@ class BaseTranspiler {
         }
 
         // can be called from ifs or conditional expressions or binary expressions so might contain the ! operator
-        if (node.kind  === ts.SyntaxKind.PrefixUnaryExpression && node.operator === ts.SyntaxKind.ExclamationToken) {
+        if (node.kind  === SyntaxKind.PrefixUnaryExpression && node.operator === SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation); // avoid infinite recursion
         }
 
@@ -1665,7 +1669,7 @@ class BaseTranspiler {
         const expression = this.printCondition(node.expression, 0);
 
         const elseExists = node.elseStatement !== undefined;
-        const isElseIf = node.parent.kind === ts.SyntaxKind.IfStatement;
+        const isElseIf = node.parent.kind === SyntaxKind.IfStatement;
 
         const needChainBlock = elseExists;
         const ifBody = this.printBlock(node.thenStatement, identation, needChainBlock);
@@ -1678,7 +1682,7 @@ class BaseTranspiler {
         }
 
         const elseStatement = node.elseStatement;
-        if (elseStatement?.kind === ts.SyntaxKind.Block) {
+        if (elseStatement?.kind === SyntaxKind.Block) {
 
             const elseBody = this.printBlock(elseStatement, identation);
 
@@ -1686,7 +1690,7 @@ class BaseTranspiler {
 
             ifComplete += elseBlock;
 
-        } else if (elseStatement?.kind === ts.SyntaxKind.IfStatement) {
+        } else if (elseStatement?.kind === SyntaxKind.IfStatement) {
             const elseBody = this.printIfStatement(elseStatement, identation);
             ifComplete += elseBody;
         }
@@ -1694,11 +1698,11 @@ class BaseTranspiler {
     }
 
     printParenthesizedExpression(node, identation) {
-        if (node.expression.kind === ts.SyntaxKind.AsExpression) {
+        if (node.expression.kind === SyntaxKind.AsExpression) {
             // transform (this as any) into this, () and as any are not necessary
             return this.getIden(identation) + this.printNode(node.expression, 0);
         }
-        if (node.expression.kind === ts.SyntaxKind.ArrowFunction) {
+        if (node.expression.kind === SyntaxKind.ArrowFunction) {
             // ignore arrowFunctions inside parenthesis
             return "";
         }
@@ -1706,7 +1710,7 @@ class BaseTranspiler {
     }
 
     printBooleanLiteral(node) {
-        if (ts.SyntaxKind.TrueKeyword === node.kind) {
+        if (SyntaxKind.TrueKeyword === node.kind) {
             return this.TRUE_KEYWORD;
         }
         return this.FALSE_KEYWORD;
@@ -1727,7 +1731,7 @@ class BaseTranspiler {
     }
 
     printNewExpression(node, identation) {
-        let expression = node.expression?.escapedText;
+        let expression = node.expression?.text;
         expression = expression ? expression : this.printNode(node.expression); // new Exception or new exact[string] check this out
         const args = node.arguments.map(n => this.printNode(n, identation)).join(", ");
         const newToken = this.NEW_TOKEN ? this.NEW_TOKEN + " " : "";
@@ -1761,17 +1765,22 @@ class BaseTranspiler {
         // the classic `async`/`return await` form: wrap them in a synthetic await
         // expression so every language prints them through its usual await path
         let exp = node.expression;
-        if (!exp || ts.isAwaitExpression(exp)
-                || !this.isImplicitAsyncFunction(ts.findAncestor(node, ts.isFunctionLike))
+        if (!exp || isAwaitExpression(exp)
+                || !this.isImplicitAsyncFunction(findAncestor(node, isFunctionLike))
                 || !this.isPromiseType(this.getChecker().getTypeAtLocation(exp))) {
             return node;
         }
-        if (ts.isConditionalExpression(exp) || ts.isBinaryExpression(exp)) {
+        if (isConditionalExpression(exp) || isBinaryExpression(exp)) {
             // an await-token prefix would change precedence (e.g. `await a ? b : c`)
-            exp = this.wrapSyntheticNode(ts.factory.createParenthesizedExpression(exp), exp);
+            exp = this.wrapSyntheticNode(createParenthesizedExpression(exp), exp);
         }
-        node.expression = this.wrapSyntheticNode(ts.factory.createAwaitExpression(exp), exp);
-        return node;
+        // TS7 program nodes are read-only: print a synthetic return in place of the original
+        const synthetic = this.wrapSyntheticNode(createReturnStatement(undefined), node);
+        const awaited = this.wrapSyntheticNode(createAwaitExpression(exp), exp);
+        awaited.parent = synthetic;
+        Object.defineProperty(synthetic, "expression", { value: awaited });
+        node.parent = synthetic.parent;
+        return synthetic;
     }
 
     printConditionalExpression(node, identation) {
@@ -1789,7 +1798,7 @@ class BaseTranspiler {
     getFunctionNodeFromReturn(node) {
         let parent = node.parent;
         while (parent) {
-            if (parent.kind === ts.SyntaxKind.FunctionDeclaration || parent.kind === ts.SyntaxKind.MethodDeclaration) {
+            if (parent.kind === SyntaxKind.FunctionDeclaration || parent.kind === SyntaxKind.MethodDeclaration) {
                 return parent;
             }
             parent = parent.parent;
@@ -1904,97 +1913,97 @@ class BaseTranspiler {
             // plain kind comparison, and a switch avoids running ~45 predicate calls
             // for nodes that match late (or not at all) in the former if-else chain
             switch (node.kind) {
-            case ts.SyntaxKind.ExpressionStatement:
+            case SyntaxKind.ExpressionStatement:
                 return this.printExpressionStatement(node, identation);
-            case ts.SyntaxKind.Block:
+            case SyntaxKind.Block:
                 return this.printBlock(node, identation);
-            case ts.SyntaxKind.FunctionDeclaration:
-            case ts.SyntaxKind.FunctionExpression:
-            case ts.SyntaxKind.ArrowFunction:
+            case SyntaxKind.FunctionDeclaration:
+            case SyntaxKind.FunctionExpression:
+            case SyntaxKind.ArrowFunction:
                 return this.printFunctionDeclaration(node, identation);
-            case ts.SyntaxKind.ClassDeclaration:
+            case SyntaxKind.ClassDeclaration:
                 return this.printClass(node, identation);
-            case ts.SyntaxKind.VariableStatement:
+            case SyntaxKind.VariableStatement:
                 return this.printVariableStatement(node, identation);
-            case ts.SyntaxKind.MethodDeclaration:
+            case SyntaxKind.MethodDeclaration:
                 return this.printMethodDeclaration(node, identation);
-            case ts.SyntaxKind.StringLiteral:
+            case SyntaxKind.StringLiteral:
                 return this.printStringLiteral(node);
-            case ts.SyntaxKind.NumericLiteral:
+            case SyntaxKind.NumericLiteral:
                 return this.printNumericLiteral(node);
-            case ts.SyntaxKind.PropertyAccessExpression:
+            case SyntaxKind.PropertyAccessExpression:
                 return this.printPropertyAccessExpression(node, identation);
-            case ts.SyntaxKind.ArrayLiteralExpression:
+            case SyntaxKind.ArrayLiteralExpression:
                 return this.printArrayLiteralExpression(node, identation);
-            case ts.SyntaxKind.CallExpression:
+            case SyntaxKind.CallExpression:
                 return this.printCallExpression(node, identation);
-            case ts.SyntaxKind.WhileStatement:
+            case SyntaxKind.WhileStatement:
                 return this.printWhileStatement(node, identation);
-            case ts.SyntaxKind.BinaryExpression:
+            case SyntaxKind.BinaryExpression:
                 return this.printBinaryExpression(node, identation);
-            case ts.SyntaxKind.BreakStatement:
+            case SyntaxKind.BreakStatement:
                 return this.printBreakStatement(node, identation);
-            case ts.SyntaxKind.ForStatement:
+            case SyntaxKind.ForStatement:
                 return this.printForStatement(node, identation);
-            case ts.SyntaxKind.PostfixUnaryExpression:
+            case SyntaxKind.PostfixUnaryExpression:
                 return this.printPostFixUnaryExpression(node, identation);
-            case ts.SyntaxKind.VariableDeclarationList:
+            case SyntaxKind.VariableDeclarationList:
                 return this.printVariableDeclarationList(node, identation); // statements are slightly different if inside a for
-            case ts.SyntaxKind.ObjectLiteralExpression:
+            case SyntaxKind.ObjectLiteralExpression:
                 return this.printObjectLiteralExpression(node, identation);
-            case ts.SyntaxKind.PropertyAssignment:
+            case SyntaxKind.PropertyAssignment:
                 return this.printPropertyAssignment(node, identation);
-            case ts.SyntaxKind.Identifier:
+            case SyntaxKind.Identifier:
                 return this.printIdentifier(node);
-            case ts.SyntaxKind.ElementAccessExpression:
+            case SyntaxKind.ElementAccessExpression:
                 return this.printElementAccessExpression(node, identation);
-            case ts.SyntaxKind.IfStatement:
+            case SyntaxKind.IfStatement:
                 return this.printIfStatement(node, identation);
-            case ts.SyntaxKind.ParenthesizedExpression:
+            case SyntaxKind.ParenthesizedExpression:
                 return this.printParenthesizedExpression(node, identation);
-            case ts.SyntaxKind.TrueKeyword:
-            case ts.SyntaxKind.FalseKeyword:
+            case SyntaxKind.TrueKeyword:
+            case SyntaxKind.FalseKeyword:
                 return this.printBooleanLiteral(node);
-            case ts.SyntaxKind.ThisKeyword:
+            case SyntaxKind.ThisKeyword:
                 return this.printThisKeyword(node, identation);
-            case ts.SyntaxKind.SuperKeyword:
+            case SyntaxKind.SuperKeyword:
                 return this.SUPER_TOKEN;
-            case ts.SyntaxKind.TryStatement:
+            case SyntaxKind.TryStatement:
                 return this.printTryStatement(node, identation);
-            case ts.SyntaxKind.PrefixUnaryExpression:
+            case SyntaxKind.PrefixUnaryExpression:
                 return this.printPrefixUnaryExpression(node, identation);
-            case ts.SyntaxKind.ThrowStatement:
+            case SyntaxKind.ThrowStatement:
                 return this.printThrowStatement(node, identation);
-            case ts.SyntaxKind.NewExpression:
+            case SyntaxKind.NewExpression:
                 return this.printNewExpression(node, identation);
-            case ts.SyntaxKind.AwaitExpression:
+            case SyntaxKind.AwaitExpression:
                 return this.printAwaitExpression(node, identation);
-            case ts.SyntaxKind.ConditionalExpression:
+            case SyntaxKind.ConditionalExpression:
                 return this.printConditionalExpression(node, identation);
-            case ts.SyntaxKind.AsExpression:
+            case SyntaxKind.AsExpression:
                 return this.printAsExpression(node, identation);
-            case ts.SyntaxKind.ReturnStatement:
+            case SyntaxKind.ReturnStatement:
                 return this.printReturnStatement(this.wrapImplicitReturnAwait(node), identation);
-            case ts.SyntaxKind.ArrayBindingPattern:
+            case SyntaxKind.ArrayBindingPattern:
                 return this.printArrayBindingPattern(node, identation);
-            case ts.SyntaxKind.Parameter:
+            case SyntaxKind.Parameter:
                 return this.printParameter(node);
-            case ts.SyntaxKind.Constructor:
+            case SyntaxKind.Constructor:
                 return this.printConstructorDeclaration(node, identation);
-            case ts.SyntaxKind.PropertyDeclaration:
+            case SyntaxKind.PropertyDeclaration:
                 return this.printPropertyDeclaration(node, identation);
-            case ts.SyntaxKind.SpreadElement:
+            case SyntaxKind.SpreadElement:
                 return this.printSpreadElement(node, identation);
-            case ts.SyntaxKind.NullKeyword:
+            case SyntaxKind.NullKeyword:
                 return this.printNullKeyword(node, identation);
-            case ts.SyntaxKind.ContinueStatement:
+            case SyntaxKind.ContinueStatement:
                 return this.printContinueStatement(node, identation);
-            case ts.SyntaxKind.DeleteExpression:
+            case SyntaxKind.DeleteExpression:
                 return this.printDeleteExpression(node, identation);
             }
 
             if (node.statements) {
-                if (ts.isSourceFile(node)) {
+                if (isSourceFile(node)) {
                     // reset the current class name when entering a new file so a
                     // class name from a previously transpiled file does not leak
                     // into a class-less file (e.g. try/catch wrappers in tests)
@@ -2018,7 +2027,7 @@ class BaseTranspiler {
 
     getFileESMImports(node): IFileImport[] {
         const result = [];
-        const importStatements = node.statements.filter((s) => ts.isImportDeclaration(s));
+        const importStatements = node.statements.filter((s) => isImportDeclaration(s));
         importStatements.forEach(node => {
             const importPath = node.moduleSpecifier.text;
             const importClause = node.importClause;
@@ -2037,7 +2046,7 @@ class BaseTranspiler {
                     });
                 } else {
                     // namespace import (import * as name from 'path')
-                    const name = namedImports.name.escapedText;
+                    const name = namedImports.name.text;
                     const fileImport: IFileImport = {
                         name,
                         path: importPath,
@@ -2062,13 +2071,13 @@ class BaseTranspiler {
 
     isCJSRequireStatement(node): boolean {
         const dec = node.declarationList.declarations[0];
-        return dec.initializer && ts.isCallExpression(dec.initializer) && dec.initializer.expression.getText() === "require";
+        return dec.initializer && isCallExpression(dec.initializer) && dec.initializer.expression.getText() === "require";
     }
 
     isCJSModuleExportsExpressionStatement(node): boolean {
-        if (node.expression && node.expression.kind === ts.SyntaxKind.BinaryExpression ) {
-            if (node.expression.left.kind === ts.SyntaxKind.PropertyAccessExpression) {
-                const left = node.expression.left as ts.PropertyAccessExpression;
+        if (node.expression && node.expression.kind === SyntaxKind.BinaryExpression ) {
+            if (node.expression.left.kind === SyntaxKind.PropertyAccessExpression) {
+                const left = node.expression.left as PropertyAccessExpression;
                 return left.expression.getText() === "module" && left.name.getText() === "exports";
             }
         }
@@ -2077,15 +2086,15 @@ class BaseTranspiler {
 
     getCJSImports(node): IFileImport[] {
         const result = [];
-        const varStatements = node.statements.filter(s => ts.isVariableStatement(s));
+        const varStatements = node.statements.filter(s => isVariableStatement(s));
         const decList = varStatements.map(s => s.declarationList);
         const dec = decList.map(d => d.declarations[0]);
 
         dec.forEach(decNode => {
-            if (decNode.initializer && decNode.initializer.kind === ts.SyntaxKind.CallExpression) {
+            if (decNode.initializer && decNode.initializer.kind === SyntaxKind.CallExpression) {
                 const callExpression = decNode.initializer.expression.getText();
                 if (callExpression === "require") {
-                    const isDefault = decNode.name.kind === ts.SyntaxKind.Identifier;
+                    const isDefault = decNode.name.kind === SyntaxKind.Identifier;
                     const importPath = decNode.initializer.arguments[0].text;
                     if (isDefault) {
                         const name = decNode.name.text;
@@ -2125,8 +2134,8 @@ class BaseTranspiler {
 
     getESMExports(node): IFileExport[] {
         const result = [];
-        const namedExports = node.statements.filter((s) => ts.isExportDeclaration(s));
-        const defaultExport = node.statements.filter((s) => ts.isExportAssignment(s));
+        const namedExports = node.statements.filter((s) => isExportDeclaration(s));
+        const defaultExport = node.statements.filter((s) => isExportAssignment(s));
 
         namedExports.forEach(node => {
             const namedExports = node.exportClause;
@@ -2155,11 +2164,11 @@ class BaseTranspiler {
 
     getCJSExports(node): IFileExport[] {
         const result = [];
-        const moduleExports = node.statements.filter(s => this.isCJSModuleExportsExpressionStatement(s)).map(s => s.expression as ts.BinaryExpression);
+        const moduleExports = node.statements.filter(s => this.isCJSModuleExportsExpressionStatement(s)).map(s => s.expression as BinaryExpression);
 
         moduleExports.forEach(node => {
             const right = node.right;
-            if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+            if (right.kind === SyntaxKind.ObjectLiteralExpression) {
                 const props = right.properties;
                 props.forEach(prop => {
                     const name = prop.name.getText();
@@ -2170,7 +2179,7 @@ class BaseTranspiler {
                     result.push(fileExport);
                 });
             }
-            if (right.kind === ts.SyntaxKind.Identifier) {
+            if (right.kind === SyntaxKind.Identifier) {
                 const name = right.getText();
                 const fileExport: IFileExport = {
                     name,
@@ -2185,14 +2194,14 @@ class BaseTranspiler {
     getExportDeclarations(node): IFileExport[] {
         // example export default class X
         const result = [];
-        const classDeclarations = node.statements.filter((s) => ts.isClassDeclaration(s));
-        const functionDeclarations = node.statements.filter((s) => ts.isFunctionDeclaration(s));
+        const classDeclarations = node.statements.filter((s) => isClassDeclaration(s));
+        const functionDeclarations = node.statements.filter((s) => isFunctionDeclaration(s));
 
         const both = classDeclarations.concat(functionDeclarations);
         both.forEach(classNode => {
             const modifiers = classNode.modifiers;
             if (modifiers) {
-                const isDefault = modifiers.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
+                const isDefault = modifiers.some((m) => m.kind === SyntaxKind.DefaultKeyword);
                 if (isDefault) {
                     const name = classNode.name.text;
                     const fileExport: IFileExport = {
@@ -2220,14 +2229,15 @@ class BaseTranspiler {
 
         const bType = this.getChecker().getTypeAtLocation(node);
         // const func2Symbol = bType.getProperty("test1")!;
-        const func2Type = this.getChecker().getTypeOfSymbolAtLocation(bType.symbol, bType.symbol.valueDeclaration);
-        const func2Signature = this.getChecker().getSignaturesOfType(func2Type, ts.SignatureKind.Call)[0];
+        const bSymbol = bType.getSymbol();
+        const func2Type = this.getChecker().getTypeOfSymbolAtLocation(bSymbol, bSymbol.valueDeclaration.resolve());
+        const func2Signature = this.getChecker().getSignaturesOfType(func2Type, SignatureKind.Call)[0];
         const rawType = func2Signature.getReturnType();
         // const parsed = ts.TypeFlags[rawType.flags];
         // console.log(parsed);
         const res = this.getChecker().typeToString(rawType); // C
         if (res === undefined) {
-            const name = node.type?.typeName?.escapedText;
+            const name = node.type?.typeName?.text;
             if (name){
                 return name as string;
             }
@@ -2256,12 +2266,12 @@ class BaseTranspiler {
                 const res = this.getChecker().typeToString(type); // C
                 // console.log("initializer", res);
                 // result.initializer = node.initializer.text;
-                result.type = ts.TypeFlags[type.flags];
+                result.type = TypeFlags[type.flags];
                 return result;
             }
         }
 
-        const name = node.type?.typeName?.escapedText;
+        const name = node.type?.typeName?.text;
         if (name){
             result.type = name as string;
             if (node.initializer !== undefined) {
@@ -2284,9 +2294,9 @@ class BaseTranspiler {
         if (!file.statements) {
             return result;
         }
-        const classDeclarations = file.statements.filter((s) => ts.isClassDeclaration(s));
+        const classDeclarations = file.statements.filter((s) => isClassDeclaration(s));
         classDeclarations.forEach((node) => {
-            const methods = node.members.filter((m) => ts.isMethodDeclaration(m));
+            const methods = node.members.filter((m) => isMethodDeclaration(m));
             methods.forEach(m => {
                 const isAsync = this.isAsyncFunction(m);
                 const name = m.name.getText();

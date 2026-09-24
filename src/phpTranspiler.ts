@@ -1,9 +1,9 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import ts, { TypeChecker } from 'typescript';
+import { SyntaxKind } from "typescript/unstable/ast";
+import { isArrowFunction, isCallExpression, isFunctionDeclaration, isFunctionExpression } from "typescript/unstable/ast/is";
+import { TypeFlags, type Checker } from "typescript/unstable/sync";
 import { unCamelCase, regexAll } from "./utils.js";
 import { Logger } from "./logger.js";
-
-const SyntaxKind = ts.SyntaxKind;
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'elseif',
@@ -89,13 +89,13 @@ export class PhpTranspiler extends BaseTranspiler {
         const symbol = this.getChecker().getSymbolAtLocation(node);
 
         // Check if the symbol references a function declaration or expression
-        if (symbol && symbol.valueDeclaration) {
-            const valueDecl = symbol.valueDeclaration;
+        const valueDecl = symbol?.valueDeclaration?.resolve();
+        if (valueDecl) {
 
             // Check if it's a function (FunctionDeclaration, FunctionExpression, ArrowFunction)
-            if (ts.isFunctionDeclaration(valueDecl) || ts.isFunctionExpression(valueDecl) || ts.isArrowFunction(valueDecl)) {
+            if (isFunctionDeclaration(valueDecl) || isFunctionExpression(valueDecl) || isArrowFunction(valueDecl)) {
                 // Check if the identifier is passed as an argument in a function call
-                if (node.parent && ts.isCallExpression(node.parent) && node.parent.arguments.includes(node)) {
+                if (node.parent && isCallExpression(node.parent) && node.parent.arguments.includes(node)) {
                     return `'${identifier}'`;  // Transpile function reference as string
                 }
             }
@@ -131,10 +131,10 @@ export class PhpTranspiler extends BaseTranspiler {
             const leftType = this.getChecker().getTypeAtLocation(left);
             const rightType = this.getChecker().getTypeAtLocation(right);
 
-            if (leftType.flags === ts.TypeFlags.String || rightType.flags === ts.TypeFlags.String) {
+            if (leftType.flags === TypeFlags.String || rightType.flags === TypeFlags.String) {
                 return TOKEN;
             }
-            if (leftType.flags === ts.TypeFlags.StringLiteral || rightType.flags === ts.TypeFlags.StringLiteral) {
+            if (leftType.flags === TypeFlags.StringLiteral || rightType.flags === TypeFlags.StringLiteral) {
                 return TOKEN;
             }
         }
@@ -143,7 +143,7 @@ export class PhpTranspiler extends BaseTranspiler {
 
     printLengthProperty(node, identation, name = undefined) {
         const leftSide = this.printNode(node.expression, 0);
-        const type = (this.getChecker() as TypeChecker).getTypeAtLocation(node.expression); // eslint-disable-line
+        const type = (this.getChecker() as Checker).getTypeAtLocation(node.expression); // eslint-disable-line
         this.warnIfAnyType(node, type.flags, leftSide, "length");
         return this.isStringType(type.flags) ? `strlen(${leftSide})` : `count(${leftSide})`;
     }
@@ -293,8 +293,8 @@ export class PhpTranspiler extends BaseTranspiler {
     printInstanceOfExpression(node, identation) {
         // const left = this.printNode(node.left, 0);
         // const right = this.printNode(node.right, 0);
-        const left = node.left.escapedText;
-        const right = node.right.escapedText;
+        const left = node.left.text;
+        const right = node.right.text;
         return this.getIden(identation) + "$"+left+" instanceof "+right+"";
     }
 
@@ -304,7 +304,7 @@ export class PhpTranspiler extends BaseTranspiler {
     }
 
     printNewExpression(node, identation) {
-        let expression = node.expression?.escapedText;
+        let expression = node.expression?.text;
         expression = expression ? expression : this.printNode(node.expression);
         // JS's built-in `Error` maps to PHP's `Exception` (PHP's `Error` is reserved for internal engine errors)
         if (expression === 'Error') {
@@ -316,7 +316,7 @@ export class PhpTranspiler extends BaseTranspiler {
     }
 
     getExceptionalAccessTokenIfAny(node) {
-        const leftSide = node.expression.escapedText ?? node.expression.getFullText().trim();
+        const leftSide = node.expression.text ?? node.expression.getFullText().trim();
 
         if (!leftSide) {
             return undefined;
@@ -371,7 +371,7 @@ export class PhpTranspiler extends BaseTranspiler {
             }
         }
 
-        if (op === ts.SyntaxKind.InKeyword) {
+        if (op === SyntaxKind.InKeyword) {
             const rightSide = this.printNode(node.right, 0);
             const leftSide = this.printNode(node.left, 0);
             return `${this.getIden(identation)}is_array(${rightSide}) && array_key_exists(${leftSide}, ${rightSide})`;
