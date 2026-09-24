@@ -139,6 +139,7 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'strings.ReplaceAll': 'string',
     'strings.HasPrefix': 'bool',
     'strings.HasSuffix': 'bool',
+    'strconv.FormatInt': 'string',
     'IsInstance': 'bool',
     'IsInteger': 'bool',
     'this.InArray': 'bool',
@@ -1445,7 +1446,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((property?.kind === ts.SyntaxKind.PropertyAccessExpression)
                 && (property.name?.escapedText === 'toString')
                 && (initializer.arguments?.length === 0)
-                && (this.goOperandStaticType(property.expression, printedValue) === 'string')) {
+                && ((this.goOperandStaticType(property.expression, printedValue) === 'string')
+                    || this.goDerefableStringOperand(property.expression))) {
                 return 'string';
             }
             break;
@@ -7047,20 +7049,25 @@ ${this.getIden(identation)}${returnStatement}`;
         return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
-    // A native string operation needs every operand to be a printed Go `string` — the helper takes
-    // `any` and re-derives the same string, so a proven operand cannot change the result. A regex
-    // literal is never a Go string (a pattern, not the helper's ToString value) and keeps the helper.
-    goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean {
+    // A native string operation needs every operand to be a Go `string`: a proven one prints as is,
+    // a `*string` goDerefableStringOperand proves non-nil prints as its pointee (the helper's nil
+    // branch is unreachable). A regex literal is a pattern, never a string: undefined keeps the helper.
+    goNativeStringOperandTexts(operands: any[], texts: string[], expected: string[]): string[] | undefined {
+        const result: string[] = [];
         for (let i = 0; i < expected.length; i++) {
             const operand = operands[i];
             if (operand === undefined || operand.kind === ts.SyntaxKind.RegularExpressionLiteral) {
-                return false;
+                return undefined;
             }
-            if (this.goOperandStaticType(operand, texts[i]) !== expected[i]) {
-                return false;
+            if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
+                result.push(texts[i]);
+            } else if ((expected[i] === 'string') && !texts[i].includes('\n') && this.goDerefableStringOperand(operand)) {
+                result.push('*' + texts[i].trim());
+            } else {
+                return undefined;
             }
         }
-        return true;
+        return result;
     }
 
     // the emission entry point: undefined when the file's stdlib import could not be placed
@@ -7083,8 +7090,9 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
         // `s.startsWith (p)` -> strings.HasPrefix
-        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string'])) {
-            const native = this.goNativeStringCall(`strings.HasPrefix(${name}, ${parsedArg})`);
+        const ops = (parsedArg === undefined) ? undefined : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.HasPrefix(${ops[0]}, ${ops[1]})`);
             if (native !== undefined) {
                 return native;
             }
@@ -7094,8 +7102,9 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
         // `s.endsWith (p)` -> strings.HasSuffix
-        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string'])) {
-            const native = this.goNativeStringCall(`strings.HasSuffix(${name}, ${parsedArg})`);
+        const ops = (parsedArg === undefined) ? undefined : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.HasSuffix(${ops[0]}, ${ops[1]})`);
             if (native !== undefined) {
                 return native;
             }
@@ -7110,8 +7119,9 @@ ${this.getIden(identation)}${returnStatement}`;
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
         // `a.join (sep)` -> strings.Join: only a declared `[]string` receiver can skip the
         // per-element ToString the helper applies to a []any
-        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['[]string', 'string'])) {
-            const native = this.goNativeStringCall(`strings.Join(${name}, ${parsedArg})`);
+        const ops = (parsedArg === undefined) ? undefined : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['[]string', 'string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.Join(${ops[0]}, ${ops[1]})`);
             if (native !== undefined) {
                 return native;
             }
@@ -7122,8 +7132,9 @@ ${this.getIden(identation)}${returnStatement}`;
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
         // `s.split (sep)` -> strings.Split, which keeps JS's empty trailing element
         // ("a," -> ["a", ""]) exactly like the helper's own strings.Split call
-        if (parsedArg !== undefined && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string'])) {
-            const native = this.goNativeStringCall(`strings.Split(${name}, ${parsedArg})`);
+        const ops = (parsedArg === undefined) ? undefined : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ['string', 'string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.Split(${ops[0]}, ${ops[1]})`);
             if (native !== undefined) {
                 return native;
             }
@@ -7137,7 +7148,7 @@ ${this.getIden(identation)}${returnStatement}`;
 
     // ToString is the identity on a Go string (exchange_helpers.go: derefScalar and `case string`
     // return it unchanged), so a receiver declared `string` prints as itself. An `any` box, a
-    // *string (derefScalar answers nil), an int64 or a float64 keeps the helper's runtime formatting.
+    // *string (derefScalar answers nil) or a float64 keeps the helper's runtime formatting.
     printToStringCall(node, identation, name = undefined) {
         if ((name !== undefined) && (name.indexOf('\n') < 0)) {
             const receiver = (node?.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
@@ -7145,6 +7156,15 @@ ${this.getIden(identation)}${returnStatement}`;
                 : undefined;
             if ((receiver !== undefined) && (this.goOperandStaticType(receiver, name) === 'string')) {
                 return name;
+            }
+            // a non-nil `*string`: derefScalar hands ToString the pointee, returned unchanged
+            if ((receiver !== undefined) && this.goDerefableStringOperand(receiver)) {
+                return '*' + name.trim();
+            }
+            // an int64 prints its decimal digits in both: the helper's Sprintf("%d") and FormatInt
+            if ((receiver !== undefined) && (this.goOperandStaticType(receiver, name) === 'int64') && this.goStdlibImportIsPlaceable()) {
+                this.goFileStdlibImports.add('strconv');
+                return `strconv.FormatInt(${name}, 10)`;
             }
         }
         return `ToString(${name})`;
@@ -7156,8 +7176,9 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printToUpperCaseCall(node, identation, name = undefined) {
         // `s.toUpperCase ()` -> strings.ToUpper
-        if (this.goNativeStringOperands([node.expression?.expression], [name], ['string'])) {
-            const native = this.goNativeStringCall(`strings.ToUpper(${name})`);
+        const ops = this.goNativeStringOperandTexts([node.expression?.expression], [name], ['string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.ToUpper(${ops[0]})`);
             if (native !== undefined) {
                 return native;
             }
@@ -7167,8 +7188,9 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printToLowerCaseCall(node, identation, name = undefined) {
         // `s.toLowerCase ()` -> strings.ToLower
-        if (this.goNativeStringOperands([node.expression?.expression], [name], ['string'])) {
-            const native = this.goNativeStringCall(`strings.ToLower(${name})`);
+        const ops = this.goNativeStringOperandTexts([node.expression?.expression], [name], ['string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.ToLower(${ops[0]})`);
             if (native !== undefined) {
                 return native;
             }
@@ -7319,9 +7341,10 @@ ${this.getIden(identation)}${returnStatement}`;
         // JS `replace` with a *string* pattern replaces the first occurrence only, which the
         // boxed helper (ReplaceAll for every argument) cannot express: with all three operands
         // proven strings, emit the count-1 form and the JS semantics exactly.
-        if (parsedArg !== undefined && parsedArg2 !== undefined
-            && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ['string', 'string', 'string'])) {
-            const native = this.goNativeStringCall(`strings.Replace(${name}, ${parsedArg}, ${parsedArg2}, 1)`);
+        const ops = (parsedArg === undefined || parsedArg2 === undefined) ? undefined
+            : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ['string', 'string', 'string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.Replace(${ops[0]}, ${ops[1]}, ${ops[2]}, 1)`);
             if (native !== undefined) {
                 return native;
             }
@@ -7331,9 +7354,10 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
         // `s.replaceAll (a, b)` replaces every occurrence, like the helper
-        if (parsedArg !== undefined && parsedArg2 !== undefined
-            && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ['string', 'string', 'string'])) {
-            const native = this.goNativeStringCall(`strings.ReplaceAll(${name}, ${parsedArg}, ${parsedArg2})`);
+        const ops = (parsedArg === undefined || parsedArg2 === undefined) ? undefined
+            : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ['string', 'string', 'string']);
+        if (ops !== undefined) {
+            const native = this.goNativeStringCall(`strings.ReplaceAll(${ops[0]}, ${ops[1]}, ${ops[2]})`);
             if (native !== undefined) {
                 return native;
             }

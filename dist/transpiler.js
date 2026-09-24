@@ -7379,6 +7379,7 @@ var GO_HELPER_RETURN_TYPES = {
   "strings.ReplaceAll": "string",
   "strings.HasPrefix": "bool",
   "strings.HasSuffix": "bool",
+  "strconv.FormatInt": "string",
   "IsInstance": "bool",
   "IsInteger": "bool",
   "this.InArray": "bool",
@@ -8550,7 +8551,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       }
       case ts5.SyntaxKind.CallExpression: {
         const property = initializer.expression;
-        if (property?.kind === ts5.SyntaxKind.PropertyAccessExpression && property.name?.escapedText === "toString" && initializer.arguments?.length === 0 && this.goOperandStaticType(property.expression, printedValue) === "string") {
+        if (property?.kind === ts5.SyntaxKind.PropertyAccessExpression && property.name?.escapedText === "toString" && initializer.arguments?.length === 0 && (this.goOperandStaticType(property.expression, printedValue) === "string" || this.goDerefableStringOperand(property.expression))) {
           return "string";
         }
         break;
@@ -13286,20 +13287,25 @@ ${this.getIden(level)}}()`;
     }
     return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
   }
-  // A native string operation needs every operand to be a printed Go `string` — the helper takes
-  // `any` and re-derives the same string, so a proven operand cannot change the result. A regex
-  // literal is never a Go string (a pattern, not the helper's ToString value) and keeps the helper.
-  goNativeStringOperands(operands, texts, expected) {
+  // A native string operation needs every operand to be a Go `string`: a proven one prints as is,
+  // a `*string` goDerefableStringOperand proves non-nil prints as its pointee (the helper's nil
+  // branch is unreachable). A regex literal is a pattern, never a string: undefined keeps the helper.
+  goNativeStringOperandTexts(operands, texts, expected) {
+    const result = [];
     for (let i = 0; i < expected.length; i++) {
       const operand = operands[i];
       if (operand === void 0 || operand.kind === ts5.SyntaxKind.RegularExpressionLiteral) {
-        return false;
+        return void 0;
       }
-      if (this.goOperandStaticType(operand, texts[i]) !== expected[i]) {
-        return false;
+      if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
+        result.push(texts[i]);
+      } else if (expected[i] === "string" && !texts[i].includes("\n") && this.goDerefableStringOperand(operand)) {
+        result.push("*" + texts[i].trim());
+      } else {
+        return void 0;
       }
     }
-    return true;
+    return result;
   }
   // the emission entry point: undefined when the file's stdlib import could not be placed
   // (see goStdlibImportIsPlaceable), else the native call text, with the file-level import
@@ -13318,8 +13324,9 @@ ${this.getIden(level)}}()`;
     return this.goFileKeepsFileLevelImports();
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.HasPrefix(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.HasPrefix(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13327,8 +13334,9 @@ ${this.getIden(level)}}()`;
     return `StartsWith(${name}, ${parsedArg})`;
   }
   printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.HasSuffix(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.HasSuffix(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13339,8 +13347,9 @@ ${this.getIden(level)}}()`;
     return `Trim(${name})`;
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["[]string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Join(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["[]string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.Join(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13348,8 +13357,9 @@ ${this.getIden(level)}}()`;
     return `Join(${name}, ${parsedArg})`;
   }
   printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Split(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0]], [name, parsedArg], ["string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.Split(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13361,12 +13371,19 @@ ${this.getIden(level)}}()`;
   }
   // ToString is the identity on a Go string (exchange_helpers.go: derefScalar and `case string`
   // return it unchanged), so a receiver declared `string` prints as itself. An `any` box, a
-  // *string (derefScalar answers nil), an int64 or a float64 keeps the helper's runtime formatting.
+  // *string (derefScalar answers nil) or a float64 keeps the helper's runtime formatting.
   printToStringCall(node, identation, name = void 0) {
     if (name !== void 0 && name.indexOf("\n") < 0) {
       const receiver = node?.expression?.kind === ts5.SyntaxKind.PropertyAccessExpression ? node.expression.expression : void 0;
       if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "string") {
         return name;
+      }
+      if (receiver !== void 0 && this.goDerefableStringOperand(receiver)) {
+        return "*" + name.trim();
+      }
+      if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "int64" && this.goStdlibImportIsPlaceable()) {
+        this.goFileStdlibImports.add("strconv");
+        return `strconv.FormatInt(${name}, 10)`;
       }
     }
     return `ToString(${name})`;
@@ -13375,8 +13392,9 @@ ${this.getIden(level)}}()`;
     return `Concat(${name}, ${parsedArg})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
-    if (this.goNativeStringOperands([node.expression?.expression], [name], ["string"])) {
-      const native = this.goNativeStringCall(`strings.ToUpper(${name})`);
+    const ops = this.goNativeStringOperandTexts([node.expression?.expression], [name], ["string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.ToUpper(${ops[0]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13384,8 +13402,9 @@ ${this.getIden(level)}}()`;
     return `ToUpper(${name})`;
   }
   printToLowerCaseCall(node, identation, name = void 0) {
-    if (this.goNativeStringOperands([node.expression?.expression], [name], ["string"])) {
-      const native = this.goNativeStringCall(`strings.ToLower(${name})`);
+    const ops = this.goNativeStringOperandTexts([node.expression?.expression], [name], ["string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.ToLower(${ops[0]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13526,8 +13545,9 @@ ${this.getIden(level)}}()`;
     return `Slice(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    if (parsedArg !== void 0 && parsedArg2 !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ["string", "string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Replace(${name}, ${parsedArg}, ${parsedArg2}, 1)`);
+    const ops = parsedArg === void 0 || parsedArg2 === void 0 ? void 0 : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ["string", "string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.Replace(${ops[0]}, ${ops[1]}, ${ops[2]}, 1)`);
       if (native !== void 0) {
         return native;
       }
@@ -13535,8 +13555,9 @@ ${this.getIden(level)}}()`;
     return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    if (parsedArg !== void 0 && parsedArg2 !== void 0 && this.goNativeStringOperands([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ["string", "string", "string"])) {
-      const native = this.goNativeStringCall(`strings.ReplaceAll(${name}, ${parsedArg}, ${parsedArg2})`);
+    const ops = parsedArg === void 0 || parsedArg2 === void 0 ? void 0 : this.goNativeStringOperandTexts([node.expression?.expression, node.arguments?.[0], node.arguments?.[1]], [name, parsedArg, parsedArg2], ["string", "string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.ReplaceAll(${ops[0]}, ${ops[1]}, ${ops[2]})`);
       if (native !== void 0) {
         return native;
       }
