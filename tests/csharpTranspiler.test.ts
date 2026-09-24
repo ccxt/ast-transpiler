@@ -1,7 +1,8 @@
 import { Transpiler } from '../src/transpiler';
 import { readFileSync } from 'fs';
 // the test bodies name their TS source snippets `ts`, so the compiler API gets its own name
-import tsApi from 'typescript';
+import { SyntaxKind } from 'typescript/unstable/ast';
+import { isStringLiteralLikeNode } from 'typescript/unstable/ast/is';
 jest.mock('module',()=>({
     __esModule: true,                 // this makes it work
     default: jest.fn()
@@ -537,11 +538,11 @@ describe('csharp transpiling tests', () => {
         const ts =
         "const x = {};\n" +
         "x[\"teste\"] = 1;";
-        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'Dictionary<string, object>' : undefined;
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.text === 'x') ? 'Dictionary<string, object>' : undefined;
         expect(hooked.transpileCSharp(ts).content).toBe(
             "object x = new Dictionary<string, object>() {};\n" +
             "x[\"teste\"] = 1;");
-        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'IDictionary<string, object>' : undefined;
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.text === 'x') ? 'IDictionary<string, object>' : undefined;
         expect(hooked.transpileCSharp(ts).content).toBe(
             "object x = new Dictionary<string, object>() {};\n" +
             "x[\"teste\"] = 1;");
@@ -563,7 +564,7 @@ describe('csharp transpiling tests', () => {
             }
         }
         const hooked = new Transpiler(config);
-        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'Dictionary<string, object>' : undefined;
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.text === 'x') ? 'Dictionary<string, object>' : undefined;
         const ts =
         "const x = {};\n" +
         "x[1] = 1;";
@@ -602,7 +603,7 @@ describe('csharp transpiling tests', () => {
             "((IDictionary<string,object>)x).Remove((string)\"a\");\n" +
             "((IDictionary<string,object>)x)[\"b\"] = 2;");
         const hooked = new Transpiler(config);
-        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'Dictionary<string, object>' : undefined;
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.text === 'x') ? 'Dictionary<string, object>' : undefined;
         expect(hooked.transpileCSharp(ts).content).toBe(
             "object x = new Dictionary<string, object>() {\n" +
             "    { \"a\", 1 },\n" +
@@ -612,7 +613,7 @@ describe('csharp transpiling tests', () => {
             "List<object> w = new List<object>(x.Values);\n" +
             "x.Remove((string)\"a\");\n" +
             "x[\"b\"] = 2;");
-        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.escapedText === 'x') ? 'IDictionary<string, object>' : undefined;
+        hooked.csharpTranspiler.csharpDeclaredReceiverType = (node) => (node?.text === 'x') ? 'IDictionary<string, object>' : undefined;
         expect(hooked.transpileCSharp(ts).content).toBe(
             "object x = new Dictionary<string, object>() {\n" +
             "    { \"a\", 1 },\n" +
@@ -691,7 +692,7 @@ describe('csharp transpiling tests', () => {
             expect(output).toBe(csharp);
         })
         test('a non-literal key keeps the wrapper (the twin takes a string)', () => {
-            install((node: any) => (tsApi.isStringLiteralLike(node.argumentExpression) ? 'IDictionary<string, object>' : undefined));
+            install((node: any) => (isStringLiteralLikeNode(node.argumentExpression) ? 'IDictionary<string, object>' : undefined));
             const ts =
             "class Exchange {\n" +
             "    async read (key) {\n" +
@@ -1735,7 +1736,7 @@ describe('csharp typed body locals', () => {
         const previous = printer.csharpDeclaredLocalTypeResolver;
         // a parameter the build layer retypes to the interface: its box may still be null, so
         // the emitted read carries the helper's null receiver branch
-        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.escapedText === 'currency') ? 'IDictionary<string, object>' : undefined;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'currency') ? 'IDictionary<string, object>' : undefined;
         const output = transpiler.transpileCSharp(
         "class Exchange {\n" +
         "    main(currency: any) {\n" +
@@ -2095,7 +2096,7 @@ describe('a nullable bool local prints an explicit `== true` instead of isTrue',
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpExpressionTypeResolver;
         // a local the printer itself leaves `object` but the ccxt classifier prints `bool?`
-        printer.csharpExpressionTypeResolver = (node: any) => (node?.escapedText === 'v' ? 'bool?' : undefined);
+        printer.csharpExpressionTypeResolver = (node: any) => (node?.text === 'v' ? 'bool?' : undefined);
         const output = transpiler.transpileCSharp(
         "class T {\n" +
         "    f(a) {\n" +
@@ -2153,7 +2154,7 @@ describe('isTrue on a bool?-returning call becomes the lifted `== true` comparis
             // no declaration-level proof: the parameter stays a boxed read
             expect(transpiler.transpileCSharp(input).content).toContain("if (isTrue(hedged))");
             // the hook the typed-parameter units register names the PRINTED `bool?`
-            printer.csharpDeclaredLocalTypeResolver = (declaration: any) => ((declaration?.name?.escapedText === 'hedged') ? 'bool?' : undefined);
+            printer.csharpDeclaredLocalTypeResolver = (declaration: any) => ((declaration?.name?.text === 'hedged') ? 'bool?' : undefined);
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain("if ((hedged == true))");
             expect(output).toContain("(hedged == true) ? \"a\" : \"b\"");
@@ -2282,7 +2283,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         // with a concrete C# type of its own; its answer comes back through
         // csharpExpressionTypeResolver, so a read of such a local IS that declared type
         const withDeclaredTypes = (types, input) => {
-            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.text];
             try {
                 return transpiler.transpileCSharp(input).content;
             } finally {
@@ -2307,7 +2308,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
     });
     test('a declared type that is not a string keeps isEqual', () => {
         const withDeclaredTypes = (types, input) => {
-            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.text];
             try {
                 return transpiler.transpileCSharp(input).content;
             } finally {
@@ -2328,7 +2329,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
     });
     test('a string local against another literal kind or another read keeps isEqual', () => {
         const withDeclaredTypes = (types, input) => {
-            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.text];
             try {
                 return transpiler.transpileCSharp(input).content;
             } finally {
@@ -2349,7 +2350,7 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
     });
     test('a parameter keeps isEqual: it prints `object` and the resolver declines it', () => {
         const withDeclaredTypes = (types, input) => {
-            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.text];
             try {
                 return transpiler.transpileCSharp(input).content;
             } finally {
@@ -2648,7 +2649,7 @@ describe('csharp equality of two reads the embedding build layer typed', () => {
     // bool?, ...) and records each one through csharpExpressionTypeResolver; a pair of reads
     // it typed compares like the two boxes isEqual compares. These tests stub that resolver.
     const withReadKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -2726,7 +2727,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "    return [yes, no];\n" +
         "}";
     test('a bool? read against a bool literal prints the operator', () => {
-        const output = withResolver((node) => (node?.escapedText === 'v') ? 'bool?' : undefined, boolRead);
+        const output = withResolver((node) => (node?.text === 'v') ? 'bool?' : undefined, boolRead);
         expect(output).toContain("bool yes = (v == true);");
         expect(output).toContain("bool no = (v != false);");
         expect(output).not.toContain("isEqual(v, true)");
@@ -2738,7 +2739,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "    const isOne = n === 1;\n" +
         "    return isOne;\n" +
         "}";
-        const output = withResolver((node) => (node?.escapedText === 'n') ? 'Int64?' : undefined, input);
+        const output = withResolver((node) => (node?.text === 'n') ? 'Int64?' : undefined, input);
         expect(output).toContain("bool isOne = (n == 1);");
         expect(output).not.toContain("isEqual(n, 1)");
     });
@@ -2751,7 +2752,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "        return isA || same;\n" +
         "    }\n" +
         "}";
-        const output = withRegistry((declaration) => (declaration?.name?.escapedText === 'x' || declaration?.name?.escapedText === 'y') ? 'string' : undefined, input);
+        const output = withRegistry((declaration) => (declaration?.name?.text === 'x' || declaration?.name?.text === 'y') ? 'string' : undefined, input);
         expect(output).toContain("bool isA = (x == \"a\");");
         expect(output).toContain("bool same = (x == y);");
         expect(output).not.toContain("isEqual(x");
@@ -2763,7 +2764,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "        return x === 3;\n" +
         "    }\n" +
         "}";
-        const output = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, input);
+        const output = withRegistry((declaration) => (declaration?.name?.text === 'x') ? 'Int64?' : undefined, input);
         expect(output).toContain("(x == 3)");
         expect(output).not.toContain("isEqual(x, 3)");
     });
@@ -2774,7 +2775,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "    const isOne = s === 1;\n" +
         "    return isOne;\n" +
         "}";
-        expect(withResolver((node) => (node?.escapedText === 's') ? 'string?' : undefined, literal)).toContain("isEqual(s, 1)");
+        expect(withResolver((node) => (node?.text === 's') ? 'string?' : undefined, literal)).toContain("isEqual(s, 1)");
         const pair =
         "class T {\n" +
         "    f(x: string, n: number): boolean {\n" +
@@ -2782,7 +2783,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "    }\n" +
         "}";
         const kinds = { x: 'string', n: 'Int64?' };
-        const output = withRegistry((declaration) => kinds[declaration?.name?.escapedText], pair);
+        const output = withRegistry((declaration) => kinds[declaration?.name?.text], pair);
         expect(output).toContain("isEqual(x, n)");
     });
     test('a mixed numeric pair and a collection still keep the helper', () => {
@@ -2793,7 +2794,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "    }\n" +
         "}";
         const kinds = { a: 'double?', b: 'Int64?' };
-        expect(withRegistry((declaration) => kinds[declaration?.name?.escapedText], mixed)).toContain("isEqual(a, b)");
+        expect(withRegistry((declaration) => kinds[declaration?.name?.text], mixed)).toContain("isEqual(a, b)");
         const collections =
         "class T {\n" +
         "    f(rows, other): boolean {\n" +
@@ -2801,7 +2802,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "    }\n" +
         "}";
         const rowKinds = { rows: 'List<object>', other: 'List<object>' };
-        expect(withRegistry((declaration) => rowKinds[declaration?.name?.escapedText], collections)).toContain("isEqual(rows, other)");
+        expect(withRegistry((declaration) => rowKinds[declaration?.name?.text], collections)).toContain("isEqual(rows, other)");
     });
     test('a registered read against null keeps the null branch decision', () => {
         // a required numeric parameter keeps B-18's answer (the helper): the registry spelling
@@ -2813,7 +2814,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "        return x === undefined;\n" +
         "    }\n" +
         "}";
-        const requiredOutput = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, required);
+        const requiredOutput = withRegistry((declaration) => (declaration?.name?.text === 'x') ? 'Int64?' : undefined, required);
         expect(requiredOutput).toContain("isEqual(x, null)");
         const optional =
         "class T {\n" +
@@ -2821,7 +2822,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
         "        return x === undefined;\n" +
         "    }\n" +
         "}";
-        const optionalOutput = withRegistry((declaration) => (declaration?.name?.escapedText === 'x') ? 'Int64?' : undefined, optional);
+        const optionalOutput = withRegistry((declaration) => (declaration?.name?.text === 'x') ? 'Int64?' : undefined, optional);
         expect(optionalOutput).toContain("(x == null)");
     });
 });
@@ -2833,7 +2834,7 @@ describe('csharp equality on a declared scalar read: literals and the parameter 
 // hook cannot name keeps the helper.
 describe('csharp null-literal comparisons instead of the isEqual wrapper', () => {
     const withNullTypes = (types, input) => {
-        transpiler.csharpTranspiler.csharpNullComparisonTypeOf = (node) => types[node?.escapedText];
+        transpiler.csharpTranspiler.csharpNullComparisonTypeOf = (node) => types[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -2892,7 +2893,7 @@ describe('csharp null-literal comparisons instead of the isEqual wrapper', () =>
         expect(output).toContain("isEqual(this.notAListedField, null)");
     });
     test('the string-literal rule is unaffected by the null hook', () => {
-        transpiler.csharpTranspiler.csharpLocalTypeOf = (node) => (node?.escapedText === 's' ? 'string?' : undefined);
+        transpiler.csharpTranspiler.csharpLocalTypeOf = (node) => (node?.text === 's' ? 'string?' : undefined);
         try {
             const output = transpiler.transpileCSharp(
             "function f (s: string) {\n" +
@@ -2912,7 +2913,7 @@ describe('csharp native numeric comparisons', () => {
     // itself; locals it leaves `object` (or that the embedding build layer retypes) come back
     // through csharpExpressionTypeResolver — these tests stub that resolver with a name map
     const withKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -3132,7 +3133,7 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
     });
     test('csharpDeclaredDictReceiverType naming the receiver a dictionary emits ContainsKey', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
-        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.escapedText === 'merged' ? 'Dictionary<string, object>' : undefined);
+        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.text === 'merged' ? 'Dictionary<string, object>' : undefined);
         try {
             const input =
             "class Exchange {\n" +
@@ -3151,8 +3152,8 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
     });
     test('an identifier key gets the helper null guard back', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
-        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.escapedText === 'merged' ? 'IDictionary<string, object>' : undefined);
-        csharp.csharpLocalTypeOf = (node: any) => (node?.escapedText === 'code' ? 'string?' : undefined);
+        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.text === 'merged' ? 'IDictionary<string, object>' : undefined);
+        csharp.csharpLocalTypeOf = (node: any) => (node?.text === 'code' ? 'string?' : undefined);
         try {
             const input =
             "class Exchange {\n" +
@@ -3172,7 +3173,7 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
     });
     test('a non-dictionary hook answer, a foreign receiver and an unnameable key keep inOp', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
-        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.escapedText === 'merged' ? 'List<object>' : undefined);
+        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.text === 'merged' ? 'List<object>' : undefined);
         try {
             const input =
             "class Exchange {\n" +
@@ -3278,7 +3279,7 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         "    }\n" +
         "}";
         const withType = (type) => {
-            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'xs') ? type : undefined;
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.text === 'xs') ? type : undefined;
             try {
                 return transpiler.transpileCSharp(input).content;
             } finally {
@@ -3435,7 +3436,7 @@ describe('csharp isEqual(getValue(x, "k"), lit) becomes a native comparison', ()
     // the receiver's C# declaration comes from the embedding build layer (the resolver the
     // numeric-comparison installer sets), the element's type from the checker
     const withReceiverTypes = (types, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => types[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -3545,7 +3546,7 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
     // embedding build layer proves it — build/csharp-local-types.js in ccxt retypes the
     // declaration `int i = 0` itself); these tests stub that resolver with a name map
     const withKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -3757,7 +3758,7 @@ describe('csharp helper removal: getIndexOf becomes the receiver IndexOf', () =>
     // the printed C# type of a local the embedding build layer retypes comes back through
     // csharpExpressionTypeResolver — these tests stub that resolver with a name map
     const withKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -3930,7 +3931,7 @@ describe('csharp Math.min/Math.max native emission', () => {
     // embedding build layer retypes come back through csharpExpressionTypeResolver — these
     // tests stub that resolver with a name map, like the numeric-comparison block above
     const withKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -4188,7 +4189,7 @@ describe('csharp helper removal: parseInt / parseFloat / mod / prefix `-x`', () 
     // csharpExpressionTypeResolver — these tests stub that resolver with a name map
     // (same pattern as the numeric-comparison block above)
     const withKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -4361,7 +4362,7 @@ describe('csharp loop-index element reads', () => {
     // retypes) comes back through csharpExpressionTypeResolver — these tests stub that resolver
     // with a name map, exactly like the numeric-comparison block above
     const withKinds = (kinds, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -4432,7 +4433,7 @@ describe('csharp loop-index element reads', () => {
 describe('isTrue drops for a declared bool the printer did not type itself', () => {
     // Identifier nodes only, the way installCsharpNumericComparisons installs the resolver
     const withKind = (kind, input) => {
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.kind === 80) ? kind : undefined;
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.kind === SyntaxKind.Identifier) ? kind : undefined;
         try {
             return transpiler.transpileCSharp(input).content;
         } finally {
@@ -4720,7 +4721,7 @@ describe('cs-10: literal-key reads on declared collection locals go native', () 
         "        return y;\n" +
         "    }\n" +
         "}\n";
-        transpiler.csharpTranspiler.csharpDeclaredLocalTypeResolver = (declaration) => (declaration.name?.escapedText === 'untyped') ? 'Dictionary<string, object>' : undefined;
+        transpiler.csharpTranspiler.csharpDeclaredLocalTypeResolver = (declaration) => (declaration.name?.text === 'untyped') ? 'Dictionary<string, object>' : undefined;
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain("object untyped = this.safeValue(item, \"x\");");
@@ -4783,7 +4784,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "}\n";
         // the printed declaration stays `object`; the value-type oracle names the box the source
         // proves, so the read compiles behind the cast and keeps the helper's null answers
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'ticker') ? 'Dictionary<string, object>' : undefined;
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.text === 'ticker') ? 'Dictionary<string, object>' : undefined;
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain('object ticker = this.parseWsBidAsk(row);');
@@ -4810,7 +4811,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "    }\n" +
         "}\n";
         const kinds: any = { rows: 'List<object>', ticker: 'Dictionary<string, object>', currency: 'Dictionary<string, object>' };
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.escapedText];
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
         try {
             const output = transpiler.transpileCSharp(input).content;
             // a list box has no dictionary key read; `currency` is a market-row receiver whose
@@ -4833,7 +4834,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
         "        return ticker['symbol'];\n" +
         "    }\n" +
         "}\n";
-        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.escapedText === 'ticker') ? 'Dictionary<string, object>' : undefined;
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.text === 'ticker') ? 'Dictionary<string, object>' : undefined;
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain('getValue(ticker, "symbol")');
@@ -5117,7 +5118,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
     });
     test('csharpLocalTypeOf naming the operand a string emits the native operator', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
-        csharp.csharpLocalTypeOf = (node: any) => (node?.escapedText === 's' ? 'string' : undefined);
+        csharp.csharpLocalTypeOf = (node: any) => (node?.text === 's' ? 'string' : undefined);
         try {
             const input =
             "class Exchange {\n" +
@@ -5139,7 +5140,7 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
     });
     test('a non-string hook answer and a non-literal side keep the helper', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
-        csharp.csharpLocalTypeOf = (node: any) => (node?.escapedText === 's' ? 'object' : undefined);
+        csharp.csharpLocalTypeOf = (node: any) => (node?.text === 's' ? 'object' : undefined);
         try {
             const input =
             "class Exchange {\n" +
@@ -5190,10 +5191,10 @@ describe('x.push on a receiver the classifier declares a list drops the cast', (
     });
     test('a receiver the hook names a list is printed without the cast', () => {
         (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => {
-            if (node?.escapedText === 'keys') {
+            if (node?.text === 'keys') {
                 return 'List<object>';
             }
-            if (node?.escapedText === 'other') {
+            if (node?.text === 'other') {
                 return 'IList<object>';
             }
             return undefined;
@@ -5220,7 +5221,7 @@ describe('x.push on a receiver the classifier declares a list drops the cast', (
         expect(output).toContain("((IList<object>)plain).Add(\"c\")");
     });
     test('a receiver the hook names object keeps the cast', () => {
-        (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => (node?.escapedText === 'keys' ? 'object' : undefined);
+        (transpiler as any).csharpTranspiler.csharpLocalTypeOf = (node: any) => (node?.text === 'keys' ? 'object' : undefined);
         const input =
         "class Exchange {\n" +
         "    main () {\n" +
@@ -5373,7 +5374,7 @@ describe('csharp typed condition operands', () => {
         const upstream = csharp.csharpConditionOperandType.bind(csharp);
         // what the ccxt classifier's installCsharpConditionOperands override answers for a
         // declaration its tables retype to `bool?`
-        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'flag') ? 'bool?' : upstream(node));
+        csharp.csharpConditionOperandType = (node) => ((node?.text === 'flag') ? 'bool?' : upstream(node));
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain("if (flag == true)");
@@ -5447,7 +5448,7 @@ describe('csharp typed condition operands', () => {
         const upstream = csharp.csharpConditionOperandType.bind(csharp);
         // what the ccxt classifier's installCsharpConditionOperands override answers for a
         // declaration its tables retype to `bool?`
-        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'flag') ? 'bool?' : upstream(node));
+        csharp.csharpConditionOperandType = (node) => ((node?.text === 'flag') ? 'bool?' : upstream(node));
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain("object pick = flag == true ? a : b;");
@@ -5482,7 +5483,7 @@ describe('csharp typed condition operands', () => {
         "}\n";
         const csharp = transpiler.csharpTranspiler;
         const upstream = csharp.csharpConditionOperandType.bind(csharp);
-        csharp.csharpConditionOperandType = (node) => ((node?.escapedText === 'flag') ? 'bool?' : upstream(node));
+        csharp.csharpConditionOperandType = (node) => ((node?.text === 'flag') ? 'bool?' : upstream(node));
         try {
             const output = transpiler.transpileCSharp(input).content;
             expect(output).toContain("if (flag != true)");
@@ -5623,7 +5624,7 @@ describe('S62: falsy wrapper around a printed bool', () => {
     test('a proven string answer emits the parenthesised native concat', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
         csharp.csharpNativeStringConcat = (left: any, right: any, leftText: string, rightText: string) =>
-            ((left?.escapedText === 's') ? `(${leftText} + ${rightText})` : undefined);
+            ((left?.text === 's') ? `(${leftText} + ${rightText})` : undefined);
         try {
             const input =
             "class Exchange {\n" +
@@ -5646,7 +5647,7 @@ describe('S62: falsy wrapper around a printed bool', () => {
     test('a nested add chain converts through the same hook and stays parenthesised', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
         csharp.csharpNativeStringConcat = (left: any, right: any, leftText: string, rightText: string) =>
-            ((left?.escapedText === 's' || (left?.kind === tsApi.SyntaxKind.BinaryExpression && left?.operatorToken?.kind === tsApi.SyntaxKind.PlusToken))
+            ((left?.text === 's' || (left?.kind === SyntaxKind.BinaryExpression && left?.operatorToken?.kind === SyntaxKind.PlusToken))
                 ? `(${leftText} + ${rightText})` : undefined);
         try {
             const input =
@@ -5689,7 +5690,7 @@ describe('S62: falsy wrapper around a printed bool', () => {
 describe('csharp declared-receiver .length: getArrayLength -> Count/Length (hook gated)', () => {
     const withReceiverType = (type, source) => {
         const previous = transpiler.csharpTranspiler.csharpLengthReceiverType;
-        transpiler.csharpTranspiler.csharpLengthReceiverType = (node) => ((node?.kind === tsApi.SyntaxKind.Identifier) ? type : undefined);
+        transpiler.csharpTranspiler.csharpLengthReceiverType = (node) => ((node?.kind === SyntaxKind.Identifier) ? type : undefined);
         try {
             return transpiler.transpileCSharp(source).content;
         } finally {

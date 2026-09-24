@@ -583,10 +583,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         // check if it is a class declaration that we need to wrap arounf typeof
         // example: const x = Error -> var x = typeof(Error)
         const type = this.getChecker().getTypeAtLocation(node);
-        const symbol = type?.symbol;
+        const symbol = type?.getSymbol();
         if (symbol !== undefined) {
-            // const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
-            const decl = symbol?.declarations ?? [];
+            // const declarations = (this.getChecker().getDeclaredTypeOfSymbol(symbol).getSymbol()?.declarations ?? []).map((d) => d.resolve());
+            const decl = (symbol?.declarations ?? []).map((d) => d.resolve());
             let isBuiltIn = undefined;
             if (decl.length > 0) {
                 isBuiltIn = decl[0].getSourceFile().fileName.indexOf('typescript') > -1; //very hacky find a better solution later
@@ -608,13 +608,13 @@ export class CSharpTranspiler extends BaseTranspiler {
                     const symbol = this.getChecker().getSymbolAtLocation(node);
                     let isClassDeclaration = false;
                     if (symbol) {
-                        const first = symbol.declarations[0];
+                        const first = symbol.declarations[0].resolve();
                         if (first.kind === SyntaxKind.ClassDeclaration) {
                             isClassDeclaration = true;
                         }
                         if (first.kind === SyntaxKind.ImportSpecifier) {
                             const importedSymbol = this.getChecker().getAliasedSymbol(symbol);
-                            if (importedSymbol?.declarations[0]?.kind === SyntaxKind.ClassDeclaration) {
+                            if (importedSymbol?.declarations[0]?.resolve()?.kind === SyntaxKind.ClassDeclaration) {
                                 isClassDeclaration = true;
                             }
                         }
@@ -754,7 +754,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         // the interface cast also carries the string-key proof; only a string key (or a union
         // holding one, the shape the index-signature key type reports) may stay cast-less
         const keyType = this.getChecker().getTypeAtLocation(argumentExpression);
-        const members = (keyType.flags === TypeFlags.Union) ? ((keyType as any).types ?? [keyType]) : [keyType];
+        const members = (keyType.flags === TypeFlags.Union) ? ((keyType as any).getTypes() ?? [keyType]) : [keyType];
         const stringKey = (keyType.flags === TypeFlags.Any) || members.some((t) => this.isStringType(t.flags));
         if (!stringKey) {
             return undefined;
@@ -799,13 +799,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (this.csharpElementAccessReceiverIsList(node)) {
             const type = this.getChecker().getTypeAtLocation(node.argumentExpression);
-            const isUnion = ((type.flags & TypeFlags.Union) !== 0) && Array.isArray((type as any).types);
+            const isUnion = ((type.flags & TypeFlags.Union) !== 0) && Array.isArray((type as any).getTypes());
             // the base printer's own key dispatch, plus the union spelling the worker
             // handles: a string (or type-less) key is a dictionary element, never a list
             // index, and keeps the IDictionary cast
             const isStringOrUnknownKey = this.isStringType(type.flags)
                 || (type.flags === TypeFlags.Any)
-                || (isUnion && (type as any).types.some((t) => this.isStringType(t.flags)));
+                || (isUnion && (type as any).getTypes().some((t) => this.isStringType(t.flags)));
             if (!isStringOrUnknownKey) {
                 return `${this.printNode(node.expression, 0)}[Convert.ToInt32(${this.printNode(node.argumentExpression, 0)})]`;
             }
@@ -1311,7 +1311,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         const symbol: any = this.getChecker().getSymbolAtLocation(expression);
-        const declarations: any = symbol?.declarations ?? [];
+        const declarations: any = (symbol?.declarations ?? []).map((d) => d.resolve());
         if (declarations.length !== 1 || !isVariableDeclaration(declarations[0])) {
             return false;
         }
@@ -2203,7 +2203,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const flags = type.flags;
         if (flags & TypeFlags.Union) {
-            const members = type.types ?? [];
+            const members = type.getTypes?.() ?? [];
             return members.some((member) => this.csharpTypeHasValueScalar(member));
         }
         return (flags & (TypeFlags.Number | TypeFlags.NumberLiteral | TypeFlags.Boolean | TypeFlags.BooleanLiteral)) !== 0;
@@ -2565,7 +2565,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (checker === undefined) {
             return true; // in-memory program without a checker: the name is all there is
         }
-        const declarations = checker.getSymbolAtLocation(node)?.declarations ?? [];
+        const declarations = (checker.getSymbolAtLocation(node)?.declarations ?? []).map((d) => d.resolve());
         return declarations.every((declaration) => declaration.getSourceFile().fileName.indexOf('typescript') > -1);
     }
 
@@ -2754,7 +2754,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (type === undefined || this.isAnyType(type.flags)) {
             return false;
         }
-        return type?.symbol?.escapedName === 'Array';
+        return type?.getSymbol()?.escapedName === 'Array';
     }
 
     // a union of dictionary members and nullish ones (what a `Dict | undefined` signature
@@ -2765,7 +2765,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         let dictionaries = 0;
-        for (const member of (type as UnionType).types ?? []) {
+        for (const member of (type as UnionType).getTypes() ?? []) {
             if ((member.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) {
                 continue;
             }
@@ -3012,7 +3012,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpScalarElementKinds(node): number {
         try {
             const type = this.getChecker().getTypeAtLocation(node);
-            const members = ((type.flags & TypeFlags.Union) !== 0) ? ((type as any).types ?? []) : [ type ];
+            const members = ((type.flags & TypeFlags.Union) !== 0) ? ((type as any).getTypes() ?? []) : [ type ];
             let kinds = 0;
             for (const member of members) {
                 const flags = member.flags;
@@ -3360,7 +3360,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         let checker;
         try {
             checker = this.getChecker();
-            declaration = checker.getResolvedSignature(node)?.declaration;
+            declaration = checker.getResolvedSignature(node)?.declaration?.resolve();
         } catch (e) {
             return false;
         }
@@ -3912,7 +3912,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (node === undefined || node.kind !== SyntaxKind.Parameter) {
             return super.printParameterType(node);
         }
-        const method = findAncestor(node, (n) => isMethodDeclaration(n));
+        const method: any = findAncestor(node, (n) => isMethodDeclaration(n));
         const name = method === undefined || method.name === undefined ? undefined : method.name.getText().trim();
         const row = name === undefined ? undefined : CSHARP_OVERRIDE_PARAM_TYPES[name as string];
         const wanted = row === undefined ? undefined : row[method.parameters.indexOf(node)];
@@ -3926,11 +3926,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // index signature, never a class instance or a callable) or an array of any/dictionary cells
     csharpOverrideParamSpelling(node): string | undefined {
         const type = this.getChecker().getTypeAtLocation(node);
-        const rest = (type === undefined || !type.isUnion())
+        const rest = (type === undefined || !type.isUnionType())
             ? type
-            : type.types.filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null)))[0];
-        return this.csharpOverrideParamSpellingOfType(rest, type !== undefined && type.isUnion()
-            ? type.types.filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null))).length
+            : type.getTypes().filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null)))[0];
+        return this.csharpOverrideParamSpellingOfType(rest, type !== undefined && type.isUnionType()
+            ? type.getTypes().filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null))).length
             : 1);
     }
 
@@ -3955,7 +3955,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (checker.getIndexTypeOfType(type, IndexKind.String) === undefined) {
             return undefined;
         }
-        const declarations = type.symbol && type.symbol.declarations ? type.symbol.declarations : [];
+        const declarations = type.getSymbol()?.declarations ? type.getSymbol().declarations.map((d) => d.resolve()) : [];
         if (declarations.some((d) => d.kind === SyntaxKind.ClassDeclaration)) {
             return undefined;   // a class instance is not a JSON dictionary
         }
@@ -4049,7 +4049,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         let result: string | undefined = undefined;
         if (node.type) {
             const type = this.getChecker().getTypeFromTypeNode(node.type);
-            const members = type.isUnion() ? type.types : [ type ];
+            const members = type.isUnionType() ? type.getTypes() : [ type ];
             let nullable = false;
             let sawBoolean = false;
             let sawOther = false;
@@ -4369,7 +4369,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         const symbol = checker.getSymbolAtLocation(receiver);
-        const declarations: any[] = symbol?.declarations ?? [];
+        const declarations: any[] = (symbol?.declarations ?? []).map((d) => d.resolve());
         return (declarations.length > 0) && declarations.every((declaration) => this.csharpDeclarationIsNonNullString(declaration));
     }
 
@@ -4744,7 +4744,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (type?.flags !== TypeFlags.Union) {
             return false;
         }
-        const members = type.types ?? [];
+        const members = type.getTypes?.() ?? [];
         return (members.length > 0) && members.every((member) => this.isStringType(member.flags) || this.csharpSliceNullishType(member.flags));
     }
 
@@ -4975,7 +4975,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         const signature = this.getChecker().getResolvedSignature(node);
-        const declaration = signature?.declaration;
+        const declaration: any = signature?.declaration?.resolve();
         // a bodiless overload signature (`safeBool (…, defaultValue: boolean): boolean` next to a
         // `boolean | undefined` implementation) states only that overload's type, while C# binds
         // the single implementation: its `bool?` must not lose the wrapper
@@ -5034,7 +5034,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!this.csharpCalleeResolves(node)) {
             return false;
         }
-        const declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        const declaration: any = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
         if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined) {
             return false;
         }
@@ -5281,7 +5281,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const idName = id.text === 'Error' ? 'Exception' : id.text;
                 const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
                 if (symbol) {
-                    const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+                    const declarations = (this.getChecker().getDeclaredTypeOfSymbol(symbol).getSymbol()?.declarations ?? []).map((d) => d.resolve());
                     const isClassDeclaration = declarations.find(l => l.kind === SyntaxKind.InterfaceDeclaration ||  l.kind === SyntaxKind.ClassDeclaration);
                     if (isClassDeclaration){
                         return this.getIden(identation) + `${this.THROW_TOKEN} ${this.NEW_TOKEN} ${idName} ((string)${parsedArg}) ${this.LINE_TERMINATOR}`;
