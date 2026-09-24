@@ -14503,10 +14503,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     // Static method emitted in place of java.util.concurrent.CompletableFuture.supplyAsync
     // for async methods. The callee owns the executor choice, so no second argument is emitted.
     this.asyncSupplier = "";
-    // method names declared by the `Exchange` class of ts/src/base/Exchange.ts, read off the
+    // method declarations (first per name) of the `Exchange` class of ts/src/base/Exchange.ts, read off the
     // program the warp ran on. A prediction venue's method with one of these names overrides
     // the tier body javaTranspiler.ts injects into PredictionExchange.java.
-    this._exchangeTierMethodNames = void 0;
+    this._exchangeTierMethods = void 0;
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
     // by method node; a plain assignment is handled by javaParameterAssignmentCast
     this.javaMethodAssignedNames = /* @__PURE__ */ new WeakMap();
@@ -16139,8 +16139,11 @@ var JavaTranspiler = class extends BaseTranspiler {
       const method = node.parent;
       const index = method.parameters.indexOf(node);
       let override = this.getMethodOverride(method);
-      if (override === void 0 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName) && method.name !== void 0 && this.exchangeTierMethodNames().has(method.name.getText().trim())) {
-        return void 0;
+      if (override === void 0 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName) && method.name !== void 0) {
+        const tier = this.exchangeTierMethods().get(method.name.getText().trim());
+        if (tier !== void 0 && !this.javaParameterPrintsType(tier.parameters?.[index], type)) {
+          return void 0;
+        }
       }
       while (override !== void 0) {
         const baseParam = override.parameters?.[index];
@@ -16154,18 +16157,19 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return type;
   }
-  exchangeTierMethodNames() {
-    if (this._exchangeTierMethodNames !== void 0) {
-      return this._exchangeTierMethodNames;
+  exchangeTierMethods() {
+    if (this._exchangeTierMethods !== void 0) {
+      return this._exchangeTierMethods;
     }
-    const names = /* @__PURE__ */ new Set();
+    const names = /* @__PURE__ */ new Map();
     try {
       const file = this.getProgram().getSourceFiles().find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
       const collect = (node) => {
         if (ts6.isClassDeclaration(node) && node.name?.text === "Exchange") {
           for (const member of node.members) {
-            if (ts6.isMethodDeclaration(member) && member.name !== void 0) {
-              names.add(member.name.getText().trim());
+            const key = member.name?.getText().trim();
+            if (ts6.isMethodDeclaration(member) && key !== void 0 && !names.has(key)) {
+              names.set(key, member);
             }
           }
         }
@@ -16176,7 +16180,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
     } catch (e) {
     }
-    this._exchangeTierMethodNames = names;
+    this._exchangeTierMethods = names;
     return names;
   }
   // the same parameter position of an ancestor declaration prints this native type: its

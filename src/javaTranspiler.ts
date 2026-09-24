@@ -2295,11 +2295,13 @@ export class JavaTranspiler extends BaseTranspiler {
             let override = this.getMethodOverride(method);
             if (override === undefined
                 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName)
-                && method.name !== undefined
-                && this.exchangeTierMethodNames().has(method.name.getText().trim())) {
-                // the venue method overrides the Exchange-tier core the generated prediction base
-                // carries; those declarations keep `Object` parameters (D8: the override must match)
-                return undefined;
+                && method.name !== undefined) {
+                // a venue method overriding the Exchange-tier body PredictionExchange.java carries
+                // must print that tier parameter's type (D8: Java overrides are invariant)
+                const tier = this.exchangeTierMethods().get(method.name.getText().trim());
+                if (tier !== undefined && !this.javaParameterPrintsType(tier.parameters?.[index], type)) {
+                    return undefined;
+                }
             }
             while (override !== undefined) {
                 const baseParam = (override as any).parameters?.[index];
@@ -2314,23 +2316,24 @@ export class JavaTranspiler extends BaseTranspiler {
         return type;
     }
 
-    // method names declared by the `Exchange` class of ts/src/base/Exchange.ts, read off the
+    // method declarations (first per name) of the `Exchange` class of ts/src/base/Exchange.ts, read off the
     // program the warp ran on. A prediction venue's method with one of these names overrides
     // the tier body javaTranspiler.ts injects into PredictionExchange.java.
-    private _exchangeTierMethodNames: Set<string> | undefined = undefined;
-    exchangeTierMethodNames(): Set<string> {
-        if (this._exchangeTierMethodNames !== undefined) {
-            return this._exchangeTierMethodNames;
+    private _exchangeTierMethods: Map<string, any> | undefined = undefined;
+    exchangeTierMethods(): Map<string, any> {
+        if (this._exchangeTierMethods !== undefined) {
+            return this._exchangeTierMethods;
         }
-        const names = new Set<string>();
+        const names = new Map<string, any>();
         try {
             const file = this.getProgram().getSourceFiles()
                 .find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
             const collect = (node: ts.Node) => {
                 if (ts.isClassDeclaration(node) && node.name?.text === 'Exchange') {
                     for (const member of node.members) {
-                        if (ts.isMethodDeclaration(member) && member.name !== undefined) {
-                            names.add(member.name.getText().trim());
+                        const key = member.name?.getText().trim();
+                        if (ts.isMethodDeclaration(member) && key !== undefined && !names.has(key)) {
+                            names.set(key, member);
                         }
                     }
                 }
@@ -2342,7 +2345,7 @@ export class JavaTranspiler extends BaseTranspiler {
         } catch (e) {
             // no program yet: the heritage walk above already answered
         }
-        this._exchangeTierMethodNames = names;
+        this._exchangeTierMethods = names;
         return names;
     }
 
