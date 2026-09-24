@@ -331,7 +331,7 @@ const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|predictio
 // the base tiers print only the methods below this line of ts/src/base/(Prediction)Exchange.ts
 const JAVA_TRANSPILE_DELIMITER = 'METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT';
 // hand-written base methods whose Java runtime declares exactly the TS parameters (no varargs)
-const JAVA_HANDWRITTEN_FULL_ARITY = new Set(['loadMarkets', 'fetchMarkets', 'fetchCurrencies']);
+const JAVA_HANDWRITTEN_FULL_ARITY = new Set(['loadMarkets', 'fetchMarkets', 'fetchCurrencies', 'exceptionMessage']);
 const JAVA_HANDWRITTEN_TIER_FILES = /(^|\/)ts\/src\/(?:base|static_dependencies)\//;
 const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 

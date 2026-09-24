@@ -14435,7 +14435,7 @@ var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
 };
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 var JAVA_TRANSPILE_DELIMITER = "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT";
-var JAVA_HANDWRITTEN_FULL_ARITY = /* @__PURE__ */ new Set(["loadMarkets", "fetchMarkets", "fetchCurrencies"]);
+var JAVA_HANDWRITTEN_FULL_ARITY = /* @__PURE__ */ new Set(["loadMarkets", "fetchMarkets", "fetchCurrencies", "exceptionMessage"]);
 var JAVA_HANDWRITTEN_TIER_FILES = /(^|\/)ts\/src\/(?:base|static_dependencies)\//;
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
