@@ -23,7 +23,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     finalVarScopeStack: Array<Set<string>>;
     finalVarMutations: Array<{
         node: any;
-        escapedText: any;
+        text: any;
         ownGetFullText: boolean;
         getFullText: any;
     }>;
