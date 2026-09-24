@@ -7888,6 +7888,7 @@ var GoTranspiler = class extends BaseTranspiler {
     // SafeListTyped reads the same member and every later use reads it as a list: a nil slice counts
     // 0 and indexes to nil, matching the box's absent case. Anything else keeps the box.
     this.goSafeListLocalUnboxCache = /* @__PURE__ */ new Map();
+    this.goLocalSafeVerdicts = /* @__PURE__ */ new WeakMap();
     // true when an `any`-typed local can hold a *T helper result: its initializer or a
     // later `x = …` write is a `this.safeX(…)` call whose Go signature returns a pointer
     this.goAnyLocalHoldsPointerCache = /* @__PURE__ */ new Map();
@@ -9586,10 +9587,21 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return "any";
     }
     const scope = this.goEnclosingFunction(declaration);
-    if (this.goTypeNameIsShadowed(scope, goType) || !this.goLocalIsSafeToType(scope, declaration, sourceName, goType)) {
-      return "any";
+    const stable = this.goLocalTypeResolution.size <= 1 && this.goDeclaredTypeInProgress.size === 0;
+    const memoKey = goType;
+    let perDecl = stable ? this.goLocalSafeVerdicts.get(declaration) : void 0;
+    if (perDecl !== void 0 && perDecl.has(memoKey)) {
+      return perDecl.get(memoKey);
     }
-    return goType;
+    const result = this.goTypeNameIsShadowed(scope, goType) || !this.goLocalIsSafeToType(scope, declaration, sourceName, goType) ? "any" : goType;
+    if (stable) {
+      if (perDecl === void 0) {
+        perDecl = /* @__PURE__ */ new Map();
+        this.goLocalSafeVerdicts.set(declaration, perDecl);
+      }
+      perDecl.set(memoKey, result);
+    }
+    return result;
   }
   // Typed async receive: an extension that knows the core's channel element type replaces
   // `x := (<-this.FooAsync(..))` + `PanicOnError(x)` with a typed declaration that runs PanicOnError

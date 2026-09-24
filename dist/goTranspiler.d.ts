@@ -186,6 +186,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeListLocalUnboxUncached(declaration: any): string | undefined;
     goSafeListUnboxValue(declaration: any, identation: number): string | undefined;
     getGoLocalType(declaration: any, parsedValue: string): string;
+    goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAwaitReceiveUnbox(awaitNode: any, printedInitializer: string): {
         goType: string;
         wrap: (recv: string) => string;

@@ -2620,11 +2620,24 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return 'any';
         }
         const scope = this.goEnclosingFunction(declaration);
-        if (this.goTypeNameIsShadowed(scope, goType) || !this.goLocalIsSafeToType(scope, declaration, sourceName, goType)) {
-            return 'any';
+        // outside any nested resolution the verdict depends only on (declaration, goType)
+        const stable = (this.goLocalTypeResolution.size <= 1) && (this.goDeclaredTypeInProgress.size === 0);
+        const memoKey = goType;
+        let perDecl = stable ? this.goLocalSafeVerdicts.get(declaration) : undefined;
+        if (perDecl !== undefined && perDecl.has(memoKey)) {
+            return perDecl.get(memoKey);
         }
-        return goType;
+        const result = (this.goTypeNameIsShadowed(scope, goType) || !this.goLocalIsSafeToType(scope, declaration, sourceName, goType)) ? 'any' : goType;
+        if (stable) {
+            if (perDecl === undefined) {
+                perDecl = new Map<string, string>();
+                this.goLocalSafeVerdicts.set(declaration, perDecl);
+            }
+            perDecl.set(memoKey, result);
+        }
+        return result;
     }
+    goLocalSafeVerdicts = new WeakMap<object, Map<string, string>>();
 
     // Typed async receive: an extension that knows the core's channel element type replaces
     // `x := (<-this.FooAsync(..))` + `PanicOnError(x)` with a typed declaration that runs PanicOnError
