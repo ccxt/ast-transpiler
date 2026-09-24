@@ -6314,7 +6314,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (this.csharpIndexOfReceiverIsDeclaredList(declared)) {
       return `((${declared})${name}).IndexOf(${parsedArg})`;
     }
-    if (declared === "string?" && ts4.isIdentifier(receiver)) {
+    const key = node.arguments?.[0];
+    const plainNeedle = key !== void 0 && (ts4.isStringLiteralLike(key) || ts4.isIdentifier(key));
+    if (declared === "string?" && ts4.isIdentifier(receiver) && plainNeedle) {
       const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
       if (needle !== void 0) {
         return `(${name}?.IndexOf(${needle}, StringComparison.Ordinal) ?? -1)`;
