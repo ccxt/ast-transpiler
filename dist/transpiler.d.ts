@@ -1087,6 +1087,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsReadOnlyCallArgument(node: any): boolean;
     goIsBareStringOperand(node: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goNativeNumericEqualityKind(left: any, leftText: string, right: any, rightText: string): string | undefined;
     goOperandNumericKind(node: any, printedText: string): string | undefined;
     goLiteralTypedLocalKind(node: any): string | undefined;
     goNumericLiteralKind(node: any): string | undefined;
