@@ -5041,6 +5041,28 @@ describe('B-20: always-dictionary fields and oracle-proven dictionaries read nat
             delete printer.csharpDestructuringTempType;
         }
     });
+    test('a typed destructuring holder drops its cast when csharpDestructuringTempNeedsCast answers false', () => {
+        const input =
+        "class Exchange {\n" +
+        "    test (): void {\n" +
+        "        const [a, b] = this.someTuple(1);\n" +
+        "        let c;\n" +
+        "        [c, params] = this.handleSomethingAndParams(params);\n" +
+        "    }\n" +
+        "}";
+        const printer: any = (transpiler as any).csharpTranspiler;
+        printer.csharpDestructuringTempType = () => 'IList<object>';
+        printer.csharpDestructuringTempNeedsCast = (node, printed) => !printed.startsWith('callDynamically(this, "handleSomething');
+        try {
+            const output = transpiler.transpileCSharp(input).content;
+            expect(output).toContain("IList<object> abVariable = (IList<object>)callDynamically(this, \"someTuple\", new object[] { 1 });");
+            expect(output).toContain("IList<object> cparametersVariable = callDynamically(this, \"handleSomethingAndParams\", new object[] { parameters });");
+            expect(output).toContain("c = cparametersVariable[0];");
+        } finally {
+            delete printer.csharpDestructuringTempType;
+            delete printer.csharpDestructuringTempNeedsCast;
+        }
+    });
     test('a ternary condition drops the redundant (bool) cast around isTrue', () => {
         // printCondition always renders a C# bool, so `((bool) isTrue(x))` was a cast on a bool
         const input =
