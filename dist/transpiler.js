@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-WJYTME3L.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -25639,6 +25639,8 @@ function memoizeUnaryMethod(owner, name) {
   };
   wrapped.gen = original.gen;
   wrapped.original = original;
+  wrapped.seed = (key, value) => cache.set(key, value === void 0 ? UNDEFINED_SENTINEL : value);
+  wrapped.has = (key) => cache.has(key);
   Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 function memoizeBinaryKindMethod(owner, name) {
@@ -25671,6 +25673,77 @@ function memoizeBinaryKindMethod(owner, name) {
   wrapped.gen = original.gen;
   Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
+var PREFETCH_TYPE_KINDS = /* @__PURE__ */ new Set([
+  SyntaxKind9.Identifier,
+  SyntaxKind9.PropertyAccessExpression,
+  SyntaxKind9.ElementAccessExpression,
+  SyntaxKind9.CallExpression,
+  SyntaxKind9.BinaryExpression,
+  SyntaxKind9.StringLiteral,
+  SyntaxKind9.TypeReference,
+  SyntaxKind9.MethodDeclaration,
+  SyntaxKind9.AnyKeyword,
+  SyntaxKind9.StringKeyword,
+  SyntaxKind9.NumberKeyword,
+  SyntaxKind9.ArrayType,
+  SyntaxKind9.NumericLiteral
+]);
+var PREFETCH_BATCH = 4096;
+function prefetchChecker(checker, root, options = {}) {
+  const wantTypes = options.types ?? true, wantSymbols = options.symbols ?? true, wantSignatures = options.signatures ?? true;
+  const getType = checker.getTypeAtLocation, getSymbol = checker.getSymbolAtLocation, getSig = checker.getResolvedSignature;
+  const typeNodes = [], symbolNodes = [], callNodes = [];
+  const visit = (node) => {
+    const kind = node.kind;
+    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !getType.has?.(node))
+      typeNodes.push(node);
+    if (wantSymbols && kind === SyntaxKind9.Identifier && !getSymbol.has?.(node))
+      symbolNodes.push(node);
+    if (wantSignatures && kind === SyntaxKind9.CallExpression && !getSig.has?.(node))
+      callNodes.push(node);
+    node.forEachChild(visit);
+  };
+  visit(root);
+  const run = (nodes, fn) => {
+    if (fn?.seed === void 0 || fn.original === void 0)
+      return;
+    for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
+      const chunk = nodes.slice(i, i + PREFETCH_BATCH);
+      let results;
+      try {
+        results = fn.original(chunk);
+      } catch {
+        continue;
+      }
+      chunk.forEach((n, j) => fn.seed(n, results[j]));
+    }
+  };
+  run(typeNodes, getType);
+  run(symbolNodes, getSymbol);
+  const api = checker.__astTranspilerApi;
+  if (callNodes.length > 0 && getSig?.seed !== void 0 && api !== void 0 && getSig.original?.gen !== void 0) {
+    for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
+      const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
+      const gens = chunk.map((n) => {
+        const g = getSig.original.gen(n);
+        return function* () {
+          try {
+            return yield* g;
+          } catch {
+            return PREFETCH_FAILED;
+          }
+        }();
+      });
+      const results = api.batch(...gens);
+      chunk.forEach((n, j) => {
+        if (results[j] !== PREFETCH_FAILED)
+          getSig.seed(n, results[j]);
+      });
+    }
+  }
+}
+var PREFETCH_FAILED = Symbol("prefetchFailed");
+var prefetchedFiles = /* @__PURE__ */ new WeakSet();
 var programDiagnosticsCache = /* @__PURE__ */ new WeakMap();
 function getProgramWideDiagnostics(program) {
   let diagnostics = programDiagnosticsCache.get(program);
@@ -25693,9 +25766,15 @@ function createSnapshotProgram(cache, rootFiles, files) {
   const program = snapshot.operation.createdPrograms[0];
   const checker = snapshot.getProjects().find((p) => p.program === program).checker;
   memoizeCheckerCalls(checker);
+  checker.__astTranspilerApi = getApi(cache);
   return [snapshot, program, checker];
 }
 var Transpiler = class _Transpiler {
+  // batch pre-resolve for callers that query the checker themselves (build hooks):
+  // one round trip per method for every relevant node under `root`
+  static prefetchChecker(checker, root, options) {
+    prefetchChecker(checker, root, options);
+  }
   // A program cache holds parsed typescript SourceFiles and the last program built
   // from them. Hand the same cache to several Transpiler instances to reuse one
   // parse/typecheck of the es lib chain and of every shared import across all of
@@ -25709,6 +25788,7 @@ var Transpiler = class _Transpiler {
   constructor(config = {}, programCache) {
     this.config = config;
     this.programCache = programCache ?? _Transpiler.createProgramCache();
+    this.prefetch = config["prefetch"] ?? true;
     const phpConfig = config["php"] || {};
     const pythonConfig = config["python"] || {};
     const csharpConfig = config["csharp"] || {};
@@ -25845,6 +25925,10 @@ var Transpiler = class _Transpiler {
       this.checkFileDiagnostics();
     }
     const src = this.context.src;
+    if (this.prefetch && !prefetchedFiles.has(src)) {
+      prefetchedFiles.add(src);
+      prefetchChecker(this.context.checker, src);
+    }
     let transpiledContent = void 0;
     switch (lang) {
       case 0 /* Python */:
