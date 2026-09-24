@@ -7872,3 +7872,52 @@ describe('java prediction venue Exchange-tier parameter boxing (D-16)', () => {
         expect(venueOutput).toContain('fetchEvents(String query');
     });
 });
+
+describe('declared container writes: native put / chain container reads', () => {
+    const transpiler = new Transpiler({ verbose: false });
+    const input =
+        "class T {\n" +
+        "    test(m: any, l: any, k: any, v: any, n: number): void {\n" +
+        "        m['a'] = 1;\n" +
+        "        m[k] = 'x';\n" +
+        "        m['b'] = v;\n" +
+        "        m['c'] = undefined;\n" +
+        "        m[k][n] = v;\n" +
+        "        for (let i = 0; i < 3; i++) { l[i]['z'] = v; }\n" +
+        "        this.s(m, l);\n" +
+        "    }\n" +
+        "    s(...a: any[]): void {}\n" +
+        "}";
+    const run = (resolver: any) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            return transpiler.transpileJava(input).content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const resolver = (d: any) => {
+        const n = d.name?.escapedText;
+        return n === 'm' ? 'java.util.Map<String, Object>' : n === 'l' ? 'java.util.List<Object>' : n === 'k' ? 'String' : undefined;
+    };
+    test('non-null values put natively, nullable values keep the helper', () => {
+        const output = run(resolver);
+        expect(output).toContain('m.put("a", 1);');
+        expect(output).toContain('m.put(k, "x");');
+        expect(output).toContain('Helpers.addElementToObject(m, "b", v);');
+        expect(output).toContain('Helpers.addElementToObject(m, "c", null);');
+    });
+    test('the bottom container of a chain reads the declared Map / List natively', () => {
+        const output = run(resolver);
+        expect(output).toContain('Helpers.addElementToObject((m == null || !(k instanceof String) ? null : m.get(k)), n, v);');
+        expect(output).toContain('Helpers.addElementToObject((l == null || i < 0 || i >= l.size() ? null : l.get(i)), "z", v);');
+    });
+    test('without a declared type every write keeps the helper', () => {
+        const output = run(undefined);
+        expect(output).toContain('Helpers.addElementToObject(m, "a", 1);');
+        expect(output).toContain('Helpers.addElementToObject(Helpers.GetValue(m, k), n, v);');
+        expect(output).toContain('Helpers.addElementToObject(Helpers.GetValue(l, i), "z", v);');
+    });
+});

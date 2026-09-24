@@ -1336,6 +1336,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     elementWriteTargetsMap(container: any, base: any, keys: any): boolean;
     elementWriteKeyText(key: any, keyText: string): string;
     isPlainHashMapReceiver(container: any, keys: any[]): boolean;
+    javaPrintsNonNullValue(node: any): boolean;
+    javaFreshExtendMap(initializer: any): boolean;
+    javaDeclaredChainContainerRead(left: any, keyCount: number): string | undefined;
     unwrapPrintTransparentExpression(node: any): any;
     javaLocalIsReassigned(node: any): boolean;
     callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;
