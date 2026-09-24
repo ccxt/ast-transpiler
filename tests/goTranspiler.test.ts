@@ -4919,7 +4919,7 @@ describe('go ToString -> the receiver when it is a declared string', () => {
         expect(output).toContain('var n int = len(keys)');
         expect(output).toContain('return ToString(n)');
     });
-    test('an int64-typed local keeps the helper', () => {
+    test('an int64-typed local prints strconv.FormatInt', () => {
         const ts =
         "class Test {\n" +
         "    f (a: any) {\n" +
@@ -4929,7 +4929,8 @@ describe('go ToString -> the receiver when it is a declared string', () => {
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toContain('var n int64 = ParseInt(a, 10)');
-        expect(output).toContain('return ToString(n)');
+        expect(output).toContain('import "strconv"');
+        expect(output).toContain('return strconv.FormatInt(n, 10)');
     });
     test('a float64-typed local keeps the helper', () => {
         const ts =

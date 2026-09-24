@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -7366,6 +7366,7 @@ var GO_HELPER_RETURN_TYPES = {
   "strings.ReplaceAll": "string",
   "strings.HasPrefix": "bool",
   "strings.HasSuffix": "bool",
+  "strconv.FormatInt": "string",
   "IsInstance": "bool",
   "IsInteger": "bool",
   "this.InArray": "bool",
@@ -13324,7 +13325,7 @@ ${this.getIden(level)}}()`;
   }
   // ToString is the identity on a Go string (exchange_helpers.go: derefScalar and `case string`
   // return it unchanged), so a receiver declared `string` prints as itself. An `any` box, a
-  // *string (derefScalar answers nil), an int64 or a float64 keeps the helper's runtime formatting.
+  // *string (derefScalar answers nil) or a float64 keeps the helper's runtime formatting.
   printToStringCall(node, identation, name = void 0) {
     if (name !== void 0 && name.indexOf("\n") < 0) {
       const receiver = _optionalChain([node, 'optionalAccess', _1034 => _1034.expression, 'optionalAccess', _1035 => _1035.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression ? node.expression.expression : void 0;
@@ -13333,6 +13334,10 @@ ${this.getIden(level)}}()`;
       }
       if (receiver !== void 0 && this.goDerefableStringOperand(receiver)) {
         return "*" + name.trim();
+      }
+      if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "int64" && this.goStdlibImportIsPlaceable()) {
+        this.goFileStdlibImports.add("strconv");
+        return `strconv.FormatInt(${name}, 10)`;
       }
     }
     return `ToString(${name})`;

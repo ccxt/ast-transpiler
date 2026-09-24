@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -7372,6 +7372,7 @@ var GO_HELPER_RETURN_TYPES = {
   "strings.ReplaceAll": "string",
   "strings.HasPrefix": "bool",
   "strings.HasSuffix": "bool",
+  "strconv.FormatInt": "string",
   "IsInstance": "bool",
   "IsInteger": "bool",
   "this.InArray": "bool",
@@ -13330,7 +13331,7 @@ ${this.getIden(level)}}()`;
   }
   // ToString is the identity on a Go string (exchange_helpers.go: derefScalar and `case string`
   // return it unchanged), so a receiver declared `string` prints as itself. An `any` box, a
-  // *string (derefScalar answers nil), an int64 or a float64 keeps the helper's runtime formatting.
+  // *string (derefScalar answers nil) or a float64 keeps the helper's runtime formatting.
   printToStringCall(node, identation, name = void 0) {
     if (name !== void 0 && name.indexOf("\n") < 0) {
       const receiver = node?.expression?.kind === ts5.SyntaxKind.PropertyAccessExpression ? node.expression.expression : void 0;
@@ -13339,6 +13340,10 @@ ${this.getIden(level)}}()`;
       }
       if (receiver !== void 0 && this.goDerefableStringOperand(receiver)) {
         return "*" + name.trim();
+      }
+      if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "int64" && this.goStdlibImportIsPlaceable()) {
+        this.goFileStdlibImports.add("strconv");
+        return `strconv.FormatInt(${name}, 10)`;
       }
     }
     return `ToString(${name})`;

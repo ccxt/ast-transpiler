@@ -139,6 +139,7 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'strings.ReplaceAll': 'string',
     'strings.HasPrefix': 'bool',
     'strings.HasSuffix': 'bool',
+    'strconv.FormatInt': 'string',
     'IsInstance': 'bool',
     'IsInteger': 'bool',
     'this.InArray': 'bool',
@@ -7110,7 +7111,7 @@ ${this.getIden(identation)}${returnStatement}`;
 
     // ToString is the identity on a Go string (exchange_helpers.go: derefScalar and `case string`
     // return it unchanged), so a receiver declared `string` prints as itself. An `any` box, a
-    // *string (derefScalar answers nil), an int64 or a float64 keeps the helper's runtime formatting.
+    // *string (derefScalar answers nil) or a float64 keeps the helper's runtime formatting.
     printToStringCall(node, identation, name = undefined) {
         if ((name !== undefined) && (name.indexOf('\n') < 0)) {
             const receiver = (node?.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
@@ -7122,6 +7123,11 @@ ${this.getIden(identation)}${returnStatement}`;
             // a non-nil `*string`: derefScalar hands ToString the pointee, returned unchanged
             if ((receiver !== undefined) && this.goDerefableStringOperand(receiver)) {
                 return '*' + name.trim();
+            }
+            // an int64 prints its decimal digits in both: the helper's Sprintf("%d") and FormatInt
+            if ((receiver !== undefined) && (this.goOperandStaticType(receiver, name) === 'int64') && this.goStdlibImportIsPlaceable()) {
+                this.goFileStdlibImports.add('strconv');
+                return `strconv.FormatInt(${name}, 10)`;
             }
         }
         return `ToString(${name})`;
