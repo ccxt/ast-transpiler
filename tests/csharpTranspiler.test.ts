@@ -449,11 +449,31 @@ describe('csharp transpiling tests', () => {
         "const f = \"foo\" + \"bar\";\n";
         const csharp =
         "object a = add(1, 1);\n" +
-        "object b = multiply(2, 2);\n" +
+        "object b = (2L * 2L);\n" +
         "object c = divide(3, 3);\n" +
         "object d = subtract(4, 4);\n" +
         "object e = mod(5, 5);\n" +
         "object f = add(\"foo\", \"bar\");"
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toBe(csharp);
+    })
+    test('multiply of two numeric literals prints the native product when the helper box is the same', () => {
+        const ts =
+        "const a = 30 * 24;\n" +
+        "const b = 5 * 1.67;\n" +
+        "const c = 2.5 * 1.5;\n" +
+        "const d = 2 * 1.5;\n" +
+        "const e = 9007199254740991 * 2;\n" +
+        "const f = 1e3 * 2;\n" +
+        "const g = 100 * 1.1;\n";
+        const csharp =
+        "object a = (30L * 24L);\n" +
+        "object b = (5 * 1.67);\n" +
+        "object c = (2.5 * 1.5);\n" +
+        "object d = multiply(2, 1.5);\n" +
+        "object e = multiply(9007199254740991, 2);\n" +
+        "object f = (1000L * 2L);\n" +
+        "object g = multiply(100, 1.1);"
         const output = transpiler.transpileCSharp(ts).content;
         expect(output).toBe(csharp);
     })

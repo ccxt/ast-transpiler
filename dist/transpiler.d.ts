@@ -615,6 +615,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeParseCall(node: any): string;
     csharpCalleeIsGlobalFunction(node: any): boolean;
     csharpNativeParseCallOnDeclaredLocal(callee: any, arg: any): string;
+    csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
     csharpNativeReceiver(node: any): {
