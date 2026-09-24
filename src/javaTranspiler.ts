@@ -1,5 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import ts, { TypeChecker } from "typescript";
+import { Logger } from "./logger.js";
 
 const parserConfig = {
     EXTENDS_TOKEN: "extends",
@@ -327,6 +328,11 @@ const JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|predictio
 // the base tier is generated too: the transpiled `BaseExchange` body of
 // ts/src/base/Exchange.ts is spliced into java/lib/.../BaseExchange.java (the hand-written
 // java surface around it is not a class of its own), so its declarations print the
+// the base tiers print only the methods below this line of ts/src/base/(Prediction)Exchange.ts
+const JAVA_TRANSPILE_DELIMITER = 'METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT';
+// hand-written base methods whose Java runtime declares exactly the TS parameters (no varargs)
+const JAVA_HANDWRITTEN_FULL_ARITY = new Set(['loadMarkets', 'fetchMarkets', 'fetchCurrencies', 'exceptionMessage']);
+const JAVA_HANDWRITTEN_TIER_FILES = /(^|\/)ts\/src\/(?:base|static_dependencies)\//;
 const JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 
 // ===== native RETURN types (D-09) =====
@@ -394,6 +400,10 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printArgsForCallExpression(node, identation) {
+        const fullArity = this.javaFullArityCallArguments(node.arguments ?? [], node, identation);
+        if (fullArity !== undefined) {
+            return fullArity;
+        }
         let args: readonly any[] = node.arguments ?? [];
         const callee = node.expression;
         const isThisCall = callee?.kind === ts.SyntaxKind.PropertyAccessExpression
@@ -436,6 +446,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (superCore !== undefined) {
             return superCore;
         }
+        const scheduled = this.javaScheduledCallArguments(args, node, identation);
+        if (scheduled !== undefined) {
+            return scheduled;
+        }
         const spawnTypes = this.javaSpawnCallParameterTypes(node);
         const parameterTypes = spawnTypes !== undefined ? spawnTypes : this.javaNativeCallParameterTypes(node);
         return args.map((a, i) => {
@@ -450,7 +464,165 @@ export class JavaTranspiler extends BaseTranspiler {
         }).join(", ");
     }
 
-    // `super.x(..)` into a split method must bind the typed core: the untyped front re-dispatches
+    // the implementation declaration of a resolved method (an overload signature has no body)
+    javaMethodImplementation(declaration) {
+        if (declaration === undefined || !ts.isMethodDeclaration(declaration)) {
+            return undefined;
+        }
+        if (declaration.body !== undefined) {
+            return declaration;
+        }
+        try {
+            const symbol = this.getChecker().getSymbolAtLocation(declaration.name);
+            return symbol?.declarations?.find((d) => ts.isMethodDeclaration(d) && d.body !== undefined);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // a method this printer emits with its single typed signature: hand-written Java declares
+    // ts/src/base/** except the base tiers below their transpile delimiter
+    javaIsPrintedMethod(method): boolean {
+        if (method === undefined || !ts.isMethodDeclaration(method) || method.body === undefined
+            || !ts.isClassDeclaration(method.parent)) {
+            return false;
+        }
+        const file = method.getSourceFile();
+        const fileName = file.fileName.replace(/\\/g, '/');
+        if (!/(^|\/)ts\/src\//.test(fileName)) {
+            return true;
+        }
+        if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName)) {
+            const delimiter = file.text.indexOf(JAVA_TRANSPILE_DELIMITER);
+            return (delimiter >= 0 && method.pos > delimiter)
+                || JAVA_HANDWRITTEN_FULL_ARITY.has((method.name as any)?.escapedText);
+        }
+        // every class outside the hand-written tiers is printed (exchanges, tests, ...)
+        return !JAVA_HANDWRITTEN_TIER_FILES.test(fileName);
+    }
+
+    javaHasOptionalParameter(method): boolean {
+        return (method?.parameters ?? []).some((p) => p.initializer !== undefined || p.questionToken !== undefined);
+    }
+
+    // a call into a printed method with optional parameters passes every parameter: omitted or
+    // `undefined` slots take the TS default, fixed slots keep the native checkcast
+    javaFullArityCallArguments(args, node, identation): string | undefined {
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind === ts.SyntaxKind.SuperKeyword) {
+            return undefined;
+        }
+        let method;
+        try {
+            method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration)
+                ?? this.javaAnyReceiverBaseMethod(callee);
+        } catch (e) {
+            return undefined;
+        }
+        return this.javaFullArityArguments(method, args, identation);
+    }
+
+    // an `any` receiver (the tests' `exchange: any`) compiles against the Java Exchange class:
+    // bind the base Exchange method of that name when it is implemented exactly once
+    javaAnyReceiverBaseMethod(callee) {
+        const type = this.getChecker().getTypeAtLocation(callee.expression);
+        if ((type.flags & ts.TypeFlags.Any) === 0) {
+            return undefined;
+        }
+        const methods = this.baseExchangeMethodsByName().get(callee.name?.escapedText as string);
+        return methods?.length === 1 ? methods[0] : undefined;
+    }
+
+    private _baseExchangeMethodsByName = new WeakMap<ts.Program, Map<string, any[]>>();
+    baseExchangeMethodsByName(): Map<string, any[]> {
+        const program = this.getProgram();
+        const cached = this._baseExchangeMethodsByName.get(program);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const names = new Map<string, any[]>();
+        const file = program.getSourceFiles()
+            .find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
+        // the implementations live on BaseExchange; Exchange only adds its own tier, and a name
+        // the base class implements binds there (the receiver compiles against BaseExchange)
+        for (const className of ['BaseExchange', 'Exchange']) {
+            const cls = file?.statements.find((s) => ts.isClassDeclaration(s) && s.name?.text === className) as any;
+            const own = new Map<string, any[]>();
+            for (const member of cls?.members ?? []) {
+                if (ts.isMethodDeclaration(member) && member.body !== undefined && ts.isIdentifier(member.name)) {
+                    own.set(member.name.text, (own.get(member.name.text) ?? []).concat([member]));
+                }
+            }
+            own.forEach((methods, key) => names.has(key) || names.set(key, methods));
+        }
+        this._baseExchangeMethodsByName.set(program, names);
+        return names;
+    }
+
+    javaFullArityArguments(method, args, identation): string | undefined {
+        if (!this.javaIsPrintedMethod(method) || !this.javaHasOptionalParameter(method)) {
+            return undefined;
+        }
+        const params = method.parameters;
+        if (args.length > params.length || params.some((p) => p.dotDotDotToken !== undefined)
+            || args.some((a) => a.kind === ts.SyntaxKind.SpreadElement)) {
+            return undefined;
+        }
+        const types = this.javaCoreParameterTypes(method);
+        return params.map((p, i) => {
+            const arg = args[i];
+            if (arg === undefined || (p.initializer !== undefined && this.javaIsUndefinedLiteral(arg))) {
+                return this.javaCoreDefaultArgument(p, types[i]);
+            }
+            const printed = this.printNode(arg, identation).trim();
+            if (p.initializer !== undefined) {
+                return this.javaArgumentHasType(arg, types[i]) || types[i] === 'Object'
+                    ? (this.javaIsUndefinedLiteral(arg) ? 'null' : printed)
+                    : this.javaConvertToCoreType(types[i], printed, arg);
+            }
+            const native = this.javaNativeParameterType(p);
+            if (native === undefined || this.javaNativeArgumentAlreadyTyped(arg, native)) {
+                return printed;
+            }
+            return `(${native}) (${printed})`;
+        }).join(', ');
+    }
+
+    javaIsUndefinedLiteral(node): boolean {
+        return node?.kind === ts.SyntaxKind.Identifier && node.escapedText === 'undefined';
+    }
+
+    // `this.spawn(this.m, a..)` / `this.delay(ms, this.m, a..)`: the ccxt post-pass turns the
+    // reference into a lambda calling `this.m(a..)`, so those arguments take m's full arity
+    javaScheduledCallArguments(args, node, identation): string | undefined {
+        const callee = node.expression;
+        if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const at = callee.name?.escapedText === 'spawn' ? 0 : (callee.name?.escapedText === 'delay' ? 1 : -1);
+        const reference = at >= 0 ? args[at] : undefined;
+        if (reference?.kind !== ts.SyntaxKind.PropertyAccessExpression
+            || reference.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        let method;
+        try {
+            const symbol = this.getChecker().getSymbolAtLocation(reference.name);
+            method = this.javaMethodImplementation(symbol?.valueDeclaration ?? symbol?.declarations?.[0]);
+        } catch (e) {
+            return undefined;
+        }
+        const forwarded = this.javaFullArityArguments(method, args.slice(at + 1), identation);
+        if (forwarded === undefined) {
+            return undefined;
+        }
+        const head = args.slice(0, at + 1).map((a) => this.printNode(a, identation).trim());
+        return head.concat(forwarded.length > 0 ? [forwarded] : []).join(', ');
+    }
+
+    // `super.x(..)` into a split method must bind the typed core: an ancestor bridge re-dispatches
     // through `this`, which lands back in the overriding core (infinite recursion)
     javaSuperCoreCallArguments(args, node, identation): string | undefined {
         const callee = node.expression;
@@ -460,7 +632,7 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         let declaration;
         try {
-            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+            declaration = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration);
         } catch (e) {
             return undefined;
         }
@@ -468,6 +640,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const params = (declaration as any).parameters;
+        if (params.some((p) => p.dotDotDotToken !== undefined)) {
+            return undefined;
+        }
         if (args.length > params.length) {
             return undefined;
         }
@@ -493,8 +668,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return false;
         }
         const method = declaration.parent;
-        if (this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
-            return false; // the body reads an `Object` copy
+        if (!ts.isMethodDeclaration(method) && this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
+            return false; // an async function body reads an `Object` copy
         }
         const printed = declaration.initializer !== undefined
             ? (this.hasDefaultedTail(method) ? this.javaOptionalParameterJavaType(declaration) : 'Object')
@@ -511,17 +686,23 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // an omitted parameter of a typed-core call: its TS default, typed like the front's reader
     javaCoreDefaultArgument(param, type: string): string {
-        if (param.initializer === undefined) {
-            return `(${type}) null`;
-        }
-        let value = this.printNode(param.initializer, 0);
+        const initializer = param.initializer;
+        // a default that reads other parameters or has effects is applied by the callee
+        const value = initializer === undefined || !this.isPureInitializer(initializer) ? 'null' : this.printNode(initializer, 0);
         if (value === 'null') {
             return `(${type}) null`;
         }
         if (type === 'Long' && /^-?\d+$/.test(value)) {
-            value += 'L';
+            return value + 'L';
         }
-        return this.javaConvertToCoreType(type, value, param.initializer);
+        if (type === JAVA_STRING_LIST_TYPE && ts.isArrayLiteralExpression(initializer) && initializer.elements.length === 0) {
+            return 'new java.util.ArrayList<String>()';
+        }
+        if (type === 'Object' || (type === 'String' && ts.isStringLiteralLike(initializer))
+            || (type === 'java.util.Map<String, Object>' && ts.isObjectLiteralExpression(initializer))) {
+            return value;
+        }
+        return this.javaConvertToCoreType(type, value, initializer);
     }
 
     // a value of any static type converted to a typed-core parameter, with the fronts' semantics
@@ -911,6 +1092,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.UNDEFINED_TOKEN;
         }
 
+        const defaulted = this.javaDefaultedLocalName(node);
+        if (defaulted !== undefined) {
+            return defaulted;
+        }
+
         // keep the same class-reference typeof-guarding logic as your original file,
         // but run the syntactic (parent-position) checks first: they exclude the vast
         // majority of identifiers without paying for a type-checker lookup
@@ -1023,30 +1209,6 @@ export class JavaTranspiler extends BaseTranspiler {
             const open = this.DYNAMIC_CALL_OPEN;
             return `${open}${target}, ${propName}, ${argsArray})`;
         }
-        return undefined;
-    }
-
-    getExpressionStatementPrefixesIfAny(node, identation) {
-        // return undefined;
-        const finalVars = [];
-        if (node.expression?.kind === ts.SyntaxKind.CallExpression) {
-            const objectLiterals = this.getObjectLiteralFromCallExpressionArguments(node.expression);
-            for (let i = 0; i < objectLiterals.length; i++) {
-                const objLiteral = objectLiterals[i];
-                const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                if (objVariables.length > 0) {
-                    finalVars.push(...objVariables);
-                }
-            }
-
-            if (finalVars.length > 0) {
-                const decls = this.buildFinalVarDeclarations(finalVars, identation);
-                if (decls) {
-                    return decls + "\n" + this.getIden(identation);
-                }
-            }
-        }
-
         return undefined;
     }
 
@@ -2185,11 +2347,13 @@ export class JavaTranspiler extends BaseTranspiler {
             let override = this.getMethodOverride(method);
             if (override === undefined
                 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName)
-                && method.name !== undefined
-                && this.exchangeTierMethodNames().has(method.name.getText().trim())) {
-                // the venue method overrides the Exchange-tier core the generated prediction base
-                // carries; those declarations keep `Object` parameters (D8: the override must match)
-                return undefined;
+                && method.name !== undefined) {
+                // a venue method overriding the Exchange-tier body PredictionExchange.java carries
+                // must print that tier parameter's type (D8: Java overrides are invariant)
+                const tier = this.exchangeTierMethods().get(method.name.getText().trim());
+                if (tier !== undefined && !this.javaParameterPrintsType(tier.parameters?.[index], type)) {
+                    return undefined;
+                }
             }
             while (override !== undefined) {
                 const baseParam = (override as any).parameters?.[index];
@@ -2204,23 +2368,24 @@ export class JavaTranspiler extends BaseTranspiler {
         return type;
     }
 
-    // method names declared by the `Exchange` class of ts/src/base/Exchange.ts, read off the
+    // method declarations (first per name) of the `Exchange` class of ts/src/base/Exchange.ts, read off the
     // program the warp ran on. A prediction venue's method with one of these names overrides
     // the tier body javaTranspiler.ts injects into PredictionExchange.java.
-    private _exchangeTierMethodNames: Set<string> | undefined = undefined;
-    exchangeTierMethodNames(): Set<string> {
-        if (this._exchangeTierMethodNames !== undefined) {
-            return this._exchangeTierMethodNames;
+    private _exchangeTierMethods: Map<string, any> | undefined = undefined;
+    exchangeTierMethods(): Map<string, any> {
+        if (this._exchangeTierMethods !== undefined) {
+            return this._exchangeTierMethods;
         }
-        const names = new Set<string>();
+        const names = new Map<string, any>();
         try {
             const file = this.getProgram().getSourceFiles()
                 .find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
             const collect = (node: ts.Node) => {
                 if (ts.isClassDeclaration(node) && node.name?.text === 'Exchange') {
                     for (const member of node.members) {
-                        if (ts.isMethodDeclaration(member) && member.name !== undefined) {
-                            names.add(member.name.getText().trim());
+                        const key = member.name?.getText().trim();
+                        if (ts.isMethodDeclaration(member) && key !== undefined && !names.has(key)) {
+                            names.set(key, member);
                         }
                     }
                 }
@@ -2232,7 +2397,7 @@ export class JavaTranspiler extends BaseTranspiler {
         } catch (e) {
             // no program yet: the heritage walk above already answered
         }
-        this._exchangeTierMethodNames = names;
+        this._exchangeTierMethods = names;
         return names;
     }
 
@@ -2408,23 +2573,18 @@ export class JavaTranspiler extends BaseTranspiler {
         return -1;
     }
 
-    // >=1 parameter with a default value: the method splits into typed core + untyped front.
-    // A method whose only optional markers are `?` keeps today's single declaration.
+    // a method with >=1 optional parameter prints one typed full signature (callers pass every slot).
     hasDefaultedTail(node): boolean {
         if (node === undefined || !ts.isMethodDeclaration(node)) {
             return false; // constructors and functions keep the optionalArgs unpack
         }
-        return (node.parameters ?? []).some((p) => p.initializer !== undefined);
+        return this.javaHasOptionalParameter(node);
     }
 
-    // a typed default-valued parameter of a sync core is written in place (async cores copy it
-    // into an Object local first), so its writes convert to the declared type
+    // a typed default-valued method parameter is written in place, so its writes convert to the declared type
     javaSplitParameterWriteType(node): string | undefined {
         if (node?.initializer === undefined || !this.hasDefaultedTail(node.parent)) {
             return undefined;
-        }
-        if (this.isAsyncFunction(node.parent)) {
-            return this.javaAsyncParameterLocalType(node);
         }
         return this.javaOptionalParameterType(node);
     }
@@ -2926,8 +3086,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
             }
 
-            let prefixes = this.getBinaryExpressionPrefixes(node, identation);
-            prefixes = prefixes ? prefixes : "";
+            const prefixes = "";
 
 
             const lastKey = keyStrs[keyStrs.length - 1];
@@ -4599,96 +4758,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaProvableNumericKind(node) !== undefined || this.javaProvableCounterInt(node);
     }
 
-    getObjectLiteralFromCallExpressionArguments(node) {
-        const res = [];
-        if (!node?.arguments) {
-            return res;
-        }
-        const args = node.arguments;
-
-        for (let i = 0; i < args.length; i++) {
-            const arg = args[i];
-            if (arg.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                res.push(arg);
-            } else if (arg.kind === ts.SyntaxKind.CallExpression) {
-                const innerCallExp = arg;
-                const innerObjLiterals = this.getObjectLiteralFromCallExpressionArguments(innerCallExp);
-                res.push(...innerObjLiterals);
-            }
-        }
-        return res;
-    }
-
-    // Finds every ObjectLiteralExpression nested anywhere inside an RHS/initializer
-    // expression that would produce an anonymous-inner-class capture in Java
-    // (HashMap double-brace init). Stops descending at each ObjectLiteralExpression
-    // because nested literals are walked recursively inside
-    // getVarListFromObjectLiteralAndUpdateInPlace. Skips function/arrow bodies so
-    // we don't capture literals that evaluate in a different scope.
-    //
-    // Unifies the previously-narrow matching in printVariableDeclarationList and
-    // getBinaryExpressionPrefixes which only handled ObjectLiteralExpression or
-    // CallExpression directly — missing wrappers like AwaitExpression,
-    // ParenthesizedExpression, NewExpression, and ConditionalExpression.
-    collectCapturingObjectLiterals(node): any[] {
-        const found = [];
-        const walk = (n) => {
-            if (!n) return;
-            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                found.push(n);
-                return;
-            }
-            if (n.kind === ts.SyntaxKind.FunctionExpression ||
-                n.kind === ts.SyntaxKind.ArrowFunction ||
-                n.kind === ts.SyntaxKind.MethodDeclaration ||
-                n.kind === ts.SyntaxKind.FunctionDeclaration) {
-                return;
-            }
-            ts.forEachChild(n, walk);
-        };
-        walk(node);
-        return found;
-    }
-
-    getBinaryExpressionPrefixes(node, identation) {
-        let right = node?.right;
-        if (right?.kind === ts.SyntaxKind.AwaitExpression) {
-            // un pack await this.x() to this.x(), we don't care about await here
-            right = right.expression;
-        }
-        if (!right) {
-            return undefined;
-        }
-        if (right.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-            const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(right);
-            if (objVariables.length > 0) {
-                const decls = this.buildFinalVarDeclarations(objVariables, identation);
-                if (decls) {
-                    return decls + "\n" + this.getIden(identation);
-                }
-            }
-        } else if (right.kind === ts.SyntaxKind.CallExpression) {
-            // search arguments recursively for object literals
-            // eg: a[x] = this.extend(this.extend(this.extend({'a':b}, c)))
-            const objectLiterals = this.getObjectLiteralFromCallExpressionArguments(right);
-            if (objectLiterals.length > 0) {
-                const allVars = [];
-                for (let i = 0; i < objectLiterals.length; i++) {
-                    const objLiteral = objectLiterals[i];
-                    const objVariables = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                    allVars.push(...objVariables);
-                }
-                if (allVars.length > 0) {
-                    const decls = this.buildFinalVarDeclarations(allVars, identation);
-                    if (decls) {
-                        return decls + "\n" + this.getIden(identation);
-                    }
-                }
-            }
-        }
-        return undefined;
-    }
-
     getFinalVarName(varName: string): string {
         if (this.ReservedKeywordsReplacements[varName]) {
             varName = this.ReservedKeywordsReplacements[varName];
@@ -5039,54 +5108,6 @@ export class JavaTranspiler extends BaseTranspiler {
         }
     }
 
-    private finalNameInAncestorScope(finalName: string): boolean {
-        for (const scope of this.finalVarScopeStack) {
-            if (scope.has(finalName)) return true;
-        }
-        return false;
-    }
-
-    buildFinalVarDeclarations(pairs: Array<{ orig: string; final: string }>, identation: number): string {
-        if (pairs.length === 0) return '';
-        const current = this.finalVarScopeStack.length > 0
-            ? this.finalVarScopeStack[this.finalVarScopeStack.length - 1]
-            : null;
-        const lines: string[] = [];
-        const seenHere = new Set<string>();
-        for (const p of pairs) {
-            if (seenHere.has(p.final)) continue;
-            if (this.finalNameInAncestorScope(p.final)) continue;
-            seenHere.add(p.final);
-            if (current) current.add(p.final);
-            const indent = lines.length === 0 ? 0 : identation;
-            // The RHS must use the remapped Java name (e.g. `params` → `parameters`,
-            // `internal` → `intern`) since the original TS identifier doesn't exist
-            // in the generated Java code.
-            lines.push(`${this.getIden(indent)}final Object ${p.final} = ${this.getOriginalVarName(p.orig)};`);
-        }
-        return lines.join('\n');
-    }
-
-    getObjectLiteralId(node): string {
-        const start = node.getStart();
-        const end = node.getEnd();
-        // Qualify with the file: the offsets alone collide between two files whose
-        // object literals happen to sit at the same character range.
-        const fileName = node.getSourceFile?.()?.fileName ?? '';
-        return `${fileName}:${start}-${end}`;
-    }
-
-    // Remember an identifier's pre-rewrite state so restoreFinalVarMutations can put
-    // the shared AST back exactly as it was parsed.
-    recordFinalVarMutation(node: any): void {
-        this.finalVarMutations.push({
-            node,
-            escapedText: node.escapedText,
-            ownGetFullText: Object.prototype.hasOwnProperty.call(node, 'getFullText'),
-            getFullText: node.getFullText,
-        });
-    }
-
     // Undo every in-place identifier rewrite made during the current emit, newest
     // first so repeated rewrites of one node unwind to the original value.
     restoreFinalVarMutations(): void {
@@ -5122,106 +5143,36 @@ export class JavaTranspiler extends BaseTranspiler {
         return super.printNode(node, identation);
     }
 
-    createNewNodeForFinalVar(originalName: string): ts.Identifier {
-        const newNode = ts.factory.createIdentifier(this.getFinalVarName(originalName));
-        newNode.getFullText = () => this.getFinalVarName(originalName);
-        return newNode;
+    // true when a property value reads a local the body reassigns (or the analyzer saw
+    // reassigned ahead): a double-brace anonymous class could not capture it
+    objectLiteralCapturesReassigned(node): boolean {
+        return this.objectLiteralCapturedKeys(node).length > 0;
     }
 
-    getVarListFromObjectLiteralAndUpdateInPlace(node): Array<{ orig: string; final: string }> {
-        // in java if we use an anonymous object literal put, we can't refer non final variables
-        // so here we collect them and then we add the wrapper final variables, eg: finalX = X;
-        // and we update the node in place to use finalX instead of X.
-        // The final name comes from analyzeFinalVars (pre-walk), which assigns
-        // version-aware names so reassignment-between-usages produces distinct finals.
-        let res: Array<{ orig: string; final: string }> = [];
-
-        const nodeId = this.getObjectLiteralId(node);
-
-        if (nodeId in this.varListFromObjectLiterals) {
-            return this.varListFromObjectLiterals[nodeId];
-        }
-
-        const finalNameFor = (n: any, origName: string): string => {
-            return this.usageToFinalName.get(n) ?? this.getFinalVarName(origName);
-        };
-
-        // Walks any expression, rewriting reassigned-var Identifiers to their
-        // finalXxx names in place. We rely on ts.forEachChild for traversal so
-        // every node kind (PrefixUnary, PostfixUnary, ElementAccess,
-        // PropertyAccess, BinaryExpression, ConditionalExpression, CallExpression,
-        // ParenthesizedExpression, etc.) is covered uniformly. ObjectLiteral is
-        // delegated back to the parent function so per-objectLiteral nodeId
-        // dedup applies to nested literals too.
-        const traverseAndReplace = (n) => {
+    // ReassignedVars keys of the reassigned locals a literal's property values read
+    objectLiteralCapturedKeys(node): string[] {
+        const keys: string[] = [];
+        const walk = (n) => {
             if (!n) return;
             if (n.kind === ts.SyntaxKind.Identifier) {
                 const name = n.escapedText as string | undefined;
-                if (name && name !== 'undefined' && !name.startsWith('null')) {
-                    // Prefer analyzeFinalVars' pre-walk result (usageToFinalName):
-                    // it knows about reassignments anywhere in the function body,
-                    // including ones that happen AFTER this object literal in
-                    // source order. ReassignedVars is populated as BinaryExpressions
-                    // are printed, so for a forward reference it is still false at
-                    // this point and would miss the shadow.
-                    const isReassignedAhead = this.usageToFinalName.has(n);
-                    if (isReassignedAhead || this.ReassignedVars[this.getVarKey(n)]) {
-                        const finalName = finalNameFor(n, name);
-                        res.push({ orig: name, final: finalName });
-                        this.recordFinalVarMutation(n);
-                        n.escapedText = finalName;
-                        // Some downstream print paths read from getFullText (which
-                        // reflects the source text, not escapedText) — shim it so
-                        // they see the rewritten name.
-                        (n as any).getFullText = () => finalName;
-                    }
+                const key = this.getVarKey(n);
+                if (name && name !== 'undefined' && !name.startsWith('null') &&
+                    (this.usageToFinalName.has(n) || this.ReassignedVars[key])) {
+                    keys.push(key);
                 }
                 return;
             }
-            if (n.kind === ts.SyntaxKind.ObjectLiteralExpression) {
-                const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(n);
-                res = res.concat(innerVars);
-                return;
-            }
-            ts.forEachChild(n, traverseAndReplace);
+            ts.forEachChild(n, walk);
         };
-
-        node.properties.forEach( (prop) => {
-            if (!prop.initializer) return;
-            traverseAndReplace(prop.initializer);
-        });
-
-        // dedup on (orig|final) pair
-        const seen = new Set<string>();
-        const dedup: Array<{ orig: string; final: string }> = [];
-        for (const p of res) {
-            const key = `${p.orig}|${p.final}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            dedup.push(p);
+        for (const prop of node.properties) {
+            walk(prop.initializer);
         }
-        this.varListFromObjectLiterals[nodeId] = dedup;
-        return dedup;
+        return keys;
     }
 
     printVariableDeclarationList(node, identation) {
         const declaration = node.declarations[0];
-
-        let finalVars = '';
-        if (declaration.initializer) {
-            // Walk the whole initializer tree — handles AwaitExpression,
-            // ParenthesizedExpression, NewExpression, ConditionalExpression,
-            // nested CallExpressions, etc. uniformly.
-            const objLiterals = this.collectCapturingObjectLiterals(declaration.initializer);
-            let varObj = [];
-            for (const lit of objLiterals) {
-                const vars = this.getVarListFromObjectLiteralAndUpdateInPlace(lit);
-                varObj = varObj.concat(vars);
-            }
-            if (varObj.length > 0) {
-                finalVars = this.buildFinalVarDeclarations(varObj, identation);
-            }
-        }
 
         if (
             this.removeVariableDeclarationForFunctionExpression &&
@@ -5304,9 +5255,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 parsedValue
             );
         }
-        finalVars = finalVars.length > 0 ?  this.getIden(identation) + finalVars + "\n" : finalVars;
         return (
-            finalVars +
             this.getIden(identation) +
             varToken +
             this.printNode(declaration.name) +
@@ -5319,7 +5268,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
         let current = node?.parent;
         while (current) {
-            if (current.kind === ts.SyntaxKind.PropertyAssignment) {
+            if (current.kind === ts.SyntaxKind.PropertyAssignment &&
+                !this.builderObjectLiterals.has(current.parent)) {
                 const className = this.currentClassName;
                 return `${this.capitalize(className)}.this`;
             }
@@ -5423,6 +5373,75 @@ export class JavaTranspiler extends BaseTranspiler {
         }
     }
 
+    // a literal-defaulted parameter reads through a fresh local holding the TS default when the
+    // caller passed null (a dynamic call pads omitted slots with null); the parameter stays final
+    javaDefaultedLocalNames: Map<ts.Symbol, string> = new Map();
+
+    javaDefaultedParameterLocals(node): string[] {
+        const lines = [];
+        if (node.body === undefined) {
+            return lines;
+        }
+        const used = new Set<string>();
+        const collect = (n) => {
+            if (ts.isIdentifier(n)) {
+                used.add(n.text);
+            }
+            ts.forEachChild(n, collect);
+        };
+        collect(node.body);
+        const types = this.javaCoreParameterTypes(node);
+        node.parameters.forEach((param, i) => {
+            const initializer = param.initializer;
+            if (!this.javaIsLiteralDefault(initializer) || !ts.isIdentifier(param.name)) {
+                return;
+            }
+            const symbol = this.javaSymbolOf(param.name);
+            if (symbol === undefined) {
+                return;
+            }
+            const name = this.printNode(param.name, 0);
+            let local = name + 'Value';
+            for (let k = 2; used.has(local); k++) {
+                local = name + 'Value' + k;
+            }
+            used.add(local);
+            this.javaDefaultedLocalNames.set(symbol, local);
+            const value = this.javaCoreDefaultArgument(param, types[i]);
+            lines.push(`${types[i]} ${local};`);
+            lines.push(`if (${name} == null) { ${local} = ${value}; } else { ${local} = ${name}; }`);
+        });
+        return lines;
+    }
+
+    // a string, number or boolean literal default (null, `undefined` and `{}` / `[]` keep the parameter)
+    javaIsLiteralDefault(initializer): boolean {
+        let node = initializer;
+        while (node !== undefined && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node))) {
+            node = node.expression;
+        }
+        if (node !== undefined && ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+            node = node.operand;
+        }
+        return node !== undefined && (ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)
+            || node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword);
+    }
+
+    javaDefaultedLocalName(node): string | undefined {
+        if (this.javaDefaultedLocalNames.size === 0 || ts.isParameter(node.parent)
+            || (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+            || ts.isPropertyAssignment(node.parent) && node.parent.name === node) {
+            return undefined;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return symbol === undefined ? undefined : this.javaDefaultedLocalNames.get(symbol);
+    }
+
     printFunctionBody(node, identation) {
         // Save/restore rather than clobber: a nested function re-enters this method
         // and must not destroy the enclosing body's analysis state on the way out.
@@ -5435,9 +5454,9 @@ export class JavaTranspiler extends BaseTranspiler {
         const funcParams = node.parameters ?? [];
         const bodyStatements = node.body.statements;
         const isAsync = this.isAsyncFunction(node);
-        // the default-valued parameters are parameters of the typed core now: no unpack locals
-        const splitCore = this.hasDefaultedTail(node);
-        const initParams = [];
+        // a method's default-valued parameters are parameters of its typed signature: no unpack locals
+        const splitCore = ts.isMethodDeclaration(node);
+        const initParams = splitCore ? this.javaDefaultedParameterLocals(node) : [];
         const processedParts = [];
         try {
             for (let i = 0; i < bodyStatements.length; i++) {
@@ -5455,7 +5474,11 @@ export class JavaTranspiler extends BaseTranspiler {
             const initializer = param.initializer;
             if (initializer) {
                 if (splitCore) {
-                    return; // the value arrives as a parameter of the typed core
+                    if (!this.isPureInitializer(initializer) && !this.javaDefaultedLocalNames.has(this.javaSymbolOf(param.name))) {
+                        const name = this.printNode(param.name, 0);
+                        initParams.push(`if (${name} == null) { ${name} = ${this.printNode(initializer, 0)}; }`);
+                    }
+                    return; // the value arrives as a parameter of the typed signature
                 }
                 const index = i + offSetIndex;
                 // index = index < 0 ? 0 : i - 1;
@@ -5490,9 +5513,19 @@ export class JavaTranspiler extends BaseTranspiler {
         const blockClose = this.getBlockClose(identation);
         firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
 
+        if (isAsync && ts.isMethodDeclaration(node) && this.javaReassignsParameter(node)) {
+            // unsupported: a lambda cannot capture a reassigned parameter; the TS source must not reassign it
+            const where = `${node.getSourceFile().fileName}:${(node.name as any).escapedText}`;
+            this.javaReassigningMethods.push(where);
+            const message = `[Java] async method reassigns a parameter (not effectively final, the TS source must use a new local): ${where}`;
+            if (this.javaStrictEffectivelyFinal) {
+                throw new Error(message);
+            }
+            Logger.warning(message);
+        }
         if (isAsync) {
-            const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
-            const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
+            const finalWrapperVars = ts.isMethodDeclaration(node) ? '\n' : this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
+            const insideWrappers = ts.isMethodDeclaration(node) ? '\n' : this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
             // Check if last statement is a return — if not, add return null for supplyAsync lambda
             const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : (bodyStatements.length > 0 ? bodyStatements[0] : undefined);
@@ -5603,73 +5636,87 @@ export class JavaTranspiler extends BaseTranspiler {
     // the typed core signature: every parameter prints its Java type, the default-valued ones
     // included (a Java signature cannot carry a default - the front supplies it)
     printCoreMethodParameters(node) {
-        const isAsyncMethod = this.isAsyncFunction(node);
-        return node.parameters.map(param => {
-            const isReassignedVar = this.ReassignedVars[this.getVarKey(param)];
-            const isDefaulted = param.initializer !== undefined;
-            let printedParam = isDefaulted
-                ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}`
-                : this.printParameter(param);
-            if (isAsyncMethod && isReassignedVar) {
-                const paramName = param.name.escapedText;
-                const { localName, sigName } = this.getAsyncParamWrapperNames(paramName);
-                // Replace the printed Java name (post keyword-remap) with sigName so
-                // the original name is freed for the lambda body to bind.
-                printedParam = printedParam.replace(localName, sigName);
-            }
-            return printedParam;
-        }).join(", ");
+        return node.parameters.map(param => (param.initializer !== undefined
+            ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}`
+            : this.printParameter(param))).join(", ");
     }
 
-    // the front's arguments: omitted slot -> TS default, explicit null -> null, typed slots widened
-    printFrontForwardedArguments(node) {
-        const out: string[] = [];
-        let offSetIndex = 0;
-        (node.parameters ?? []).forEach((param, i) => {
-            const name = this.printNode(param.name, 0);
-            if (param.initializer === undefined) {
-                offSetIndex--;
-                out.push(name);
-                return;
+    // the async method body writes one of its parameters, or a non-pure default must be applied
+    // by an `if (x == null) { x = init; }` inside the lambda (both break effective finality)
+    javaReassignsParameter(node): boolean {
+        const params = node.parameters ?? [];
+        if (params.some((p) => p.initializer !== undefined && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node))) {
+            return true;
+        }
+        const symbols = new Set<ts.Symbol>();
+        params.forEach((p) => {
+            const symbol = this.javaSymbolOf(p.name);
+            if (symbol !== undefined) {
+                symbols.add(symbol);
             }
-            const index = i + offSetIndex;
-            const javaType = this.javaOptionalParameterJavaType(param);
-            const getter = javaType === 'Long' ? 'getArgLong'
-                : javaType === 'String' ? 'getArgString'
-                    : javaType === 'java.util.Map<String, Object>' ? 'getArgMap'
-                        : javaType === JAVA_STRING_LIST_TYPE ? 'getArgStringList' : undefined;
-            if (getter === undefined) {
-                out.push(this.printOptionalArgExpression(index, param.initializer));
-                return;
-            }
-            let defaultValue = this.printNode(param.initializer, 0);
-            if (getter === 'getArgLong' && /^-?\d+$/.test(defaultValue)) {
-                defaultValue += 'L'; // an int literal does not box to Long
-            }
-            if (getter === 'getArgStringList' && ts.isArrayLiteralExpression(param.initializer)
-                && param.initializer.elements.length === 0) {
-                defaultValue = 'new java.util.ArrayList<String>()';
-            }
-            out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
         });
-        return out.join(', ');
+        return symbols.size > 0 && node.body !== undefined && this.javaWritesSymbol(node.body, symbols);
     }
 
-    // the front keeps today's `Object...` signature for TypedSurface, findMethod and legacy callers
-    printFrontMethodDeclaration(node, identation) {
-        const name = this.transformMethodNameIfNeeded(node.name.escapedText);
-        // the front has no async body, so its fixed parameters keep their source names
-        const methodDef = this.printMethodDefinition(node, identation, (n) => n.parameters
-            .filter((p) => p.initializer === undefined)
-            .map((p) => this.printParameter(p))
-            .concat(['Object... optionalArgs']).join(', '));
-        const args = this.printFrontForwardedArguments(node);
-        const call = `this.${name}(${args});`;
-        const isVoid = /(^|\s)void\s+\w+\s*\(/.test(methodDef);
-        return "\n" + methodDef + this.getBlockOpen(identation)
-            + this.getIden(identation + 1) + (isVoid ? call : `return ${call}`)
-            + this.getBlockClose(identation);
+    javaSymbolOf(node): ts.Symbol | undefined {
+        return this.getChecker().getSymbolAtLocation(node);
     }
+
+    // syntactic walk: assignment targets, ++/--, destructuring targets and for-in/of expression heads
+    javaWritesSymbol(node, symbols: Set<ts.Symbol>): boolean {
+        if (ts.isBinaryExpression(node)) {
+            const op = node.operatorToken.kind;
+            if (op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment
+                && this.javaTargetWritesSymbol(node.left, symbols, op === ts.SyntaxKind.EqualsToken)) {
+                return true;
+            }
+        } else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+            && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+            && this.javaTargetWritesSymbol(node.operand, symbols, false)) {
+            return true;
+        } else if ((ts.isForInStatement(node) || ts.isForOfStatement(node))
+            && !ts.isVariableDeclarationList(node.initializer)
+            && this.javaTargetWritesSymbol(node.initializer, symbols, true)) {
+            return true;
+        }
+        return ts.forEachChild(node, (child) => this.javaWritesSymbol(child, symbols) || undefined) === true;
+    }
+
+    javaTargetWritesSymbol(target, symbols: Set<ts.Symbol>, destructuring: boolean): boolean {
+        if (ts.isParenthesizedExpression(target) || ts.isNonNullExpression(target) || ts.isAsExpression(target)) {
+            return this.javaTargetWritesSymbol(target.expression, symbols, destructuring);
+        }
+        if (ts.isIdentifier(target)) {
+            const symbol = this.javaSymbolOf(target);
+            return symbol !== undefined && symbols.has(symbol);
+        }
+        if (!destructuring) {
+            return false;
+        }
+        if (ts.isArrayLiteralExpression(target)) {
+            return target.elements.some((e) => this.javaTargetWritesSymbol(ts.isSpreadElement(e) ? e.expression : e, symbols, true));
+        }
+        if (ts.isObjectLiteralExpression(target)) {
+            return target.properties.some((p) => {
+                if (ts.isShorthandPropertyAssignment(p)) {
+                    return this.javaTargetWritesSymbol(p.name, symbols, true);
+                }
+                if (ts.isPropertyAssignment(p)) {
+                    return this.javaTargetWritesSymbol(p.initializer, symbols, true);
+                }
+                return ts.isSpreadAssignment(p) && this.javaTargetWritesSymbol(p.expression, symbols, true);
+            });
+        }
+        if (ts.isBinaryExpression(target) && target.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+            return this.javaTargetWritesSymbol(target.left, symbols, true); // `[x = 1] = ...` default
+        }
+        return false;
+    }
+
+    // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
+    javaReassigningMethods: string[] = [];
+    // the embedding build turns a reassigned async parameter into a hard transpile error
+    javaStrictEffectivelyFinal = false;
 
     printMethodParameters(node) {
         const isAsyncMethod = this.isAsyncFunction(node);
@@ -5756,19 +5803,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
 
         const funcBody = this.printFunctionBody(node, identation); // print body first to get var reassignments filled
-
-        // typed core (the body) + the untyped `Object... optionalArgs` front that keeps every
-        // legacy call shape working. Only for methods with >=1 default-valued parameter.
-        if (this.hasDefaultedTail(node)) {
-            let splitDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
-            splitDef += funcBody;
-            splitDef += this.printFrontMethodDeclaration(node, identation);
-            splitDef += this.printOverrideBridges(node, identation);
-            return splitDef;
-        }
-
-        let methodDef = this.printMethodDefinition(node, identation);
-
+        // one typed signature: default-valued and `?` parameters are ordinary typed parameters
+        let methodDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
         methodDef += funcBody;
         methodDef += this.printOverrideBridges(node, identation);
 
@@ -7204,10 +7240,51 @@ export class JavaTranspiler extends BaseTranspiler {
         return res;
     }
 
+    // literals printed as `Helpers.newMap(k, v, ...)` (no anonymous class, so no capture rule)
+    builderObjectLiterals: WeakSet<ts.Node> = new WeakSet();
+
     printObjectLiteralExpression(node, identation) {
+        if (node.properties.length > 0 && node.properties.every((p) => ts.isPropertyAssignment(p)) &&
+            this.objectLiteralCapturesReassigned(node)) {
+            this.builderObjectLiterals.add(node);
+            return this.printObjectLiteralBuilder(node, identation);
+        }
+        this.builderObjectLiterals.delete(node);
         const objectBody = this.printObjectLiteralBody(node, identation);
         const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(identation) : objectBody;
         return  this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
+    }
+
+    printObjectLiteralBuilder(node, identation) {
+        // a comparison inside the values must not mark a captured local as reassigned
+        // (that flag drives the async-parameter copies and the typed-parameter write casts)
+        const keys = this.objectLiteralCapturedKeys(node);
+        const saved = keys.map((key) => this.ReassignedVars[key]);
+        try {
+            return this.printObjectLiteralBuilderText(node, identation);
+        } finally {
+            keys.forEach((key, i) => {
+                if (saved[i] === undefined) {
+                    delete this.ReassignedVars[key];
+                } else {
+                    this.ReassignedVars[key] = saved[i];
+                }
+            });
+        }
+    }
+
+    printObjectLiteralBuilderText(node, identation) {
+        const props = node.properties;
+        const lines = props.map((prop, i) => {
+            const name = this.printNode(prop.name, 0);
+            const custom = this.printCustomRightSidePropertyAssignment(prop.initializer, identation + 1);
+            const value = (custom ? custom : this.printNode(prop.initializer, identation + 1)).trim();
+            let comment = this.printTraillingComment(prop, identation + 1);
+            comment = comment ? " " + comment : "";
+            const sep = i < props.length - 1 ? "," : "";
+            return this.getIden(identation + 1) + name + ", " + value + sep + comment;
+        });
+        return "Helpers.newMap(\n" + lines.join("\n") + "\n" + this.getIden(identation) + ")";
     }
 
     printObjectLiteralBody(node, identation) {
@@ -7238,23 +7315,6 @@ export class JavaTranspiler extends BaseTranspiler {
         if (exp && exp.kind === ts.SyntaxKind.AsExpression && (exp.expression.kind === ts.SyntaxKind.ObjectLiteralExpression || ts.SyntaxKind.CallExpression)) {
             exp = exp.expression; // go over something like return {} as SomeType
         }
-        // Use collectCapturingObjectLiterals to walk through every wrapper
-        // (AwaitExpression, ParenthesizedExpression, CallExpression args, ArrayLiteral
-        // elements, ConditionalExpression branches, NewExpression args, etc.) and
-        // pick up every HashMap literal whose anonymous-inner-class body would
-        // need effectively-final captures. The previous narrow switch missed
-        // `return await this.watch(..., { literal capturing reassigned var }, ...)`
-        // entirely — the literal ended up referencing the raw (reassigned)
-        // identifier with no snapshot, which javac rejects.
-        const allVarNames = [];
-        if (exp) {
-            const objLiterals = this.collectCapturingObjectLiterals(exp);
-            for (const objLiteral of objLiterals) {
-                const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-                allVarNames.push(...varsList);
-            }
-        }
-        let finalVars = allVarNames.length > 0 ? this.buildFinalVarDeclarations(allVarNames, identation) : '';
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
         if (!rightPart) {
@@ -7271,8 +7331,7 @@ export class JavaTranspiler extends BaseTranspiler {
             }
         }
         rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
-        finalVars = finalVars.length > 0 ?  this.getIden(identation) + finalVars + "\n" : finalVars;
-        return leadingComment + finalVars + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+        return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
     }
 
     private allBranchesTerminate(node: ts.Node): boolean {
