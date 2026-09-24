@@ -13642,6 +13642,7 @@ var parserConfig5 = {
 var JAVA_THIS_RETURN_TYPES = {
   "milliseconds": "long"
 };
+var JAVA_FRESH_EXTEND_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/](functions[\\/]generic|Exchange(\.nooverloads\.\d+)?)\.ts$/;
 var JAVA_THIS_RETURN_TYPES_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
 var JAVA_THIS_RETURN_TYPES_LIB_FILE = /(^|[\\/])node_modules[\\/](?:[^\\/]+[\\/]node_modules[\\/])?typescript6?[\\/]lib[\\/]lib\.[^\\/]*\.d\.ts$/;
 var JAVA_ASSIGNMENT_OPERATOR_KINDS = (() => {
@@ -14726,11 +14727,60 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
-    const proven = ts6.isObjectLiteralExpression(initializer) || ts6.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0);
+    const proven = ts6.isObjectLiteralExpression(initializer) || ts6.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0) || this.javaDeclaredMapReceiver(container) && this.javaFreshExtendMap(initializer);
     if (!proven) {
       return false;
     }
     return !this.javaLocalIsReassigned(container);
+  }
+  // a value whose Java print can never be null: non-null literals and fresh containers
+  javaPrintsNonNullValue(node) {
+    const value = this.unwrapPrintTransparentExpression(node);
+    if (value === void 0) {
+      return false;
+    }
+    return ts6.isStringLiteralLike(value) || ts6.isNumericLiteral(value) || value.kind === ts6.SyntaxKind.TrueKeyword || value.kind === ts6.SyntaxKind.FalseKeyword || ts6.isObjectLiteralExpression(value) || ts6.isArrayLiteralExpression(value) || ts6.isPrefixUnaryExpression(value) && value.operator === ts6.SyntaxKind.MinusToken && ts6.isNumericLiteral(value.operand);
+  }
+  // `this.extend(..)` / `this.deepExtend(..)` from the base tier hand back a fresh LinkedHashMap
+  // when the call has two arguments (Generic.Extend copies both) or ends in an object literal
+  // (deepExtend's last Map argument replaces any earlier non-Map box with a new map)
+  javaFreshExtendMap(initializer) {
+    if (initializer === void 0 || !ts6.isCallExpression(initializer) || !ts6.isPropertyAccessExpression(initializer.expression) || initializer.expression.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    const name = initializer.expression.name.escapedText;
+    const args = initializer.arguments;
+    const last = args.length > 0 ? this.unwrapPrintTransparentExpression(args[args.length - 1]) : void 0;
+    const endsInLiteral = last !== void 0 && ts6.isObjectLiteralExpression(last);
+    if (!(name === "extend" && (args.length === 2 || endsInLiteral) || name === "deepExtend" && endsInLiteral)) {
+      return false;
+    }
+    const checker = this.checkerOrUndefined();
+    const fileName = checker?.getResolvedSignature(initializer)?.declaration?.getSourceFile?.()?.fileName;
+    return typeof fileName === "string" && JAVA_FRESH_EXTEND_FILE.test(fileName);
+  }
+  // the bottom container of `x[k1][k2].. = v` when x is a declared Map / List and k1 is not a
+  // string literal: the guarded native read of the element-read families (the literal key is
+  // printed by the caller's own arm)
+  javaDeclaredChainContainerRead(left, keyCount) {
+    let inner = left;
+    for (let i = 1; i < keyCount; i++) {
+      inner = inner.expression;
+    }
+    if (inner === void 0 || !ts6.isElementAccessExpression(inner) || ts6.isStringLiteralLike(inner.argumentExpression)) {
+      return void 0;
+    }
+    const declared = this.javaDeclaredTypeOf(inner.expression);
+    if (declared === void 0) {
+      return void 0;
+    }
+    if (JAVA_DECLARED_MAP_TYPES.test(declared)) {
+      return this.javaDeclaredMapElementRead(inner);
+    }
+    if (JAVA_DECLARED_LIST_TYPES.test(declared) && this.javaPrimitiveCounterIndex(inner.argumentExpression)) {
+      return this.javaDeclaredListElementRead(inner, true);
+    }
+    return void 0;
   }
   unwrapPrintTransparentExpression(node) {
     let current = node;
@@ -15813,8 +15863,12 @@ var JavaTranspiler = class extends BaseTranspiler {
       const keyStrs = keys.map((k) => this.printNode(k, 0));
       let acc = containerStr;
       let firstKey = 0;
+      const chainRead = keyStrs.length > 1 ? this.javaDeclaredChainContainerRead(left, keys.length) : void 0;
       if (keyStrs.length > 1 && this.javaDeclaredMapReceiver(baseExpr) && ts6.isStringLiteralLike(keys[0])) {
         acc = `${containerStr}.get(${keyStrs[0]})`;
+        firstKey = 1;
+      } else if (chainRead !== void 0) {
+        acc = chainRead;
         firstKey = 1;
       } else if (keyStrs.length > 1) {
         const fieldRead = this.javaFieldMapReadText(baseExpr, keys[0]);
@@ -15831,7 +15885,11 @@ var JavaTranspiler = class extends BaseTranspiler {
       const rhs = this.printNode(right, 0);
       const keyArg = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
       if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
-        return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${keyArg}, ${rhs})`;
+        const target = keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr) ? acc : `((${this.OBJECT_KEYWORD})${acc})`;
+        return `${prefixes}${target}.put(${keyArg}, ${rhs})`;
+      }
+      if (keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr) && (ts6.isStringLiteralLike(keys[0]) || this.javaDeclaredStringType(keys[0])) && this.javaPrintsNonNullValue(right)) {
+        return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
       return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }

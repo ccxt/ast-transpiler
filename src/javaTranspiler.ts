@@ -78,6 +78,8 @@ const JAVA_THIS_RETURN_TYPES: { [name: string]: string } = {
 // source files the table was audited against: the declaration on the base class, or
 // its overload-stripped temp copy (build/stripOverloads.ts). A call resolving anywhere
 // else is a venue override that prints its own signature - not provable.
+// `extend = extend` / `deepExtend = deepExtend` resolve to the base-tier generic helpers
+const JAVA_FRESH_EXTEND_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/](functions[\\/]generic|Exchange(\.nooverloads\.\d+)?)\.ts$/;
 const JAVA_THIS_RETURN_TYPES_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/;
 // `milliseconds = milliseconds` (Exchange.ts) mixes in the functions/time.ts helper, so
 // the same call may resolve to the Date.now signature in a typescript lib.d.ts instead.
@@ -1425,11 +1427,69 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
         const proven = ts.isObjectLiteralExpression(initializer)
-            || (ts.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0));
+            || (ts.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0))
+            || (this.javaDeclaredMapReceiver(container) && this.javaFreshExtendMap(initializer));
         if (!proven) {
             return false;
         }
         return !this.javaLocalIsReassigned(container); // a later write can hand the local another type (D2)
+    }
+
+    // a value whose Java print can never be null: non-null literals and fresh containers
+    javaPrintsNonNullValue(node): boolean {
+        const value = this.unwrapPrintTransparentExpression(node);
+        if (value === undefined) {
+            return false;
+        }
+        return ts.isStringLiteralLike(value) || ts.isNumericLiteral(value)
+            || value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword
+            || ts.isObjectLiteralExpression(value) || ts.isArrayLiteralExpression(value)
+            || (ts.isPrefixUnaryExpression(value) && value.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(value.operand));
+    }
+
+    // `this.extend(..)` / `this.deepExtend(..)` from the base tier hand back a fresh LinkedHashMap
+    // when the call has two arguments (Generic.Extend copies both) or ends in an object literal
+    // (deepExtend's last Map argument replaces any earlier non-Map box with a new map)
+    javaFreshExtendMap(initializer): boolean {
+        if (initializer === undefined || !ts.isCallExpression(initializer)
+            || !ts.isPropertyAccessExpression(initializer.expression)
+            || initializer.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = initializer.expression.name.escapedText;
+        const args = initializer.arguments;
+        const last = args.length > 0 ? this.unwrapPrintTransparentExpression(args[args.length - 1]) : undefined;
+        const endsInLiteral = last !== undefined && ts.isObjectLiteralExpression(last);
+        if (!((name === 'extend' && (args.length === 2 || endsInLiteral)) || (name === 'deepExtend' && endsInLiteral))) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const fileName = checker?.getResolvedSignature(initializer)?.declaration?.getSourceFile?.()?.fileName;
+        return typeof fileName === 'string' && JAVA_FRESH_EXTEND_FILE.test(fileName);
+    }
+
+    // the bottom container of `x[k1][k2].. = v` when x is a declared Map / List and k1 is not a
+    // string literal: the guarded native read of the element-read families (the literal key is
+    // printed by the caller's own arm)
+    javaDeclaredChainContainerRead(left, keyCount: number): string | undefined {
+        let inner = left;
+        for (let i = 1; i < keyCount; i++) {
+            inner = inner.expression;
+        }
+        if (inner === undefined || !ts.isElementAccessExpression(inner) || ts.isStringLiteralLike(inner.argumentExpression)) {
+            return undefined;
+        }
+        const declared = this.javaDeclaredTypeOf(inner.expression);
+        if (declared === undefined) {
+            return undefined;
+        }
+        if (JAVA_DECLARED_MAP_TYPES.test(declared)) {
+            return this.javaDeclaredMapElementRead(inner);
+        }
+        if (JAVA_DECLARED_LIST_TYPES.test(declared) && this.javaPrimitiveCounterIndex(inner.argumentExpression)) {
+            return this.javaDeclaredListElementRead(inner, true);
+        }
+        return undefined;
     }
 
     unwrapPrintTransparentExpression(node): any {
@@ -2677,9 +2737,13 @@ export class JavaTranspiler extends BaseTranspiler {
             // the `any` steps above it keep the helper (Go: goElementWriteChain).
             let acc = containerStr;
             let firstKey = 0;
+            const chainRead = (keyStrs.length > 1) ? this.javaDeclaredChainContainerRead(left, keys.length) : undefined;
             if ((keyStrs.length > 1) && this.javaDeclaredMapReceiver(baseExpr)
                 && ts.isStringLiteralLike(keys[0])) {
                 acc = `${containerStr}.get(${keyStrs[0]})`;
+                firstKey = 1;
+            } else if (chainRead !== undefined) {
+                acc = chainRead;
                 firstKey = 1;
             } else if (keyStrs.length > 1) {
                 // `this.<field>[k1][k2] = v`: the bottom step reads the hand-written base map
@@ -2701,7 +2765,17 @@ export class JavaTranspiler extends BaseTranspiler {
             const keyArg  = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
 
             if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
-                return `${prefixes}((${this.OBJECT_KEYWORD})${acc}).put(${keyArg}, ${rhs})`;
+                // a receiver declared as a Map already carries the type the put binds on
+                const target = (keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr))
+                    ? acc : `((${this.OBJECT_KEYWORD})${acc})`;
+                return `${prefixes}${target}.put(${keyArg}, ${rhs})`;
+            }
+            // a declared Map local takes a non-null value: the helper's only non-put branch is
+            // the ConcurrentHashMap null removal, so the native put is the same write
+            if (keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr)
+                && (ts.isStringLiteralLike(keys[0]) || this.javaDeclaredStringType(keys[0]))
+                && this.javaPrintsNonNullValue(right)) {
+                return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
 
             return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
