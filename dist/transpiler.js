@@ -25522,7 +25522,7 @@ var CppTranspiler = class extends BaseTranspiler {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = this.getChecker().getDeclaredTypeOfSymbol(symbol).symbol?.declarations ?? [];
+          const declarations = (this.getChecker().getDeclaredTypeOfSymbol(symbol).getSymbol()?.declarations ?? []).map((d) => d.resolve());
           const isClassDeclaration5 = declarations.find((l) => l.kind === SyntaxKind8.InterfaceDeclaration || l.kind === SyntaxKind8.ClassDeclaration);
           if (isClassDeclaration5) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;

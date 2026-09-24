@@ -25521,7 +25521,7 @@ var CppTranspiler = class extends BaseTranspiler {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1994 => _1994.getChecker, 'call', _1995 => _1995(), 'access', _1996 => _1996.getDeclaredTypeOfSymbol, 'call', _1997 => _1997(symbol), 'access', _1998 => _1998.symbol, 'optionalAccess', _1999 => _1999.declarations]), () => ( []));
+          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _1994 => _1994.getChecker, 'call', _1995 => _1995(), 'access', _1996 => _1996.getDeclaredTypeOfSymbol, 'call', _1997 => _1997(symbol), 'access', _1998 => _1998.getSymbol, 'call', _1999 => _1999(), 'optionalAccess', _2000 => _2000.declarations]), () => ( []))).map((d) => d.resolve());
           const isClassDeclaration5 = declarations.find((l) => l.kind === _ast.SyntaxKind.InterfaceDeclaration || l.kind === _ast.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration5) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -25642,7 +25642,7 @@ function memoizeUnaryMethod(owner, name) {
 }
 function memoizeBinaryKindMethod(owner, name) {
   const unary = owner[name];
-  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2000 => _2000.original]), () => ( unary));
+  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2001 => _2001.original]), () => ( unary));
   if (typeof original !== "function") {
     return;
   }
@@ -25745,7 +25745,7 @@ var Transpiler = class _Transpiler {
     const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path2.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _2001 => _2001.dispose, 'call', _2002 => _2002()]);
+    _optionalChain([previous, 'optionalAccess', _2002 => _2002.dispose, 'call', _2003 => _2003()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -25769,7 +25769,7 @@ var Transpiler = class _Transpiler {
   // long as the file's text on disk still equals the snapshot's. Replaces any
   // previous shared program; pass [] to drop it.
   setSharedProgram(paths) {
-    _optionalChain([this, 'access', _2003 => _2003.programCache, 'access', _2004 => _2004.shared, 'optionalAccess', _2005 => _2005.snapshot, 'access', _2006 => _2006.dispose, 'call', _2007 => _2007()]);
+    _optionalChain([this, 'access', _2004 => _2004.programCache, 'access', _2005 => _2005.shared, 'optionalAccess', _2006 => _2006.snapshot, 'access', _2007 => _2007.dispose, 'call', _2008 => _2008()]);
     this.programCache.shared = void 0;
     if (paths.length === 0) {
       return;
