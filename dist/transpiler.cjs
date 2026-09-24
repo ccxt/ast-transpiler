@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -5348,7 +5348,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const syntheticName = parsedArrayBindingElements.join("") + "Variable";
       const tempType = this.csharpDestructuringTempType(right);
       const tempExpression = this.printNode(right, 0);
-      let arrayBindingStatement = tempType ? `${tempType} ${syntheticName} = (${tempType})${tempExpression};
+      const tempCast = tempType && this.csharpDestructuringTempNeedsCast(right, tempExpression) ? `(${tempType})` : "";
+      let arrayBindingStatement = tempType ? `${tempType} ${syntheticName} = ${tempCast}${tempExpression};
 ` : `var ${syntheticName} = ${tempExpression};
 `;
       parsedArrayBindingElements.forEach((e, index) => {
@@ -5764,6 +5765,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
   csharpDestructuringTempType(initializer) {
     return void 0;
   }
+  // whether the typed holder needs the `(T)` cast on its printed initializer; a consumer that
+  // proves the printed call already returns T (or a subtype) answers false
+  csharpDestructuringTempNeedsCast(initializer, printedExpression) {
+    return true;
+  }
   // `isTrue (x)` is the identity on a C# `bool`, and `x == true` is what it computes for a `bool?`
   // (null -> false), so in a condition the wrapper adds nothing. The hook answers the emitted
   // declaration's type (getCSharpLocalType, plus classifier retypes); unnamed operands keep isTrue.
@@ -5848,7 +5854,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const syntheticName = parsedArrayBindingElements.join("") + "Variable";
       const tempType = this.csharpDestructuringTempType(declaration.initializer);
       const tempExpression = this.printNode(declaration.initializer, 0);
-      const tempDeclaration = tempType ? `${tempType} ${syntheticName} = (${tempType})${tempExpression}` : `var ${syntheticName} = ${tempExpression}`;
+      const tempCast = tempType && this.csharpDestructuringTempNeedsCast(declaration.initializer, tempExpression) ? `(${tempType})` : "";
+      const tempDeclaration = tempType ? `${tempType} ${syntheticName} = ${tempCast}${tempExpression}` : `var ${syntheticName} = ${tempExpression}`;
       let arrayBindingStatement = `${this.getIden(identation)}${tempDeclaration};
 `;
       parsedArrayBindingElements.forEach((e, index) => {
@@ -14779,6 +14786,9 @@ var JavaTranspiler = class extends BaseTranspiler {
   // argument prints from a local the printer declares `Object`, and needs the checkcast.
   javaNativeArgumentAlreadyTyped(arg, type) {
     if (arg.kind === _typescript2.default.SyntaxKind.NullKeyword) {
+      return true;
+    }
+    if (type === JAVA_NATIVE_RETURN_MAP_TYPE && _typescript2.default.isObjectLiteralExpression(arg)) {
       return true;
     }
     if (type !== "String") {

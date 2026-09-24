@@ -668,6 +668,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpStringReceiverType(receiver: any): string | undefined;
     csharpStringMethodReceiver(node: any, name: any): any;
     csharpDestructuringTempType(initializer: any): string | undefined;
+    csharpDestructuringTempNeedsCast(initializer: any, printedExpression: string): boolean;
     csharpConditionOperandType(node: any): string;
     csharpNativeCondition(node: any, identation: any): string;
     csharpNegatedConditionOperand(operand: any): string;

@@ -651,6 +651,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (arg.kind === ts.SyntaxKind.NullKeyword) {
             return true;
         }
+        // an object literal prints a `HashMap<String, Object>` instance, already a Map
+        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && ts.isObjectLiteralExpression(arg)) {
+            return true;
+        }
         if (type !== 'String') {
             return false;
         }
