@@ -7322,6 +7322,7 @@ describe('java typed parameters (b-09)', () => {
             "    go (raw: any, data: Dict): void {\n" +
             "        const v = new Venue ();\n" +
             "        v.parseZ (data, raw, data, data);\n" +
+            "        v.parseZ ({ 'a': 1 }, raw, data, data);\n" +
             "    }\n" +
             "}\n");
         const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -7362,6 +7363,11 @@ describe('java typed parameters (b-09)', () => {
 
     test('call sites cast the argument to the declared parameter type', () => {
         expect(venueOutput).toContain('v.parseZ((java.util.Map<String, Object>) (data), (String) (raw), (java.util.Map<String, Object>) (data), (java.util.Map<String, Object>) (data))');
+    });
+
+    test('an object literal argument binds a Map parameter with no cast', () => {
+        expect(venueOutput).toContain('v.parseZ(new java.util.HashMap<String, Object>() {{');
+        expect(venueOutput).not.toContain('(java.util.Map<String, Object>) (new java.util.HashMap');
     });
 
     test('a plain write to a retyped parameter casts its right side', () => {
