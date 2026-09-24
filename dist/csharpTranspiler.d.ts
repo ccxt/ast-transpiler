@@ -192,6 +192,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpOverrideParamSpelling(node: any): string | undefined;
     csharpOverrideParamSpellingOfType(type: any, unionArms?: number): string | undefined;
     printParameter(node: any, defaultValue?: boolean): string;
+    csharpCallSiteFunctionType(node: any): string;
     printArrayLiteralExpression(node: any): string;
     csharpBooleanReturnType(node: any): string | undefined;
     printFunctionType(node: any): string;

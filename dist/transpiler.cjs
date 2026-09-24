@@ -6046,6 +6046,22 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return name;
   }
+  // getFunctionType for a call site: TS7's getSignatureFromDeclaration panics on a CallExpression
+  // (TS6 returned the resolved call signature there), so resolve the call itself
+  csharpCallSiteFunctionType(node) {
+    const checker = this.getChecker();
+    const type = checker.getReturnTypeOfSignature(checker.getResolvedSignature(node));
+    const parsedType = this.getTypeFromRawType(type);
+    if (parsedType !== this.PROMISE_TYPE_KEYWORD) {
+      return parsedType;
+    }
+    const typeArguments = checker.getTypeArguments(type);
+    if (typeArguments.length === 0 || typeArguments.length === 1 && typeArguments[0].flags === _sync.TypeFlags.Void) {
+      return this.PROMISE_TYPE_KEYWORD;
+    }
+    const insideTypes = typeArguments.map((t) => this.getTypeFromRawType(t)).join(",");
+    return insideTypes.length > 0 ? `${this.PROMISE_TYPE_KEYWORD}<${insideTypes}>` : void 0;
+  }
   printArrayLiteralExpression(node) {
     let arrayOpen = this.ARRAY_OPENING_TOKEN;
     const elems = node.elements;
@@ -6055,7 +6071,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (elems.length > 0) {
       const first = elems[0];
       if (first.kind === _ast.SyntaxKind.CallExpression) {
-        let type = this.getFunctionType(first);
+        let type = this.csharpCallSiteFunctionType(first);
         if (type === void 0 || elements.indexOf(this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN) > -1) {
           arrayOpen = "new List<object> {";
         } else {

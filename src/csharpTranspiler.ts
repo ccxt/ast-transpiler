@@ -3991,6 +3991,23 @@ export class CSharpTranspiler extends BaseTranspiler {
         return name;
     }
 
+    // getFunctionType for a call site: TS7's getSignatureFromDeclaration panics on a CallExpression
+    // (TS6 returned the resolved call signature there), so resolve the call itself
+    csharpCallSiteFunctionType(node) {
+        const checker = this.getChecker();
+        const type = checker.getReturnTypeOfSignature(checker.getResolvedSignature(node));
+        const parsedType = this.getTypeFromRawType(type);
+        if (parsedType !== this.PROMISE_TYPE_KEYWORD) {
+            return parsedType;
+        }
+        const typeArguments = checker.getTypeArguments(type as any);
+        if (typeArguments.length === 0 || (typeArguments.length === 1 && typeArguments[0].flags === TypeFlags.Void)) {
+            return this.PROMISE_TYPE_KEYWORD;
+        }
+        const insideTypes = typeArguments.map((t) => this.getTypeFromRawType(t)).join(",");
+        return (insideTypes.length > 0) ? `${this.PROMISE_TYPE_KEYWORD}<${insideTypes}>` : undefined;
+    }
+
     printArrayLiteralExpression(node) {
 
         let arrayOpen = this.ARRAY_OPENING_TOKEN;
@@ -4005,7 +4022,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             const first = elems[0];
             if (first.kind === SyntaxKind.CallExpression) {
                 // const type = this.getChecker().getTypeAtLocation(first);
-                let type = this.getFunctionType(first);
+                let type = this.csharpCallSiteFunctionType(first);
                 // const parsedType = this.getTypeFromRawType(type);
                 // parsedType === "Task" ||
                 // to do check this later
