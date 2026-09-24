@@ -2,7 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
 import { IndexKind, TypeFlags, type Checker, type Symbol as TsSymbol, type UnionType } from 'typescript/unstable/sync';
 import { isArrayLiteralExpression, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isBreakStatement, isCallExpression, isClassDeclaration, isClassExpression, isClassLikeDeclaration, isContinueStatement, isDeleteExpression, isElementAccessExpression, isExpressionStatement, isForStatement, isFunctionExpression, isIdentifier, isIfStatement, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertySignatureDeclaration, isReturnStatement, isSourceFile, isSpreadAssignment, isSpreadElement, isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement } from 'typescript/unstable/ast/is';
-import { findAncestor, isFunctionLike } from 'ast-transpiler/tsUtils';
+import { findAncestor, isFunctionLike } from './tsUtils.js';
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
