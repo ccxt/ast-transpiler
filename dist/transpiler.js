@@ -25,8 +25,8 @@ var require_dirname = __commonJS({
 // src/transpiler.ts
 init_esm_shims();
 var import_dirname = __toESM(require_dirname(), 1);
-import { ScriptTarget } from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import { ScriptTarget, SyntaxKind as SyntaxKind9 } from "typescript/unstable/ast";
+import { API, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags7, TypeFormatFlags } from "typescript/unstable/sync";
 
 // src/pythonTranspiler.ts
 init_esm_shims();
@@ -26074,9 +26074,18 @@ var TranspileProgramBatch = class {
   }
 };
 export {
+  CheckFlags,
+  ElementFlags2 as ElementFlags,
+  IndexKind5 as IndexKind,
+  ObjectFlags2 as ObjectFlags,
   RUST_DECLARED_DICT_LOCALS,
+  SignatureKind3 as SignatureKind,
+  SymbolFlags4 as SymbolFlags,
+  SyntaxKind9 as SyntaxKind,
   TranspileProgramBatch,
   Transpiler,
+  TypeFlags7 as TypeFlags,
+  TypeFormatFlags,
   alignGoTrailingComments,
   Transpiler as default
 };

@@ -1,5 +1,5 @@
-import { ScriptTarget, type Node, type SourceFile } from "typescript/unstable/ast";
-import { API, type Checker, type CompilerOptions, type Program, type Snapshot, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
+import { ScriptTarget, SyntaxKind, type Node, type SourceFile } from "typescript/unstable/ast";
+import { API, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type CompilerOptions, type Program, type Snapshot } from "typescript/unstable/sync";
 import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
@@ -670,6 +670,10 @@ class TranspileProgramBatch {
 export {
     Transpiler,
     TranspileProgramBatch,
+    // the TS7 flag enums of the typescript the generator runs on, for consumer hooks whose
+    // own `typescript` resolution may be an older 7.x lacking them
+    CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags,
+    SyntaxKind,
     // the trailing-comment alignment pass, so a consumer that assembles its own Go files
     // (ccxt build/goTranspiler.ts) can run it on the assembled text as well
     alignGoTrailingComments,
