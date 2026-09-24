@@ -1170,7 +1170,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goFileKeepsFileLevelImports(): boolean;
     goNativeIndexOf(node: any, name: any, parsedArg: any): string | undefined;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
-    goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean;
+    goNativeStringOperandTexts(operands: any[], texts: string[], expected: string[]): string[] | undefined;
     goNativeStringCall(nativeCall: string): string | undefined;
     goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;

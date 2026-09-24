@@ -8537,7 +8537,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       }
       case _typescript2.default.SyntaxKind.CallExpression: {
         const property = initializer.expression;
-        if (_optionalChain([property, 'optionalAccess', _466 => _466.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression && _optionalChain([property, 'access', _467 => _467.name, 'optionalAccess', _468 => _468.escapedText]) === "toString" && _optionalChain([initializer, 'access', _469 => _469.arguments, 'optionalAccess', _470 => _470.length]) === 0 && this.goOperandStaticType(property.expression, printedValue) === "string") {
+        if (_optionalChain([property, 'optionalAccess', _466 => _466.kind]) === _typescript2.default.SyntaxKind.PropertyAccessExpression && _optionalChain([property, 'access', _467 => _467.name, 'optionalAccess', _468 => _468.escapedText]) === "toString" && _optionalChain([initializer, 'access', _469 => _469.arguments, 'optionalAccess', _470 => _470.length]) === 0 && (this.goOperandStaticType(property.expression, printedValue) === "string" || this.goDerefableStringOperand(property.expression))) {
           return "string";
         }
         break;
@@ -13240,20 +13240,25 @@ ${this.getIden(level)}}()`;
     }
     return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
   }
-  // A native string operation needs every operand to be a printed Go `string` — the helper takes
-  // `any` and re-derives the same string, so a proven operand cannot change the result. A regex
-  // literal is never a Go string (a pattern, not the helper's ToString value) and keeps the helper.
-  goNativeStringOperands(operands, texts, expected) {
+  // A native string operation needs every operand to be a Go `string`: a proven one prints as is,
+  // a `*string` goDerefableStringOperand proves non-nil prints as its pointee (the helper's nil
+  // branch is unreachable). A regex literal is a pattern, never a string: undefined keeps the helper.
+  goNativeStringOperandTexts(operands, texts, expected) {
+    const result = [];
     for (let i = 0; i < expected.length; i++) {
       const operand = operands[i];
       if (operand === void 0 || operand.kind === _typescript2.default.SyntaxKind.RegularExpressionLiteral) {
-        return false;
+        return void 0;
       }
-      if (this.goOperandStaticType(operand, texts[i]) !== expected[i]) {
-        return false;
+      if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
+        result.push(texts[i]);
+      } else if (expected[i] === "string" && !texts[i].includes("\n") && this.goDerefableStringOperand(operand)) {
+        result.push("*" + texts[i].trim());
+      } else {
+        return void 0;
       }
     }
-    return true;
+    return result;
   }
   // the emission entry point: undefined when the file's stdlib import could not be placed
   // (see goStdlibImportIsPlaceable), else the native call text, with the file-level import
@@ -13272,8 +13277,9 @@ ${this.getIden(level)}}()`;
     return this.goFileKeepsFileLevelImports();
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([_optionalChain([node, 'access', _1018 => _1018.expression, 'optionalAccess', _1019 => _1019.expression]), _optionalChain([node, 'access', _1020 => _1020.arguments, 'optionalAccess', _1021 => _1021[0]])], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.HasPrefix(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1018 => _1018.expression, 'optionalAccess', _1019 => _1019.expression]), _optionalChain([node, 'access', _1020 => _1020.arguments, 'optionalAccess', _1021 => _1021[0]])], [name, parsedArg], ["string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.HasPrefix(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13281,8 +13287,9 @@ ${this.getIden(level)}}()`;
     return `StartsWith(${name}, ${parsedArg})`;
   }
   printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([_optionalChain([node, 'access', _1022 => _1022.expression, 'optionalAccess', _1023 => _1023.expression]), _optionalChain([node, 'access', _1024 => _1024.arguments, 'optionalAccess', _1025 => _1025[0]])], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.HasSuffix(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1022 => _1022.expression, 'optionalAccess', _1023 => _1023.expression]), _optionalChain([node, 'access', _1024 => _1024.arguments, 'optionalAccess', _1025 => _1025[0]])], [name, parsedArg], ["string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.HasSuffix(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13293,8 +13300,9 @@ ${this.getIden(level)}}()`;
     return `Trim(${name})`;
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([_optionalChain([node, 'access', _1026 => _1026.expression, 'optionalAccess', _1027 => _1027.expression]), _optionalChain([node, 'access', _1028 => _1028.arguments, 'optionalAccess', _1029 => _1029[0]])], [name, parsedArg], ["[]string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Join(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1026 => _1026.expression, 'optionalAccess', _1027 => _1027.expression]), _optionalChain([node, 'access', _1028 => _1028.arguments, 'optionalAccess', _1029 => _1029[0]])], [name, parsedArg], ["[]string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.Join(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13302,8 +13310,9 @@ ${this.getIden(level)}}()`;
     return `Join(${name}, ${parsedArg})`;
   }
   printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
-    if (parsedArg !== void 0 && this.goNativeStringOperands([_optionalChain([node, 'access', _1030 => _1030.expression, 'optionalAccess', _1031 => _1031.expression]), _optionalChain([node, 'access', _1032 => _1032.arguments, 'optionalAccess', _1033 => _1033[0]])], [name, parsedArg], ["string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Split(${name}, ${parsedArg})`);
+    const ops = parsedArg === void 0 ? void 0 : this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1030 => _1030.expression, 'optionalAccess', _1031 => _1031.expression]), _optionalChain([node, 'access', _1032 => _1032.arguments, 'optionalAccess', _1033 => _1033[0]])], [name, parsedArg], ["string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.Split(${ops[0]}, ${ops[1]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13322,6 +13331,9 @@ ${this.getIden(level)}}()`;
       if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "string") {
         return name;
       }
+      if (receiver !== void 0 && this.goDerefableStringOperand(receiver)) {
+        return "*" + name.trim();
+      }
     }
     return `ToString(${name})`;
   }
@@ -13329,8 +13341,9 @@ ${this.getIden(level)}}()`;
     return `Concat(${name}, ${parsedArg})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
-    if (this.goNativeStringOperands([_optionalChain([node, 'access', _1036 => _1036.expression, 'optionalAccess', _1037 => _1037.expression])], [name], ["string"])) {
-      const native = this.goNativeStringCall(`strings.ToUpper(${name})`);
+    const ops = this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1036 => _1036.expression, 'optionalAccess', _1037 => _1037.expression])], [name], ["string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.ToUpper(${ops[0]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13338,8 +13351,9 @@ ${this.getIden(level)}}()`;
     return `ToUpper(${name})`;
   }
   printToLowerCaseCall(node, identation, name = void 0) {
-    if (this.goNativeStringOperands([_optionalChain([node, 'access', _1038 => _1038.expression, 'optionalAccess', _1039 => _1039.expression])], [name], ["string"])) {
-      const native = this.goNativeStringCall(`strings.ToLower(${name})`);
+    const ops = this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1038 => _1038.expression, 'optionalAccess', _1039 => _1039.expression])], [name], ["string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.ToLower(${ops[0]})`);
       if (native !== void 0) {
         return native;
       }
@@ -13480,8 +13494,9 @@ ${this.getIden(level)}}()`;
     return `Slice(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    if (parsedArg !== void 0 && parsedArg2 !== void 0 && this.goNativeStringOperands([_optionalChain([node, 'access', _1057 => _1057.expression, 'optionalAccess', _1058 => _1058.expression]), _optionalChain([node, 'access', _1059 => _1059.arguments, 'optionalAccess', _1060 => _1060[0]]), _optionalChain([node, 'access', _1061 => _1061.arguments, 'optionalAccess', _1062 => _1062[1]])], [name, parsedArg, parsedArg2], ["string", "string", "string"])) {
-      const native = this.goNativeStringCall(`strings.Replace(${name}, ${parsedArg}, ${parsedArg2}, 1)`);
+    const ops = parsedArg === void 0 || parsedArg2 === void 0 ? void 0 : this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1057 => _1057.expression, 'optionalAccess', _1058 => _1058.expression]), _optionalChain([node, 'access', _1059 => _1059.arguments, 'optionalAccess', _1060 => _1060[0]]), _optionalChain([node, 'access', _1061 => _1061.arguments, 'optionalAccess', _1062 => _1062[1]])], [name, parsedArg, parsedArg2], ["string", "string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.Replace(${ops[0]}, ${ops[1]}, ${ops[2]}, 1)`);
       if (native !== void 0) {
         return native;
       }
@@ -13489,8 +13504,9 @@ ${this.getIden(level)}}()`;
     return `Replace(${name}, ${parsedArg}, ${parsedArg2})`;
   }
   printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    if (parsedArg !== void 0 && parsedArg2 !== void 0 && this.goNativeStringOperands([_optionalChain([node, 'access', _1063 => _1063.expression, 'optionalAccess', _1064 => _1064.expression]), _optionalChain([node, 'access', _1065 => _1065.arguments, 'optionalAccess', _1066 => _1066[0]]), _optionalChain([node, 'access', _1067 => _1067.arguments, 'optionalAccess', _1068 => _1068[1]])], [name, parsedArg, parsedArg2], ["string", "string", "string"])) {
-      const native = this.goNativeStringCall(`strings.ReplaceAll(${name}, ${parsedArg}, ${parsedArg2})`);
+    const ops = parsedArg === void 0 || parsedArg2 === void 0 ? void 0 : this.goNativeStringOperandTexts([_optionalChain([node, 'access', _1063 => _1063.expression, 'optionalAccess', _1064 => _1064.expression]), _optionalChain([node, 'access', _1065 => _1065.arguments, 'optionalAccess', _1066 => _1066[0]]), _optionalChain([node, 'access', _1067 => _1067.arguments, 'optionalAccess', _1068 => _1068[1]])], [name, parsedArg, parsedArg2], ["string", "string", "string"]);
+    if (ops !== void 0) {
+      const native = this.goNativeStringCall(`strings.ReplaceAll(${ops[0]}, ${ops[1]}, ${ops[2]})`);
       if (native !== void 0) {
         return native;
       }
