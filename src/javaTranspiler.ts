@@ -3594,7 +3594,7 @@ export class JavaTranspiler extends BaseTranspiler {
             if (t === undefined || t.flags === 0) {
                 return false;
             }
-            if (t.isUnion?.()) {
+            if (t.isUnionType?.()) {
                 return t.getTypes().every(notNumeric);
             }
             return (t.flags & ~notNumber) === 0;
