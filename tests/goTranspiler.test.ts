@@ -1,7 +1,7 @@
 import { assert } from 'console';
 import { Transpiler, alignGoTrailingComments } from '../src/transpiler';
 
-import { SyntaxKind } from 'typescript';
+import { SyntaxKind } from 'typescript/unstable/ast';
 import { readFileSync } from 'fs';
 import * as nodefs from 'fs';
 import * as nodepath from 'path';
@@ -1717,7 +1717,7 @@ describe('go inline equality', () => {
         const shippedBinary = go.printBinaryExpression.bind(go);
         // a write-site rule asks the same question from the assignment, mid-body
         go.printBinaryExpression = function (node: any, identation: number) {
-            const param: any = this.getChecker().getSymbolAtLocation(node.left)?.valueDeclaration;
+            const param: any = this.getChecker().getSymbolAtLocation(node.left)?.valueDeclaration?.resolve();
             if (param?.initializer !== undefined) {
                 answers.push(shipped(this.goEnclosingFunction(param), param, 'nil'));
             }
@@ -4269,7 +4269,7 @@ describe('go string concat operands -> declared Go string', () => {
         const printer: any = inst.goTranspiler;
         const upstream = printer.printParameterType;
         printer.printParameterType = function (node) {
-            return (node?.name?.escapedText === 'symbol') ? 'string' : upstream.call(this, node);
+            return (node?.name?.text === 'symbol') ? 'string' : upstream.call(this, node);
         };
         const input =
         "class Exchange {\n" +

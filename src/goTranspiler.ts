@@ -6702,7 +6702,7 @@ ${this.getIden(identation)}${returnStatement}`;
             const first = elems[0];
             if (first.kind === SyntaxKind.CallExpression) {
                 // const type = this.getChecker().getTypeAtLocation(first);
-                const type = this.getFunctionType(first);
+                const type = undefined;
                 // const parsedType = this.getTypeFromRawType(type);
                 // parsedType === "Task" ||
                 // to do check this later
