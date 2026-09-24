@@ -1491,6 +1491,10 @@ declare class JavaTranspiler extends BaseTranspiler {
     printOptionalArgExpression(index: any, initializer: any): string;
     printOptionalArgInit(paramName: any, index: any, initializer: any): string;
     isPureInitializer(node: any): any;
+    javaDefaultedLocalNames: Map<ts.Symbol, string>;
+    javaDefaultedParameterLocals(node: any): string[];
+    javaIsLiteralDefault(initializer: any): boolean;
+    javaDefaultedLocalName(node: any): string | undefined;
     printFunctionBody(node: any, identation: any): string;
     printBlock(node: any, identation: any, chainBlock?: boolean): string;
     printInstanceOfExpression(node: any, identation: any): string;

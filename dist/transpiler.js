@@ -14516,6 +14516,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
     this.javaReturnTypeCache = /* @__PURE__ */ new WeakMap();
     this.javaReturnTypeInProgress = /* @__PURE__ */ new Set();
+    // a literal-defaulted parameter reads through a fresh local holding the TS default when the
+    // caller passed null (a dynamic call pads omitted slots with null); the parameter stays final
+    this.javaDefaultedLocalNames = /* @__PURE__ */ new Map();
     // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
     this.javaReassigningMethods = [];
     // the embedding build turns a reassigned async parameter into a hard transpile error
@@ -15089,6 +15092,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (idValue === "undefined") {
       return this.UNDEFINED_TOKEN;
+    }
+    const defaulted = this.javaDefaultedLocalName(node);
+    if (defaulted !== void 0) {
+      return defaulted;
     }
     const isInsideNewExpression = node?.parent?.kind === ts6.SyntaxKind.NewExpression;
     const isInsideCatch = node?.parent?.kind === ts6.SyntaxKind.ThrowStatement;
@@ -18693,6 +18700,65 @@ var JavaTranspiler = class extends BaseTranspiler {
         return false;
     }
   }
+  javaDefaultedParameterLocals(node) {
+    const lines = [];
+    if (node.body === void 0) {
+      return lines;
+    }
+    const used = /* @__PURE__ */ new Set();
+    const collect = (n) => {
+      if (ts6.isIdentifier(n)) {
+        used.add(n.text);
+      }
+      ts6.forEachChild(n, collect);
+    };
+    collect(node.body);
+    const types = this.javaCoreParameterTypes(node);
+    node.parameters.forEach((param, i) => {
+      const initializer = param.initializer;
+      if (!this.javaIsLiteralDefault(initializer) || !ts6.isIdentifier(param.name)) {
+        return;
+      }
+      const symbol = this.javaSymbolOf(param.name);
+      if (symbol === void 0) {
+        return;
+      }
+      const name = this.printNode(param.name, 0);
+      let local = name + "Value";
+      for (let k = 2; used.has(local); k++) {
+        local = name + "Value" + k;
+      }
+      used.add(local);
+      this.javaDefaultedLocalNames.set(symbol, local);
+      const value = this.javaCoreDefaultArgument(param, types[i]);
+      lines.push(`${types[i]} ${local};`);
+      lines.push(`if (${name} == null) { ${local} = ${value}; } else { ${local} = ${name}; }`);
+    });
+    return lines;
+  }
+  // a string, number or boolean literal default (null, `undefined` and `{}` / `[]` keep the parameter)
+  javaIsLiteralDefault(initializer) {
+    let node = initializer;
+    while (node !== void 0 && (ts6.isParenthesizedExpression(node) || ts6.isAsExpression(node))) {
+      node = node.expression;
+    }
+    if (node !== void 0 && ts6.isPrefixUnaryExpression(node) && node.operator === ts6.SyntaxKind.MinusToken) {
+      node = node.operand;
+    }
+    return node !== void 0 && (ts6.isStringLiteralLike(node) || ts6.isNumericLiteral(node) || node.kind === ts6.SyntaxKind.TrueKeyword || node.kind === ts6.SyntaxKind.FalseKeyword);
+  }
+  javaDefaultedLocalName(node) {
+    if (this.javaDefaultedLocalNames.size === 0 || ts6.isParameter(node.parent) || ts6.isPropertyAccessExpression(node.parent) && node.parent.name === node || ts6.isPropertyAssignment(node.parent) && node.parent.name === node) {
+      return void 0;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    return symbol === void 0 ? void 0 : this.javaDefaultedLocalNames.get(symbol);
+  }
   printFunctionBody(node, identation) {
     const savedVarList = this.varListFromObjectLiterals;
     const savedUsageToFinalName = this.usageToFinalName;
@@ -18704,7 +18770,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const bodyStatements = node.body.statements;
     const isAsync = this.isAsyncFunction(node);
     const splitCore = ts6.isMethodDeclaration(node);
-    const initParams = [];
+    const initParams = splitCore ? this.javaDefaultedParameterLocals(node) : [];
     const processedParts = [];
     try {
       for (let i = 0; i < bodyStatements.length; i++) {
@@ -18722,7 +18788,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       const initializer = param.initializer;
       if (initializer) {
         if (splitCore) {
-          if (!this.isPureInitializer(initializer)) {
+          if (!this.isPureInitializer(initializer) && !this.javaDefaultedLocalNames.has(this.javaSymbolOf(param.name))) {
             const name = this.printNode(param.name, 0);
             initParams.push(`if (${name} == null) { ${name} = ${this.printNode(initializer, 0)}; }`);
           }

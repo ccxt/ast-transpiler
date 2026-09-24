@@ -6364,6 +6364,9 @@ describe('java full arity for own methods of a non-exchange class', () => {
             "    }\n" +
             "    assertErr (cond: boolean, message: string, key: string = undefined): void {\n" +
             "    }\n" +
+            "    async candles (symbol: string, timeframe: string = '1m', limit: number = 25, params = {}): Promise<any> {\n" +
+            "        return [ symbol, timeframe, limit, params ];\n" +
+            "    }\n" +
             "    run (): void {\n" +
             "        this.initOffline ('a');\n" +
             "        this.initOffline ('a', true);\n" +
@@ -6383,5 +6386,11 @@ describe('java full arity for own methods of a non-exchange class', () => {
         expect(output).toMatch(/this\.initOffline\("a", true\)/);
         expect(output).toMatch(/this\.assertErr\(true, "m", \(Object\) null\)/);
         expect(output).not.toContain('Object... optionalArgs');
+    });
+
+    test('a literal default reaches the body when a dynamic caller passes null', () => {
+        expect(output).toMatch(/(String|Object) timeframeValue;\s*if \(timeframe == null\) \{ timeframeValue = "1m"; \} else \{ timeframeValue = timeframe; \}/);
+        expect(output).toMatch(/symbol, timeframeValue, limitValue, parameters/);
+        expect(output).not.toMatch(/timeframe = /);
     });
 });

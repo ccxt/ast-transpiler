@@ -1088,6 +1088,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.UNDEFINED_TOKEN;
         }
 
+        const defaulted = this.javaDefaultedLocalName(node);
+        if (defaulted !== undefined) {
+            return defaulted;
+        }
+
         // keep the same class-reference typeof-guarding logic as your original file,
         // but run the syntactic (parent-position) checks first: they exclude the vast
         // majority of identifiers without paying for a type-checker lookup
@@ -5364,6 +5369,75 @@ export class JavaTranspiler extends BaseTranspiler {
         }
     }
 
+    // a literal-defaulted parameter reads through a fresh local holding the TS default when the
+    // caller passed null (a dynamic call pads omitted slots with null); the parameter stays final
+    javaDefaultedLocalNames: Map<ts.Symbol, string> = new Map();
+
+    javaDefaultedParameterLocals(node): string[] {
+        const lines = [];
+        if (node.body === undefined) {
+            return lines;
+        }
+        const used = new Set<string>();
+        const collect = (n) => {
+            if (ts.isIdentifier(n)) {
+                used.add(n.text);
+            }
+            ts.forEachChild(n, collect);
+        };
+        collect(node.body);
+        const types = this.javaCoreParameterTypes(node);
+        node.parameters.forEach((param, i) => {
+            const initializer = param.initializer;
+            if (!this.javaIsLiteralDefault(initializer) || !ts.isIdentifier(param.name)) {
+                return;
+            }
+            const symbol = this.javaSymbolOf(param.name);
+            if (symbol === undefined) {
+                return;
+            }
+            const name = this.printNode(param.name, 0);
+            let local = name + 'Value';
+            for (let k = 2; used.has(local); k++) {
+                local = name + 'Value' + k;
+            }
+            used.add(local);
+            this.javaDefaultedLocalNames.set(symbol, local);
+            const value = this.javaCoreDefaultArgument(param, types[i]);
+            lines.push(`${types[i]} ${local};`);
+            lines.push(`if (${name} == null) { ${local} = ${value}; } else { ${local} = ${name}; }`);
+        });
+        return lines;
+    }
+
+    // a string, number or boolean literal default (null, `undefined` and `{}` / `[]` keep the parameter)
+    javaIsLiteralDefault(initializer): boolean {
+        let node = initializer;
+        while (node !== undefined && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node))) {
+            node = node.expression;
+        }
+        if (node !== undefined && ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+            node = node.operand;
+        }
+        return node !== undefined && (ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)
+            || node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword);
+    }
+
+    javaDefaultedLocalName(node): string | undefined {
+        if (this.javaDefaultedLocalNames.size === 0 || ts.isParameter(node.parent)
+            || (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+            || ts.isPropertyAssignment(node.parent) && node.parent.name === node) {
+            return undefined;
+        }
+        let symbol;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        return symbol === undefined ? undefined : this.javaDefaultedLocalNames.get(symbol);
+    }
+
     printFunctionBody(node, identation) {
         // Save/restore rather than clobber: a nested function re-enters this method
         // and must not destroy the enclosing body's analysis state on the way out.
@@ -5378,7 +5452,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const isAsync = this.isAsyncFunction(node);
         // a method's default-valued parameters are parameters of its typed signature: no unpack locals
         const splitCore = ts.isMethodDeclaration(node);
-        const initParams = [];
+        const initParams = splitCore ? this.javaDefaultedParameterLocals(node) : [];
         const processedParts = [];
         try {
             for (let i = 0; i < bodyStatements.length; i++) {
@@ -5396,7 +5470,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const initializer = param.initializer;
             if (initializer) {
                 if (splitCore) {
-                    if (!this.isPureInitializer(initializer)) {
+                    if (!this.isPureInitializer(initializer) && !this.javaDefaultedLocalNames.has(this.javaSymbolOf(param.name))) {
                         const name = this.printNode(param.name, 0);
                         initParams.push(`if (${name} == null) { ${name} = ${this.printNode(initializer, 0)}; }`);
                     }
