@@ -14465,10 +14465,87 @@ var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
   "handleParamBool",
   "handleParamBool2"
 ]);
+var JAVA_MEMO_UNDEFINED = Symbol("javaMemoUndefined");
+var JAVA_MEMOIZED_METHODS = ["getResolvedSignature", "getSignatureFromDeclaration", "isArrayType", "isTupleType", "getAliasedSymbol", "getTypeArguments", "getDeclaredTypeOfSymbol", "getReturnTypeOfSignature", "getSymbolOfType", "getTypeOfSymbolAtLocation", "getSignaturesOfType", "typeToString", "getTypesOfType"];
+var JAVA_TYPE_PREFETCH_KINDS = /* @__PURE__ */ new Set([SyntaxKind6.Identifier, SyntaxKind6.BinaryExpression, SyntaxKind6.Parameter, SyntaxKind6.VariableDeclaration, SyntaxKind6.StringLiteral, SyntaxKind6.MethodDeclaration, SyntaxKind6.PropertyAccessExpression, SyntaxKind6.ParenthesizedExpression, SyntaxKind6.ElementAccessExpression]);
+var JAVA_SYMBOL_PREFETCH_KINDS = /* @__PURE__ */ new Set([SyntaxKind6.Identifier]);
+function prefetchByFile(checker, name, kinds) {
+  const original = checker[name];
+  const cache = /* @__PURE__ */ new WeakMap();
+  const done = /* @__PURE__ */ new WeakSet();
+  Object.defineProperty(checker, name, { configurable: true, value: (node) => {
+    if (Array.isArray(node)) {
+      return original(node);
+    }
+    if (cache.has(node)) {
+      return cache.get(node);
+    }
+    const sf = node.getSourceFile?.();
+    if (sf !== void 0 && !done.has(sf)) {
+      done.add(sf);
+      const nodes = [];
+      const visit = (n) => {
+        if (kinds.has(n.kind)) {
+          nodes.push(n);
+        }
+        n.forEachChild(visit);
+      };
+      sf.forEachChild(visit);
+      if (nodes.length > 0) {
+        const results = original(nodes);
+        for (let i = 0; i < nodes.length; i++) {
+          cache.set(nodes[i], results[i]);
+        }
+      }
+      if (cache.has(node)) {
+        return cache.get(node);
+      }
+    }
+    const result = original(node);
+    cache.set(node, result);
+    return result;
+  } });
+}
+function memoizeJavaCheckerCalls(checker) {
+  if (checker.__javaMemoized) {
+    return checker;
+  }
+  Object.defineProperty(checker, "__javaMemoized", { value: true });
+  prefetchByFile(checker, "getTypeAtLocation", JAVA_TYPE_PREFETCH_KINDS);
+  prefetchByFile(checker, "getSymbolAtLocation", JAVA_SYMBOL_PREFETCH_KINDS);
+  for (const name of JAVA_MEMOIZED_METHODS) {
+    const original = checker[name];
+    if (typeof original !== "function") {
+      continue;
+    }
+    const byFirst = /* @__PURE__ */ new WeakMap();
+    Object.defineProperty(checker, name, { configurable: true, value: (first, ...rest) => {
+      if (first === null || typeof first !== "object" && typeof first !== "function" || rest.some((a) => a !== void 0 && typeof a === "object")) {
+        return original(first, ...rest);
+      }
+      let byRest = byFirst.get(first);
+      if (byRest === void 0) {
+        byRest = /* @__PURE__ */ new Map();
+        byFirst.set(first, byRest);
+      }
+      const key = rest.length === 0 ? "" : JSON.stringify(rest);
+      const cached = byRest.get(key);
+      if (cached !== void 0) {
+        return cached === JAVA_MEMO_UNDEFINED ? void 0 : cached;
+      }
+      const result = original(first, ...rest);
+      byRest.set(key, result === void 0 ? JAVA_MEMO_UNDEFINED : result);
+      return result;
+    } });
+  }
+  return checker;
+}
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
     super(config);
+    // override lookups repeat per method on every printed call and hook; the answer is fixed per node
+    this.methodOverrideCache = /* @__PURE__ */ new WeakMap();
     this.varListFromObjectLiterals = {};
     // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
     // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
@@ -14529,6 +14606,25 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.applyUserOverrides(config);
     this.asyncExecutor = config["asyncExecutor"] ?? "";
     this.asyncSupplier = config["asyncSupplier"] ?? "";
+  }
+  getChecker() {
+    return memoizeJavaCheckerCalls(super.getChecker());
+  }
+  getMethodOverride(node) {
+    if (node === void 0 || node === null) {
+      return super.getMethodOverride(node);
+    }
+    const cached = this.methodOverrideCache.get(node);
+    if (cached !== void 0) {
+      return cached === JAVA_MEMO_UNDEFINED ? void 0 : cached;
+    }
+    const result = super.getMethodOverride(node);
+    this.methodOverrideCache.set(node, result === void 0 ? JAVA_MEMO_UNDEFINED : result);
+    return result;
+  }
+  checkerOrUndefined() {
+    const checker = super.checkerOrUndefined();
+    return checker === void 0 ? void 0 : memoizeJavaCheckerCalls(checker);
   }
   // the embedding build layer (build/java-local-types.js) installs this: it names the
   // Java type of a local whose printed declaration line it rewrote (`Long`/`Double`).
