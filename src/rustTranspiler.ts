@@ -230,10 +230,6 @@ export class RustTranspiler extends BaseTranspiler {
         };
     }
 
-    capitalize(str: string) {
-        return str[0].toUpperCase() + str.slice(1);
-    }
-
     // Escaped Rust string literal for the given TS literal text — shared by
     // the `Value::Str(..)` form and the `&str` key form below.
     quotedStringLiteral(text: string): string {
@@ -252,9 +248,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printStringLiteral(node) {
         const text = node.text;
-        if (text in this.StringLiteralReplacements) {
-            return this.StringLiteralReplacements[text];
-        }
+        if (text in this.StringLiteralReplacements) return this.StringLiteralReplacements[text];
         // `.into()` borrows the `&'static str` into the `Cow` payload — no alloc.
         return `Value::Str(${this.quotedStringLiteral(text)}.into())`;
     }
@@ -262,17 +256,12 @@ export class RustTranspiler extends BaseTranspiler {
     printNumericLiteral(node) {
         const text = node.text;
         // a decimal point or an exponent makes the literal a float
-        if (text.includes('.') || /[eE]/.test(text)) {
-            return `Value::Float(${text})`;
-        }
+        if (text.includes('.') || /[eE]/.test(text)) return `Value::Float(${text})`;
         return `Value::Int(${text})`;
     }
 
     printBooleanLiteral(node) {
-        if (ts.SyntaxKind.TrueKeyword === node.kind) {
-            return 'Value::Bool(true)';
-        }
-        return 'Value::Bool(false)';
+        return `Value::Bool(${ts.SyntaxKind.TrueKeyword === node.kind})`;
     }
 
     printNullKeyword(node, identation) {
@@ -382,19 +371,11 @@ export class RustTranspiler extends BaseTranspiler {
     // Primitive kind the checker proves for `type`; a union keeps the kind only
     // when every non-nullable member is that same primitive.
     primitiveKindOfType(type): string {
-        if (type === undefined) {
-            return undefined;
-        }
+        if (type === undefined) return undefined;
         const flags = type.flags;
-        if (this.isStringType(flags)) {
-            return 'string';
-        }
-        if (flags === ts.TypeFlags.Number || flags === ts.TypeFlags.NumberLiteral) {
-            return 'number';
-        }
-        if (flags === ts.TypeFlags.Boolean || flags === ts.TypeFlags.BooleanLiteral) {
-            return 'boolean';
-        }
+        if (this.isStringType(flags)) return 'string';
+        if (flags === ts.TypeFlags.Number || flags === ts.TypeFlags.NumberLiteral) return 'number';
+        if (flags === ts.TypeFlags.Boolean || flags === ts.TypeFlags.BooleanLiteral) return 'boolean';
         if (flags & ts.TypeFlags.Union) {
             let kind = undefined;
             for (const member of type.types ?? []) {
@@ -402,9 +383,7 @@ export class RustTranspiler extends BaseTranspiler {
                     continue;
                 }
                 const memberKind = this.primitiveKindOfType(member);
-                if (memberKind === undefined || (kind !== undefined && kind !== memberKind)) {
-                    return undefined;
-                }
+                if (memberKind === undefined || (kind !== undefined && kind !== memberKind)) return undefined;
                 kind = memberKind;
             }
             return kind;
@@ -418,9 +397,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `true` / `false` / `boolean` (a union of BooleanLiteral members too). */
     isBooleanValueType(type: ts.Type | undefined): boolean {
-        if (type === undefined) {
-            return false;
-        }
+        if (type === undefined) return false;
         if (type.flags & ts.TypeFlags.Union) {
             const members: ts.Type[] = (type as any).types ?? [];
             return members.length > 0 && members.every((member) => this.isBooleanValueType(member));
@@ -431,13 +408,9 @@ export class RustTranspiler extends BaseTranspiler {
     /** `boolean | undefined`: `undefined`/`null` both print `Value::Null` (false
      *  for the helper and for the `matches!` alike), so they may join the union. */
     isBooleanOrUndefinedType(type: ts.Type | undefined): boolean {
-        if (type === undefined) {
-            return false;
-        }
+        if (type === undefined) return false;
         const members: ts.Type[] = (type.flags & ts.TypeFlags.Union) ? ((type as any).types ?? []) : [type];
-        if (members.length === 0) {
-            return false;
-        }
+        if (members.length === 0) return false;
         const onlyBooleanOrEmpty = members.every((member) =>
             this.isBooleanValueType(member) ||
             (member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void | ts.TypeFlags.Null)) !== 0);
@@ -448,12 +421,8 @@ export class RustTranspiler extends BaseTranspiler {
      *  `Value` in the port) and element accesses (printed as `get_value`). */
     isBooleanValueFamilyOperand(node): boolean {
         const inner = this.unwrapParens(node);
-        if (inner === undefined) {
-            return false;
-        }
-        if (ts.isElementAccessExpression(inner)) {
-            return true;
-        }
+        if (inner === undefined) return false;
+        if (ts.isElementAccessExpression(inner)) return true;
         if (ts.isCallExpression(inner)) {
             const name = this.callExpressionName(inner);
             return name === 'safeBool' || name === 'safeBool2' || name === 'safeBoolN';
@@ -467,53 +436,30 @@ export class RustTranspiler extends BaseTranspiler {
      *  ccxt post-passes, which key on the leading helper token the operand would
      *  no longer provide. */
     isBareBoolEmissionSafe(node): boolean {
+        return this.isBooleanPosition(this.rustClimbLogicalWrappers(node));
+    }
+
+    /** Outermost ancestor reached through parens, `!` and `&&`/`||`. */
+    rustClimbLogicalWrappers(node): any {
         let current: any = node;
         let parent: any = current.parent;
-        while (parent !== undefined) {
-            if (ts.isParenthesizedExpression(parent)) {
-                current = parent;
-                parent = parent.parent;
-                continue;
-            }
-            if (parent.kind === SyntaxKind.PrefixUnaryExpression &&
-                parent.operator === SyntaxKind.ExclamationToken) {
-                current = parent;
-                parent = parent.parent;
-                continue;
-            }
-            if (parent.kind === SyntaxKind.BinaryExpression &&
-                (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
-                 parent.operatorToken.kind === SyntaxKind.BarBarToken)) {
-                current = parent;
-                parent = parent.parent;
-                continue;
-            }
-            break;
+        while (parent !== undefined && (ts.isParenthesizedExpression(parent) ||
+            (parent.kind === SyntaxKind.PrefixUnaryExpression && parent.operator === SyntaxKind.ExclamationToken) ||
+            (parent.kind === SyntaxKind.BinaryExpression &&
+             (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+              parent.operatorToken.kind === SyntaxKind.BarBarToken)))) {
+            current = parent;
+            parent = parent.parent;
         }
-        return this.isBooleanPosition(current);
+        return current;
     }
 
     // B-26 extends the proof with the printer's own bool-typed sinks: a narrowed `let x: bool = …`
     // (getRustBoolLocalInitializer) and a logical boxed in `Value::Bool(…)`
     // (printCustomBinaryExpressionIfAny) both demand a `bool`, so their operands may print bare.
     rustConditionBoolSlot(node): boolean {
-        if (this.isBareBoolEmissionSafe(node)) {
-            return true;
-        }
-        let current: any = node;
-        let parent: any = current.parent;
-        while (parent !== undefined) {
-            if (ts.isParenthesizedExpression(parent) ||
-                (parent.kind === SyntaxKind.PrefixUnaryExpression && parent.operator === SyntaxKind.ExclamationToken) ||
-                (parent.kind === SyntaxKind.BinaryExpression &&
-                 (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
-                  parent.operatorToken.kind === SyntaxKind.BarBarToken))) {
-                current = parent;
-                parent = parent.parent;
-                continue;
-            }
-            break;
-        }
+        if (this.isBareBoolEmissionSafe(node)) return true;
+        const current = this.rustClimbLogicalWrappers(node);
         // A logical the printer boxes (`Value::Bool(<logical>)`) for a Value slot.
         const inner = this.unwrapParens(current);
         if (inner !== undefined && inner.kind === SyntaxKind.BinaryExpression &&
@@ -535,16 +481,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Native truthiness text of the operand, or undefined to keep `is_true`. */
     printNativeTruthiness(node): string | undefined {
-        if (!this.isBooleanValueFamilyOperand(node)) {
-            return undefined;
-        }
-        if (!this.printsValueExpression(node)) {
-            return undefined;
-        }
-        if (!this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node))) {
-            return undefined;
-        }
-        if (!this.isBareBoolEmissionSafe(node)) {
+        if (!this.isBooleanValueFamilyOperand(node) || !this.printsValueExpression(node) ||
+            !this.isBooleanOrUndefinedType(this.typeOfNodeIfAny(node)) || !this.isBareBoolEmissionSafe(node)) {
             return undefined;
         }
         return `matches!(${this.printNode(node, 0)}, Value::Bool(true))`;
@@ -552,9 +490,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Kind of a literal operand whose printed Value variant is exactly known.
     literalKindOfNode(node): string {
-        if (node === undefined) {
-            return undefined;
-        }
+        if (node === undefined) return undefined;
         switch (node.kind) {
         case SyntaxKind.StringLiteral: return 'string';
         case SyntaxKind.NumericLiteral: return 'number';
@@ -568,9 +504,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Does printNode() render `node` as a Rust `Value` (and not a bare bool)?
     printsValueExpression(node): boolean {
-        if (node === undefined) {
-            return false;
-        }
+        if (node === undefined) return false;
         switch (node.kind) {
         case SyntaxKind.ParenthesizedExpression: return this.printsValueExpression(node.expression);
         case SyntaxKind.AwaitExpression: return this.printsValueExpression(node.expression);
@@ -598,12 +532,8 @@ export class RustTranspiler extends BaseTranspiler {
     // can neither be compared to Value::Null nor unwrapped with as_*().
     callExpressionName(node): string {
         const expression = node.expression;
-        if (ts.isIdentifier(expression)) {
-            return expression.escapedText as string;
-        }
-        if (ts.isPropertyAccessExpression(expression)) {
-            return expression.name.escapedText as string;
-        }
+        if (ts.isIdentifier(expression)) return expression.escapedText as string;
+        if (ts.isPropertyAccessExpression(expression)) return expression.name.escapedText as string;
         return '';
     }
 
@@ -611,29 +541,16 @@ export class RustTranspiler extends BaseTranspiler {
     // is_equal() coerces those against numeric/bool operands, a plain string
     // compare does not.
     textCoercesToNumber(text: string): boolean {
-        if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text)) {
-            return true;
-        }
-        return /^[+-]?(inf|infinity|nan)$/i.test(text);
-    }
-
-    stringLiteralCoercesToNumber(node): boolean {
-        return this.textCoercesToNumber(node.text);
+        return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(text) || /^[+-]?(inf|infinity|nan)$/i.test(text);
     }
 
     // f64 literal text for a numeric literal; undefined when it is not a Rust
     // decimal/float literal (hex/octal/binary fall back to the helper).
     numericLiteralF64Text(node): string {
         const text = node.text;
-        if (text.startsWith('0x') || text.startsWith('0o') || text.startsWith('0b')) {
-            return undefined;
-        }
-        if (text.startsWith('.')) {
-            return `0${text}`;
-        }
-        if (text.includes('.') || text.includes('e') || text.includes('E')) {
-            return text;
-        }
+        if (text.startsWith('0x') || text.startsWith('0o') || text.startsWith('0b')) return undefined;
+        if (text.startsWith('.')) return `0${text}`;
+        if (text.includes('.') || text.includes('e') || text.includes('E')) return text;
         return `${text}.0`;
     }
 
@@ -641,20 +558,12 @@ export class RustTranspiler extends BaseTranspiler {
     // declared field is `Value`) or an identifier bound to a local/param (a local is narrowed to
     // `bool` only when every use is a condition sink — never an is_equal argument).
     rustReadPrintsValue(node): boolean {
-        if (node === undefined) {
-            return false;
-        }
-        if (node.kind === SyntaxKind.PropertyAccessExpression && node.expression.kind === SyntaxKind.ThisKeyword) {
-            return true;
-        }
-        if (node.kind !== SyntaxKind.Identifier) {
-            return false;
-        }
+        if (node === undefined) return false;
+        if (node.kind === SyntaxKind.PropertyAccessExpression && node.expression.kind === SyntaxKind.ThisKeyword) return true;
+        if (node.kind !== SyntaxKind.Identifier) return false;
         const symbol: any = this.getChecker().getSymbolAtLocation(node);
         const declarations: any[] = symbol?.declarations ?? [];
-        if (declarations.length === 0) {
-            return false;
-        }
+        if (declarations.length === 0) return false;
         return declarations.every((declaration) => ts.isParameter(declaration)
             || (ts.isVariableDeclaration(declaration)
                 && declaration.initializer?.kind !== SyntaxKind.NewExpression));
@@ -664,22 +573,14 @@ export class RustTranspiler extends BaseTranspiler {
     // string? Then `x.as_bool() == Some(b)` answers exactly what is_equal(x, b)
     // does: its f64 fallback (Str parse / Bool→0|1) can never fire.
     rustBooleanComparableType(type): boolean {
-        if (type === undefined) {
-            return false;
-        }
+        if (type === undefined) return false;
         if (type.flags & ts.TypeFlags.Union) {
             const members: any[] = (type as any).types ?? [];
             return members.length > 0 && members.every((member) => this.rustBooleanComparableType(member));
         }
-        if (type.flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) {
-            return true;
-        }
-        if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) {
-            return true;
-        }
-        if (type.flags & ts.TypeFlags.StringLiteral) {
-            return !this.textCoercesToNumber(String((type as any).value ?? ''));
-        }
+        if (type.flags & (ts.TypeFlags.Boolean | ts.TypeFlags.BooleanLiteral)) return true;
+        if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)) return true;
+        if (type.flags & ts.TypeFlags.StringLiteral) return !this.textCoercesToNumber(String((type as any).value ?? ''));
         return false;
     }
 
@@ -689,64 +590,44 @@ export class RustTranspiler extends BaseTranspiler {
         const operator = (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';
         const leftLiteral = this.literalKindOfNode(left);
         const rightLiteral = this.literalKindOfNode(right);
-        if (leftLiteral !== undefined && rightLiteral !== undefined) {
-            return undefined;
-        }
+        if (leftLiteral !== undefined && rightLiteral !== undefined) return undefined;
         if (leftLiteral !== undefined || rightLiteral !== undefined) {
             const literal = leftLiteral !== undefined ? left : right;
             const literalKind = leftLiteral ?? rightLiteral;
             const other = leftLiteral !== undefined ? right : left;
-            if (!this.printsValueExpression(other) && (literalKind !== 'null' || !this.rustReadPrintsValue(other))) {
-                return undefined;
-            }
+            if (!this.printsValueExpression(other) && (literalKind !== 'null' || !this.rustReadPrintsValue(other))) return undefined;
             const otherType = this.getChecker().getTypeAtLocation(other);
             const otherKind = this.primitiveKindOfType(otherType);
             const typedStringLocal = this.rustStringLocalIdentifierIsTyped(other);
             if (literalKind === 'null') {
                 // Exact for every runtime value: is_equal(x, null) is true only
                 // when x is Null, and the derived PartialEq says the same.
-                if (typedStringLocal) {
-                    return `${this.printNode(other, 0)}.${operator === '==' ? 'is_none' : 'is_some'}()`;
-                }
+                if (typedStringLocal) return `${this.printNode(other, 0)}.${operator === '==' ? 'is_none' : 'is_some'}()`;
                 return `${this.printNode(other, 0)} ${operator} Value::Null`;
             }
             if (literalKind === 'string') {
-                if (literal.text in this.StringLiteralReplacements) {
-                    return undefined;
-                }
-                if (this.stringLiteralCoercesToNumber(literal) && otherKind !== 'string') {
-                    return undefined;
-                }
+                if (literal.text in this.StringLiteralReplacements) return undefined;
+                if (this.textCoercesToNumber(literal.text) && otherKind !== 'string') return undefined;
                 const accessor = typedStringLocal ? 'as_deref' : 'as_str';
                 return `${this.printNode(other, 0)}.${accessor}() ${operator} Some(${this.quotedStringLiteral(literal.text)})`;
             }
             if (literalKind === 'number') {
-                if (otherKind !== 'number') {
-                    return undefined;
-                }
+                if (otherKind !== 'number') return undefined;
                 const text = this.numericLiteralF64Text(literal);
-                if (text === undefined) {
-                    return undefined;
-                }
+                if (text === undefined) return undefined;
                 return `${this.printNode(other, 0)}.as_f64() ${operator} Some(${text})`;
             }
             if (literalKind === 'boolean') {
-                if (otherKind !== 'boolean' && !this.rustBooleanComparableType(otherType)) {
-                    return undefined;
-                }
+                if (otherKind !== 'boolean' && !this.rustBooleanComparableType(otherType)) return undefined;
                 const value = literal.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
                 return `${this.printNode(other, 0)}.as_bool() ${operator} Some(${value})`;
             }
             return undefined;
         }
-        if (!this.printsValueExpression(left) || !this.printsValueExpression(right)) {
-            return undefined;
-        }
+        if (!this.printsValueExpression(left) || !this.printsValueExpression(right)) return undefined;
         const leftKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(left));
         const rightKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(right));
-        if (leftKind === undefined || leftKind !== rightKind) {
-            return undefined;
-        }
+        if (leftKind === undefined || leftKind !== rightKind) return undefined;
         const accessor = RustTranspiler.PAYLOAD_ACCESSORS[leftKind];
         return `${this.printNode(left, 0)}.${accessor}() ${operator} ${this.printNode(right, 0)}.${accessor}()`;
     }
@@ -765,9 +646,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Other shapes (Dict) keep the helper — ArrayCache / OrderBookSide markers
     // hold their length in the marker dict, which get_array_length unwraps.
     isValueLengthType(type: ts.Type | undefined): boolean {
-        if (type === undefined) {
-            return false;
-        }
+        if (type === undefined) return false;
         if (type.flags & ts.TypeFlags.Union) {
             const parts: ts.Type[] = (type as any).types ?? [];
             return parts.length > 0 && parts.every((part) => this.isValueLengthType(part));
@@ -782,9 +661,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printArrayLength(node, identation, leftExpr = undefined) {
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
-        if (this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) {
-            return `Value::Int(${receiver}.len() as i64)`;
-        }
+        if (this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return `Value::Int(${receiver}.len() as i64)`;
         return `get_array_length(&${receiver})`;
     }
 
@@ -794,9 +671,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
     rustSliceLiteralBound(node): number | undefined {
-        if (node === undefined) {
-            return undefined;
-        }
+        if (node === undefined) return undefined;
         if (ts.isNumericLiteral(node)) {
             const value = Number(node.text);
             return Number.isSafeInteger(value) ? value : undefined;
@@ -822,16 +697,10 @@ export class RustTranspiler extends BaseTranspiler {
             !ts.isPropertyAccessExpression(node.expression) || node.arguments?.length !== 1) {
             return undefined;
         }
-        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') {
-            return undefined;
-        }
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') return undefined;
         const needle = node.arguments[0];
-        if (!ts.isStringLiteral(needle) && !ts.isNoSubstitutionTemplateLiteral(needle)) {
-            return undefined;
-        }
-        if (typeof receiverText !== 'string' || receiverText.includes('\n')) {
-            return undefined;
-        }
+        if (!ts.isStringLiteral(needle) && !ts.isNoSubstitutionTemplateLiteral(needle)) return undefined;
+        if (typeof receiverText !== 'string' || receiverText.includes('\n')) return undefined;
         const literal = this.escapeRustStringLiteral(needle.text);
         return `Value::Int(${receiverText}.as_str().and_then(|__s| __s.find("${literal}")).map(|__i| __i as i64).unwrap_or(-1))`;
     }
@@ -845,25 +714,15 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const args = node.arguments ?? [];
-        if (args.length === 0 || args.length > 2) {
-            return undefined;
-        }
-        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') {
-            return undefined;
-        }
-        if (typeof receiverText !== 'string' || receiverText.includes('\n')) {
-            return undefined;
-        }
+        if (args.length === 0 || args.length > 2) return undefined;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== 'string') return undefined;
+        if (typeof receiverText !== 'string' || receiverText.includes('\n')) return undefined;
         const start = this.rustSliceLiteralBound(args[0]);
-        if (start === undefined) {
-            return undefined;
-        }
+        if (start === undefined) return undefined;
         let end = '__l';
         if (args[1] !== undefined && args[1].kind !== SyntaxKind.NullKeyword && args[1].kind !== SyntaxKind.UndefinedKeyword) {
             const bound = this.rustSliceLiteralBound(args[1]);
-            if (bound === undefined) {
-                return undefined;
-            }
+            if (bound === undefined) return undefined;
             end = this.rustSliceClampedIndex(bound);
         }
         const begin = this.rustSliceClampedIndex(start);
@@ -890,14 +749,9 @@ export class RustTranspiler extends BaseTranspiler {
     // every one of them as `Value`. Imports, classes and function names print
     // as Rust items rather than as values, so they keep the helper.
     isDeclaredValueIdentifier(node): boolean {
-        const symbol = (this.getChecker() as any).getSymbolAtLocation(node);
-        const declarations = symbol?.declarations ?? [];
-        if (declarations.length === 0) {
-            return false;
-        }
-        return declarations.every((declaration) => ts.isVariableDeclaration(declaration)
-            || ts.isParameter(declaration)
-            || ts.isBindingElement(declaration));
+        const declarations = (this.getChecker() as any).getSymbolAtLocation(node)?.declarations ?? [];
+        return declarations.length > 0 && declarations.every((d) =>
+            ts.isVariableDeclaration(d) || ts.isParameter(d) || ts.isBindingElement(d));
     }
 
     // A declared `Value` place: a local/param identifier, or a field/element
@@ -905,13 +759,10 @@ export class RustTranspiler extends BaseTranspiler {
     // whose printed text the helper already borrows as a `Value`.
     isDeclaredValuePlace(node): boolean {
         const inner = this.unwrapParens(node);
-        if (inner === undefined) {
-            return false;
-        }
-        if (ts.isIdentifier(inner)) {
+        if (inner !== undefined && ts.isIdentifier(inner)) {
             return this.isDeclaredValueIdentifier(inner);
         }
-        if (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner)) {
+        if (inner !== undefined && (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner))) {
             const root = this.unwrapParens(this.valuePlaceRoot(inner));
             return root !== undefined &&
                 (root.kind === SyntaxKind.ThisKeyword || this.isDeclaredValueIdentifier(root));
@@ -941,9 +792,7 @@ export class RustTranspiler extends BaseTranspiler {
     // A `Dict`/`Dictionary<T>` receiver is a Reference to its index-signature
     // interface, so the class/lib guards — not the Reference flag — decide it.
     isDictShapedType(type: ts.Type | undefined): boolean {
-        if (type === undefined) {
-            return false;
-        }
+        if (type === undefined) return false;
         if (type.flags & ts.TypeFlags.Union) {
             // `Market | undefined` style aliases: a nullish member carries no
             // value, so only the value-carrying members have to be dict-shaped.
@@ -953,14 +802,9 @@ export class RustTranspiler extends BaseTranspiler {
             return parts.length > valueParts.length && valueParts.length > 0
                 && valueParts.every((part) => this.isDictShapedType(part));
         }
-        if (!(type.flags & ts.TypeFlags.Object)) {
-            return false;
-        }
         const checker = this.getChecker();
-        if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
-            return false;
-        }
-        if (type.getCallSignatures().length !== 0) {
+        if (!(type.flags & ts.TypeFlags.Object) || type.getCallSignatures().length !== 0
+            || checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
             return false;
         }
         return !this.isClassInstanceType(type) && !this.isLibDeclaredType(type);
@@ -969,14 +813,10 @@ export class RustTranspiler extends BaseTranspiler {
     // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
     // In the TS AST `key` is the left operand and `obj` the right one.
     printNativeInOperator(key, obj) {
-        if (!ts.isStringLiteral(key)) {
+        if (!ts.isStringLiteral(key) || !this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
             return undefined;
         }
-        if (!this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
-            return undefined;
-        }
-        const printedKey = this.printStringLiteral(key);
-        const keyLiteral = this.rustStringLiteralOf(printedKey);
+        const keyLiteral = this.rustStringLiteralOf(this.printStringLiteral(key));
         if (keyLiteral === undefined) {
             return undefined;
         }
@@ -998,10 +838,7 @@ export class RustTranspiler extends BaseTranspiler {
     // hashmap) only fire on tagged dicts, which a plain object type never is.
     printNativeDictInsert(baseExpr, keyNode, keyText, valueText): string | undefined {
         const receiver = this.rustNativeInsertReceiver(baseExpr);
-        if (receiver === undefined) {
-            return undefined;
-        }
-        if (!this.rustReceiverStaysDict(baseExpr, receiver)) {
+        if (receiver === undefined || !this.rustReceiverStaysDict(baseExpr, receiver)) {
             return undefined;
         }
         // A bucket read off `cache.hashmap` / client `subscriptions`/`futures` carries a runtime
@@ -1014,10 +851,7 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const name = receiver.text;
-        let value = valueText;
-        if (this.rustPrintedBoolArg(value)) {
-            value = `Value::Bool(${value})`;
-        }
+        const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText;
         const insert = (val: string) =>
             `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyArg}, ${val}); }`;
         // Any mention of the receiver in the value operand reads it while the
@@ -1053,10 +887,8 @@ export class RustTranspiler extends BaseTranspiler {
         // Dynamic key: a plain place, never one that reads the receiver (the
         // insert holds its `&mut`). Every other key shape keeps the helper.
         const key = keyText.trim();
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-            return undefined;
-        }
-        if (receiver.isField ? key.includes('self') : new RegExp(`\\b${receiver.text}\\b`).test(key)) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+            || (receiver.isField ? key.includes('self') : new RegExp(`\\b${receiver.text}\\b`).test(key))) {
             return undefined;
         }
         return `crate::runtime::stringify_param(&${key})`;
@@ -1068,10 +900,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustNativeInsertReceiver(expr): { text: string, isField: boolean, plain: boolean, nameNode: any } | undefined {
         if (ts.isIdentifier(expr)) {
             const plain = this.rustInsertIdentifierReceiver(expr);
-            if (plain !== undefined) {
-                return { text: expr.text, isField: false, plain, nameNode: expr };
-            }
-            return undefined;
+            return plain === undefined ? undefined : { text: expr.text, isField: false, plain, nameNode: expr };
         }
         if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind.ThisKeyword
             && expr.name?.kind === SyntaxKind.Identifier) {
@@ -1097,9 +926,8 @@ export class RustTranspiler extends BaseTranspiler {
             // A default value (`params: Dict = {}`) keeps the pre-unit
             // initializer proof — `rustReceiverStaysDict` runs both it and the
             // annotation proof and rejects the site when neither holds.
-            const admitted = this.rustParamStaysPlainDict(declaration as ts.ParameterDeclaration)
-                || (declaration as ts.ParameterDeclaration).initializer !== undefined;
-            if (admitted) {
+            if (this.rustParamStaysPlainDict(declaration as ts.ParameterDeclaration)
+                || (declaration as ts.ParameterDeclaration).initializer !== undefined) {
                 return false;
             }
         } else if (declaration !== undefined && ts.isVariableDeclaration(declaration as any)) {
@@ -1123,15 +951,16 @@ export class RustTranspiler extends BaseTranspiler {
     /** A literal initializer must carry no runtime tag key; a call initializer
      *  is the axiom the declared-Dict table itself rests on. */
     rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean {
-        let init: any = declaration.initializer;
-        while (init !== undefined
-            && (ts.isParenthesizedExpression(init) || ts.isNonNullExpression(init) || ts.isAsExpression(init))) {
-            init = init.expression;
+        const init = this.rustStripWrappers(declaration.initializer);
+        return init === undefined || !ts.isObjectLiteralExpression(init) || this.rustPlainDictLiteral(init);
+    }
+
+    /** Skip `( … )`, `x!` and `x as T` wrappers. */
+    rustStripWrappers(node: any): any {
+        while (node !== undefined && (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node))) {
+            node = node.expression;
         }
-        if (init === undefined || !ts.isObjectLiteralExpression(init)) {
-            return true;
-        }
-        return this.rustPlainDictLiteral(init);
+        return node;
     }
 
     /** The local's single declaration is initialised from a call that reads
@@ -1142,18 +971,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
             return false;
         }
-        let init: any = declaration.initializer;
-        while (init !== undefined && (ts.isParenthesizedExpression(init) || ts.isNonNullExpression(init) || ts.isAsExpression(init))) {
-            init = init.expression;
-        }
-        if (init === undefined || !ts.isCallExpression(init)) {
-            return false;
-        }
-        return init.arguments.some((arg) => {
-            let n: any = arg;
-            while (n !== undefined && (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isNonNullExpression(n))) {
-                n = n.expression;
-            }
+        const init = this.rustStripWrappers(declaration.initializer);
+        return init !== undefined && ts.isCallExpression(init) && init.arguments.some((arg) => {
+            const n = this.rustStripWrappers(arg);
             return n !== undefined && ts.isPropertyAccessExpression(n)
                 && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(n.name.text);
         });
@@ -1169,11 +989,8 @@ export class RustTranspiler extends BaseTranspiler {
      *  hand-written handler's own dict arguments. */
     rustInsertReceiverBuildsPlainDict(declaration: ts.VariableDeclaration): boolean {
         const name = String((declaration.name as ts.Identifier).escapedText);
-        if (!this.rustPlainDictLiteral(declaration.initializer)) {
-            return false;
-        }
         const scope = this.rustEnclosingFunction(declaration);
-        if (scope === undefined) {
+        if (!this.rustPlainDictLiteral(declaration.initializer) || scope === undefined) {
             return false;
         }
         const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
@@ -1186,14 +1003,10 @@ export class RustTranspiler extends BaseTranspiler {
             const left: any = n.left;
             if (ts.isIdentifier(left) && String(left.escapedText) === name
                 && (declarationSymbol === undefined || this.rustSymbolOf(left) === declarationSymbol)) {
-                if (!this.rustPlainDictLiteral(n.right) && !this.rustTypeIsUndefinedish(n.right)) {
-                    plain = false;
-                }
+                plain = this.rustPlainDictLiteral(n.right) || this.rustTypeIsUndefinedish(n.right);
             } else if (ts.isArrayLiteralExpression(left)
                 && left.elements.some((e) => ts.isIdentifier(e) && String(e.escapedText) === name)) {
-                if (!this.rustHandlerTupleCall(n.right)) {
-                    plain = false;
-                }
+                plain = this.rustHandlerTupleCall(n.right);
             }
             ts.forEachChild(n, visit);
         };
@@ -1204,16 +1017,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** An object literal with no runtime tag key — the transpiler built it, so
      *  it is a fresh plain `Value::Map` on every path. */
     rustPlainDictLiteral(node: ts.Node | undefined): boolean {
-        if (node === undefined) {
-            return false;
-        }
-        if (ts.isParenthesizedExpression(node)) {
+        if (node !== undefined && ts.isParenthesizedExpression(node)) {
             return this.rustPlainDictLiteral(node.expression);
         }
-        if (!ts.isObjectLiteralExpression(node)) {
-            return false;
-        }
-        return node.properties.every((property: any) => {
+        return node !== undefined && ts.isObjectLiteralExpression(node) && node.properties.every((property: any) => {
             const key = property.name;
             if (key === undefined) {
                 return false;
@@ -1227,11 +1034,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** `this.handle…(…)` — the hand-written `handle*AndParams` / `handleUntil…`
      *  family; each returns its own request/params dict arguments. */
     rustHandlerTupleCall(node: ts.Node | undefined): boolean {
-        if (node === undefined || !ts.isCallExpression(node)) {
-            return false;
-        }
-        const callee: any = node.expression;
-        return ts.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
+        const callee: any = node !== undefined && ts.isCallExpression(node) ? node.expression : undefined;
+        return callee !== undefined && ts.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
             && callee.name?.kind === SyntaxKind.Identifier && /^handle[A-Z]/.test(callee.name.text);
     }
 
@@ -1242,11 +1046,7 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         }
         const type = this.typeOfNodeIfAny(node);
-        if (type === undefined) {
-            return false;
-        }
-        const mask = ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void;
-        return (type.flags & mask) !== 0;
+        return type !== undefined && (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) !== 0;
     }
 
     /** The single variable declaration a local identifier binds to, or
@@ -1257,23 +1057,16 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
-        if (declarations.length !== 1) {
-            return undefined;
-        }
-        const declaration: any = declarations[0];
-        if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
-            return undefined;
-        }
-        return declaration;
+        const declaration: any = declarations.length === 1 ? declarations[0] : undefined;
+        return declaration !== undefined && (ts.isVariableDeclaration(declaration) || ts.isParameter(declaration))
+            ? declaration : undefined;
     }
 
     // Dict-shape proof for a write receiver: an object type with no class, array or callable shape
     // — `Dictionary<T>` instantiations count (they resolve to their interface target). A union keeps
     // the proof when every member is a Dict or `undefined` (both untaggable at runtime).
     rustWriteDictShape(type): boolean {
-        if (type === undefined) {
-            return false;
-        }
+        if (type === undefined) return false;
         if (type.flags & ts.TypeFlags.Union) {
             const parts: any[] = (type as any).types ?? [];
             return parts.length > 0 && parts.every((part) => this.rustWriteDictShape(part));
@@ -1281,15 +1074,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) {
             return true;
         }
-        if (!(type.flags & ts.TypeFlags.Object)) {
-            return false;
-        }
         const checker = this.getChecker();
-        if (checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)) {
-            return false;
-        }
-        const target: any = (type as any).target ?? type;
-        if (target.objectFlags & ts.ObjectFlags.Class) {
+        if (!(type.flags & ts.TypeFlags.Object)
+            || checker.isArrayType(type) || checker.isTupleType(type) || checker.isArrayLikeType(type)
+            || (((type as any).target ?? type).objectFlags & ts.ObjectFlags.Class)) {
             return false;
         }
         return type.getCallSignatures().length === 0 && type.getConstructSignatures().length === 0;
@@ -1303,16 +1091,8 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustFieldStaysDict(baseExpr, receiver.nameNode.text);
         }
         const ident = baseExpr;
-        const checker: any = this.checkerOrUndefined();
-        if (checker === undefined) {
-            return false;
-        }
-        const declarations = checker.getSymbolAtLocation(ident)?.declarations ?? [];
-        if (declarations.length !== 1) {
-            return false;
-        }
-        const declaration: any = declarations[0];
-        if (!ts.isVariableDeclaration(declaration) && !ts.isParameter(declaration)) {
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined) {
             return false;
         }
         // The declared-Dict table is its own proof (alwaysDict && stable, D2):
@@ -1329,12 +1109,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const name = ident.text;
         const initializer = declaration.initializer;
-        if (initializer === undefined || ts.isElementAccessExpression(initializer)
-            || declaration.name?.kind !== SyntaxKind.Identifier) {
-            return false;
-        }
         const scope = this.rustEnclosingFunction(declaration);
-        if (scope === undefined) {
+        if (initializer === undefined || ts.isElementAccessExpression(initializer)
+            || declaration.name?.kind !== SyntaxKind.Identifier || scope === undefined) {
             return false;
         }
         let safe = this.rustWriteDictShape(this.typeOfNodeIfAny(ident))
@@ -1363,11 +1140,9 @@ export class RustTranspiler extends BaseTranspiler {
     // by the hand-written base when the TS declaration is `any`) and no `this.<field> = …` in the
     // method assigns another shape. Handle fields (cache/client/subscriptions/order book) are excluded.
     rustFieldStaysDict(baseExpr, fieldName: string): boolean {
-        if (RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(fieldName)) {
-            return false;
-        }
-        if (!this.rustWriteDictShape(this.typeOfNodeIfAny(baseExpr))
-            && !RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(fieldName)) {
+        if (RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(fieldName)
+            || (!this.rustWriteDictShape(this.typeOfNodeIfAny(baseExpr))
+                && !RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(fieldName))) {
             return false;
         }
         const scope = this.rustEnclosingFunction(baseExpr);
@@ -1400,14 +1175,11 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const type = this.getCheckedTypeOf(declaration.type);
-        if (type === undefined || !this.isProvenMapType(type)) {
+        const scope = this.rustEnclosingFunction(declaration);
+        if (type === undefined || !this.isProvenMapType(type) || scope === undefined) {
             return false;
         }
         const name = String((declaration.name as ts.Identifier).escapedText);
-        const scope = this.rustEnclosingFunction(declaration);
-        if (scope === undefined) {
-            return false;
-        }
         let plain = true;
         const visit = (n) => {
             if (!plain) {
@@ -1434,14 +1206,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** RHS of a write to a plain-dict parameter that keeps the shape. */
     rustPlainDictPreservingRhs(node: ts.Node, name: string): boolean {
-        if (this.rustPlainDictLiteral(node) || this.rustTypeIsUndefinedish(node)) {
-            return true;
-        }
-        if (ts.isIdentifier(node) && node.text === name) {
-            return true;
-        }
         // `this.handle…(…)` returns its own dict arguments (rust-12's proof).
-        if (this.rustHandlerTupleCall(node)) {
+        if (this.rustPlainDictLiteral(node) || this.rustTypeIsUndefinedish(node)
+            || (ts.isIdentifier(node) && node.text === name) || this.rustHandlerTupleCall(node)) {
             return true;
         }
         if (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node)) {
@@ -1483,12 +1250,9 @@ export class RustTranspiler extends BaseTranspiler {
     // strings/bools/floats, so only Int/Float literals can be folded.
     foldNegateLiteral(operandText: string): string | undefined {
         const match = operandText.match(/^Value::(Int|Float)\((-?)(\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\)$/);
-        if (!match) {
+        // leave big literals to the runtime helper
+        if (!match || match[3].replaceAll('_', '').replace('.', '').length > 18) {
             return undefined;
-        }
-        const digits = match[3].replaceAll('_', '');
-        if (digits.replace('.', '').length > 18) {
-            return undefined; // leave big literals to the runtime helper
         }
         const sign = match[2] === '-' ? '' : '-';
         return `Value::${match[1]}(${sign}${match[3]})`;
@@ -1496,20 +1260,14 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Ensure a & ref prefix — skip only if already a reference
     ensureRef(expr: string): string {
-        if (expr.startsWith('&')) {
-            return expr;
-        }
-        return `&${expr}`;
+        return expr.startsWith('&') ? expr : `&${expr}`;
     }
 
     // TS `number` / number-literal type proof for a comparison operand. Unions
     // (`number | undefined`) and `any` are rejected — those keep the helper.
     isNumberTyped(node) {
         const type = this.getChecker().getTypeAtLocation(node);
-        if (type === undefined) {
-            return false;
-        }
-        return (type.flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral)) !== 0;
+        return type !== undefined && (type.flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral)) !== 0;
     }
 
     // Positions whose emitted Rust is a native `bool`: if/while/do/for
@@ -1531,7 +1289,6 @@ export class RustTranspiler extends BaseTranspiler {
         case SyntaxKind.DoStatement:
             return parent.expression === current;
         case SyntaxKind.ForStatement:
-            return parent.condition === current;
         case SyntaxKind.ConditionalExpression:
             return parent.condition === current;
         case SyntaxKind.PrefixUnaryExpression:
@@ -1559,17 +1316,11 @@ export class RustTranspiler extends BaseTranspiler {
     // 'number' (checker-typed — Int, Float or Null, never a string), undefined.
     rustNumericOperandKind(node): string | undefined {
         const inner = this.orderedComparisonOperand(node);
-        if (inner.kind === SyntaxKind.NumericLiteral) {
-            return 'definite';
-        }
-        // `.length` prints through printArrayLength: `Value::Int(len)` or
-        // `get_array_length`, both always `Value::Int`.
-        if (ts.isPropertyAccessExpression(inner) && inner.name.escapedText === 'length') {
-            return 'definite';
-        }
-        // `.indexOf(x)` prints through printIndexOfCall: `get_index_of`, which
-        // returns `Value::Int` on every path.
-        if (inner.kind === SyntaxKind.CallExpression && this.callExpressionName(inner) === 'indexOf') {
+        // `.length` prints through printArrayLength (`Value::Int(len)` or `get_array_length`),
+        // `.indexOf(x)` through printIndexOfCall (`get_index_of`): always `Value::Int`.
+        if (inner.kind === SyntaxKind.NumericLiteral
+            || (ts.isPropertyAccessExpression(inner) && inner.name.escapedText === 'length')
+            || (inner.kind === SyntaxKind.CallExpression && this.callExpressionName(inner) === 'indexOf')) {
             return 'definite';
         }
         return this.isNumberTyped(node) ? 'number' : undefined;
@@ -1590,10 +1341,7 @@ export class RustTranspiler extends BaseTranspiler {
     // OR `is_equal` in (TRUE for two Nulls) and need a 'definite' operand.
     printNativeOrderedComparison(node, op, left, right): string | undefined {
         const operator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
-        if (operator === undefined) {
-            return undefined;
-        }
-        if (!this.printsValueExpression(this.orderedComparisonOperand(left)) ||
+        if (operator === undefined || !this.printsValueExpression(this.orderedComparisonOperand(left)) ||
             !this.printsValueExpression(this.orderedComparisonOperand(right))) {
             return undefined;
         }
@@ -1618,30 +1366,23 @@ export class RustTranspiler extends BaseTranspiler {
     // Int/Float dispatch, `as_f64()` division, or a `format!` string concat.
     // Anything the checker cannot prove keeps the runtime helper.
 
-    isNumberLikeType(type: any): boolean {
+    // `type` (or every member of a non-empty union) has exactly one of `flags`.
+    rustTypeFlagsAll(type: any, flags: Set<number>): boolean {
         if (!type) {
             return false;
         }
-        if (type.flags === ts.TypeFlags.Number || type.flags === ts.TypeFlags.NumberLiteral) {
-            return true;
-        }
         if (type.flags === ts.TypeFlags.Union && Array.isArray(type.types)) {
-            return type.types.length > 0 && type.types.every((member: any) => this.isNumberLikeType(member));
+            return type.types.length > 0 && type.types.every((member: any) => this.rustTypeFlagsAll(member, flags));
         }
-        return false;
+        return flags.has(type.flags);
+    }
+
+    isNumberLikeType(type: any): boolean {
+        return this.rustTypeFlagsAll(type, new Set([ ts.TypeFlags.Number, ts.TypeFlags.NumberLiteral ]));
     }
 
     isStringLikeType(type: any): boolean {
-        if (!type) {
-            return false;
-        }
-        if (type.flags === ts.TypeFlags.String || type.flags === ts.TypeFlags.StringLiteral) {
-            return true;
-        }
-        if (type.flags === ts.TypeFlags.Union && Array.isArray(type.types)) {
-            return type.types.length > 0 && type.types.every((member: any) => this.isStringLikeType(member));
-        }
-        return false;
+        return this.rustTypeFlagsAll(type, new Set([ ts.TypeFlags.String, ts.TypeFlags.StringLiteral ]));
     }
 
     // Types whose runtime value the `add` helper stringifies exactly as `format!` does: a string,
@@ -1655,46 +1396,22 @@ export class RustTranspiler extends BaseTranspiler {
     ]);
 
     isStringOrNullishType(type: any): boolean {
-        if (!type) {
-            return false;
-        }
-        if (RustTranspiler.RUST_CONCAT_SAFE_FLAGS.has(type.flags)) {
-            return true;
-        }
-        if (type.flags === ts.TypeFlags.Union && Array.isArray(type.types)) {
-            return type.types.length > 0 && type.types.every((member: any) => this.isStringOrNullishType(member));
-        }
-        return false;
+        return this.rustTypeFlagsAll(type, RustTranspiler.RUST_CONCAT_SAFE_FLAGS);
     }
 
     // `Str` (`string | undefined`) operands concatenate natively only against an operand proven
     // ALWAYS a string: the helper then takes its string branch, which `format!` reproduces.
     // Without that anchor (`Str + Str`) the both-null case yields `Value::Null`, not "nullnull".
     isNativeStringConcatPair(leftType: any, rightType: any): boolean {
-        if (!this.isStringOrNullishType(leftType) || !this.isStringOrNullishType(rightType)) {
-            return false;
-        }
-        return this.isStringLikeType(leftType) || this.isStringLikeType(rightType);
+        return this.isStringOrNullishType(leftType) && this.isStringOrNullishType(rightType)
+            && (this.isStringLikeType(leftType) || this.isStringLikeType(rightType));
     }
 
     // `(+|-)` with the left operand of `+=`/`-=`: assignment plus the same
     // native emission as the plain binary form.
     printNativeAssignmentArithmetic(op, left, right, leftText, rightText): string | undefined {
-        let leftType, rightType;
-        try {
-            const checker = this.getChecker();
-            leftType = checker.getTypeAtLocation(left);
-            rightType = checker.getTypeAtLocation(right);
-        } catch (e) {
-            return undefined;
-        }
-        if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
-            return `${leftText} = ${this.printNativeStringConcat(leftText, rightText)}`;
-        }
-        if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
-            return undefined;
-        }
-        return `${leftText} = ${this.printNativeNumeric(op, leftText, rightText)}`;
+        const native = this.printNativeArithmetic(op, left, right, leftText, rightText);
+        return native === undefined ? undefined : `${leftText} = ${native}`;
     }
 
     printNativeArithmetic(op, left, right, leftText, rightText): string | undefined {
@@ -1728,8 +1445,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Always parenthesised so it composes under `&`, in argument position and
     // as an operand of another native match.
     printNativeNumeric(op, leftText: string, rightText: string): string {
-        const left = `(${leftText})`;
-        const right = `(${rightText})`;
+        const [ left, right ] = [ `(${leftText})`, `(${rightText})` ];
         if (op === SyntaxKind.SlashToken) {
             return `(match (${left}.as_f64(), ${right}.as_f64()) { (Some(x), Some(y)) if y != 0.0 => Value::Float(x / y), _ => Value::Null })`;
         }
@@ -1742,168 +1458,95 @@ export class RustTranspiler extends BaseTranspiler {
             ` _ => Value::Null })`;
     }
 
-    printCustomBinaryExpressionIfAny(node, identation) {
-        const left = node.left;
-        const right = node.right;
-        const op = node.operatorToken.kind;
+    private static readonly RUST_TYPEOF_HELPERS = new Map([
+        ['string', 'is_string'], ['number', 'is_number'], ['boolean', 'is_bool'], ['object', 'is_object'], ['function', 'is_function'],
+    ]);
 
-        // Handle array destructuring reassignment: [a, b] = expr → bind once, reassign each
-        if (op === SyntaxKind.EqualsToken && left.kind === SyntaxKind.ArrayLiteralExpression) {
-            const elements = left.elements;
-            const rhs = this.printNode(right, 0);
+    printCustomBinaryExpressionIfAny(node, identation) {
+        const { left, right } = node;
+        const op = node.operatorToken.kind;
+        const isAssign = op === SyntaxKind.EqualsToken;
+        // Array destructuring reassignment: [a, b] = expr → bind once, reassign each
+        if (isAssign && left.kind === SyntaxKind.ArrayLiteralExpression) {
             const tmpName = '__destr_tmp';
+            const rhs = this.printNode(right, 0);
             const nativeList = this.rustNativeListSource(right);
-            const assignments = elements.map((e, idx) => {
-                const target = this.printNode(e, 0);
-                if (nativeList) {
-                    return `${target} = ${this.printNativeListIndex(tmpName, idx)}`;
-                }
-                return `${target} = get_value(&${tmpName}, &Value::Int(${idx}))`;
-            }).join('; ');
+            const assignments = left.elements.map((e, idx) => `${this.printNode(e, 0)} = ${nativeList
+                ? this.printNativeListIndex(tmpName, idx) : `get_value(&${tmpName}, &Value::Int(${idx}))`}`).join('; ');
             return `{ let ${tmpName} = ${rhs}; ${assignments}; }`;
         }
-
-        // Handle element access assignment: a[b] = v → add_element_to_object(&mut a, &b, v)
-        if (op === SyntaxKind.EqualsToken && left.kind === SyntaxKind.ElementAccessExpression) {
+        // Element access assignment: a[b] = v → add_element_to_object(&mut a, &b, v)
+        if (isAssign && left.kind === SyntaxKind.ElementAccessExpression) {
             const keys: any[] = [];
-            let baseExpr: any = null;
-            let cur: any = left;
-            while (ts.isElementAccessExpression(cur)) {
-                keys.unshift(cur.argumentExpression);
-                const expr = cur.expression;
-                if (!ts.isElementAccessExpression(expr)) {
-                    baseExpr = expr;
-                    break;
-                }
-                cur = expr;
+            let baseExpr: any = left;
+            while (ts.isElementAccessExpression(baseExpr)) {
+                keys.unshift(baseExpr.argumentExpression);
+                baseExpr = baseExpr.expression;
             }
-            const containerStr = this.printNode(baseExpr, 0);
+            let acc = `&mut ${this.printNode(baseExpr, 0)}`;
             const keyStrs = keys.map(k => this.printNode(k, 0));
-            let acc = `&mut ${containerStr}`;
-            for (let i = 0; i < keyStrs.length - 1; i++) {
-                acc = `get_value_mut(${acc}, &${keyStrs[i]})`;
-            }
-            const lastKey = keyStrs[keyStrs.length - 1];
+            for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
-            if (keyStrs.length === 1) {
-                const nativeInsert = this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs);
-                if (nativeInsert !== undefined) {
-                    return nativeInsert;
-                }
-            }
-            return `add_element_to_object(${acc}, &${lastKey}, ${rhs})`;
+            const nativeInsert = keyStrs.length === 1 ? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) : undefined;
+            return nativeInsert ?? `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
         }
-
-        // Handle typeof comparisons
+        // typeof comparisons
         if (left.kind === SyntaxKind.TypeOfExpression) {
-            const expression = left.expression;
             const rightText = right.text;
-            const target = this.printNode(expression, 0);
+            const target = this.printNode(left.expression, 0);
             const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
-            const not = isDiff ? '!' : '';
-            const native = this.nativeValuePredicateText(rightText, expression, target);
+            const native = this.nativeValuePredicateText(rightText, left.expression, target);
             if (native !== undefined) {
                 const negated = isDiff ? `!${native}` : native;
-                // Conditions/logical operands expect a bool; every other
-                // position stores the result in a `Value`, so box it as before.
+                // Conditions/logical operands expect a bool; other positions store a boxed `Value`.
                 return this.isBooleanPosition(node) ? negated : `Value::Bool(${negated})`;
             }
-            switch (rightText) {
-            case 'string': return `${not}is_string(&${target})`;
-            case 'number': return `${not}is_number(&${target})`;
-            case 'boolean': return `${not}is_bool(&${target})`;
-            case 'object': return `${not}is_object(&${target})`;
-            case 'function': return `${not}is_function(&${target})`;
-            }
+            const helper = RustTranspiler.RUST_TYPEOF_HELPERS.get(rightText);
+            if (helper !== undefined) return `${isDiff ? '!' : ''}${helper}(&${target})`;
         }
-
-        // Handle in operator — wrap as Value so it composes in any context
+        // `in` — wrapped as Value so it composes in any context
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
-            if (shadow !== undefined) {
-                const native = this.printShadowInOperator(shadow, left);
-                if (native !== undefined) {
-                    return native;
-                }
-            }
-            const native = this.printNativeInOperator(left, right);
-            if (native !== undefined) {
-                return native;
-            }
-            return `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
+            return (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+                ?? this.printNativeInOperator(left, right)
+                ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
-
-        // Handle += for regular variables
-        if (op === SyntaxKind.PlusEqualsToken && left.kind !== SyntaxKind.ElementAccessExpression) {
+        // `+=` / `-=` on regular variables
+        if ((op === SyntaxKind.PlusEqualsToken || op === SyntaxKind.MinusEqualsToken) && left.kind !== SyntaxKind.ElementAccessExpression) {
+            const isPlus = op === SyntaxKind.PlusEqualsToken;
             const leftText = this.printNode(left, 0);
             const rightText = this.printNode(right, 0);
-            const native = this.printNativeAssignmentArithmetic(SyntaxKind.PlusToken, left, right, leftText, rightText);
-            if (native !== undefined) {
-                return native;
-            }
-            return `${leftText} = add(&${leftText}, &${rightText})`;
+            return this.printNativeAssignmentArithmetic(isPlus ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, left, right, leftText, rightText)
+                ?? `${leftText} = ${isPlus ? 'add' : 'subtract'}(&${leftText}, &${rightText})`;
         }
-
-        // Handle -= for regular variables
-        if (op === SyntaxKind.MinusEqualsToken && left.kind !== SyntaxKind.ElementAccessExpression) {
-            const leftText = this.printNode(left, 0);
-            const rightText = this.printNode(right, 0);
-            const native = this.printNativeAssignmentArithmetic(SyntaxKind.MinusToken, left, right, leftText, rightText);
-            if (native !== undefined) {
-                return native;
-            }
-            return `${leftText} = subtract(&${leftText}, &${rightText})`;
-        }
-
-        // Native equality on unwrapped payloads when the checker proves the
-        // variants line up (see printNativeEqualityComparison). Value positions
-        // get the bool boxed, exactly like the other Value-returning helpers.
+        // Native equality on unwrapped payloads when the checker proves the variants line up
+        // (see printNativeEqualityComparison); the bool is boxed like the other Value helpers.
         if (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken ||
             op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken) {
             const nativeEquality = this.printNativeEqualityComparison(left, right, op);
-            if (nativeEquality) {
-                return `Value::Bool(${nativeEquality})`;
-            }
+            if (nativeEquality) return `Value::Bool(${nativeEquality})`;
         }
-
-        // A logical expression whose operands include a native compare no longer
-        // starts with a bool helper, so box it here — the post-pass used to.
-        if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) {
-            if (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right)) {
-                return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
-            }
+        // A logical expression with a native-compare operand no longer starts with a bool helper: box it.
+        if ((op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken)
+            && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right))) {
+            return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
         }
-
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
         if (op in this.binaryExpressionsWrappers) {
-            const nativeOperator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
-            if (nativeOperator !== undefined) {
-                const native = this.printNativeOrderedComparison(node, op, left, right);
-                if (native !== undefined) {
-                    return native;
-                }
-            }
+            const nativeCompare = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op] !== undefined
+                ? this.printNativeOrderedComparison(node, op, left, right) : undefined;
+            if (nativeCompare !== undefined) return nativeCompare;
             const [fnName, close] = this.binaryExpressionsWrappers[op];
             const leftText = this.printNode(left, 0);
             const rightText = this.printNode(right, 0);
-            const native = this.printNativeArithmetic(op, left, right, leftText, rightText);
-            if (native !== undefined) {
-                return native;
-            }
-            const leftRef = this.ensureRef(leftText);
-            const rightRef = this.ensureRef(rightText);
-            return `${fnName}${leftRef}, ${rightRef}${close}`;
+            return this.printNativeArithmetic(op, left, right, leftText, rightText)
+                ?? `${fnName}${this.ensureRef(leftText)}, ${this.ensureRef(rightText)}${close}`;
         }
-
         return undefined;
     }
 
     printBinaryExpression(node, identation) {
-        const custom = this.printCustomBinaryExpressionIfAny(node, identation);
-        if (custom) {
-            return custom;
-        }
-        return super.printBinaryExpression(node, identation);
+        return this.printCustomBinaryExpressionIfAny(node, identation) || super.printBinaryExpression(node, identation);
     }
 
     // `Date.now()` → runtime helper returning current epoch millis.
@@ -1911,8 +1554,7 @@ export class RustTranspiler extends BaseTranspiler {
         return 'date_now()';
     }
 
-    // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers
-    // (`pad_start` / `pad_end` take `(&Value, &Value, &Value)`).
+    // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers `(&Value, &Value, &Value)`.
     printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
         return `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
     }
@@ -1923,55 +1565,36 @@ export class RustTranspiler extends BaseTranspiler {
 
     printVariableDeclarationList(node, identation) {
         const declaration = node.declarations[0];
-        const isNew = declaration.initializer && declaration.initializer.kind === SyntaxKind.NewExpression;
-
+        const indent = this.getIden(identation);
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
-            const elements = declaration.name.elements;
-            const parsedElements = elements.map(e => this.printNode(e.name, 0));
+            const parsedElements = declaration.name.elements.map(e => this.printNode(e.name, 0));
             const syntheticName = parsedElements.join('') + 'Variable';
-            let stmt = `${this.getIden(identation)}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
+            const head = `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
             const nativeList = this.rustNativeListSource(declaration.initializer);
-            parsedElements.forEach((e, idx) => {
-                const access = nativeList
-                    ? this.printNativeListIndex(syntheticName, idx)
-                    : `get_value(&${syntheticName}, &Value::Int(${idx}))`;
-                const line = `${this.getIden(identation)}let mut ${e}: Value = ${access}`;
-                stmt += idx < parsedElements.length - 1 ? line + ';\n' : line;
-            });
-            return stmt;
+            const lines = parsedElements.map((e, idx) => `${indent}let mut ${e}: Value = ${nativeList
+                ? this.printNativeListIndex(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`}`);
+            return head + lines.join(';\n');
         }
-
         const varName = this.printNode(declaration.name, 0);
-
         if (!declaration.initializer) {
-            return `${this.getIden(identation)}let mut ${varName}: Value = Value::Null`;
+            return `${indent}let mut ${varName}: Value = Value::Null`;
         }
-
         const parsedValue = this.printNode(declaration.initializer, identation).trim();
-
-        if (isNew) {
-            return `${this.getIden(identation)}let mut ${varName} = ${parsedValue}`;
+        if (declaration.initializer.kind === SyntaxKind.NewExpression) {
+            return `${indent}let mut ${varName} = ${parsedValue}`;
         }
-
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
-            return `${this.getIden(identation)}let mut ${varName}: bool = ${boolValue}`;
+            return `${indent}let mut ${varName}: bool = ${boolValue}`;
         }
-
-        if (this.rustSafeStringLocalIsTyped(declaration)) {
-            // A call to a native-`Option<String>` method already carries the
-            // native payload; the `safeString` helpers still need the unwrap.
-            const suffix = this.rustNativeStrCalleeKind(declaration.initializer) === 'str'
-                ? '' : '.as_str().map(str::to_owned)';
-            return `${this.getIden(identation)}let mut ${varName}: Option<String> = ${parsedValue}${suffix}`;
+        const typedStr = this.rustSafeStringLocalIsTyped(declaration);
+        const nativeStr = this.rustNativeStrCalleeKind(declaration.initializer) === 'str';
+        if (typedStr) {
+            // A native-`Option<String>` callee already carries the payload; `safeString` helpers need the unwrap.
+            return `${indent}let mut ${varName}: Option<String> = ${parsedValue}${nativeStr ? '' : '.as_str().map(str::to_owned)'}`;
         }
-
-        if (this.rustNativeStrCalleeKind(declaration.initializer) === 'str') {
-            // The callee returns `Option<String>`; this local keeps the box.
-            return `${this.getIden(identation)}let mut ${varName}: Value = ${this.rustNativeStrValueBox(parsedValue)}`;
-        }
-
-        return `${this.getIden(identation)}let mut ${varName}: Value = ${parsedValue}`;
+        // A callee returning `Option<String>` into a boxed local keeps the box.
+        return `${indent}let mut ${varName}: Value = ${nativeStr ? this.rustNativeStrValueBox(parsedValue) : parsedValue}`;
     }
 
     // ── native-typed locals ───────────────────────────────────────────────────
@@ -2007,16 +1630,17 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const callee: any = node.expression;
-        let name: string | undefined;
-        if (callee?.kind === SyntaxKind.Identifier) {
-            name = callee.escapedText;
-        } else if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
-            name = callee.name?.escapedText;
+        const name = callee?.kind === SyntaxKind.Identifier ? callee.escapedText
+            : callee?.kind === SyntaxKind.PropertyAccessExpression ? callee.name?.escapedText : undefined;
+        return name !== undefined && RustTranspiler.RUST_BOOL_RESULT_CALLEES.has(name) && this.rustTypeIsBoolean(node);
+    }
+
+    // Index just past the `"..."` literal opening at `i` (escapes skipped).
+    private rustSkipStringLiteral(text: string, i: number): number {
+        for (i++; i < text.length && text[i] !== '"'; i++) {
+            if (text[i] === '\\') i++;
         }
-        if (name === undefined || !(RustTranspiler as any).RUST_BOOL_RESULT_CALLEES.has(name)) {
-            return false;
-        }
-        return this.rustTypeIsBoolean(node);
+        return i;
     }
 
     // `<box><expr>)` spanning the whole printed value → `<expr>`. The payload is
@@ -2028,20 +1652,10 @@ export class RustTranspiler extends BaseTranspiler {
         let depth = 0;
         for (let i = prefix.length - 1; i < printedValue.length; i++) {
             const char = printedValue[i];
-            if (char === '"') {
-                i++;
-                while (i < printedValue.length && printedValue[i] !== '"') {
-                    if (printedValue[i] === '\\') i++;
-                    i++;
-                }
-                continue;
-            }
-            if (char === '(') depth++;
-            else if (char === ')') {
-                depth--;
-                if (depth === 0) {
-                    return i === printedValue.length - 1 ? printedValue.slice(prefix.length, i) : undefined;
-                }
+            if (char === '"') i = this.rustSkipStringLiteral(printedValue, i);
+            else if (char === '(') depth++;
+            else if (char === ')' && --depth === 0) {
+                return i === printedValue.length - 1 ? printedValue.slice(prefix.length, i) : undefined;
             }
         }
         return undefined;
@@ -2064,24 +1678,11 @@ export class RustTranspiler extends BaseTranspiler {
         while (value.startsWith('(') && value.endsWith(')')) {
             let depth = 0;
             let closesAtEnd = true;
-            for (let i = 0; i < value.length; i++) {
+            for (let i = 0; i < value.length && closesAtEnd; i++) {
                 const char = value[i];
-                if (char === '"') {
-                    i++;
-                    while (i < value.length && value[i] !== '"') {
-                        if (value[i] === '\\') i++;
-                        i++;
-                    }
-                    continue;
-                }
-                if (char === '(') depth++;
-                else if (char === ')') {
-                    depth--;
-                    if (depth === 0 && i !== value.length - 1) {
-                        closesAtEnd = false;
-                        break;
-                    }
-                }
+                if (char === '"') i = this.rustSkipStringLiteral(value, i);
+                else if (char === '(') depth++;
+                else if (char === ')' && --depth === 0 && i !== value.length - 1) closesAtEnd = false;
             }
             if (!closesAtEnd || depth !== 0) break;
             value = value.slice(1, -1).trim();
@@ -2093,7 +1694,7 @@ export class RustTranspiler extends BaseTranspiler {
     printedBoolHelperCall(printedValue: string): boolean {
         const stripped = printedValue.startsWith('!') ? printedValue.slice(1).trim() : printedValue;
         const match = /^([a-z_][a-z0-9_]*)\(/.exec(stripped);
-        return match !== null && (RustTranspiler as any).RUST_BOOL_RESULT_HELPERS.has(match[1]);
+        return match !== null && RustTranspiler.RUST_BOOL_RESULT_HELPERS.has(match[1]);
     }
 
     // Source shapes the printer turns into a bool: comparisons, `&&`/`||`
@@ -2107,12 +1708,11 @@ export class RustTranspiler extends BaseTranspiler {
             return this.rustNodeIsBoolExpression(node.expression);
         case SyntaxKind.PrefixUnaryExpression:
             return node.operator === SyntaxKind.ExclamationToken;
-        case SyntaxKind.BinaryExpression:
-            return (RustTranspiler as any).COMPARISON_OPS.has(node.operatorToken.kind)
-                || node.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken
-                || node.operatorToken.kind === SyntaxKind.BarBarToken
-                || node.operatorToken.kind === SyntaxKind.InKeyword
-                || node.operatorToken.kind === SyntaxKind.InstanceOfKeyword;
+        case SyntaxKind.BinaryExpression: {
+            const kind = node.operatorToken.kind;
+            return (RustTranspiler as any).COMPARISON_OPS.has(kind) || kind === SyntaxKind.AmpersandAmpersandToken
+                || kind === SyntaxKind.BarBarToken || kind === SyntaxKind.InKeyword || kind === SyntaxKind.InstanceOfKeyword;
+        }
         }
         return false;
     }
@@ -2120,10 +1720,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustTypeIsBoolean(node): boolean {
         try {
             const type = this.getChecker().getTypeAtLocation(node);
-            if ((type.flags & ts.TypeFlags.BooleanLike) !== 0) {
-                return true;
-            }
-            return this.getChecker().typeToString(type).trim() === 'boolean';
+            return (type.flags & ts.TypeFlags.BooleanLike) !== 0 || this.getChecker().typeToString(type).trim() === 'boolean';
         } catch (e) {
             return false; // no checker type → keep the boxed form
         }
@@ -2131,15 +1728,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustTypeIsString(node): boolean {
         const checker: any = this.checkerOrUndefined();
-        if (checker === undefined) {
-            return false; // no checker type → keep the boxed form
-        }
-        return this.isStringLikeType(checker.getTypeAtLocation(node));
+        // no checker type → keep the boxed form
+        return checker !== undefined && this.isStringLikeType(checker.getTypeAtLocation(node));
     }
 
     rustEnclosingFunction(node) {
-        let current = node?.parent;
-        while (current) {
+        for (let current = node?.parent; current; current = current.parent) {
             switch (current.kind) {
             case SyntaxKind.MethodDeclaration:
             case SyntaxKind.FunctionDeclaration:
@@ -2149,7 +1743,6 @@ export class RustTranspiler extends BaseTranspiler {
             case SyntaxKind.SourceFile:
                 return current;
             }
-            current = current.parent;
         }
         return undefined;
     }
@@ -2172,9 +1765,7 @@ export class RustTranspiler extends BaseTranspiler {
     // (under any depth of `(...)`, `!`, `&&`/`||`), and the condition slot of
     // if/while/for/ternary — all printed is_true-wrapped.
     rustIdentifierUseIsCondition(node): boolean {
-        let current: any = node;
-        let parent: any = current.parent;
-        while (parent) {
+        for (let current: any = node, parent: any = node.parent; parent; current = parent, parent = parent.parent) {
             switch (parent.kind) {
             case SyntaxKind.ParenthesizedExpression:
                 if (parent.expression !== current) return false;
@@ -2196,34 +1787,38 @@ export class RustTranspiler extends BaseTranspiler {
             default:
                 return false;
             }
-            current = parent;
-            parent = current.parent;
         }
         return false;
     }
 
-    rustLocalUsesAcceptBool(declaration, sourceName: string): boolean {
+    // Visits every in-scope use of the local `name` declared by `declaration`: false as soon as the
+    // name is re-bound in scope or `acceptUse(identifier)` rejects a use. `skipPropertyNames` leaves
+    // `x.foo` / `{ foo }` names out of the uses.
+    private rustLocalUsesAll(declaration, name: string, skipPropertyNames: boolean, acceptUse: (n) => boolean): boolean {
         const scope = this.rustEnclosingFunction(declaration);
-        if (scope === undefined || sourceName === undefined) {
+        if (scope === undefined || name === undefined) {
             return false;
         }
         let safe = true;
         const visit = (n) => {
             if (!safe) return;
-            if (n !== declaration && this.rustBindsName(n, sourceName)) {
+            if (n !== declaration && this.rustBindsName(n, name)) {
                 safe = false; // a second binding of the name in scope — stay boxed
                 return;
             }
-            if (n.kind === SyntaxKind.Identifier && n.escapedText === sourceName && n !== declaration.name) {
-                if (!this.rustIdentifierUseIsCondition(n)) {
-                    safe = false;
-                    return;
-                }
+            if (n.kind === SyntaxKind.Identifier && n.escapedText === name && n !== declaration.name
+                && !(skipPropertyNames && this.rustIdentifierIsPropertyName(n)) && !acceptUse(n)) {
+                safe = false;
+                return;
             }
             ts.forEachChild(n, visit);
         };
         ts.forEachChild(scope, visit);
         return safe;
+    }
+
+    rustLocalUsesAcceptBool(declaration, sourceName: string): boolean {
+        return this.rustLocalUsesAll(declaration, sourceName, false, (n) => this.rustIdentifierUseIsCondition(n));
     }
 
     // Typed string locals: `let x: Value = self.safeString(..)` is declared `Option<String>` when
@@ -2243,32 +1838,25 @@ export class RustTranspiler extends BaseTranspiler {
     // method) is the same payload without the unwrap.
     rustSafeStringLocalInitializer(declaration): boolean {
         const initializer = declaration.initializer;
-        if (declaration.name?.kind !== SyntaxKind.Identifier
-            || initializer?.kind !== SyntaxKind.CallExpression) {
+        if (declaration.name?.kind !== SyntaxKind.Identifier || initializer?.kind !== SyntaxKind.CallExpression) {
             return false;
         }
         if (this.rustNativeStrCalleeKind(initializer) === 'str') {
             return true;
         }
         const callee = initializer.expression;
+        const helpers = RustTranspiler.RUST_STRING_LOCAL_HELPERS;
         if (callee?.kind === SyntaxKind.PropertyAccessExpression) {
-            return callee.expression?.kind === SyntaxKind.ThisKeyword
-                && (RustTranspiler as any).RUST_STRING_LOCAL_HELPERS.has(callee.name.escapedText);
+            return callee.expression?.kind === SyntaxKind.ThisKeyword && helpers.has(callee.name.escapedText);
         }
-        if (callee?.kind === SyntaxKind.Identifier) {
-            return (RustTranspiler as any).RUST_STRING_LOCAL_HELPERS.has(callee.escapedText);
-        }
-        return false;
+        return callee?.kind === SyntaxKind.Identifier && helpers.has(callee.escapedText);
     }
 
     // The two uses that compile against an `Option<String>` local and print
     // natively: `x ==/!= null|undefined` and `x ==/!= "lit"`.
     rustStringLocalUseIsNative(node): boolean {
         const parent = node.parent;
-        if (parent === undefined) {
-            return false;
-        }
-        if (parent.kind !== SyntaxKind.BinaryExpression) {
+        if (parent?.kind !== SyntaxKind.BinaryExpression) {
             return false;
         }
         const op = parent.operatorToken.kind;
@@ -2281,12 +1869,9 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const otherLiteral = this.literalKindOfNode(other);
-        if (otherLiteral === 'null') {
-            return true;
-        }
         // The string-literal compare prints as `<x>.as_deref() == Some("lit")`;
         // the printer's own rejections (replacement tokens) must match.
-        return otherLiteral === 'string' && !(other.text in this.StringLiteralReplacements);
+        return otherLiteral === 'null' || (otherLiteral === 'string' && !(other.text in this.StringLiteralReplacements));
     }
 
     // Every use compiles against `Option<String>`, and at least one native sink
@@ -2303,48 +1888,20 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustSafeStringLocalIsTypedUncached(declaration): boolean {
-        if (!this.rustSafeStringLocalInitializer(declaration)) {
-            return false;
-        }
-        if (this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) !== 'string') {
-            return false;
-        }
-        const name = declaration.name.escapedText;
-        const scope = this.rustEnclosingFunction(declaration);
-        if (scope === undefined) {
+        if (!this.rustSafeStringLocalInitializer(declaration)
+            || this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) !== 'string') {
             return false;
         }
         let nativeUses = 0;
-        let safe = true;
-        const visit = (n) => {
-            if (!safe) {
-                return;
-            }
-            if (n !== declaration && this.rustBindsName(n, name)) {
-                safe = false; // a second binding of the name in scope
-                return;
-            }
-            if (n.kind === SyntaxKind.Identifier && n.escapedText === name && n !== declaration.name
-                && !this.rustIdentifierIsPropertyName(n)) {
-                if (!this.rustStringLocalUseIsNative(n)) {
-                    safe = false;
-                    return;
-                }
-                nativeUses++;
-            }
-            ts.forEachChild(n, visit);
-        };
-        ts.forEachChild(scope, visit);
+        const safe = this.rustLocalUsesAll(declaration, declaration.name.escapedText, true,
+            (n) => this.rustStringLocalUseIsNative(n) && ++nativeUses > 0);
         return safe && nativeUses > 0;
     }
 
     // `x.foo` / `{ foo: 1 }` — a property name is not a use of the local.
     rustIdentifierIsPropertyName(node): boolean {
         const parent = node.parent;
-        if (parent === undefined) {
-            return false;
-        }
-        switch (parent.kind) {
+        switch (parent?.kind) {
         case SyntaxKind.PropertyAccessExpression:
         case SyntaxKind.PropertyAssignment:
         case SyntaxKind.PropertySignature:
@@ -2356,19 +1913,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Is this identifier occurrence bound to a typed string local?
     rustStringLocalIdentifierIsTyped(node): boolean {
-        if (node?.kind !== SyntaxKind.Identifier) {
-            return false;
-        }
-        const checker: any = this.checkerOrUndefined();
+        const checker: any = node?.kind === SyntaxKind.Identifier ? this.checkerOrUndefined() : undefined;
         if (checker === undefined) {
             return false;
         }
         const symbol = checker.getSymbolAtLocation(node);
         const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
-        if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
-            return false;
-        }
-        return this.rustSafeStringLocalIsTyped(declaration);
+        return declaration?.kind === SyntaxKind.VariableDeclaration && this.rustSafeStringLocalIsTyped(declaration);
     }
 
     // `let x = <bool expr>` → the printed bool expression, or undefined.
@@ -2382,13 +1933,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (peeled === undefined && !this.printedBoolHelperCall(inner) && !this.rustNodeIsBoolExpression(initializer)) {
             return undefined;
         }
-        if (!this.rustTypeIsBoolean(initializer)) {
+        if (!this.rustTypeIsBoolean(initializer) || !this.rustLocalUsesAcceptBool(declaration, declaration.name.escapedText)) {
             return undefined;
         }
-        if (!this.rustLocalUsesAcceptBool(declaration, declaration.name.escapedText)) {
-            return undefined;
-        }
-        return peeled !== undefined ? peeled : inner;
+        return peeled ?? inner;
     }
 
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
@@ -2406,27 +1954,21 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined || node.kind !== SyntaxKind.MethodDeclaration) {
             return undefined;
         }
-        const cached = this.rustNativeStrReturnDecisions.get(node);
-        if (cached !== undefined) {
-            return cached ? 'str' : undefined;
+        let decision = this.rustNativeStrReturnDecisions.get(node);
+        if (decision === undefined) {
+            this.rustNativeStrReturnDecisions.set(node, false); // re-entrancy guard
+            decision = this.rustNativeStrReturnDecisionUncached(node);
+            this.rustNativeStrReturnDecisions.set(node, decision);
         }
-        this.rustNativeStrReturnDecisions.set(node, false); // re-entrancy guard
-        const decision = this.rustNativeStrReturnDecisionUncached(node);
-        this.rustNativeStrReturnDecisions.set(node, decision);
         return decision ? 'str' : undefined;
     }
 
     private rustNativeStrReturnDecisionUncached(node): boolean {
-        if (node.type === undefined || this.isAsyncFunction(node)) {
-            return false;
-        }
-        if (this.getMethodOverride(node) !== undefined) {
-            return false; // the base/trait copy prints `-> Value`
-        }
-        // The base classes are hand-tuned across the whole tree: their methods
-        // are called from ~every derived file (and the hand-written runtime),
+        // An override's base/trait copy prints `-> Value`. The base classes are hand-tuned across the
+        // whole tree: their methods are called from ~every derived file (and the hand-written runtime),
         // where the boxed `Value` ABI is load-bearing. Only per-exchange
-        if (RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
+        if (node.type === undefined || this.isAsyncFunction(node) || this.getMethodOverride(node) !== undefined
+            || RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
             return false;
         }
         let type: ts.Type;
@@ -2435,30 +1977,20 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return false;
         }
-        if (this.primitiveKindOfType(type) !== 'string') {
-            return false;
-        }
-        return this.rustStrReturnPathsConvert(node.body);
+        return this.primitiveKindOfType(type) === 'string' && this.rustStrReturnPathsConvert(node.body);
     }
 
     /** Every `return` of the method's own body converts, and the body's last
      *  statement is one of them (so Rust sees no `()`-valued tail the
      *  `-> Value` post-passes would have patched with `Value::Null`). */
     rustStrReturnPathsConvert(body: ts.Block): boolean {
-        if (body === undefined) {
-            return false;
-        }
-        const statements = body.statements;
-        const last = statements[statements.length - 1];
+        const last = body?.statements[body.statements.length - 1];
         if (last === undefined || !ts.isReturnStatement(last)) {
             return false;
         }
         let ok = true;
         const visit = (n: ts.Node) => {
-            if (!ok) {
-                return;
-            }
-            if (n !== body && ts.isFunctionLike(n)) {
+            if (!ok || (n !== body && ts.isFunctionLike(n))) {
                 return; // a nested function keeps the boxed signature
             }
             if (ts.isReturnStatement(n) && !this.rustStrReturnValueConverts(n.expression)) {
@@ -2480,32 +2012,20 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner === undefined) {
             return false;
         }
-        if (this.literalKindOfNode(inner) === 'null') {
+        if (this.literalKindOfNode(inner) === 'null' || this.rustStrNativeExpression(inner)) {
             return true;
         }
-        if (this.rustStrNativeExpression(inner)) {
-            return true;
-        }
-        if (!this.printsValueExpression(inner)) {
-            return false;
-        }
-        return this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
+        return this.printsValueExpression(inner) && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
     }
 
     /** An expression that already prints an `Option<String>` in a `: Str`
      *  method's return position. */
     rustStrNativeExpression(expression: ts.Node): boolean {
         const inner = this.unwrapParensNode(expression);
-        if (inner === undefined) {
-            return false;
-        }
-        if (ts.isCallExpression(inner)) {
+        if (inner !== undefined && ts.isCallExpression(inner)) {
             return this.rustNativeStrCalleeKind(inner) === 'str';
         }
-        if (ts.isIdentifier(inner)) {
-            return this.rustStringLocalIdentifierIsTyped(inner);
-        }
-        return false;
+        return inner !== undefined && ts.isIdentifier(inner) && this.rustStringLocalIdentifierIsTyped(inner);
     }
 
     unwrapParensNode(node: ts.Node): ts.Node | undefined {
@@ -2528,10 +2048,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
-        if (declaration === undefined || declaration.kind !== SyntaxKind.MethodDeclaration) {
-            return undefined;
-        }
-        return this.rustNativeStrReturnKind(declaration);
+        return declaration?.kind === SyntaxKind.MethodDeclaration ? this.rustNativeStrReturnKind(declaration) : undefined;
     }
 
     /** `Option<String>` → `Value` (exact inverse of the return conversion). */
@@ -2552,14 +2069,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (parent === undefined) {
             return true;
         }
-        if (ts.isVariableDeclaration(parent) && parent.initializer === current
-            && ts.isIdentifier(parent.name)) {
+        if (ts.isVariableDeclaration(parent) && parent.initializer === current && ts.isIdentifier(parent.name)) {
             return false; // the declaration printer binds the type / boxes it
         }
         if (ts.isReturnStatement(parent) && parent.expression === current) {
             // only a native-`Str` method's own return printer runs the conversion
-            const fn: any = ts.findAncestor(parent.parent, ts.isFunctionLike);
-            return this.rustNativeStrReturnKind(fn) !== 'str';
+            return this.rustNativeStrReturnKind(ts.findAncestor(parent.parent, ts.isFunctionLike) as any) !== 'str';
         }
         return true;
     }
@@ -2567,13 +2082,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** Wrap a call text when the callee returns a native `Option<String>`
      *  and the position still needs a `Value`. */
     rustBoxNativeStrCallIfNeeded(node: ts.Node, text: string): string {
-        if (this.rustNativeStrCalleeKind(node) !== 'str') {
-            return text;
-        }
-        if (!this.rustNativeStrCallNeedsBox(node)) {
-            return text;
-        }
-        return this.rustNativeStrValueBox(text);
+        return this.rustNativeStrCalleeKind(node) === 'str' && this.rustNativeStrCallNeedsBox(node)
+            ? this.rustNativeStrValueBox(text) : text;
     }
 
     // ── declared-Dict locals (`let x: Value = self.safe_dict_k(..)`) ───────────
@@ -2586,7 +2096,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  source file, keyed by local name in declaration order. */
     rustDeclaredDictLocals(): Map<string, RustDeclaredDictLocalEntry[]> {
         const src = this.getSrc();
-        if (this.declaredDictLocalsCache === undefined || this.declaredDictLocalsCache.src !== src) {
+        if (this.declaredDictLocalsCache?.src !== src) {
             let table: Map<string, RustDeclaredDictLocalEntry[]>;
             try {
                 table = this.collectRustDeclaredDictLocals(src);
@@ -2603,8 +2113,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  Accepts the receiver node of the helper call (identifier, `x['k']` chain,
      *  `this.x` chain) or the declaration itself. */
     rustDeclaredLocalTypeResolver(node: ts.Node): RustDeclaredLocalKind | undefined {
-        const entry = this.rustDeclaredLocalEntry(node);
-        return entry === undefined ? undefined : entry.kind;
+        return this.rustDeclaredLocalEntry(node)?.kind;
     }
 
     /** The table entry a use site resolves to (the declaration whose binding the
@@ -2636,20 +2145,15 @@ export class RustTranspiler extends BaseTranspiler {
      *  local) — the node the resolver matches against the table. */
     private rustDeclaredLocalIdentifier(node: ts.Node): ts.Identifier | undefined {
         let current: any = node;
-        while (current !== undefined) {
-            if (ts.isIdentifier(current)) return current;
+        while (current !== undefined && !ts.isIdentifier(current)) {
             if (ts.isElementAccessExpression(current) || ts.isPropertyAccessExpression(current)) {
                 if (current.expression.kind === SyntaxKind.ThisKeyword) return undefined;
-                current = current.expression;
-                continue;
+            } else if (!ts.isParenthesizedExpression(current) && !ts.isNonNullExpression(current)) {
+                return undefined;
             }
-            if (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
-                current = current.expression;
-                continue;
-            }
-            return undefined;
+            current = current.expression;
         }
-        return undefined;
+        return current;
     }
 
     /** Binding symbol of an identifier, or undefined when the checker cannot
@@ -2662,9 +2166,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  Without a checker answer the callers stay conservative (reject). */
     private rustIdentifierRefersToDeclaration(node: ts.Identifier, declaration: ts.VariableDeclaration): boolean {
         const symbol = this.rustSymbolOf(node);
-        const declarationSymbol = this.rustSymbolOf(declaration.name as ts.Identifier);
-        if (symbol === undefined || declarationSymbol === undefined) return false;
-        return symbol === declarationSymbol;
+        return symbol !== undefined && symbol === this.rustSymbolOf(declaration.name as ts.Identifier);
     }
 
     /** Census of the current source file's table, for reports and tests. */
@@ -2704,16 +2206,8 @@ export class RustTranspiler extends BaseTranspiler {
             const alwaysDict = this.rustDictProvenExpression(candidate.defaultNode, table, start);
             const scan = this.rustDictLocalWriteScan(declaration, candidate.name, table);
             const entries = table.get(candidate.name) ?? [];
-            entries.push({
-                kind: RUST_DECLARED_DICT_LOCALS.DICT,
-                name: candidate.name,
-                source: candidate.source,
-                alwaysDict,
-                stable: scan.stable,
-                uses: scan.uses,
-                declaration,
-                start,
-            });
+            entries.push({ kind: RUST_DECLARED_DICT_LOCALS.DICT, name: candidate.name, source: candidate.source,
+                alwaysDict, stable: scan.stable, uses: scan.uses, declaration, start });
             table.set(candidate.name, entries);
         }
         return table;
@@ -2839,32 +2333,21 @@ export class RustTranspiler extends BaseTranspiler {
      *  `delete x[k]`), or something that would need the local to still be a
      *  `Value`. */
     private rustDictLocalClassifyUse(node: ts.Node, uses: { elementAccess: number, mutHelper: number, other: number }): void {
+        const isAccessOf = (p: any, c: ts.Node) => p !== undefined &&
+            (ts.isElementAccessExpression(p) || ts.isPropertyAccessExpression(p)) && p.expression === c;
         let current: any = node;
         const parent: any = current.parent;
-        if (parent !== undefined && (ts.isElementAccessExpression(parent) || ts.isPropertyAccessExpression(parent)) && parent.expression === current) {
-            current = parent;
-            while (current.parent !== undefined &&
-                (ts.isElementAccessExpression(current.parent) || ts.isPropertyAccessExpression(current.parent)) &&
-                current.parent.expression === current) {
-                current = current.parent;
-            }
-            if (ts.isElementAccessExpression(current)) {
-                uses.elementAccess++;
-                return;
-            }
-            uses.other++; // `x.field` on a dict value
-            return;
-        }
-        if (parent !== undefined && ts.isCallExpression(parent) && ts.isPropertyAccessExpression(parent.expression) &&
-            parent.expression.expression === current && parent.expression.name.text === 'push') {
+        if (isAccessOf(parent, current)) {
+            while (isAccessOf(current.parent, current)) current = current.parent;
+            if (ts.isElementAccessExpression(current)) uses.elementAccess++;
+            else uses.other++; // `x.field` on a dict value
+        } else if (parent !== undefined && (ts.isDeleteExpression(parent) || (ts.isCallExpression(parent) &&
+            ts.isPropertyAccessExpression(parent.expression) && parent.expression.expression === current &&
+            parent.expression.name.text === 'push'))) {
             uses.mutHelper++;
-            return;
+        } else {
+            uses.other++;
         }
-        if (parent !== undefined && ts.isDeleteExpression(parent)) {
-            uses.mutHelper++;
-            return;
-        }
-        uses.other++;
     }
 
 
@@ -2879,23 +2362,19 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Collect property declarations with their initializers for use in new()
     getStructFields(node): Array<{ name: string, init: string }> {
-        const propDecls = node.members.filter(m => m.kind === SyntaxKind.PropertyDeclaration);
-        return propDecls.map(p => {
-            const name = this.printNode(p.name, 0);
-            const init = p.initializer ? this.printNode(p.initializer, 0) : 'Value::Null';
-            return { name, init };
-        });
+        return node.members.filter(m => m.kind === SyntaxKind.PropertyDeclaration).map(p => ({
+            name: this.printNode(p.name, 0),
+            init: p.initializer ? this.printNode(p.initializer, 0) : 'Value::Null',
+        }));
     }
 
     printStruct(node, identation) {
-        const fields = this.getStructFields(node);
-        const fieldLines = fields.map(f => `${this.getIden(identation + 1)}pub ${f.name}: Value,`).join('\n');
+        const fieldLines = this.getStructFields(node).map(f => `${this.getIden(identation + 1)}pub ${f.name}: Value,`).join('\n');
         return `#[derive(Debug, Clone)]\npub struct ${this.className} {\n${fieldLines}\n}`;
     }
 
     printNewMethod(node, identation) {
-        const fields = this.getStructFields(node);
-        const fieldInits = fields.map(f => `${this.getIden(identation + 2)}${f.name}: ${f.init},`).join('\n');
+        const fieldInits = this.getStructFields(node).map(f => `${this.getIden(identation + 2)}${f.name}: ${f.init},`).join('\n');
         return `\nimpl ${this.className} {\n${this.getIden(identation + 1)}pub fn new() -> Self {\n${this.getIden(identation + 2)}${this.className} {\n${fieldInits}\n${this.getIden(identation + 2)}}\n${this.getIden(identation + 1)}}\n}`;
     }
 
@@ -2904,43 +2383,27 @@ export class RustTranspiler extends BaseTranspiler {
 
         // First pass: collect method signatures for optional param handling
         const methods = node.members.filter(m => m.kind === SyntaxKind.MethodDeclaration);
-        methods.forEach(method => {
-            const name = (method as any).name.escapedText;
-            const params = (method as any).parameters;
-            const requiredCount = params.filter(p => !p.initializer && !p.questionToken).length;
-            const hasOptional = params.some(p => p.initializer !== undefined || p.questionToken !== undefined);
-            if (hasOptional) {
-                this.methodSignatures[name] = { requiredCount };
+        methods.forEach((method: any) => {
+            const requiredCount = method.parameters.filter(p => !p.initializer && !p.questionToken).length;
+            if (requiredCount < method.parameters.length) {
+                this.methodSignatures[method.name.escapedText] = { requiredCount };
             }
         });
 
         const struct = this.printStruct(node, identation);
         const newMethod = this.printNewMethod(node, identation);
-
         const classMethods = methods.map(m => this.printMethodDeclaration(m, identation)).join('\n\n');
-
-        const implBlock = `\nimpl ${this.className} {\n${classMethods}\n}`;
-
-        return struct + newMethod + implBlock;
+        return struct + newMethod + `\nimpl ${this.className} {\n${classMethods}\n}`;
     }
 
     printMethodDefinition(node, identation) {
         const name = (node.name as any).escapedText;
         const params = node.parameters;
-        const hasOptional = params.some(p => p.initializer !== undefined || p.questionToken !== undefined);
-
         const requiredParams = params.filter(p => !p.initializer && !p.questionToken);
-        const optionalParams = params.filter(p => p.initializer !== undefined || p.questionToken !== undefined);
-
-        let parsedArgs = '&self';
-        if (requiredParams.length > 0) {
-            const reqArgs = requiredParams.map(p => `${this.printNode(p.name, 0)}: Value`).join(', ');
-            parsedArgs += ', ' + reqArgs;
-        }
-        if (hasOptional) {
+        let parsedArgs = ['&self', ...requiredParams.map(p => `${this.printNode(p.name, 0)}: Value`)].join(', ');
+        if (requiredParams.length < params.length) {
             parsedArgs += ', optional_args: &[Value]';
         }
-
         const returnType = this.printRustFunctionType(node);
         const retStr = returnType ? ` -> ${returnType}` : '';
         return `${this.getIden(identation + 1)}pub fn ${name}(${parsedArgs})${retStr}`;
@@ -2954,10 +2417,8 @@ export class RustTranspiler extends BaseTranspiler {
             return 'Option<String>';
         }
         try {
-            const type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
-            if (type.flags === ts.TypeFlags.Void) {
-                return '';
-            }
+            const checker = this.getChecker();
+            if (checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(node)).flags === ts.TypeFlags.Void) return '';
         } catch (e) {
             // ignore
         }
@@ -2970,15 +2431,10 @@ export class RustTranspiler extends BaseTranspiler {
         const optionalParams = params.filter(p => p.initializer !== undefined || p.questionToken !== undefined);
 
         // Build optional param initializations
-        let optionalInits = '';
-        if (optionalParams.length > 0) {
-            const requiredCount = params.filter(p => !p.initializer && !p.questionToken).length;
-            optionalInits = optionalParams.map((p, idx) => {
-                const pname = this.printNode(p.name, 0);
-                const defaultVal = p.initializer ? this.printNode(p.initializer, 0) : 'Value::Null';
-                return `${this.getIden(identation + 2)}let ${pname} = get_arg(optional_args, ${idx}, ${defaultVal});`;
-            }).join('\n') + '\n';
-        }
+        const optionalInits = optionalParams.map((p, idx) => {
+            const defaultVal = p.initializer ? this.printNode(p.initializer, 0) : 'Value::Null';
+            return `${this.getIden(identation + 2)}let ${this.printNode(p.name, 0)} = get_arg(optional_args, ${idx}, ${defaultVal});\n`;
+        }).join('');
 
         const blockOpen = this.getBlockOpen(identation);
         const blockClose = this.getBlockClose(identation);
@@ -2987,13 +2443,10 @@ export class RustTranspiler extends BaseTranspiler {
         // `&IndexMap` shadow so its `safe_*` reads print natively.
         const shadowPlan = this.rustProHandlerShadowPlan(node, identation);
         const savedShadowParam = this.rustProHandlerShadowParam;
-        if (shadowPlan !== undefined) {
-            this.rustProHandlerShadowParam = shadowPlan.param;
-        }
+        if (shadowPlan !== undefined) this.rustProHandlerShadowParam = shadowPlan.param;
         const statements = node.body.statements.map(s => this.printNode(s, identation + 2)).join('\n');
         this.rustProHandlerShadowParam = savedShadowParam;
-        const shadow = shadowPlan === undefined ? '' : shadowPlan.lines;
-        const body = blockOpen + optionalInits + shadows + shadow + statements + blockClose;
+        const body = blockOpen + optionalInits + shadows + (shadowPlan?.lines ?? '') + statements + blockClose;
 
         return this.printNodeCommentsIfAny(node, identation, methodDef + body);
     }
@@ -3031,11 +2484,10 @@ export class RustTranspiler extends BaseTranspiler {
             const methodName = expr.name.escapedText;
             const sig = this.methodSignatures[methodName];
             if (sig) {
-                const requiredArgs = args.slice(0, sig.requiredCount).map(a => this.printNode(a, 0)).join(', ');
-                const optionalArgsList = args.slice(sig.requiredCount).map(a => this.printNode(a, 0)).join(', ');
-                const optSlice = optionalArgsList ? `&[${optionalArgsList}]` : '&[]';
+                const printArgs = (list) => list.map(a => this.printNode(a, 0)).join(', ');
+                const requiredArgs = printArgs(args.slice(0, sig.requiredCount));
                 const reqPart = requiredArgs ? `${requiredArgs}, ` : '';
-                return `self.${methodName}(${reqPart}${optSlice})`;
+                return `self.${methodName}(${reqPart}&[${printArgs(args.slice(sig.requiredCount))}])`;
             }
         }
 
@@ -3064,9 +2516,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const args = node.arguments;
                 if (args.length === 1) {
                     const argText = this.printNode(args[0], 0).trim();
-                    const ref = argText.startsWith('Value::') ? `&${argText}` :
-                        argText.startsWith('&') ? argText : `&${argText}`;
-                    return `println_val(${ref})`;
+                    return `println_val(${argText.startsWith('&') ? argText : `&${argText}`})`;
                 }
                 // Multiple args: print each
                 const argParts = Array.from(args).map(a => {
@@ -3111,46 +2561,16 @@ export class RustTranspiler extends BaseTranspiler {
     // rust/ccxt-base/src/exchange_errors.rs: `msg` is `impl ToErrorMessage` (`&str`/`String`/`Value`
     // yield the same string) and `create_error`'s class name is `&str` (bare literal only).
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS: Record<string, ('msg' | 'str')[]> = {
-        exchange_error: ['msg'],
-        authentication_error: ['msg'],
-        permission_denied: ['msg'],
-        account_not_enabled: ['msg'],
-        account_suspended: ['msg'],
-        arguments_required: ['msg'],
-        bad_request: ['msg'],
-        bad_symbol: ['msg'],
-        operation_rejected: ['msg'],
-        no_change: ['msg'],
-        margin_mode_already_set: ['msg'],
-        market_closed: ['msg'],
-        manual_interaction_needed: ['msg'],
-        restricted_location: ['msg'],
-        insufficient_funds: ['msg'],
-        invalid_address: ['msg'],
-        address_pending: ['msg'],
-        invalid_order: ['msg'],
-        order_not_found: ['msg'],
-        order_not_cached: ['msg'],
-        order_immediately_fillable: ['msg'],
-        order_not_fillable: ['msg'],
-        duplicate_order_id: ['msg'],
-        contract_unavailable: ['msg'],
-        not_supported: ['msg'],
-        invalid_proxy_settings: ['msg'],
-        exchange_closed_by_user: ['msg'],
-        operation_failed: ['msg'],
-        network_error: ['msg'],
-        d_do_s_protection: ['msg'],
-        rate_limit_exceeded: ['msg'],
-        exchange_not_available: ['msg'],
-        on_maintenance: ['msg'],
-        invalid_nonce: ['msg'],
-        checksum_error: ['msg'],
-        request_timeout: ['msg'],
-        bad_response: ['msg'],
-        null_response: ['msg'],
-        cancel_pending: ['msg'],
-        unsubscribe_error: ['msg'],
+        ...Object.fromEntries((
+            'exchange_error authentication_error permission_denied account_not_enabled account_suspended ' +
+            'arguments_required bad_request bad_symbol operation_rejected no_change margin_mode_already_set ' +
+            'market_closed manual_interaction_needed restricted_location insufficient_funds invalid_address ' +
+            'address_pending invalid_order order_not_found order_not_cached order_immediately_fillable ' +
+            'order_not_fillable duplicate_order_id contract_unavailable not_supported invalid_proxy_settings ' +
+            'exchange_closed_by_user operation_failed network_error d_do_s_protection rate_limit_exceeded ' +
+            'exchange_not_available on_maintenance invalid_nonce checksum_error request_timeout bad_response ' +
+            'null_response cancel_pending unsubscribe_error '
+        ).trim().split(' ').map((n) => [n, ['msg']])),
         create_error: ['str', 'msg'],
     };
 
@@ -3179,10 +2599,7 @@ export class RustTranspiler extends BaseTranspiler {
     // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
     // post-pass applies to `X::new(..)` calls.
     rustErrorConstructorName(className: string): string {
-        return className
-            .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-            .replace(/([a-z\d])([A-Z])/g, '$1_$2')
-            .toLowerCase();
+        return this.toSnakeCaseName(className);
     }
 
     printNewExpression(node, identation) {
@@ -3345,14 +2762,11 @@ export class RustTranspiler extends BaseTranspiler {
     /** `undefined` / `null` / `void` / `never` — a union member that carries no
      *  runtime value; `Value::Null` is the only box these ever get. */
     rustTypeIsNullish(type: ts.Type): boolean {
-        return type !== undefined && (type.flags &
-            (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void |
-                ts.TypeFlags.Never)) !== 0;
+        return type !== undefined && (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void | ts.TypeFlags.Never)) !== 0;
     }
 
     isProvenMapExpression(node: ts.Node): boolean {
-        const type = this.getCheckedTypeOf(node);
-        return type !== undefined && this.isProvenMapType(type);
+        return this.isProvenMapType(this.getCheckedTypeOf(node));
     }
 
     isProvenListExpression(node: ts.Node): boolean {
@@ -3372,9 +2786,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustCallPrintsRuntimeSplit(node: ts.Node): boolean {
         if (!ts.isCallExpression(node) || node.arguments.length === 0) return false;
         const expression: any = node.expression;
-        if (!ts.isPropertyAccessExpression(expression)) return false;
-        if (expression.expression.kind === SyntaxKind.ThisKeyword) return false;
-        return String(expression.name.escapedText) === 'split';
+        return ts.isPropertyAccessExpression(expression) && expression.expression.kind !== SyntaxKind.ThisKeyword &&
+            String(expression.name.escapedText) === 'split';
     }
 
     /** True when the call's value is always a runtime array: the `handle*AndParams`
@@ -3389,8 +2802,7 @@ export class RustTranspiler extends BaseTranspiler {
     private rustProvenListCall(node: ts.Node, stack: Set<ts.Node>): boolean {
         if (this.rustCallPrintsRuntimeSplit(node)) return true;
         const declaration = this.rustCalleeDeclaration(node);
-        if (declaration === undefined) return false;
-        return this.rustFunctionReturnsArrayLiteral(declaration, stack);
+        return declaration !== undefined && this.rustFunctionReturnsArrayLiteral(declaration, stack);
     }
 
     /** Implementation of a `x.y(..)` call, when the checker resolves one. */
@@ -3398,8 +2810,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!ts.isCallExpression(node)) return undefined;
         if (!ts.isPropertyAccessExpression((node as any).expression)) return undefined;
         try {
-            const signature: any = (this.getChecker() as any).getResolvedSignature(node);
-            return signature?.declaration ?? undefined;
+            return (this.getChecker() as any).getResolvedSignature(node)?.declaration ?? undefined;
         } catch (e) {
             return undefined;
         }
@@ -3422,18 +2833,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (ts.isReturnStatement(node)) {
                     returns++;
                     const expression: any = node.expression;
-                    if (expression === undefined || !ts.isArrayLiteralExpression(expression)) {
-                        if (expression !== undefined && ts.isCallExpression(expression) &&
-                            this.rustProvenListCall(expression, stack)) {
-                            return;
-                        }
-                        if (expression !== undefined && ts.isParenthesizedExpression(expression) &&
-                            ts.isArrayLiteralExpression(expression.expression)) {
-                            return;
-                        }
-                        all = false;
-                        return;
-                    }
+                    all = expression !== undefined && (ts.isArrayLiteralExpression(expression) ||
+                        (ts.isCallExpression(expression) && this.rustProvenListCall(expression, stack)) ||
+                        (ts.isParenthesizedExpression(expression) && ts.isArrayLiteralExpression(expression.expression)));
                     return;
                 }
                 ts.forEachChild(node, visit);
@@ -3515,13 +2917,9 @@ export class RustTranspiler extends BaseTranspiler {
         let mutated = false;
         const visit = (n: ts.Node) => {
             if (mutated) return;
-            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) &&
-                this.rootPlaceText(n.left) === name) {
-                mutated = true;
-                return;
-            }
-            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
-                n.expression.name.text === 'push' && this.rootPlaceText(n.expression.expression) === name) {
+            if ((ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && this.rootPlaceText(n.left) === name) ||
+                (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
+                n.expression.name.text === 'push' && this.rootPlaceText(n.expression.expression) === name)) {
                 mutated = true;
                 return;
             }
@@ -3536,20 +2934,19 @@ export class RustTranspiler extends BaseTranspiler {
      *  Any other shape keeps the helper — the printed local could be a native
      *  `i64`/`f64`, which the `Value` match would not compile against. */
     isRustValueIndexKey(node: ts.Node): boolean {
-        let current: any = node;
-        while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current)) {
-            current = current.expression;
-        }
+        const current: any = this.rustSkipWrappers(node);
         if (!ts.isIdentifier(current)) return false;
         const type = this.getCheckedTypeOf(current);
         if (type === undefined || !(type.flags & (ts.TypeFlags.Number | ts.TypeFlags.NumberLiteral))) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(current);
         if (declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
-        let initializer: any = declaration.initializer;
-        while (ts.isParenthesizedExpression(initializer) || ts.isAsExpression(initializer) || ts.isNonNullExpression(initializer)) {
-            initializer = initializer.expression;
-        }
-        return ts.isNumericLiteral(initializer);
+        return ts.isNumericLiteral(this.rustSkipWrappers(declaration.initializer));
+    }
+
+    /** Strips `( )`, `as T` and `!` wrappers. */
+    rustSkipWrappers(node: any): any {
+        while (node !== undefined && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node))) node = node.expression;
+        return node;
     }
 
     // Typed-parameter dict reads: a checker-proven plain dict param (`Dict`, `Dictionary<T>`,
@@ -3698,12 +3095,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The shadow a read receiver resolves to, or undefined (no proof → helper). */
     rustParamShadowOf(node: ts.Node): RustParamShadow | undefined {
-        if (node === undefined) return undefined;
-        let current: any = node;
-        while (current !== undefined && (ts.isParenthesizedExpression(current) ||
-            ts.isAsExpression(current) || ts.isNonNullExpression(current))) {
-            current = current.expression;
-        }
+        const current: any = this.rustSkipWrappers(node);
         if (current === undefined || !ts.isIdentifier(current)) return undefined;
         const name = String(current.escapedText);
         const declaration = this.rustDeclarationOfIdentifier(current);
@@ -3726,11 +3118,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: ts.Node) => {
             if (found) return;
             if (node !== fn && ts.isFunctionLike(node)) return; // nested closure: own scope
-            if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) {
-                found = true;
-                return;
-            }
-            if (ts.isParameter(node) && ts.isIdentifier(node.name) && node.name.text === name) {
+            if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.name.text === name) {
                 found = true;
                 return;
             }
@@ -3752,12 +3140,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (param.type === undefined) continue;
             const type = this.getCheckedTypeOf(param.type);
             if (type === undefined) continue;
-            let kind: RustParamShadowKind | undefined;
-            if (this.isProvenMapType(type)) {
-                kind = RUST_PARAM_SHADOWS.MAP;
-            } else if (this.isProvenShadowListType(type)) {
-                kind = RUST_PARAM_SHADOWS.LIST;
-            }
+            const kind: RustParamShadowKind | undefined = this.isProvenMapType(type) ? RUST_PARAM_SHADOWS.MAP :
+                this.isProvenShadowListType(type) ? RUST_PARAM_SHADOWS.LIST : undefined;
             if (kind === undefined) continue;
             if (this.rustParameterIsClientHandle(param)) continue;
             if (this.rustParamShadowUseCensus(fn, param, kind) === undefined) continue;
@@ -3885,17 +3269,10 @@ export class RustTranspiler extends BaseTranspiler {
     printShadowContainerRead(shadow: RustParamShadow, keyNode: ts.Node): string | undefined {
         const key: any = keyNode;
         if (shadow.kind === RUST_PARAM_SHADOWS.MAP) {
-            if (ts.isStringLiteralLike(key)) {
-                const text = String(key.text);
-                if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
-                return `${shadow.name}.get("${text}").cloned().unwrap_or(Value::Null)`;
-            }
-            if (ts.isIdentifier(key) && this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) {
-                const keyText = this.printNode(key, 0).trim();
-                if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
-                return `${keyText}.as_str().and_then(|__k| ${shadow.name}.get(__k)).cloned().unwrap_or(Value::Null)`;
-            }
-            return undefined;
+            const k = this.rustShadowMapKey(key);
+            if (k === undefined) return undefined;
+            return k.literal !== undefined ? `${shadow.name}.get("${k.literal}").cloned().unwrap_or(Value::Null)`
+                : `${k.place}.as_str().and_then(|__k| ${shadow.name}.get(__k)).cloned().unwrap_or(Value::Null)`;
         }
         if (ts.isNumericLiteral(key)) {
             const index = Number(key.text);
@@ -3907,19 +3284,22 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `'k' in x` on a shadowed dict parameter. */
     printShadowInOperator(shadow: RustParamShadow, keyNode: ts.Node): string | undefined {
-        const key: any = keyNode;
         if (shadow.kind !== RUST_PARAM_SHADOWS.MAP) return undefined;
+        const k = this.rustShadowMapKey(keyNode);
+        if (k === undefined) return undefined;
+        return k.literal !== undefined ? `Value::Bool(${shadow.name}.contains_key("${k.literal}"))`
+            : `Value::Bool(${k.place}.as_str().map(|__k| ${shadow.name}.contains_key(__k)).unwrap_or(false))`;
+    }
+
+    /** A shadow dict key: an inlinable literal, or a proven-string plain place. */
+    private rustShadowMapKey(key: any): { literal?: string, place?: string } | undefined {
         if (ts.isStringLiteralLike(key)) {
             const text = String(key.text);
-            if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
-            return `Value::Bool(${shadow.name}.contains_key("${text}"))`;
+            return this.rustShadowKeyLiteral(text) && !this.rustNodeIsKeyUnsafePlace(text) ? { literal: text } : undefined;
         }
-        if (ts.isIdentifier(key) && this.rustKeyIsProvenString(key) && !this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) {
-            const keyText = this.printNode(key, 0).trim();
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
-            return `Value::Bool(${keyText}.as_str().map(|__k| ${shadow.name}.contains_key(__k)).unwrap_or(false))`;
-        }
-        return undefined;
+        if (!ts.isIdentifier(key) || !this.rustKeyIsProvenString(key) || this.rustNodeIsKeyUnsafePlace(String(key.escapedText))) return undefined;
+        const place = this.printNode(key, 0).trim();
+        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(place) ? { place } : undefined;
     }
 
     /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
@@ -4016,29 +3396,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLocalIsReassigned(param, name)) return true;
         const scope = this.rustEnclosingFunction(param);
         if (scope === undefined) return true;
+        if (this.rustStatementMutatesLocal(scope, name)) return true;
         const merging = ['deepExtend', 'extend', 'addElementToObject', 'remove'];
         let written = false;
         const visit = (n: ts.Node) => {
             if (written) return;
-            if (ts.isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) &&
-                this.rootPlaceText(n.left) === name) {
-                written = true;
-                return;
-            }
-            if (ts.isCallExpression(n) && n.arguments.length > 0 && ts.isIdentifier(n.arguments[0]) &&
-                (n.arguments[0] as any).escapedText === name) {
+            if (ts.isCallExpression(n) && n.arguments.length > 0 && ts.isIdentifier(n.arguments[0]) && (n.arguments[0] as any).escapedText === name) {
                 const callee: any = n.expression;
-                const calleeName = ts.isPropertyAccessExpression(callee) ? String(callee.name?.escapedText ?? '') :
-                    ts.isIdentifier(callee) ? String(callee.escapedText ?? '') : '';
-                if (merging.includes(calleeName)) {
-                    written = true;
-                    return;
-                }
-            }
-            if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) &&
-                n.expression.name?.text === 'push' && this.rootPlaceText(n.expression.expression) === name) {
-                written = true;
-                return;
+                written = merging.includes(ts.isPropertyAccessExpression(callee) ? String(callee.name?.escapedText ?? '') :
+                    ts.isIdentifier(callee) ? String(callee.escapedText ?? '') : '');
+                if (written) return;
             }
             ts.forEachChild(n, visit);
         };
@@ -4213,15 +3580,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const name = String(callee.name.escapedText);
         // Readers whose rust counterpart returns the stored dict itself.
-        if (name === 'safeDict' || name === 'safeMarketStructure' || name === 'market' ||
-            name === 'currency' || name === 'safeMarket' || name === 'safeCurrency') {
-            return true;
-        }
         // `this.client(url)` returns the WS client handle Dict the runtime keeps
         // (`Map{url, subscriptions, futures}`), never a class instance.
-        if (name === 'client') {
-            return true;
-        }
+        if (['safeDict', 'safeMarketStructure', 'market', 'currency', 'safeMarket', 'safeCurrency', 'client'].includes(name)) return true;
         // `extend`/`deepExtend` merge onto their first argument.
         if (name === 'extend' || name === 'deepExtend') {
             return this.rustDictProducingInitializer((node as any).arguments[0], seen);
@@ -4232,20 +3593,15 @@ export class RustTranspiler extends BaseTranspiler {
     /** D2: the proof holds only while nothing re-assigns the local. */
     rustLocalIsReassigned(declaration: ts.Declaration, name: string): boolean {
         let scope: ts.Node | undefined = declaration;
-        while (scope !== undefined && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) {
-            scope = scope.parent;
-        }
+        while (scope !== undefined && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
         if (scope === undefined) return true;
         let reassigned = false;
         const visit = (node: ts.Node) => {
             if (reassigned) return;
-            if (ts.isBinaryExpression(node)) {
-                const operator = node.operatorToken.kind;
-                if (operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment &&
-                    ts.isIdentifier(node.left) && node.left.text === name) {
-                    reassigned = true;
-                    return;
-                }
+            if (ts.isBinaryExpression(node) && node.operatorToken.kind >= SyntaxKind.FirstAssignment &&
+                node.operatorToken.kind <= SyntaxKind.LastAssignment && ts.isIdentifier(node.left) && node.left.text === name) {
+                reassigned = true;
+                return;
             }
             ts.forEachChild(node, visit);
         };
@@ -4265,14 +3621,9 @@ export class RustTranspiler extends BaseTranspiler {
             // A `Client`-typed parameter is the WS handle passed to `handle_message`/`handle*`
             // (`ws_client::client_value`): a `Value::Dict{url, subscriptions, futures}` in the port, not
             // the TS class. Its fields are plain map reads.
-            if (!this.rustParameterIsClientHandle(declaration)) {
-                const fallback = declaration.initializer;
-                if (fallback === undefined || !this.rustDictProducingInitializer(fallback, new Set())) return false;
-            }
+            if (!this.rustParameterIsClientHandle(declaration) && !this.rustDictProducingInitializer(declaration.initializer, new Set())) return false;
         } else if (ts.isVariableDeclaration(declaration)) {
-            const initializer = declaration.initializer;
-            if (initializer === undefined) return false;
-            if (!this.rustDictProducingInitializer(initializer, new Set())) return false;
+            if (!this.rustDictProducingInitializer(declaration.initializer, new Set())) return false;
         } else {
             return false;
         }
@@ -4351,22 +3702,11 @@ export class RustTranspiler extends BaseTranspiler {
      *  `this.balance['usdt']`), or undefined for a temporary. */
     rootPlaceText(node: ts.Node): string | undefined {
         let current: any = node;
-        while (current) {
-            if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
-                if (current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.getText().trim();
-                current = current.expression;
-                continue;
-            }
-            if (ts.isParenthesizedExpression(current)) {
-                current = current.expression;
-                continue;
-            }
-            if (ts.isIdentifier(current) || current.kind === ts.SyntaxKind.ThisKeyword) {
-                return current.getText().trim();
-            }
-            return undefined;
+        while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current) || ts.isParenthesizedExpression(current)) {
+            if (!ts.isParenthesizedExpression(current) && current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.getText().trim();
+            current = current.expression;
         }
-        return undefined;
+        return current && (ts.isIdentifier(current) || current.kind === ts.SyntaxKind.ThisKeyword) ? current.getText().trim() : undefined;
     }
 
     /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
@@ -4375,16 +3715,13 @@ export class RustTranspiler extends BaseTranspiler {
     isNativeAccessPositionSafe(node: ts.Node): boolean {
         const parent = node.parent;
         // `x['k'].push(...)` / `x['k'](...)`: the post-pass rewrites the target.
-        if (parent && ts.isPropertyAccessExpression(parent) && parent.expression === node) return false;
-        if (parent && ts.isCallExpression(parent) && parent.expression === node) return false;
+        if (parent && (ts.isPropertyAccessExpression(parent) || ts.isCallExpression(parent)) && parent.expression === node) return false;
         const root = this.rootPlaceText(node);
-        let current: any = node.parent;
-        while (current) {
+        for (let current: any = node.parent; current; current = current.parent) {
             if (ts.isStatement(current) || ts.isSourceFile(current) || ts.isFunctionLike(current)) break;
             if (ts.isBinaryExpression(current) && this.isNodeInsideNode(node, current.right)) {
                 const op = current.operatorToken.kind;
-                const isAssign = op === ts.SyntaxKind.EqualsToken ||
-                    (op >= ts.SyntaxKind.PlusEqualsToken && op <= ts.SyntaxKind.CaretEqualsToken);
+                const isAssign = op === ts.SyntaxKind.EqualsToken || (op >= ts.SyntaxKind.PlusEqualsToken && op <= ts.SyntaxKind.CaretEqualsToken);
                 if (isAssign && root !== undefined && this.rootPlaceText(current.left) === root) return false;
             }
             if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression) &&
@@ -4393,21 +3730,18 @@ export class RustTranspiler extends BaseTranspiler {
                 // Same-place receiver (`x.push(x[0])`) is rewritten to `&mut x` args.
                 if (root !== undefined && this.rootPlaceText(callee.expression) === root) return false;
                 // `&mut self.<method>(...)` arg lists are hoisted by the ccxt
-                // pass because a `&self` reborrow conflicts with the outer
-                // `&mut self`. A read of a local or a parameter performs no
+                // pass because a `&self` reborrow conflicts with the outer `&mut self`.
                 if (callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
                     RustTranspiler.MUT_SELF_METHODS.has(this.toSnakeCaseName(String(callee.name.escapedText))) &&
                     (root === undefined || root === 'this' || root.startsWith('this.'))) return false;
             }
-            current = current.parent;
         }
         return true;
     }
 
     /** Receiver shapes whose printed text is a single `Value` place (`x`, `this.x`). */
     isShallowValueReceiver(node: ts.Node): boolean {
-        if (ts.isIdentifier(node)) return true;
-        return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword;
+        return ts.isIdentifier(node) || (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword);
     }
 
     /** True when this read is the receiver of an element-access chain that is
@@ -4416,35 +3750,24 @@ export class RustTranspiler extends BaseTranspiler {
      *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
      *  native read would write into a discarded clone. */
     isNativeWriteTargetBase(node: ts.Node): boolean {
+        const isWrite = (n: any, target: any) => n !== undefined && (ts.isDeleteExpression(n) ||
+            (ts.isBinaryExpression(n) && n.left === target && rustIsAssignmentOperator(n.operatorToken.kind)));
         const parent: any = node.parent;
-        if (parent === undefined) return false;
-        if (ts.isBinaryExpression(parent) && parent.left === node && rustIsAssignmentOperator(parent.operatorToken.kind)) return true;
-        if (ts.isDeleteExpression(parent)) return true;
-        if (!ts.isElementAccessExpression(parent) || parent.expression !== node) return false;
+        if (isWrite(parent, node)) return true;
+        if (parent === undefined || !ts.isElementAccessExpression(parent) || parent.expression !== node) return false;
         let current: any = parent;
-        while (current.parent !== undefined && ts.isElementAccessExpression(current.parent) && current.parent.expression === current) {
-            current = current.parent;
-        }
-        const top: any = current.parent;
-        if (top === undefined) return false;
-        if (ts.isDeleteExpression(top)) return true;
-        return ts.isBinaryExpression(top) && top.left === current && rustIsAssignmentOperator(top.operatorToken.kind);
+        while (current.parent !== undefined && ts.isElementAccessExpression(current.parent) && current.parent.expression === current) current = current.parent;
+        return isWrite(current.parent, current);
     }
 
     transformPropertyAcessExpressionIfNeeded(node) {
-        const rightSide = node.name.escapedText;
         // Printed here (as before) so the receiver's loop-flag numbering in the
         // generated file matches the pinned baseline for non-length accesses.
         const leftExpr = this.printNode(node.expression, 0);
-        if (rightSide === 'length') {
-            const shadow = this.rustParamShadowOf(node.expression);
-            if (shadow !== undefined) {
-                const native = this.printShadowLength(shadow);
-                if (native !== undefined) return native;
-            }
-            return this.printArrayLength(node, 0, leftExpr);
-        }
-        return undefined;
+        if (node.name.escapedText !== 'length') return undefined;
+        const shadow = this.rustParamShadowOf(node.expression);
+        const native = shadow !== undefined ? this.printShadowLength(shadow) : undefined;
+        return native ?? this.printArrayLength(node, 0, leftExpr);
     }
 
     // `crate::value::get_value_k` is `get_value` for a `&str` key — the same
@@ -4453,125 +3776,69 @@ export class RustTranspiler extends BaseTranspiler {
     // the cache `hashmap` bucket, live client `subscriptions`/`futures`) and a
     // `this`/class receiver is not a `Value`, so those keep `get_value`.
     staticKeyLookup(node, container): string | undefined {
-        if (!ts.isStringLiteral(node)) {
-            return undefined;
-        }
+        if (!ts.isStringLiteral(node)) return undefined;
         // Test sources keep the allocating form: the test-only post-passes
         // pattern-match `get_value(&…, &Value::Str(…))` call sites.
         const source = (node as any).getSourceFile ? (node as any).getSourceFile().fileName : '';
-        if (typeof source === 'string' && /\/test\//.test(source)) {
-            return undefined;
-        }
-        if (container.kind === SyntaxKind.ThisKeyword) {
-            return undefined;
-        }
+        if (typeof source === 'string' && /\/test\//.test(source)) return undefined;
+        if (container.kind === SyntaxKind.ThisKeyword) return undefined;
         const text = node.text;
-        if (text === '' || text in this.StringLiteralReplacements) {
-            return undefined;
-        }
-        if (/^\d+$/.test(text) || text === 'hashmap' || text === 'subscriptions' || text === 'futures') {
-            return undefined;
-        }
+        if (text === '' || text in this.StringLiteralReplacements) return undefined;
+        if (/^\d+$/.test(text) || text === 'hashmap' || text === 'subscriptions' || text === 'futures') return undefined;
         const checker: any = this.checkerOrUndefined();
-        if (checker === undefined) {
-            return undefined;
-        }
+        if (checker === undefined) return undefined;
         const type = checker.getTypeAtLocation(container);
-        if (type !== undefined && ((type as any).objectFlags & ts.ObjectFlags.Class)) {
-            return undefined;
-        }
+        if (type !== undefined && ((type as any).objectFlags & ts.ObjectFlags.Class)) return undefined;
         return this.quotedStringLiteral(text);
     }
 
     printElementAccessExpression(node, identation) {
         const special = this.printElementAccessExpressionExceptionIfAny(node);
         if (special) return special;
-
         // `obj['x'] = v` is rewritten to `crate::set_value(...)` by a pass that
-        // matches the `get_value(&obj, &key)` target shape, so targets and
-        // computed reads keep that shape.
-        const parent = node.parent;
-        const isAssignmentTarget = parent !== undefined
-            && ts.isBinaryExpression(parent)
-            && parent.left === node
-            && parent.operatorToken.kind >= SyntaxKind.FirstAssignment
-            && parent.operatorToken.kind <= SyntaxKind.LastAssignment;
-
+        // matches the `get_value(&obj, &key)` target shape, so targets keep it.
         // `d['a'].push(v)` lowers to `append_to_array(&mut <target>, v)` and the
-        // ccxt pass that gives that append write-through semantics
-        // (`append_to_object_array`) matches the target text literally
-        // (`append_to_array(&mut get_value(&`), so a call/property target must
-        // keep the allocating `get_value(&d, &Value::Str("a").to_string())`
-        // form: the `get_value_k` spelling is invisible to that pass and the
-        // append would land on a discarded COW clone.
-        const isCallOrPropertyTarget = parent !== undefined
-            && ((ts.isPropertyAccessExpression(parent) && parent.expression === node)
-                || (ts.isCallExpression(parent) && parent.expression === node));
-
-        const keys: any[] = [];
-        const receivers: any[] = [];
-        const containers: any[] = [];
-        let baseExpr = null;
+        // ccxt pass giving it write-through semantics (`append_to_object_array`)
+        // matches `append_to_array(&mut get_value(&` literally, so call/property
+        // targets keep the allocating form too: `get_value_k` is invisible to
+        // that pass and the append would land on a discarded COW clone.
+        const parent = node.parent;
+        const keepGetValue = parent !== undefined && (
+            (ts.isBinaryExpression(parent) && parent.left === node &&
+                parent.operatorToken.kind >= SyntaxKind.FirstAssignment && parent.operatorToken.kind <= SyntaxKind.LastAssignment) ||
+            ((ts.isPropertyAccessExpression(parent) || ts.isCallExpression(parent)) && parent.expression === node));
+        const chain: any[] = [];
         let current: any = node;
         while (ts.isElementAccessExpression(current)) {
-            keys.unshift(current.argumentExpression);
-            receivers.unshift(current.expression);
-            containers.unshift(current.expression);
-            const expr = current.expression;
-            if (!ts.isElementAccessExpression(expr)) {
-                baseExpr = expr;
-                break;
-            }
-            current = expr;
+            chain.unshift(current);
+            current = current.expression;
         }
-
         // One checker proof per chain: the emitted text replaces `get_value` only
         // when it is legal at the position the whole chain occupies.
         const nativeAllowed = this.isNativeAccessPositionSafe(node) && !this.isNativeWriteTargetBase(node);
-
-        let acc = this.printNode(baseExpr, 0);
-        keys.forEach((key, index) => {
-            const native = nativeAllowed
-                ? this.printNativeContainerAccess(acc, receivers[index], key)
-                : undefined;
-            if (native !== undefined) {
-                acc = native;
-                return;
-            }
-            const staticKey = (isAssignmentTarget || isCallOrPropertyTarget)
-                ? undefined
-                : this.staticKeyLookup(key, containers[index]);
-            if (staticKey !== undefined) {
-                acc = `crate::value::get_value_k(&${acc}, ${staticKey})`;
-                return;
-            }
-            const kRef = `&${this.printNode(key, 0)}`;
-            acc = `get_value(&${acc}, ${kRef})`;
-        });
+        let acc = this.printNode(current, 0);
+        for (const { expression: receiver, argumentExpression: key } of chain) {
+            const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key) : undefined;
+            const staticKey = native === undefined && !keepGetValue ? this.staticKeyLookup(key, receiver) : undefined;
+            acc = native ?? (staticKey !== undefined
+                ? `crate::value::get_value_k(&${acc}, ${staticKey})`
+                : `get_value(&${acc}, &${this.printNode(key, 0)})`);
+        }
         return acc;
     }
 
     printForStatement(node, identation) {
-        const initNode = node.initializer;
-        const condNode = node.condition;
-        const incrNode = node.incrementor;
-
         const idn = this.getIden(identation);
         const idn1 = this.getIden(identation + 1);
-
-        const initStr = initNode ? this.printNode(initNode, identation + 1) + ';\n' : '';
-        const condStr = condNode ? this.printComparisonInBooleanContext(condNode, 0).trim() : 'true';
-        const incrStr = incrNode ? this.printNode(incrNode, 0) : '';
-
+        const initStr = node.initializer ? this.printNode(node.initializer, identation + 1) + ';\n' : '';
+        const condStr = node.condition ? this.printComparisonInBooleanContext(node.condition, 0).trim() : 'true';
+        const incrStr = node.incrementor ? this.printNode(node.incrementor, 0) : '';
         const statements = node.statement.statements.map(s => this.printNode(s, identation + 1)).join('\n');
         const body = `{\n${statements}\n${idn}}`;
-
         // A C-style `for` becomes a Rust `while`. The increment must run on
-        // every iteration *including* one ended by `continue` — a `continue`
-        // re-evaluates the loop condition, so the increment is folded into
-        // it (guarded by a first-iteration flag). Putting the increment at
-        // the end of the body instead would let `continue` skip it and spin
-        // the loop forever.
+        // every iteration *including* one ended by `continue`, so it is folded
+        // into the condition (guarded by a first-iteration flag); at the end of
+        // the body a `continue` would skip it and spin the loop forever.
         if (incrStr !== '') {
             const flag = `__for_first_${this.forLoopCounter++}`;
             const cond = `{ if !${flag} { ${incrStr}; } ${flag} = false; ${condStr} }`;
@@ -4581,70 +3848,57 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private static readonly COMPARISON_OPS = new Set([
-        SyntaxKind.EqualsEqualsToken,
-        SyntaxKind.EqualsEqualsEqualsToken,
-        SyntaxKind.ExclamationEqualsToken,
-        SyntaxKind.ExclamationEqualsEqualsToken,
-        SyntaxKind.LessThanToken,
-        SyntaxKind.LessThanEqualsToken,
-        SyntaxKind.GreaterThanToken,
-        SyntaxKind.GreaterThanEqualsToken,
+        SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,
+        SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken,
     ]);
 
     // Comparison helpers that can be replaced by a native numeric operator.
     private static readonly NATIVE_COMPARISON_OPERATORS: Record<number, string> = {
-        [SyntaxKind.LessThanToken]: '<',
-        [SyntaxKind.LessThanEqualsToken]: '<=',
-        [SyntaxKind.GreaterThanToken]: '>',
-        [SyntaxKind.GreaterThanEqualsToken]: '>=',
+        [SyntaxKind.LessThanToken]: '<', [SyntaxKind.LessThanEqualsToken]: '<=',
+        [SyntaxKind.GreaterThanToken]: '>', [SyntaxKind.GreaterThanEqualsToken]: '>=',
     };
 
+    isEqualityOp(op): boolean {
+        return op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken ||
+            op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken;
+    }
+
+    isLogicalOp(op): boolean {
+        return op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken;
+    }
+
     printCondition(node, identation) {
+        const idn = this.getIden(identation);
         if (node.kind === SyntaxKind.BinaryExpression) {
             const opKind = node.operatorToken.kind;
             // Comparison binary expressions already return bool — skip is_true() wrapping
-            if ((RustTranspiler as any).COMPARISON_OPS.has(opKind)) {
-                return this.printComparisonInBooleanContext(node, identation);
-            }
+            if (RustTranspiler.COMPARISON_OPS.has(opKind)) return this.printComparisonInBooleanContext(node, identation);
             // Logical &&/|| operands are individually is_true()-wrapped in
             // printBinaryExpression, so the whole expression is already bool —
             // unless one carries a native compare, which needs no is_true().
-            if (opKind === SyntaxKind.AmpersandAmpersandToken ||
-                opKind === SyntaxKind.BarBarToken) {
-                if (this.hasNativeComparisonOperand(node.left) || this.hasNativeComparisonOperand(node.right)) {
-                    return `${this.getIden(identation)}${this.printLogicalInBooleanContext(node)}`;
-                }
-                return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+            if (this.isLogicalOp(opKind)) {
+                const native = this.hasNativeComparisonOperand(node.left) || this.hasNativeComparisonOperand(node.right);
+                return idn + (native ? this.printLogicalInBooleanContext(node) : this.printNode(node, 0));
             }
         }
-        // `(a === b)` — a native payload compare is already bool; keep the
-        // is_true() marker so the post-pass still sees a bool expression.
         // PrefixUnary ! — delegate to avoid double-wrapping
-        if (node.kind === SyntaxKind.PrefixUnaryExpression &&
-      node.operator === SyntaxKind.ExclamationToken) {
+        if (node.kind === SyntaxKind.PrefixUnaryExpression && node.operator === SyntaxKind.ExclamationToken) {
             return this.printPrefixUnaryExpression(node, identation);
         }
         // A call to a hand-written `-> bool` fn is already a Rust bool.
-        if (this.rustCallPrintsBool(node)) {
-            return `${this.getIden(identation)}${this.printNode(node, 0)}`;
-        }
+        if (this.rustCallPrintsBool(node)) return idn + this.printNode(node, 0);
         // Checker-proved boolean Value (safe_bool / get_value): native matches!.
         const nativeTruthiness = this.printNativeTruthiness(node);
-        if (nativeTruthiness !== undefined) {
-            return `${this.getIden(identation)}${nativeTruthiness}`;
-        }
+        if (nativeTruthiness !== undefined) return idn + nativeTruthiness;
         // B-26: an operand whose printer emission is already a Rust `bool`.
         const nativeCondition = this.printNativeParenthesizedCondition(node);
-        if (nativeCondition !== undefined && this.rustConditionBoolSlot(node)) {
-            return `${this.getIden(identation)}${nativeCondition}`;
-        }
+        if (nativeCondition !== undefined && this.rustConditionBoolSlot(node)) return idn + nativeCondition;
         const expression = this.printNode(node, 0);
         const peeled = this.peelValueBoolBox(this.stripOuterParens(expression));
-        if (peeled !== undefined && this.rustConditionBoolSlot(node) &&
-            !this.printedBoolHelperCall(this.stripOuterParens(peeled))) {
-            return `${this.getIden(identation)}(${peeled})`;
+        if (peeled !== undefined && this.rustConditionBoolSlot(node) && !this.printedBoolHelperCall(this.stripOuterParens(peeled))) {
+            return `${idn}(${peeled})`;
         }
-        return `${this.getIden(identation)}is_true(&${this.printTruthyArgument(expression)})`;
+        return `${idn}is_true(&${this.printTruthyArgument(expression)})`;
     }
 
     // B-26: `is_true(&(…)` on an operand the printer already emits as a native Rust `bool` (payload
@@ -4654,37 +3908,24 @@ export class RustTranspiler extends BaseTranspiler {
     /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
     printNativeParenthesizedCondition(node): string | undefined {
         const inner = this.unwrapParens(node);
-        if (inner === undefined || inner === node || inner.kind !== SyntaxKind.BinaryExpression) {
-            return undefined;
-        }
+        if (inner === undefined || inner === node || inner.kind !== SyntaxKind.BinaryExpression) return undefined;
         const op = inner.operatorToken.kind;
-        if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) {
+        if (this.isLogicalOp(op)) {
             // Every operand of a logical already prints a bool; keep the wrapper
             // when they are all helper-led (the post-passes key on that token).
-            if (!this.hasNativeComparisonOperand(inner.left) && !this.hasNativeComparisonOperand(inner.right)) {
-                return undefined;
-            }
+            if (!this.hasNativeComparisonOperand(inner.left) && !this.hasNativeComparisonOperand(inner.right)) return undefined;
             return `(${this.printLogicalInBooleanContext(inner)})`;
         }
-        if (!(RustTranspiler as any).COMPARISON_OPS.has(op)) {
-            return undefined;
-        }
-        // `typeof x === 'string'` prints the same native predicate as `x in obj`.
+        if (!RustTranspiler.COMPARISON_OPS.has(op)) return undefined;
+        let native: string | undefined;
         if (inner.left.kind === SyntaxKind.TypeOfExpression) {
-            const native = this.nativeValuePredicateText(inner.right.text, inner.left.expression,
-                this.printNode(inner.left.expression, 0));
-            if (native === undefined) {
-                return undefined;
-            }
+            // `typeof x === 'string'` prints the same native predicate as `x in obj`.
+            native = this.nativeValuePredicateText(inner.right.text, inner.left.expression, this.printNode(inner.left.expression, 0));
             const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
-            return `(${isDiff ? '!' : ''}${native})`;
+            if (native !== undefined && isDiff) native = '!' + native;
+        } else {
+            native = this.isEqualityOp(op) ? this.nativeEqualityText(inner) : this.printNativeOrderedComparison(inner, op, inner.left, inner.right);
         }
-        if (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken ||
-            op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken) {
-            const native = this.nativeEqualityText(inner);
-            return native === undefined ? undefined : `(${native})`;
-        }
-        const native = this.printNativeOrderedComparison(inner, op, inner.left, inner.right);
         return native === undefined ? undefined : `(${native})`;
     }
 
@@ -4712,18 +3953,12 @@ export class RustTranspiler extends BaseTranspiler {
         for (let i = 0; i < parsedArgs.length; i++) {
             const char = parsedArgs[i];
             if (char === '"') {
-                i++;
-                while (i < parsedArgs.length && parsedArgs[i] !== '"') {
+                for (i++; i < parsedArgs.length && parsedArgs[i] !== '"'; i++) {
                     if (parsedArgs[i] === '\\') i++;
-                    i++;
                 }
-                continue;
-            }
-            if (char === '(' || char === '[' || char === '{') depth++;
-            else if (char === ')' || char === ']' || char === '}') depth--;
-            else if (char === ',' && depth === 0) {
-                return [parsedArgs.slice(0, i), parsedArgs.slice(i)];
-            }
+            } else if ('([{'.includes(char)) depth++;
+            else if (')]}'.includes(char)) depth--;
+            else if (char === ',' && depth === 0) return [parsedArgs.slice(0, i), parsedArgs.slice(i)];
         }
         return [parsedArgs, ''];
     }
@@ -4732,31 +3967,19 @@ export class RustTranspiler extends BaseTranspiler {
     // bool) when the checker proves it, the is_equal() helper otherwise.
     printComparisonInBooleanContext(node, identation) {
         const native = this.nativeEqualityText(node);
-        if (native) {
-            return `${this.getIden(identation)}(${native})`;
-        }
-        return `${this.getIden(identation)}${this.printNode(node, 0)}`;
+        return this.getIden(identation) + (native ? `(${native})` : this.printNode(node, 0));
     }
 
     // Native equality text of `node` (parens unwrapped), if the checker proves it.
     nativeEqualityText(node) {
         const inner = this.unwrapParens(node);
-        if (inner === undefined || inner.kind !== SyntaxKind.BinaryExpression) {
-            return undefined;
-        }
-        const op = inner.operatorToken.kind;
-        if (op !== SyntaxKind.EqualsEqualsToken && op !== SyntaxKind.EqualsEqualsEqualsToken &&
-            op !== SyntaxKind.ExclamationEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) {
-            return undefined;
-        }
-        return this.printNativeEqualityComparison(inner.left, inner.right, op);
+        if (inner === undefined || inner.kind !== SyntaxKind.BinaryExpression || !this.isEqualityOp(inner.operatorToken.kind)) return undefined;
+        return this.printNativeEqualityComparison(inner.left, inner.right, inner.operatorToken.kind);
     }
 
     unwrapParens(node) {
         let inner = node;
-        while (inner !== undefined && inner.kind === SyntaxKind.ParenthesizedExpression) {
-            inner = inner.expression;
-        }
+        while (inner !== undefined && inner.kind === SyntaxKind.ParenthesizedExpression) inner = inner.expression;
         return inner;
     }
 
@@ -4764,53 +3987,30 @@ export class RustTranspiler extends BaseTranspiler {
     // text started with a bool helper? The post-pass types locals by that token.
     hasNativeComparisonOperand(node) {
         const inner = this.unwrapParens(node);
-        if (inner === undefined) {
-            return false;
-        }
-        if (inner.kind === SyntaxKind.PrefixUnaryExpression &&
-            inner.operator === SyntaxKind.ExclamationToken) {
+        if (inner === undefined) return false;
+        if (inner.kind === SyntaxKind.PrefixUnaryExpression && inner.operator === SyntaxKind.ExclamationToken) {
             return this.hasNativeComparisonOperand(inner.operand);
         }
-        if (this.nativeEqualityText(inner) !== undefined) {
-            return true;
-        }
-        if (inner.kind === SyntaxKind.BinaryExpression) {
-            const op = inner.operatorToken.kind;
-            if (op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken) {
-                return this.hasNativeComparisonOperand(inner.left) || this.hasNativeComparisonOperand(inner.right);
-            }
-        }
-        return false;
+        if (this.nativeEqualityText(inner) !== undefined) return true;
+        return inner.kind === SyntaxKind.BinaryExpression && this.isLogicalOp(inner.operatorToken.kind) &&
+            (this.hasNativeComparisonOperand(inner.left) || this.hasNativeComparisonOperand(inner.right));
     }
 
     // Bare `&&`/`||` text of a logical expression (its operands are bools).
     printLogicalInBooleanContext(node) {
         const token = node.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ? '&&' : '||';
-        const left = this.printCondition(node.left, 0).trim();
-        const right = this.printCondition(node.right, 0).trim();
-        return `${left} ${token} ${right}`;
+        return `${this.printCondition(node.left, 0).trim()} ${token} ${this.printCondition(node.right, 0).trim()}`;
     }
 
     printWhileStatement(node, identation) {
-        const expr = this.printCondition(node.expression, 0);
-        const body = this.printBlock(node.statement, identation);
-        return `${this.getIden(identation)}while ${expr}${body}`;
+        return `${this.getIden(identation)}while ${this.printCondition(node.expression, 0)}${this.printBlock(node.statement, identation)}`;
     }
 
     printIfStatement(node, identation) {
-        const expression = this.printCondition(node.expression, 0);
-        const elseExists = node.elseStatement !== undefined;
-        const ifBody = this.printBlock(node.thenStatement, identation, elseExists);
-
-        let ifComplete = `${expression}${ifBody}`;
-        const isElseIf = node.parent.kind === SyntaxKind.IfStatement;
-        if (isElseIf) {
-            ifComplete = `else if ${ifComplete}`;
-        } else {
-            ifComplete = `${this.getIden(identation)}if ${ifComplete}`;
-        }
-
         const elseStatement = node.elseStatement;
+        const ifBody = this.printBlock(node.thenStatement, identation, elseStatement !== undefined);
+        const head = node.parent.kind === SyntaxKind.IfStatement ? 'else if ' : `${this.getIden(identation)}if `;
+        let ifComplete = `${head}${this.printCondition(node.expression, 0)}${ifBody}`;
         if (elseStatement?.kind === SyntaxKind.Block) {
             ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
         } else if (elseStatement?.kind === SyntaxKind.IfStatement) {
@@ -4821,30 +4021,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     printPostFixUnaryExpression(node, identation) {
         const { operand, operator } = node;
+        const helper = operator === SyntaxKind.PlusPlusToken ? 'add' : operator === SyntaxKind.MinusMinusToken ? 'subtract' : undefined;
+        if (helper === undefined) return super.printPostFixUnaryExpression(node, identation);
         const operandText = this.printNode(operand, 0);
-        if (operator === SyntaxKind.PlusPlusToken) {
-            const native = this.printNativeIncrement(SyntaxKind.PlusToken, operand, operandText);
-            if (native !== undefined) {
-                return `${this.getIden(identation)}${operandText} = ${native}`;
-            }
-            return `${this.getIden(identation)}${operandText} = add(&${operandText}, &Value::Int(1))`;
-        }
-        if (operator === SyntaxKind.MinusMinusToken) {
-            const native = this.printNativeIncrement(SyntaxKind.MinusToken, operand, operandText);
-            if (native !== undefined) {
-                return `${this.getIden(identation)}${operandText} = ${native}`;
-            }
-            return `${this.getIden(identation)}${operandText} = subtract(&${operandText}, &Value::Int(1))`;
-        }
-        return super.printPostFixUnaryExpression(node, identation);
+        const native = this.printNativeIncrement(helper === 'add' ? SyntaxKind.PlusToken : SyntaxKind.MinusToken, operand, operandText);
+        return `${this.getIden(identation)}${operandText} = ${native ?? `${helper}(&${operandText}, &Value::Int(1))`}`;
     }
 
     // `x++` / `x--` on a checker-typed number: native `+`/`-` with `Value::Int(1)`.
     printNativeIncrement(op, operand, operandText: string): string | undefined {
         try {
-            if (!this.isNumberLikeType(this.getChecker().getTypeAtLocation(operand))) {
-                return undefined;
-            }
+            if (!this.isNumberLikeType(this.getChecker().getTypeAtLocation(operand))) return undefined;
         } catch (e) {
             return undefined;
         }
@@ -4853,57 +4040,41 @@ export class RustTranspiler extends BaseTranspiler {
 
     printPrefixUnaryExpression(node, identation) {
         const { operand, operator } = node;
-        if (operator === SyntaxKind.ExclamationToken) {
-            return this.getIden(identation) + '!' + this.printCondition(node.operand, 0);
-        }
-        if (operator === SyntaxKind.MinusToken) {
-            const operandText = this.printNode(operand, 0);
-            const folded = this.foldNegateLiteral(operandText);
-            if (folded !== undefined) {
-                return this.getIden(identation) + folded;
-            }
-            return this.getIden(identation) + `negate(&${operandText})`;
-        }
-        return this.getIden(identation) + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
+        const idn = this.getIden(identation);
+        if (operator === SyntaxKind.ExclamationToken) return idn + '!' + this.printCondition(operand, 0);
+        if (operator !== SyntaxKind.MinusToken) return idn + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
+        const operandText = this.printNode(operand, 0);
+        return idn + (this.foldNegateLiteral(operandText) ?? `negate(&${operandText})`);
     }
 
     printObjectLiteralExpression(node, identation) {
-        if (node.properties.length === 0) {
-            return 'Value::Map({\n' + this.getIden(identation + 1) + 'let mut m = std::collections::HashMap::new();\n' + this.getIden(identation + 1) + 'm\n' + this.getIden(identation) + '})';
-        }
-        const escapeKey = (s: any): string => {
-            return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
-        };
+        const escapeKey = (s: any): string => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+            .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+        const idn2 = this.getIden(identation + 2);
         const lines = node.properties.map(p => {
             // Shorthand: { foo }  →  m.insert("foo", foo.clone());
             if (ts.isShorthandPropertyAssignment(p)) {
                 const name = p.name.escapedText;
-                return `${this.getIden(identation + 2)}m.insert("${escapeKey(name)}".to_string(), ${name}.clone());`;
+                return `${idn2}m.insert("${escapeKey(name)}".to_string(), ${name}.clone());`;
             }
-            const { name, initializer } = p;
-            const keyText = ts.isStringLiteral(name) ? name.text : name.escapedText;
-            const valText = this.printNode(initializer, 0);
-            return `${this.getIden(identation + 2)}m.insert("${escapeKey(keyText)}".to_string(), ${valText});`;
-        }).join('\n');
-        return `Value::Map({\n${this.getIden(identation + 1)}let mut m = std::collections::HashMap::new();\n${lines}\n${this.getIden(identation + 1)}m\n${this.getIden(identation)}})`;
+            const keyText = ts.isStringLiteral(p.name) ? p.name.text : p.name.escapedText;
+            return `${idn2}m.insert("${escapeKey(keyText)}".to_string(), ${this.printNode(p.initializer, 0)});`;
+        });
+        const idn1 = this.getIden(identation + 1);
+        const body = lines.map(l => l + '\n').join('');
+        return `Value::Map({\n${idn1}let mut m = std::collections::HashMap::new();\n${body}${idn1}m\n${this.getIden(identation)}})`;
     }
 
     printArrayLiteralExpression(node, identation) {
-        const elements = node.elements.map(e => this.printNode(e, 0)).join(', ');
-        return `Value::from(vec![${elements}])`;
+        return `Value::from(vec![${node.elements.map(e => this.printNode(e, 0)).join(', ')}])`;
     }
 
     printDeleteExpression(node, identation) {
-        const object = this.printNode(node.expression.expression, 0);
-        const key = this.printNode(node.expression.argumentExpression, 0);
-        const keyRef = key.startsWith('Value::') ? `&${key}` : `&${key}`;
-        return `remove(&mut ${object}, ${keyRef})`;
+        return `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
     }
 
     printInstanceOfExpression(node, identation) {
-        const left = this.printNode(node.left, 0);
-        const right = this.printNode(node.right, 0);
-        return `${this.getIden(identation)}is_instance(&${left}, &${right})`;
+        return `${this.getIden(identation)}is_instance(&${this.printNode(node.left, 0)}, &${this.printNode(node.right, 0)})`;
     }
 
     printConditionalExpression(node, identation) {
@@ -4911,8 +4082,8 @@ export class RustTranspiler extends BaseTranspiler {
         const whenTrue = this.printTernaryArm(node.whenTrue);
         const whenFalse = this.printTernaryArm(node.whenFalse);
         // `ternary` is `if cond { a } else { b }` over `Value`; the arms are
-        // normalized to `Value` below, so the native form matches it and
-        // evaluates only the taken arm (TS semantics).
+        // normalized to `Value`, so the native form matches it and evaluates
+        // only the taken arm (TS semantics).
         return `(if ${condition} { ${whenTrue} } else { ${whenFalse} })`;
     }
 
@@ -4926,31 +4097,17 @@ export class RustTranspiler extends BaseTranspiler {
 
     private static isBoolValueExpression(text: string): boolean {
         let value = text.trim();
-        for (;;) {
-            if (!(value.startsWith('(') && value.endsWith(')'))) {
-                break;
-            }
+        while (value.startsWith('(') && value.endsWith(')')) {
             let depth = 0;
             let wrapsWhole = true;
-            for (let i = 0; i < value.length; i++) {
-                if (value[i] === '(') {
-                    depth++;
-                } else if (value[i] === ')') {
-                    depth--;
-                    if (depth === 0 && i < value.length - 1) {
-                        wrapsWhole = false;
-                        break;
-                    }
-                }
+            for (let i = 0; i < value.length && wrapsWhole; i++) {
+                if (value[i] === '(') depth++;
+                else if (value[i] === ')' && --depth === 0 && i < value.length - 1) wrapsWhole = false;
             }
-            if (!wrapsWhole) {
-                break;
-            }
+            if (!wrapsWhole) break;
             value = value.slice(1, -1).trim();
         }
-        if (value.startsWith('!')) {
-            value = value.slice(1).trim();
-        }
+        if (value.startsWith('!')) value = value.slice(1).trim();
         return RustTranspiler.BOOL_VALUE_PREFIXES.some((fn) => value.startsWith(fn + '('));
     }
 
@@ -4960,23 +4117,14 @@ export class RustTranspiler extends BaseTranspiler {
     printTernaryArm(node, identation = 0) {
         const text = this.printNode(node, identation);
         const trimmed = text.trim();
-        if (RustTranspiler.isBoolValueExpression(trimmed)) {
-            return `Value::Bool(${trimmed})`;
-        }
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) &&
-            trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false') {
-            return `${trimmed}.clone()`;
-        }
+        if (RustTranspiler.isBoolValueExpression(trimmed)) return `Value::Bool(${trimmed})`;
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed) && trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false') return `${trimmed}.clone()`;
         return text;
     }
 
     // Built-in method call overrides
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
-        const native = this.nativeValuePredicateText('array', node?.arguments?.[0], parsedArg);
-        if (native !== undefined) {
-            return `Value::Bool(${native})`;
-        }
-        return `Value::Bool(is_array(&${parsedArg}))`;
+        return `Value::Bool(${this.nativeValuePredicateText('array', node?.arguments?.[0], parsedArg) ?? `is_array(&${parsedArg})`})`;
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
@@ -4999,17 +4147,14 @@ export class RustTranspiler extends BaseTranspiler {
         return `math_floor(&${parsedArg})`;
     }
 
+    // No `.await` here: `printAwaitExpression` appends it for `await Promise.all(...)`.
     printPromiseAllCall(node, identation, parsedArg = undefined) {
-        // No trailing `.await` here — when the TS source has
-        // `await Promise.all(...)`, `printAwaitExpression` will append it.
-        // Adding it here too would produce `.await.await` (double-await).
         return `promise_all(&${parsedArg})`;
     }
 
     // Rust uses postfix `.await`; the base transpiler defaults to prefix.
     printAwaitExpression(node, identation) {
-        const expr = this.printNode(node.expression, identation);
-        return `${expr}.await`;
+        return `${this.printNode(node.expression, identation)}.await`;
     }
 
     printMathRoundCall(node, identation, parsedArg = undefined) {
@@ -5029,16 +4174,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
-        const pRef = parsedArg?.startsWith('Value::') ? `&${parsedArg}` : `&${parsedArg}`;
-        return `Value::Bool(contains(&${name}, ${pRef}))`;
+        return `Value::Bool(contains(&${name}, &${parsedArg}))`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
-        const native = this.printNativeStringIndexOf(node, name);
-        if (native !== undefined) {
-            return native;
-        }
-        return `get_index_of(&${name}, &${parsedArg})`;
+        return this.printNativeStringIndexOf(node, name) ?? `get_index_of(&${name}, &${parsedArg})`;
     }
 
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -5094,12 +4234,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        const native = this.printNativeStringSlice(node, name);
-        if (native !== undefined) {
-            return native;
-        }
-        const arg2 = parsedArg2 ?? 'Value::Null';
-        return `slice(&${name}, &${parsedArg}, &${arg2})`;
+        return this.printNativeStringSlice(node, name) ?? `slice(&${name}, &${parsedArg}, &${parsedArg2 ?? 'Value::Null'})`;
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -5110,42 +4245,34 @@ export class RustTranspiler extends BaseTranspiler {
         return `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`;
     }
 
+    // `{}` (Display) renders an ExchangeError as `[Kind] message`; `{:?}` would dump the struct fields.
     printThrowStatement(node, identation) {
-        const expression = this.printNode(node.expression, 0);
-        // `{}` (Display) renders an ExchangeError as `[Kind] message`;
-        // `{:?}` would dump the struct fields.
-        return `${this.getIden(identation)}panic!("{}", ${expression});`;
+        return `${this.getIden(identation)}panic!("{}", ${this.printNode(node.expression, 0)});`;
     }
 
     printTryStatement(node, identation) {
-        const tryBody = node.tryBlock.statements.map(s => this.printNode(s, identation + 1)).join('\n');
-        const catchBody = node.catchClause.block.statements.map(s => this.printNode(s, identation + 1)).join('\n');
+        const body = (block) => block.statements.map(s => this.printNode(s, identation + 1)).join('\n');
         const rawName = node.catchClause?.variableDeclaration?.name?.escapedText;
-        const errorName = rawName ? `_${rawName}` : '_e';
         const iden = this.getIden(identation);
-        return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n${tryBody}\n${iden}}));\n${iden}if let Err(${errorName}) = _try_result {\n${catchBody}\n${iden}}`;
+        const errorName = rawName ? `_${rawName}` : '_e';
+        return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n${body(node.tryBlock)}\n${iden}}));\n` +
+            `${iden}if let Err(${errorName}) = _try_result {\n${body(node.catchClause.block)}\n${iden}}`;
     }
 
     printReturnStatement(node, identation) {
         const exp = node.expression;
-        if (!exp) {
-            return `${this.getIden(identation)}return;`;
-        }
+        const idn = this.getIden(identation);
+        if (!exp) return `${idn}return;`;
         // `return X;` inside a native-`Option<String>` method: the printed
         // expression is still the `Value` box, so convert it back to the
         // native payload (a nullish literal is the `None` arm).
         const fn: any = ts.findAncestor(node.parent, ts.isFunctionLike);
         if (this.rustNativeStrReturnKind(fn) === 'str' && this.rustStrReturnValueConverts(exp)) {
-            const inner = this.unwrapParensNode(exp);
-            if (this.literalKindOfNode(inner) === 'null') {
-                return `${this.getIden(identation)}return None;`;
-            }
-            const text = this.printNode(exp, 0).trim();
+            if (this.literalKindOfNode(this.unwrapParensNode(exp)) === 'null') return `${idn}return None;`;
             const suffix = this.rustStrNativeExpression(exp) ? '' : '.as_str().map(str::to_owned)';
-            return `${this.getIden(identation)}return ${text}${suffix};`;
+            return `${idn}return ${this.printNode(exp, 0).trim()}${suffix};`;
         }
-        const rightPart = this.printNode(exp, 0).trim();
-        return `${this.getIden(identation)}return ${rightPart};`;
+        return `${idn}return ${this.printNode(exp, 0).trim()};`;
     }
 
     printBreakStatement(node, identation) {
@@ -5161,7 +4288,6 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSpreadElement(node, identation) {
-        const expression = this.printNode(node.expression, 0);
-        return `${this.getIden(identation)}${expression}`;
+        return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
     }
 }
