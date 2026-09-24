@@ -1815,7 +1815,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (checker.isArrayType(type) || checker.isTupleType(type)) {
             return true;
         }
-        return (type as any).getTarget?.()?.getSymbol()?.escapedName === 'ReadonlyArray';
+        return (type as any).isTypeReference?.() === true && (type as any).getTarget().getSymbol()?.escapedName === 'ReadonlyArray';
     }
 
     // `.length` is a Java int for exactly these receivers; every other receiver keeps
@@ -3075,7 +3075,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     tupleRequiredElementCount(type) {
-        const flags = (type as any)?.getTarget?.()?.elementFlags ?? (type as any)?.elementFlags ?? [];
+        const flags = ((type as any)?.isTypeReference?.() ? (type as any).getTarget().elementFlags : undefined) ?? (type as any)?.elementFlags ?? [];
         let required = 0;
         for (const flag of flags) {
             if (flag !== ElementFlags.Optional && flag !== ElementFlags.Rest) {
