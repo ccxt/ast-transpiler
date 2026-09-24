@@ -14748,6 +14748,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (arg.kind === _typescript2.default.SyntaxKind.NullKeyword) {
       return true;
     }
+    if (type === JAVA_NATIVE_RETURN_MAP_TYPE && _typescript2.default.isObjectLiteralExpression(arg)) {
+      return true;
+    }
     if (type !== "String") {
       return false;
     }
