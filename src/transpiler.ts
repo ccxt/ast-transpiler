@@ -88,6 +88,40 @@ function memoizeCheckerCalls(checker: Checker): void {
     memoizeBinaryKindMethod(checker, "getSignaturesOfType");
     memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
     memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+    memoizePairMethod(checker, "getTypeOfSymbolAtLocation");
+}
+
+// (object, object) pairs, e.g. getTypeOfSymbolAtLocation(symbol, node); seed2 fills it from a prefetch
+function memoizePairMethod(owner: object, name: string): void {
+    const original = owner[name];
+    if (typeof original !== "function") {
+        return;
+    }
+    const cache = new WeakMap<object, WeakMap<object, unknown>>();
+    const seed2 = (a: object, b: object, value: unknown) => {
+        let inner = cache.get(a);
+        if (inner === undefined) {
+            cache.set(a, inner = new WeakMap());
+        }
+        inner.set(b, value === undefined ? UNDEFINED_SENTINEL : value);
+    };
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const [a, b] = args;
+        if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
+            return original.apply(owner, args);
+        }
+        const cached = cache.get(a as object)?.get(b as object);
+        if (cached !== undefined) {
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
+        }
+        const result = original.call(owner, a, b);
+        seed2(a as object, b as object, result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    (wrapped as any).original = original;
+    (wrapped as any).seed2 = seed2;
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 
 // the TS7 checker exposes its methods as prototype getters: shadow them on the instance.
@@ -113,6 +147,9 @@ function memoizeUnaryMethod(owner: object, name: string): void {
     };
     (wrapped as any).gen = (original as any).gen;
     (wrapped as any).original = original;
+    // prefetch support: seed(key, value) fills the cache; has(key) tells whether it is filled
+    (wrapped as any).seed = (key: object, value: unknown) => cache.set(key, value === undefined ? UNDEFINED_SENTINEL : value);
+    (wrapped as any).has = (key: object) => cache.has(key);
     Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 
@@ -147,6 +184,97 @@ function memoizeBinaryKindMethod(owner: object, name: string): void {
     Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 
+// Batch pre-resolve: walk `root` once and resolve, in one round trip per method, the
+// types/symbols of the node kinds the printers ask about, seeding the memo caches above.
+// Results are identical to per-node calls; nodes the printers never ask about only cost payload.
+const PREFETCH_TYPE_KINDS = new Set<SyntaxKind>([
+    SyntaxKind.Identifier, SyntaxKind.PropertyAccessExpression, SyntaxKind.ElementAccessExpression,
+    SyntaxKind.CallExpression, SyntaxKind.BinaryExpression, SyntaxKind.StringLiteral, SyntaxKind.TypeReference,
+    SyntaxKind.MethodDeclaration, SyntaxKind.AnyKeyword, SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword,
+    SyntaxKind.ArrayType, SyntaxKind.NumericLiteral,
+]);
+const PREFETCH_BATCH = 4096;
+function prefetchChecker(checker: Checker, root: Node, options: { types?: boolean, symbols?: boolean, signatures?: boolean } = {}): void {
+    const wantTypes = options.types ?? true, wantSymbols = options.symbols ?? true, wantSignatures = options.signatures ?? true;
+    const getType = checker.getTypeAtLocation as any, getSymbol = checker.getSymbolAtLocation as any, getSig = checker.getResolvedSignature as any;
+    const typeNodes: Node[] = [], symbolNodes: Node[] = [], callNodes: Node[] = [];
+    const visit = (node: Node) => {
+        const kind = node.kind;
+        if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !getType.has?.(node)) typeNodes.push(node);
+        if (wantSymbols && kind === SyntaxKind.Identifier && !getSymbol.has?.(node)) symbolNodes.push(node);
+        if (wantSignatures && kind === SyntaxKind.CallExpression && !getSig.has?.(node)) callNodes.push(node);
+        node.forEachChild(visit);
+    };
+    visit(root);
+    const run = (nodes: Node[], fn: any) => {
+        if (fn?.seed === undefined || fn.original === undefined) return;
+        for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
+            const chunk = nodes.slice(i, i + PREFETCH_BATCH);
+            let results: unknown[];
+            try {
+                results = fn.original(chunk);
+            } catch {
+                continue; // leave this chunk to the lazy per-node path
+            }
+            chunk.forEach((n, j) => fn.seed(n, results[j]));
+        }
+    };
+    run(typeNodes, getType);
+    run(symbolNodes, getSymbol);
+    // no bulk getResolvedSignature: pipeline the per-call requests through api.batch
+    const api = (checker as any).__astTranspilerApi as API | undefined;
+    if (callNodes.length > 0 && getSig?.seed !== undefined && api !== undefined && getSig.original?.gen !== undefined) {
+        for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
+            const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
+            const gens = chunk.map((n) => {
+                const g = getSig.original.gen(n);
+                // a call the checker cannot resolve must not fail the whole batch
+                return (function* () { try { return yield* g; } catch { return PREFETCH_FAILED; } })();
+            });
+            const results = api.batch(...gens) as unknown[];
+            chunk.forEach((n, j) => { if (results[j] !== PREFETCH_FAILED) getSig.seed(n, results[j]); });
+        }
+    }
+    if (wantSignatures && api !== undefined) {
+        prefetchDeclarationSignatures(checker, api, root);
+    }
+}
+
+// Warm the per-declaration chains baseTranspiler walks for every method/function
+// (getFunctionType, getReturnTypeFromMethod) in one pipelined batch per level
+function prefetchDeclarationSignatures(checker: Checker, api: API, root: Node): void {
+    const getSigDecl = checker.getSignatureFromDeclaration as any;
+    const getTypeOfSymbolAtLocation = (checker as any).getTypeOfSymbolAtLocation;
+    if (getSigDecl?.seed === undefined || getSigDecl.original?.gen === undefined) return;
+    const decls: Node[] = [];
+    const visit = (node: Node) => {
+        if (node.kind === SyntaxKind.MethodDeclaration || node.kind === SyntaxKind.FunctionDeclaration) decls.push(node);
+        node.forEachChild(visit);
+    };
+    visit(root);
+    const safe = (g: Generator<any, any, any>) => (function* () { try { return yield* g; } catch { return PREFETCH_FAILED; } })();
+    for (let i = 0; i < decls.length; i += PREFETCH_BATCH) {
+        const chunk = decls.slice(i, i + PREFETCH_BATCH);
+        api.batch(...chunk.map((decl) => safe((function* () {
+            const sig = getSigDecl.has(decl) ? getSigDecl(decl) : yield* getSigDecl.original.gen(decl);
+            getSigDecl.seed(decl, sig);
+            if (sig !== undefined) yield* sig.getReturnType.gen();
+        })())));
+        // getReturnTypeFromMethod: type -> symbol -> type of symbol at its declaration -> call signatures
+        api.batch(...chunk.map((decl) => safe((function* () {
+            const type = checker.getTypeAtLocation(decl) as any;
+            const symbol = type?.getSymbol?.gen !== undefined ? yield* type.getSymbol.gen() : undefined;
+            const location = symbol?.valueDeclaration?.resolve();
+            if (location === undefined || getTypeOfSymbolAtLocation?.seed2 === undefined) return;
+            const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
+            getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
+            yield* symbolType.getCallSignatures.gen();
+        })())));
+    }
+}
+const PREFETCH_FAILED = Symbol("prefetchFailed");
+const prefetchedFiles = new WeakSet<SourceFile>();
+
 // program-wide diagnostics are identical for every file of a program: fetch them once
 type ProgramWideDiagnostics = { program: readonly { text: string }[], global: readonly { text: string }[] };
 const programDiagnosticsCache = new WeakMap<Program, ProgramWideDiagnostics>();
@@ -175,6 +303,7 @@ function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[
     const program = snapshot.operation.createdPrograms[0];
     const checker = snapshot.getProjects().find((p) => p.program === program).checker;
     memoizeCheckerCalls(checker);
+    (checker as any).__astTranspilerApi = getApi(cache);
     return [snapshot, program, checker];
 }
 
@@ -197,6 +326,14 @@ export default class Transpiler {
     private context: ITranspileContext | undefined;
     // the snapshot behind the current single-file context
     private snapshot: Snapshot | undefined;
+    // batch pre-resolve each source file's checker queries before printing it (config.prefetch=false disables)
+    prefetch: boolean;
+
+    // batch pre-resolve for callers that query the checker themselves (build hooks):
+    // one round trip per method for every relevant node under `root`
+    static prefetchChecker(checker: Checker, root: Node, options?: { types?: boolean, symbols?: boolean, signatures?: boolean }): void {
+        prefetchChecker(checker, root, options);
+    }
 
     // A program cache holds parsed typescript SourceFiles and the last program built
     // from them. Hand the same cache to several Transpiler instances to reuse one
@@ -212,6 +349,7 @@ export default class Transpiler {
     constructor(config = {}, programCache?: ITranspileProgramCache) {
         this.config = config;
         this.programCache = programCache ?? Transpiler.createProgramCache();
+        this.prefetch = config["prefetch"] ?? true;
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
@@ -337,6 +475,11 @@ export default class Transpiler {
     }
 
     checkFileDiagnostics(context: ITranspileContext = this.context) {
+        // the pass only produces a Logger warning; on TS7 getGlobalDiagnostics forces a
+        // whole-program check in tsgo, so skip it when nothing would be printed
+        if (!Logger.verbose) {
+            return;
+        }
         const fileName = context.src.fileName;
         const programWide = getProgramWideDiagnostics(context.program);
         const diagnostics = [
@@ -367,6 +510,10 @@ export default class Transpiler {
         }
 
         const src = this.context.src;
+        if (this.prefetch && !prefetchedFiles.has(src)) {
+            prefetchedFiles.add(src);
+            prefetchChecker(this.context.checker, src);
+        }
 
         let transpiledContent = undefined;
         switch(lang) {
@@ -621,8 +768,7 @@ class TranspileProgramBatch {
     }
 
     // point the owning Transpiler at one file of this batch, then run the same
-    // diagnostics pass the single-file path runs — the printers read checker state
-    // back from it, so it is not optional
+    // diagnostics pass the single-file path runs
     setContextForPath(filePath: string): ITranspileContext {
         const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path.resolve(filePath));
         if (src === undefined) {

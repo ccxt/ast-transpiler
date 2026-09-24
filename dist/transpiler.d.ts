@@ -1,4 +1,4 @@
-import { SyntaxKind } from "typescript/unstable/ast";
+import { SyntaxKind, type Node } from "typescript/unstable/ast";
 import { CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type Program, type Snapshot } from "typescript/unstable/sync";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
@@ -21,6 +21,12 @@ export default class Transpiler {
     private programCache;
     private context;
     private snapshot;
+    prefetch: boolean;
+    static prefetchChecker(checker: Checker, root: Node, options?: {
+        types?: boolean;
+        symbols?: boolean;
+        signatures?: boolean;
+    }): void;
     static createProgramCache(): ITranspileProgramCache;
     constructor(config?: {}, programCache?: ITranspileProgramCache);
     setVerboseMode(verbose: boolean): void;

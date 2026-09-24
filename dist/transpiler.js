@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-YTJO6U6G.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -25681,6 +25681,38 @@ function memoizeCheckerCalls(checker) {
   memoizeBinaryKindMethod(checker, "getSignaturesOfType");
   memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
   memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+  memoizePairMethod(checker, "getTypeOfSymbolAtLocation");
+}
+function memoizePairMethod(owner, name) {
+  const original = owner[name];
+  if (typeof original !== "function") {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const seed2 = (a, b, value) => {
+    let inner = cache.get(a);
+    if (inner === void 0) {
+      cache.set(a, inner = /* @__PURE__ */ new WeakMap());
+    }
+    inner.set(b, value === void 0 ? UNDEFINED_SENTINEL : value);
+  };
+  const wrapped = function(...args) {
+    const [a, b] = args;
+    if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
+      return original.apply(owner, args);
+    }
+    const cached = cache.get(a)?.get(b);
+    if (cached !== void 0) {
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
+    }
+    const result = original.call(owner, a, b);
+    seed2(a, b, result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  wrapped.original = original;
+  wrapped.seed2 = seed2;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 function memoizeUnaryMethod(owner, name) {
   const original = owner[name];
@@ -25703,6 +25735,8 @@ function memoizeUnaryMethod(owner, name) {
   };
   wrapped.gen = original.gen;
   wrapped.original = original;
+  wrapped.seed = (key, value) => cache.set(key, value === void 0 ? UNDEFINED_SENTINEL : value);
+  wrapped.has = (key) => cache.has(key);
   Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 function memoizeBinaryKindMethod(owner, name) {
@@ -25735,6 +25769,119 @@ function memoizeBinaryKindMethod(owner, name) {
   wrapped.gen = original.gen;
   Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
+var PREFETCH_TYPE_KINDS = /* @__PURE__ */ new Set([
+  SyntaxKind9.Identifier,
+  SyntaxKind9.PropertyAccessExpression,
+  SyntaxKind9.ElementAccessExpression,
+  SyntaxKind9.CallExpression,
+  SyntaxKind9.BinaryExpression,
+  SyntaxKind9.StringLiteral,
+  SyntaxKind9.TypeReference,
+  SyntaxKind9.MethodDeclaration,
+  SyntaxKind9.AnyKeyword,
+  SyntaxKind9.StringKeyword,
+  SyntaxKind9.NumberKeyword,
+  SyntaxKind9.ArrayType,
+  SyntaxKind9.NumericLiteral
+]);
+var PREFETCH_BATCH = 4096;
+function prefetchChecker(checker, root, options = {}) {
+  const wantTypes = options.types ?? true, wantSymbols = options.symbols ?? true, wantSignatures = options.signatures ?? true;
+  const getType = checker.getTypeAtLocation, getSymbol = checker.getSymbolAtLocation, getSig = checker.getResolvedSignature;
+  const typeNodes = [], symbolNodes = [], callNodes = [];
+  const visit = (node) => {
+    const kind = node.kind;
+    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !getType.has?.(node))
+      typeNodes.push(node);
+    if (wantSymbols && kind === SyntaxKind9.Identifier && !getSymbol.has?.(node))
+      symbolNodes.push(node);
+    if (wantSignatures && kind === SyntaxKind9.CallExpression && !getSig.has?.(node))
+      callNodes.push(node);
+    node.forEachChild(visit);
+  };
+  visit(root);
+  const run = (nodes, fn) => {
+    if (fn?.seed === void 0 || fn.original === void 0)
+      return;
+    for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
+      const chunk = nodes.slice(i, i + PREFETCH_BATCH);
+      let results;
+      try {
+        results = fn.original(chunk);
+      } catch {
+        continue;
+      }
+      chunk.forEach((n, j) => fn.seed(n, results[j]));
+    }
+  };
+  run(typeNodes, getType);
+  run(symbolNodes, getSymbol);
+  const api = checker.__astTranspilerApi;
+  if (callNodes.length > 0 && getSig?.seed !== void 0 && api !== void 0 && getSig.original?.gen !== void 0) {
+    for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
+      const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
+      const gens = chunk.map((n) => {
+        const g = getSig.original.gen(n);
+        return function* () {
+          try {
+            return yield* g;
+          } catch {
+            return PREFETCH_FAILED;
+          }
+        }();
+      });
+      const results = api.batch(...gens);
+      chunk.forEach((n, j) => {
+        if (results[j] !== PREFETCH_FAILED)
+          getSig.seed(n, results[j]);
+      });
+    }
+  }
+  if (wantSignatures && api !== void 0) {
+    prefetchDeclarationSignatures(checker, api, root);
+  }
+}
+function prefetchDeclarationSignatures(checker, api, root) {
+  const getSigDecl = checker.getSignatureFromDeclaration;
+  const getTypeOfSymbolAtLocation = checker.getTypeOfSymbolAtLocation;
+  if (getSigDecl?.seed === void 0 || getSigDecl.original?.gen === void 0)
+    return;
+  const decls = [];
+  const visit = (node) => {
+    if (node.kind === SyntaxKind9.MethodDeclaration || node.kind === SyntaxKind9.FunctionDeclaration)
+      decls.push(node);
+    node.forEachChild(visit);
+  };
+  visit(root);
+  const safe = (g) => function* () {
+    try {
+      return yield* g;
+    } catch {
+      return PREFETCH_FAILED;
+    }
+  }();
+  for (let i = 0; i < decls.length; i += PREFETCH_BATCH) {
+    const chunk = decls.slice(i, i + PREFETCH_BATCH);
+    api.batch(...chunk.map((decl) => safe(function* () {
+      const sig = getSigDecl.has(decl) ? getSigDecl(decl) : yield* getSigDecl.original.gen(decl);
+      getSigDecl.seed(decl, sig);
+      if (sig !== void 0)
+        yield* sig.getReturnType.gen();
+    }())));
+    api.batch(...chunk.map((decl) => safe(function* () {
+      const type = checker.getTypeAtLocation(decl);
+      const symbol = type?.getSymbol?.gen !== void 0 ? yield* type.getSymbol.gen() : void 0;
+      const location = symbol?.valueDeclaration?.resolve();
+      if (location === void 0 || getTypeOfSymbolAtLocation?.seed2 === void 0)
+        return;
+      const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
+      getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
+      yield* symbolType.getCallSignatures.gen();
+    }())));
+  }
+}
+var PREFETCH_FAILED = Symbol("prefetchFailed");
+var prefetchedFiles = /* @__PURE__ */ new WeakSet();
 var programDiagnosticsCache = /* @__PURE__ */ new WeakMap();
 function getProgramWideDiagnostics(program) {
   let diagnostics = programDiagnosticsCache.get(program);
@@ -25757,9 +25904,15 @@ function createSnapshotProgram(cache, rootFiles, files) {
   const program = snapshot.operation.createdPrograms[0];
   const checker = snapshot.getProjects().find((p) => p.program === program).checker;
   memoizeCheckerCalls(checker);
+  checker.__astTranspilerApi = getApi(cache);
   return [snapshot, program, checker];
 }
 var Transpiler = class _Transpiler {
+  // batch pre-resolve for callers that query the checker themselves (build hooks):
+  // one round trip per method for every relevant node under `root`
+  static prefetchChecker(checker, root, options) {
+    prefetchChecker(checker, root, options);
+  }
   // A program cache holds parsed typescript SourceFiles and the last program built
   // from them. Hand the same cache to several Transpiler instances to reuse one
   // parse/typecheck of the es lib chain and of every shared import across all of
@@ -25773,6 +25926,7 @@ var Transpiler = class _Transpiler {
   constructor(config = {}, programCache) {
     this.config = config;
     this.programCache = programCache ?? _Transpiler.createProgramCache();
+    this.prefetch = config["prefetch"] ?? true;
     const phpConfig = config["php"] || {};
     const pythonConfig = config["python"] || {};
     const csharpConfig = config["csharp"] || {};
@@ -25883,6 +26037,9 @@ var Transpiler = class _Transpiler {
     return this.createProgramByPathAndSetContext(path3);
   }
   checkFileDiagnostics(context = this.context) {
+    if (!Logger.verbose) {
+      return;
+    }
     const fileName = context.src.fileName;
     const programWide = getProgramWideDiagnostics(context.program);
     const diagnostics = [
@@ -25909,6 +26066,10 @@ var Transpiler = class _Transpiler {
       this.checkFileDiagnostics();
     }
     const src = this.context.src;
+    if (this.prefetch && !prefetchedFiles.has(src)) {
+      prefetchedFiles.add(src);
+      prefetchChecker(this.context.checker, src);
+    }
     let transpiledContent = void 0;
     switch (lang) {
       case 0 /* Python */:
@@ -26100,8 +26261,7 @@ var TranspileProgramBatch = class {
     return this.program;
   }
   // point the owning Transpiler at one file of this batch, then run the same
-  // diagnostics pass the single-file path runs — the printers read checker state
-  // back from it, so it is not optional
+  // diagnostics pass the single-file path runs
   setContextForPath(filePath) {
     const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path2.resolve(filePath));
     if (src === void 0) {
