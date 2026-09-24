@@ -12,6 +12,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
     goLocalTypeResolution: Set<any>;
+    goLocalStaticTypeCache: WeakMap<object, string>;
     asyncMethodSuffix: string;
     classNameMap: {
         [key: string]: string;

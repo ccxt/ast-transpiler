@@ -7889,6 +7889,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.wrapCallMethods = [];
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     this.goLocalTypeResolution = /* @__PURE__ */ new Set();
+    this.goLocalStaticTypeCache = /* @__PURE__ */ new WeakMap();
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     this.asyncMethodSuffix = "";
@@ -8624,9 +8625,17 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (this.goLocalTypeResolution.has(declaration)) {
       return void 0;
     }
+    const topLevel = this.goLocalTypeResolution.size === 0;
+    if (topLevel && this.goLocalStaticTypeCache.has(declaration)) {
+      return this.goLocalStaticTypeCache.get(declaration);
+    }
     this.goLocalTypeResolution.add(declaration);
     try {
-      return this.getGoLocalType(declaration, this.printNode(declaration.initializer, 0));
+      const goType = this.getGoLocalType(declaration, this.printNode(declaration.initializer, 0));
+      if (topLevel) {
+        this.goLocalStaticTypeCache.set(declaration, goType);
+      }
+      return goType;
     } finally {
       this.goLocalTypeResolution.delete(declaration);
     }
