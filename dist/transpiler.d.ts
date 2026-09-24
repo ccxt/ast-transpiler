@@ -512,7 +512,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printSuperCallInsideConstructor(node: any, identation: any): string;
     printIdentifier(node: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
-    printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     csharpDeclaredReceiverType(node: any): string | undefined;
     csharpPrintedParamType(receiver: any): string | undefined;
@@ -521,6 +520,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
+    csharpIsMarketRowKeyRead(expression: any, argumentExpression: any): boolean;
     csharpNativeDeclaredDictionaryRead(expression: any, argumentExpression: any): string | undefined;
     csharpDeclaredDictionaryType(node: any): string | undefined;
     csharpDeclaredLocalResolverType(node: any): string | undefined;
@@ -571,6 +571,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIndexBoundIsVoided(body: any, receiverSymbol: any, indexSymbol: any): boolean;
     csharpReceiverUseKeepsBound(node: any): boolean;
     csharpIdentifierIsWritten(node: any): boolean;
+    csharpIsSetOrAddTarget(node: any): boolean;
     csharpIsAssignmentOperator(kind: any): boolean;
     csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
     csharpElementAccessTypedReceiver(node: any): string | undefined;
@@ -595,6 +596,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpTypeHasValueScalar(type: any): boolean;
     csharpDeclaredStringLiteralComparison(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpDeclaredReadType(node: any): string | undefined;
+    csharpResolvedReadType(node: any): string | undefined;
     csharpDeclaredLocalType(node: any): string | undefined;
     csharpOperandsAreDeclaredReads(left: any, right: any): boolean;
     csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
@@ -606,7 +608,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegerLiteralKind(node: any): string | undefined;
     csharpNumericKindHoldsLiteral(callKind: string, literalKind: string): boolean;
     csharpExpressionTypeOf(node: any): string | undefined;
-    csharpOperandsAreNumbers(node: any): boolean;
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
@@ -687,7 +688,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printFunctionType(node: any): any;
     printReturnStatement(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
-    printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
@@ -709,7 +709,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeIndexOfCall(node: any, name?: any, parsedArg?: any): string | undefined;
     csharpIndexOfReceiverHoldsString(node: any, receiver: any, declared: any): boolean;
     csharpIndexOfReceiverIsCheckedString(receiver: any): boolean;
-    csharpIndexOfReceiverIsDeclaredList(declared: any): boolean;
     csharpReceiverDeclaredNonNullString(receiver: any): boolean;
     csharpDeclarationIsNonNullString(declaration: any): boolean;
     csharpInitializerIsUndefined(initializer: any): boolean;
@@ -734,14 +733,12 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printShiftCall(node: any, identation: any, name?: any): string;
     printReverseCall(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
-    printAssertCall(node: any, identation: any, parsedArgs: any): string;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     csharpNativeSliceCall(node: any, name: any): string;
     csharpSliceLiteralBound(node: any): any;
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceReceiverKind(expression: any): "string" | "list";
     csharpSliceStringType(type: any): boolean;
-    csharpSliceNullishType(flags: ts.TypeFlags): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
@@ -759,6 +756,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpIdentifierPrintsBool(node: any): boolean;
     csharpCalleeName_Native(node: any): string | undefined;
     csharpBoolCall_Native(node: any): boolean;
+    csharpGeneratedThisCallBoolType_Native(node: any, callee: string | undefined): string | undefined;
     csharpCallPrintsBool(node: any): boolean;
     csharpNullableBoolCondition(node: any): string | undefined;
     csharpCallPrintsNullableBool(node: any): boolean;
@@ -774,7 +772,6 @@ declare class CSharpTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
-    csModifiers: {};
     printPropertyAccessModifiers(node: any): string;
 }
 
@@ -829,6 +826,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
+    printAsyncDeclarationPair(node: any, identation: any, def: string, funcBody: string, isMethod: boolean): string;
     printFunctionDeclaration(node: any, identation: any): string;
     /**
      * Name of the sibling *body* method/function an async core hands its work to.
@@ -889,9 +887,10 @@ declare class GoTranspiler extends BaseTranspiler {
     applyAsyncSuffixToCallee(nameNode: any, goName: string): string;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
+    printGoSignature(node: any, identation: any, receiver: string): string;
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
-    printParameterType(node: any): any;
+    printParameterType(node: any): string;
     printFunctionType(node: any): any;
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
@@ -935,8 +934,13 @@ declare class GoTranspiler extends BaseTranspiler {
         container: any;
         key: any;
     };
+    goSafeAccessorLocalArgs(initializer: any, accessor: string, fallbackKind: ts.SyntaxKind, fallbackItems: string): {
+        container: any;
+        key: any;
+    };
     goSafeDictUseReadsTheMap(node: any): boolean;
     goSafeDictLocalUnboxCache: Map<any, string>;
+    goCachedLocalUnbox(cache: Map<any, string | undefined>, declaration: any, compute: () => string | undefined): string | undefined;
     goSafeDictLocalUnbox(declaration: any): string | undefined;
     goDeclaredLocalTypeIfSafe(declaration: any, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined;
     goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
@@ -950,6 +954,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
     goDeclarationOfIdentifier(node: any): any;
     goMarketComparisonElementRead(node: any): boolean;
+    goIsComparedOperand(node: any): boolean;
     goSafeListLocalArgs(initializer: any): {
         container: any;
         key: any;
@@ -982,7 +987,6 @@ declare class GoTranspiler extends BaseTranspiler {
     getGoRuneLength(text: any): number;
     getGoByteLength(text: any): number;
     printConstructorDeclaration(node: any, identation: any): string;
-    printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any, identation?: number): string;
@@ -990,6 +994,7 @@ declare class GoTranspiler extends BaseTranspiler {
     transformCallExpressionName(name: string, nameNode?: any): string;
     transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
+    goTypeOfHelpers: Map<string, string>;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     goScalarFamily(node: any): string | undefined;
@@ -1023,6 +1028,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
+    goEnclosingClass(fn: any): any;
     goEnclosingClassName(fn: any): string | undefined;
     goPrintedArgType(arg: any): string | undefined;
     goSameFileCallsOf(fn: any, name: string): Array<any>;
@@ -1100,6 +1106,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsNonNilTestOf(node: any, ident: any): boolean;
     goIsNilLiteral(node: any): boolean;
     goIsSameSymbol(a: any, b: any): boolean;
+    goNilGuardFields: {
+        [kind: number]: [string, string];
+    };
     goHasEnclosingNilGuard(ident: any): boolean;
     goConditionProvesNonNil(condition: any, ident: any): boolean;
     goUnwrapParenthesizedNode(node: any): any;
@@ -1108,7 +1117,6 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsParenthesizedExpression(printed: string): boolean;
     goSkipGoLiteral(text: string, start: number): number;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
-    printCustomDefaultValueIfNeeded(node: any): any;
     goGetArgLocalType(body: any, param: any, printedDefault: string): string | undefined;
     goGetArgBaseParamIsUnannotated(param: any): boolean;
     goGetArgNilMapUseOnlyReads(n: any): boolean;
@@ -1131,7 +1139,6 @@ declare class GoTranspiler extends BaseTranspiler {
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: BinaryExpression, identation: number): string;
-    getRandomNameSuffix(): string;
     getLineBasedSuffix(node: any): string;
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): any;
@@ -1145,7 +1152,6 @@ declare class GoTranspiler extends BaseTranspiler {
      */
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
-    printAsExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
     isArraySliceTypes: string[];
@@ -1171,7 +1177,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goNativeIndexOf(node: any, name: any, parsedArg: any): string | undefined;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean;
-    goNativeStringCall(nativeCall: string): string | undefined;
+    goNativeStringCallOr(node: any, texts: string[], expected: string[], nativeCall: string, helperCall: string): string;
     goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -1274,7 +1280,7 @@ declare class GoTranspiler extends BaseTranspiler {
 
 declare class JavaTranspiler extends BaseTranspiler {
     javaExpressionTypeResolver?: (node: any) => string | undefined;
-    countRequiredParameters(declaration: any): number;
+    countRequiredParameters(declaration: any): any;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
     javaSuperCoreCallArguments(args: any, node: any, identation: any): string | undefined;
@@ -1290,7 +1296,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
-    javaBooleanOperators: ts.SyntaxKind[];
+    javaBooleanOperators: number[];
     usageToFinalName: WeakMap<ts.Node, string>;
     finalVarScopeStack: Array<Set<string>>;
     finalVarMutations: Array<{
@@ -1358,7 +1364,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
     isJavaMapType(type: any): boolean;
     isJavaStringType(type: any): any;
-    isJavaNullableMapType(type: any): boolean;
+    isJavaNullableMapType(type: any): any;
     javaRepeatableOperand(node: any): any;
     javaDeclaredTypeOf(expression: any): string | undefined;
     javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
@@ -1395,6 +1401,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    javaConcreteStructureType(type: any): boolean;
     isJavaMapStructureType(type: any): boolean;
     isJavaListStructureType(type: any): boolean;
     tupleRequiredElementCount(type: any): number;
@@ -1409,7 +1416,6 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredMapElementRead(node: any): string;
     javaPrimitiveCounterIndex(node: any): boolean;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
-    javaFieldMapRead(node: any): string | undefined;
     javaFieldMapReadIfAllowed(node: any): string | undefined;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
@@ -1432,6 +1438,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaBaseTimeLongCall(node: any): boolean;
     javaBaseIntCall(node: any): boolean;
+    javaThisCallName(node: any): any;
     javaIntForCounter(node: any): boolean;
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
@@ -1483,7 +1490,6 @@ declare class JavaTranspiler extends BaseTranspiler {
     recordFinalVarMutation(node: any): void;
     restoreFinalVarMutations(): void;
     printNode(node: any, identation?: number): string;
-    createNewNodeForFinalVar(originalName: string): ts.Identifier;
     getVarListFromObjectLiteralAndUpdateInPlace(node: any): Array<{
         orig: string;
         final: string;
@@ -1503,12 +1509,14 @@ declare class JavaTranspiler extends BaseTranspiler {
     printParameterType(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printCoreMethodParameters(node: any): any;
+    javaAsyncSignatureParameter(param: any, isAsyncMethod: any, printedParam: any): any;
     printFrontForwardedArguments(node: any): string;
     printFrontMethodDeclaration(node: any, identation: any): string;
     printMethodParameters(node: any): any;
     printArrayLiteralExpression(node: any): string;
     printFinalOutsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printInsideMethodVariableWrappersIfAny(node: any, identation: any): string;
+    javaAsyncParamWrapperLines(node: any, identation: any, printLine: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
     printArrayIsArrayCall(node: any, _identation: any, parsedArg?: any): string;
@@ -1516,8 +1524,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaPrimaryIsArrayOperand(node: any): boolean;
     javaOperandType(operand: any): ts.Type;
     javaArrayLiteralDropsNothing(node: any, depth?: number): boolean;
-    javaScalarType(type: any, depth?: number): boolean;
-    javaNonArrayType(type: any, depth?: number): boolean;
+    javaScalarType(type: any): boolean;
+    javaNonArrayType(type: any): boolean;
+    javaTypeFlagsOnly(type: any, mask: number, depth?: number): boolean;
     printObjectKeysCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeObjectKeysCall(node: any): string;
     printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
@@ -1581,6 +1590,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaBooleanBaseField(node: any): string | undefined;
     javaBooleanBoxIdentifier(node: any, seen: Set<any>): string | undefined;
     javaBooleanWritesAreBoxed(symbol: any, decl: any, node: any, seen: Set<any>): boolean;
+    javaWritesAreBoxed(symbol: any, decl: any, next: Set<any>, accepts: (value: any) => boolean, tuples: boolean): boolean;
     javaDeclaredBooleanKind(node: any): 'boolean' | 'Boolean' | undefined;
     javaNullableBooleanDeclaration(declaration: any): boolean;
     javaPrintsBooleanBoxValue(node: any, seen: Set<any>): boolean;
@@ -1662,11 +1672,10 @@ declare class RustTranspiler extends BaseTranspiler {
     rustProHandlerShadowParam: ts.ParameterDeclaration | undefined;
     constructor(config?: {});
     initConfig(): void;
-    capitalize(str: string): string;
     quotedStringLiteral(text: string): string;
     printStringLiteral(node: any): any;
     printNumericLiteral(node: any): string;
-    printBooleanLiteral(node: any): "Value::Bool(true)" | "Value::Bool(false)";
+    printBooleanLiteral(node: any): string;
     printNullKeyword(node: any, identation: any): string;
     private static readonly BOOL_PRODUCING_OPERATORS;
     private static readonly BOOL_PRODUCING_CALLS;
@@ -1691,6 +1700,8 @@ declare class RustTranspiler extends BaseTranspiler {
      *  ccxt post-passes, which key on the leading helper token the operand would
      *  no longer provide. */
     isBareBoolEmissionSafe(node: any): boolean;
+    /** Outermost ancestor reached through parens, `!` and `&&`/`||`. */
+    rustClimbLogicalWrappers(node: any): any;
     rustConditionBoolSlot(node: any): boolean;
     /** Native truthiness text of the operand, or undefined to keep `is_true`. */
     printNativeTruthiness(node: any): string | undefined;
@@ -1698,7 +1709,6 @@ declare class RustTranspiler extends BaseTranspiler {
     printsValueExpression(node: any): boolean;
     callExpressionName(node: any): string;
     textCoercesToNumber(text: string): boolean;
-    stringLiteralCoercesToNumber(node: any): boolean;
     numericLiteralF64Text(node: any): string;
     rustReadPrintsValue(node: any): boolean;
     rustBooleanComparableType(type: any): boolean;
@@ -1742,6 +1752,8 @@ declare class RustTranspiler extends BaseTranspiler {
     /** A literal initializer must carry no runtime tag key; a call initializer
      *  is the axiom the declared-Dict table itself rests on. */
     rustDeclaredInitIsTagFree(declaration: ts.VariableDeclaration): boolean;
+    /** Skip `( … )`, `x!` and `x as T` wrappers. */
+    rustStripWrappers(node: any): any;
     /** The local's single declaration is initialised from a call that reads
      *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
      *  tags with a backref so writes reach the shared store, not the COW copy. */
@@ -1781,6 +1793,7 @@ declare class RustTranspiler extends BaseTranspiler {
     rustNumericOperandKind(node: any): string | undefined;
     orderedComparisonOperand(node: any): any;
     printNativeOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    rustTypeFlagsAll(type: any, flags: Set<number>): boolean;
     isNumberLikeType(type: any): boolean;
     isStringLikeType(type: any): boolean;
     private static readonly RUST_CONCAT_SAFE_FLAGS;
@@ -1790,6 +1803,7 @@ declare class RustTranspiler extends BaseTranspiler {
     printNativeArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
     printNativeStringConcat(leftText: string, rightText: string): string;
     printNativeNumeric(op: any, leftText: string, rightText: string): string;
+    private static readonly RUST_TYPEOF_HELPERS;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
     printDateNowCall(node: any, identation: any): string;
@@ -1799,6 +1813,7 @@ declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BOOL_RESULT_HELPERS;
     private static readonly RUST_BOOL_RESULT_CALLEES;
     rustCallPrintsBool(node: any): boolean;
+    private rustSkipStringLiteral;
     peelValueBox(printedValue: string, prefix: string): string | undefined;
     peelValueBoolBox(printedValue: string): string | undefined;
     peelValueStrBox(printedValue: string): string | undefined;
@@ -1810,6 +1825,7 @@ declare class RustTranspiler extends BaseTranspiler {
     rustEnclosingFunction(node: any): any;
     rustBindsName(node: any, name: string): boolean;
     rustIdentifierUseIsCondition(node: any): boolean;
+    private rustLocalUsesAll;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
     private static readonly RUST_STRING_LOCAL_HELPERS;
     private rustStringLocalDecisions;
@@ -1993,6 +2009,8 @@ declare class RustTranspiler extends BaseTranspiler {
      *  Any other shape keeps the helper — the printed local could be a native
      *  `i64`/`f64`, which the `Value` match would not compile against. */
     isRustValueIndexKey(node: ts.Node): boolean;
+    /** Strips `( )`, `as T` and `!` wrappers. */
+    rustSkipWrappers(node: any): any;
     /** The parameter declaration behind a receiver when its *annotation* proves
      *  a plain dict; undefined otherwise (no proof → keep the helper). */
     rustProvenDictParameter(node: ts.Node): ts.ParameterDeclaration | undefined;
@@ -2054,6 +2072,8 @@ declare class RustTranspiler extends BaseTranspiler {
     printShadowContainerRead(shadow: RustParamShadow, keyNode: ts.Node): string | undefined;
     /** `'k' in x` on a shadowed dict parameter. */
     printShadowInOperator(shadow: RustParamShadow, keyNode: ts.Node): string | undefined;
+    /** A shadow dict key: an inlinable literal, or a proven-string plain place. */
+    private rustShadowMapKey;
     /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
     printShadowLength(shadow: RustParamShadow): string | undefined;
     /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
@@ -2139,6 +2159,8 @@ declare class RustTranspiler extends BaseTranspiler {
     printForStatement(node: any, identation: any): string;
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
+    isEqualityOp(op: any): boolean;
+    isLogicalOp(op: any): boolean;
     printCondition(node: any, identation: any): any;
     /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
     printNativeParenthesizedCondition(node: any): string | undefined;
