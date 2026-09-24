@@ -14466,6 +14466,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
     super(config);
+    this._baseExchangeMethodsByName = /* @__PURE__ */ new WeakMap();
     this.varListFromObjectLiterals = {};
     // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
     // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
@@ -14638,11 +14639,39 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let method;
     try {
-      method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration);
+      method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration) ?? this.javaAnyReceiverBaseMethod(callee);
     } catch (e) {
       return void 0;
     }
     return this.javaFullArityArguments(method, args, identation);
+  }
+  // an `any` receiver (the tests' `exchange: any`) compiles against the Java Exchange class:
+  // bind the base Exchange method of that name when it is implemented exactly once
+  javaAnyReceiverBaseMethod(callee) {
+    const type = this.getChecker().getTypeAtLocation(callee.expression);
+    if ((type.flags & ts6.TypeFlags.Any) === 0) {
+      return void 0;
+    }
+    const methods = this.baseExchangeMethodsByName().get(callee.name?.escapedText);
+    return methods?.length === 1 ? methods[0] : void 0;
+  }
+  baseExchangeMethodsByName() {
+    const program = this.getProgram();
+    const cached = this._baseExchangeMethodsByName.get(program);
+    if (cached !== void 0) {
+      return cached;
+    }
+    const names = /* @__PURE__ */ new Map();
+    const file = program.getSourceFiles().find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
+    const exchange = file?.statements.find((s) => ts6.isClassDeclaration(s) && s.name?.text === "Exchange");
+    for (const member of exchange?.members ?? []) {
+      if (ts6.isMethodDeclaration(member) && member.body !== void 0 && ts6.isIdentifier(member.name)) {
+        const key = member.name.text;
+        names.set(key, (names.get(key) ?? []).concat([member]));
+      }
+    }
+    this._baseExchangeMethodsByName.set(program, names);
+    return names;
   }
   javaFullArityArguments(method, args, identation) {
     if (!this.javaIsPrintedMethod(method) || !this.javaHasOptionalParameter(method)) {

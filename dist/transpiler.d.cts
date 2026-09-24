@@ -1281,6 +1281,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaIsPrintedMethod(method: any): boolean;
     javaHasOptionalParameter(method: any): boolean;
     javaFullArityCallArguments(args: any, node: any, identation: any): string | undefined;
+    javaAnyReceiverBaseMethod(callee: any): any;
+    private _baseExchangeMethodsByName;
+    baseExchangeMethodsByName(): Map<string, any[]>;
     javaFullArityArguments(method: any, args: any, identation: any): string | undefined;
     javaIsUndefinedLiteral(node: any): boolean;
     javaScheduledCallArguments(args: any, node: any, identation: any): string | undefined;

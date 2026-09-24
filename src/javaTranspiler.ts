@@ -494,7 +494,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName)) {
             const delimiter = file.text.indexOf(JAVA_TRANSPILE_DELIMITER);
             return (delimiter >= 0 && method.pos > delimiter)
-                || JAVA_HANDWRITTEN_FULL_ARITY.has(method.name?.escapedText as string);
+                || JAVA_HANDWRITTEN_FULL_ARITY.has((method.name as any)?.escapedText);
         }
         return JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
     }
@@ -513,11 +513,44 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         let method;
         try {
-            method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration);
+            method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration)
+                ?? this.javaAnyReceiverBaseMethod(callee);
         } catch (e) {
             return undefined;
         }
         return this.javaFullArityArguments(method, args, identation);
+    }
+
+    // an `any` receiver (the tests' `exchange: any`) compiles against the Java Exchange class:
+    // bind the base Exchange method of that name when it is implemented exactly once
+    javaAnyReceiverBaseMethod(callee) {
+        const type = this.getChecker().getTypeAtLocation(callee.expression);
+        if ((type.flags & ts.TypeFlags.Any) === 0) {
+            return undefined;
+        }
+        const methods = this.baseExchangeMethodsByName().get(callee.name?.escapedText as string);
+        return methods?.length === 1 ? methods[0] : undefined;
+    }
+
+    private _baseExchangeMethodsByName = new WeakMap<ts.Program, Map<string, any[]>>();
+    baseExchangeMethodsByName(): Map<string, any[]> {
+        const program = this.getProgram();
+        const cached = this._baseExchangeMethodsByName.get(program);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const names = new Map<string, any[]>();
+        const file = program.getSourceFiles()
+            .find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
+        const exchange = file?.statements.find((s) => ts.isClassDeclaration(s) && s.name?.text === 'Exchange') as any;
+        for (const member of exchange?.members ?? []) {
+            if (ts.isMethodDeclaration(member) && member.body !== undefined && ts.isIdentifier(member.name)) {
+                const key = member.name.text;
+                names.set(key, (names.get(key) ?? []).concat([member]));
+            }
+        }
+        this._baseExchangeMethodsByName.set(program, names);
+        return names;
     }
 
     javaFullArityArguments(method, args, identation): string | undefined {
