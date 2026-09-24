@@ -11850,6 +11850,10 @@ ${this.getIden(level)}}()`;
     if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
+    const numericKind = !lPtr && !rPtr ? this.goNativeNumericEqualityKind(left, leftText, right, rightText) : void 0;
+    if (numericKind !== void 0) {
+      return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
     if (!lPtr && !rPtr) {
       if (this.goIsBareStringOperand(left) && this.goIsStringLiteralNode(right)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
@@ -11916,6 +11920,19 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     return void 0;
+  }
+  // the kind a native `==` compares two numeric operands in; undefined keeps IsEqual. Two
+  // constants are left to the helper (nothing to type), as is any mix Go would refuse.
+  goNativeNumericEqualityKind(left, leftText, right, rightText) {
+    if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+      return void 0;
+    }
+    const leftKind = this.goOperandNumericKind(left, leftText);
+    const rightKind = this.goOperandNumericKind(right, rightText);
+    if (leftKind === void 0 || rightKind === void 0) {
+      return void 0;
+    }
+    return this.goComparisonKind(left, leftKind, right, rightKind);
   }
   // the Go numeric kind an operand's static type is, or undefined when it stays
   // `any` (unknown helper result, union, pointer box): only a concrete kind can

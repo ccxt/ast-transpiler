@@ -5281,6 +5281,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
+        // both operands print as a concrete Go numeric kind (a declared int/int64/float64, or a
+        // constant that fits the other side): IsEqual converts to that same kind, never sees nil
+        const numericKind = (!lPtr && !rPtr) ? this.goNativeNumericEqualityKind(left, leftText, right, rightText) : undefined;
+        if (numericKind !== undefined) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
         // the declared-local table names `string` for this identifier (or the signature printer emits the
         // parameter as `string`): a `var x string` cannot hold a pointer or nil, so a string-literal
         // comparison equals the helper. A local ever written another type is reported `any` and boxed.
@@ -5375,6 +5381,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         return undefined;
+    }
+
+    // the kind a native `==` compares two numeric operands in; undefined keeps IsEqual. Two
+    // constants are left to the helper (nothing to type), as is any mix Go would refuse.
+    goNativeNumericEqualityKind(left, leftText: string, right, rightText: string): string | undefined {
+        if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+            return undefined;
+        }
+        const leftKind = this.goOperandNumericKind(left, leftText);
+        const rightKind = this.goOperandNumericKind(right, rightText);
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        return this.goComparisonKind(left, leftKind, right, rightKind);
     }
 
     // the Go numeric kind an operand's static type is, or undefined when it stays
