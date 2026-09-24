@@ -26,7 +26,7 @@ var require_dirname = __commonJS({
 init_esm_shims();
 var import_dirname = __toESM(require_dirname(), 1);
 import { ScriptTarget } from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import { API as API2 } from "typescript/unstable/sync";
 
 // src/pythonTranspiler.ts
 init_esm_shims();
@@ -14200,7 +14200,7 @@ init_esm_shims();
 import { NodeFlags, SyntaxKind as SyntaxKind6 } from "typescript/unstable/ast";
 import { isArrayLiteralExpression as isArrayLiteralExpression3, isArrowFunction as isArrowFunction4, isAsExpression as isAsExpression2, isBinaryExpression as isBinaryExpression4, isBlock as isBlock3, isBooleanLiteral as isBooleanLiteral4, isCallExpression as isCallExpression5, isClassDeclaration as isClassDeclaration3, isElementAccessExpression as isElementAccessExpression3, isExpressionStatement as isExpressionStatement3, isForInStatement, isForOfStatement, isFunctionDeclaration as isFunctionDeclaration4, isFunctionExpression as isFunctionExpression5, isIdentifier as isIdentifier2, isIfStatement as isIfStatement3, isMethodDeclaration as isMethodDeclaration4, isNonNullExpression, isNumericLiteral as isNumericLiteral3, isObjectLiteralExpression as isObjectLiteralExpression3, isParameterDeclaration as isParameterDeclaration2, isParenthesizedExpression as isParenthesizedExpression2, isPostfixUnaryExpression as isPostfixUnaryExpression2, isPrefixUnaryExpression as isPrefixUnaryExpression2, isPropertyAccessExpression as isPropertyAccessExpression2, isPropertyAssignment, isReturnStatement as isReturnStatement3, isSourceFile as isSourceFile4, isStringLiteral as isStringLiteral2, isStringLiteralLikeNode as isStringLiteralLikeNode3, isThrowStatement as isThrowStatement3, isTypeAssertion as isTypeAssertion2, isTypeOfExpression, isTypeReferenceNode, isVariableDeclaration as isVariableDeclaration2, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { createIdentifier } from "typescript/unstable/ast/factory";
-import { ElementFlags, IndexKind as IndexKind3, SymbolFlags as SymbolFlags2, TypeFlags as TypeFlags5 } from "typescript/unstable/sync";
+import { API, ElementFlags, IndexKind as IndexKind3, SymbolFlags as SymbolFlags2, TypeFlags as TypeFlags5 } from "typescript/unstable/sync";
 var parserConfig5 = {
   EXTENDS_TOKEN: "extends",
   PROMISE_TYPE_KEYWORD: "java.util.concurrent.CompletableFuture",
@@ -14466,7 +14466,7 @@ var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
   "handleParamBool2"
 ]);
 var JAVA_MEMO_UNDEFINED = Symbol("javaMemoUndefined");
-var JAVA_MEMOIZED_METHODS = ["getResolvedSignature", "getSignatureFromDeclaration", "isArrayType", "isTupleType", "getAliasedSymbol", "getTypeArguments", "getDeclaredTypeOfSymbol", "getReturnTypeOfSignature", "getSymbolOfType", "getTypeOfSymbolAtLocation", "getSignaturesOfType", "typeToString", "getTypesOfType"];
+var JAVA_MEMOIZED_METHODS = ["getSignatureFromDeclaration", "isArrayType", "isTupleType", "getAliasedSymbol", "getTypeArguments", "getDeclaredTypeOfSymbol", "getReturnTypeOfSignature", "getSymbolOfType", "getTypeOfSymbolAtLocation", "getSignaturesOfType", "typeToString", "getTypesOfType"];
 var JAVA_TYPE_PREFETCH_KINDS = /* @__PURE__ */ new Set([SyntaxKind6.Identifier, SyntaxKind6.BinaryExpression, SyntaxKind6.Parameter, SyntaxKind6.VariableDeclaration, SyntaxKind6.StringLiteral, SyntaxKind6.MethodDeclaration, SyntaxKind6.PropertyAccessExpression, SyntaxKind6.ParenthesizedExpression, SyntaxKind6.ElementAccessExpression]);
 var JAVA_SYMBOL_PREFETCH_KINDS = /* @__PURE__ */ new Set([SyntaxKind6.Identifier]);
 function prefetchByFile(checker, name, kinds) {
@@ -14506,6 +14506,44 @@ function prefetchByFile(checker, name, kinds) {
     return result;
   } });
 }
+function prefetchResolvedSignatures(checker) {
+  const original = checker.getResolvedSignature;
+  const client = checker.client;
+  if (client === void 0) {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const done = /* @__PURE__ */ new WeakSet();
+  Object.defineProperty(checker, "getResolvedSignature", { configurable: true, value: (node) => {
+    if (cache.has(node)) {
+      return cache.get(node);
+    }
+    const sf = node?.getSourceFile?.();
+    if (sf !== void 0 && !done.has(sf)) {
+      done.add(sf);
+      const calls = [];
+      const visit = (n) => {
+        if (n.kind === SyntaxKind6.CallExpression) {
+          calls.push(n);
+        }
+        n.forEachChild(visit);
+      };
+      sf.forEachChild(visit);
+      if (calls.length > 0) {
+        const results = API.prototype.batch.call({ client }, ...calls.map((c) => original.gen(c)));
+        for (let i = 0; i < calls.length; i++) {
+          cache.set(calls[i], results[i]);
+        }
+      }
+      if (cache.has(node)) {
+        return cache.get(node);
+      }
+    }
+    const result = original(node);
+    cache.set(node, result);
+    return result;
+  } });
+}
 function memoizeJavaCheckerCalls(checker) {
   if (checker.__javaMemoized) {
     return checker;
@@ -14513,6 +14551,7 @@ function memoizeJavaCheckerCalls(checker) {
   Object.defineProperty(checker, "__javaMemoized", { value: true });
   prefetchByFile(checker, "getTypeAtLocation", JAVA_TYPE_PREFETCH_KINDS);
   prefetchByFile(checker, "getSymbolAtLocation", JAVA_SYMBOL_PREFETCH_KINDS);
+  prefetchResolvedSignatures(checker);
   for (const name of JAVA_MEMOIZED_METHODS) {
     const original = checker[name];
     if (typeof original !== "function") {
@@ -25706,7 +25745,7 @@ function memoizeCheckerCalls(checker) {
 }
 var processApi;
 function getApi(cache) {
-  cache.api ??= processApi ??= new API({ cwd: process.cwd() });
+  cache.api ??= processApi ??= new API2({ cwd: process.cwd() });
   return cache.api;
 }
 function createSnapshotProgram(cache, rootFiles, files) {

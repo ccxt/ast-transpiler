@@ -2,7 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import { NodeFlags, SyntaxKind, type Expression, type Identifier, type Node } from "typescript/unstable/ast";
 import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration, isElementAccessExpression, isExpressionStatement, isForInStatement, isForOfStatement, isFunctionDeclaration, isFunctionExpression, isIdentifier, isIfStatement, isMethodDeclaration, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyAssignment, isReturnStatement, isSourceFile, isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isTypeOfExpression, isTypeReferenceNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { createIdentifier } from "typescript/unstable/ast/factory";
-import { ElementFlags, IndexKind, SymbolFlags, TypeFlags, type Checker } from "typescript/unstable/sync";
+import { API, ElementFlags, IndexKind, SymbolFlags, TypeFlags, type Checker } from "typescript/unstable/sync";
 import { getCombinedNodeFlags, isFunctionLike } from "./tsUtils.js";
 
 const parserConfig = {
@@ -377,7 +377,7 @@ const JAVA_BOOLEAN_BOX_TUPLE_METHODS = new Set<string>([
 // the Java printer and its build hooks re-ask the same checker questions about one node,
 // type, symbol or signature; answers are fixed per snapshot, so each is one round trip
 const JAVA_MEMO_UNDEFINED = Symbol("javaMemoUndefined");
-const JAVA_MEMOIZED_METHODS = ["getResolvedSignature", "getSignatureFromDeclaration", "isArrayType", "isTupleType", "getAliasedSymbol", "getTypeArguments", "getDeclaredTypeOfSymbol", "getReturnTypeOfSignature", "getSymbolOfType", "getTypeOfSymbolAtLocation", "getSignaturesOfType", "typeToString", "getTypesOfType"];
+const JAVA_MEMOIZED_METHODS = ["getSignatureFromDeclaration", "isArrayType", "isTupleType", "getAliasedSymbol", "getTypeArguments", "getDeclaredTypeOfSymbol", "getReturnTypeOfSignature", "getSymbolOfType", "getTypeOfSymbolAtLocation", "getSignaturesOfType", "typeToString", "getTypesOfType"];
 const JAVA_TYPE_PREFETCH_KINDS = new Set<number>([SyntaxKind.Identifier, SyntaxKind.BinaryExpression, SyntaxKind.Parameter, SyntaxKind.VariableDeclaration, SyntaxKind.StringLiteral, SyntaxKind.MethodDeclaration, SyntaxKind.PropertyAccessExpression, SyntaxKind.ParenthesizedExpression, SyntaxKind.ElementAccessExpression]);
 const JAVA_SYMBOL_PREFETCH_KINDS = new Set<number>([SyntaxKind.Identifier]);
 // the first lookup in a source file answers every node of the hot kinds in that file in one
@@ -420,6 +420,47 @@ function prefetchByFile(checker: Checker, name: "getTypeAtLocation" | "getSymbol
     } });
 }
 
+// getResolvedSignature has no array form: the first lookup in a file pipelines every call
+// expression of that file through one batched request (API#batch over the checker's client)
+function prefetchResolvedSignatures(checker: Checker): void {
+    const original = checker.getResolvedSignature;
+    const client = (checker as any).client;
+    if (client === undefined) {
+        return;
+    }
+    const cache = new WeakMap<Node, unknown>();
+    const done = new WeakSet<object>();
+    Object.defineProperty(checker, "getResolvedSignature", { configurable: true, value: (node: any) => {
+        if (cache.has(node)) {
+            return cache.get(node);
+        }
+        const sf = node?.getSourceFile?.();
+        if (sf !== undefined && !done.has(sf)) {
+            done.add(sf);
+            const calls: Node[] = [];
+            const visit = (n: Node) => {
+                if (n.kind === SyntaxKind.CallExpression) {
+                    calls.push(n);
+                }
+                n.forEachChild(visit);
+            };
+            sf.forEachChild(visit);
+            if (calls.length > 0) {
+                const results = API.prototype.batch.call({ client }, ...calls.map((c) => original.gen(c))) as unknown[];
+                for (let i = 0; i < calls.length; i++) {
+                    cache.set(calls[i], results[i]);
+                }
+            }
+            if (cache.has(node)) {
+                return cache.get(node);
+            }
+        }
+        const result = original(node);
+        cache.set(node, result);
+        return result;
+    } });
+}
+
 function memoizeJavaCheckerCalls(checker: Checker): Checker {
     if ((checker as any).__javaMemoized) {
         return checker;
@@ -427,6 +468,7 @@ function memoizeJavaCheckerCalls(checker: Checker): Checker {
     Object.defineProperty(checker, "__javaMemoized", { value: true });
     prefetchByFile(checker, "getTypeAtLocation", JAVA_TYPE_PREFETCH_KINDS);
     prefetchByFile(checker, "getSymbolAtLocation", JAVA_SYMBOL_PREFETCH_KINDS);
+    prefetchResolvedSignatures(checker);
     for (const name of JAVA_MEMOIZED_METHODS) {
         const original = (checker as any)[name];
         if (typeof original !== "function") {
