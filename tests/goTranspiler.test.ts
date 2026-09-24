@@ -4919,7 +4919,7 @@ describe('go ToString -> the receiver when it is a declared string', () => {
         expect(output).toContain('var n int = len(keys)');
         expect(output).toContain('return ToString(n)');
     });
-    test('an int64-typed local keeps the helper', () => {
+    test('an int64-typed local prints strconv.FormatInt', () => {
         const ts =
         "class Test {\n" +
         "    f (a: any) {\n" +
@@ -4929,7 +4929,8 @@ describe('go ToString -> the receiver when it is a declared string', () => {
         "}";
         const output = transpiler.transpileGo(ts).content;
         expect(output).toContain('var n int64 = ParseInt(a, 10)');
-        expect(output).toContain('return ToString(n)');
+        expect(output).toContain('import "strconv"');
+        expect(output).toContain('return strconv.FormatInt(n, 10)');
     });
     test('a float64-typed local keeps the helper', () => {
         const ts =
@@ -5160,6 +5161,37 @@ describe('go native string operations (strings.*)', () => {
         const output = transpiler.transpileGo("function f () { return 1; }\n").content;
         expect(output).not.toContain('import "strings"');
         expect(nativeCalls(output).length).toBe(0);
+    });
+    test('a non-nil *string operand is dereferenced, a nilable one keeps the helper', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class Base { safeString (a, b, c?): Str { return undefined; } }\n" +
+        "class Test extends Base {\n" +
+        "    main (d) {\n" +
+        "        const a = this.safeString (d, 'a');\n" +
+        "        const b = this.safeString (d, 'b', '');\n" +
+        "        const p1 = a.split ('-');\n" +
+        "        const p2 = b.split ('-');\n" +
+        "        const u = b.toUpperCase ();\n" +
+        "        const s = b.toString ();\n" +
+        "        const r = b.replace ('a', 'b');\n" +
+        "        if (a !== undefined) { const l = a.toLowerCase (); return [ l ]; }\n" +
+        "        if (b.startsWith ('x') || a.endsWith ('y')) { return p1; }\n" +
+        "        return [ p1, p2, u, s, r ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        // `a` can be nil (the helper answers nil / "" / false there): helper kept
+        expect(output).toContain('var p1 []string = Split(a, "-")');
+        expect(output).toContain('EndsWith(a, "y")');
+        // a literal default makes SafeString's nil return unreachable
+        expect(output).toContain('var p2 []string = strings.Split(*b, "-")');
+        expect(output).toContain('var u string = strings.ToUpper(*b)');
+        expect(output).toContain('var s string = *b');
+        expect(output).toContain('var r string = strings.Replace(*b, "a", "b", 1)');
+        expect(output).toContain('strings.HasPrefix(*b, "x")');
+        // the checker narrowed `a` inside the guard
+        expect(output).toContain('var l string = strings.ToLower(*a)');
     });
 });
 

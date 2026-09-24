@@ -144,6 +144,7 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'strings.ReplaceAll': 'string',
     'strings.HasPrefix': 'bool',
     'strings.HasSuffix': 'bool',
+    'strconv.FormatInt': 'string',
     'IsInstance': 'bool',
     'IsInteger': 'bool',
     'this.InArray': 'bool',
@@ -1292,7 +1293,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((property?.kind === ts.SyntaxKind.PropertyAccessExpression)
                 && (property.name?.escapedText === 'toString')
                 && (initializer.arguments?.length === 0)
-                && (this.goOperandStaticType(property.expression, printedValue) === 'string')) {
+                && ((this.goOperandStaticType(property.expression, printedValue) === 'string')
+                    || this.goDerefableStringOperand(property.expression))) {
                 return 'string';
             }
             break;
@@ -6468,31 +6470,36 @@ ${this.getIden(identation)}${returnStatement}`;
         return `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
-    // A native string operation needs every operand to be a printed Go `string` — the helper takes
-    // `any` and re-derives the same string, so a proven operand cannot change the result. A regex
-    // literal is never a Go string (a pattern, not the helper's ToString value) and keeps the helper.
-    goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean {
+    // A native string operation needs every operand to be a Go `string`: a proven one prints as is,
+    // a `*string` goDerefableStringOperand proves non-nil prints as its pointee (the helper's nil
+    // branch is unreachable). A regex literal is a pattern, never a string: undefined keeps the helper.
+    goNativeStringOperandTexts(operands: any[], texts: string[], expected: string[]): string[] | undefined {
+        const result: string[] = [];
         for (let i = 0; i < expected.length; i++) {
             const operand = operands[i];
             if (operand === undefined || operand.kind === ts.SyntaxKind.RegularExpressionLiteral) {
-                return false;
+                return undefined;
             }
-            if (this.goOperandStaticType(operand, texts[i]) !== expected[i]) {
-                return false;
+            if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
+                result.push(texts[i]);
+            } else if ((expected[i] === 'string') && !texts[i].includes('\n') && this.goDerefableStringOperand(operand)) {
+                result.push('*' + texts[i].trim());
+            } else {
+                return undefined;
             }
         }
-        return true;
+        return result;
     }
 
-    // the native string call when the receiver and every argument are proven Go strings (`expected`
-    // per operand) and the file's stdlib import can be placed (see goStdlibImportIsPlaceable), else
-    // the helper call; an unprinted argument (undefined text) keeps the helper
-    goNativeStringCallOr(node, texts: string[], expected: string[], nativeCall: string, helperCall: string): string {
+    // the native string call (built from the proven operand texts, `*`-dereferenced where needed) when
+    // every operand matches `expected` and the file's stdlib import can be placed (see
+    // goStdlibImportIsPlaceable), else the helper call; an unprinted argument keeps the helper
+    goNativeStringCallOr(node, texts: string[], expected: string[], nativeCall: (ops: string[]) => string, helperCall: string): string {
         const operands = [node.expression?.expression, ...expected.slice(1).map((_, i) => node.arguments?.[i])];
-        if (!texts.slice(1).includes(undefined) && this.goNativeStringOperands(operands, texts, expected)
-            && this.goStdlibImportIsPlaceable()) {
+        const ops = texts.slice(1).includes(undefined) ? undefined : this.goNativeStringOperandTexts(operands, texts, expected);
+        if ((ops !== undefined) && this.goStdlibImportIsPlaceable()) {
             this.goFileStdlibImports.add('strings');
-            return nativeCall;
+            return nativeCall(ops);
         }
         return helperCall;
     }
@@ -6507,13 +6514,13 @@ ${this.getIden(identation)}${returnStatement}`;
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
         // `s.startsWith (p)` -> strings.HasPrefix
         return this.goNativeStringCallOr(node, [name, parsedArg], ['string', 'string'],
-            `strings.HasPrefix(${name}, ${parsedArg})`, `StartsWith(${name}, ${parsedArg})`);
+            (o) => `strings.HasPrefix(${o[0]}, ${o[1]})`, `StartsWith(${name}, ${parsedArg})`);
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
         // `s.endsWith (p)` -> strings.HasSuffix
         return this.goNativeStringCallOr(node, [name, parsedArg], ['string', 'string'],
-            `strings.HasSuffix(${name}, ${parsedArg})`, `EndsWith(${name}, ${parsedArg})`);
+            (o) => `strings.HasSuffix(${o[0]}, ${o[1]})`, `EndsWith(${name}, ${parsedArg})`);
     }
 
     printTrimCall(node, identation, name = undefined) {
@@ -6524,14 +6531,14 @@ ${this.getIden(identation)}${returnStatement}`;
         // `a.join (sep)` -> strings.Join: only a declared `[]string` receiver can skip the
         // per-element ToString the helper applies to a []any
         return this.goNativeStringCallOr(node, [name, parsedArg], ['[]string', 'string'],
-            `strings.Join(${name}, ${parsedArg})`, `Join(${name}, ${parsedArg})`);
+            (o) => `strings.Join(${o[0]}, ${o[1]})`, `Join(${name}, ${parsedArg})`);
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
         // `s.split (sep)` -> strings.Split, which keeps JS's empty trailing element
         // ("a," -> ["a", ""]) exactly like the helper's own strings.Split call
         return this.goNativeStringCallOr(node, [name, parsedArg], ['string', 'string'],
-            `strings.Split(${name}, ${parsedArg})`, `Split(${name}, ${parsedArg})`);
+            (o) => `strings.Split(${o[0]}, ${o[1]})`, `Split(${name}, ${parsedArg})`);
     }
 
     printToFixedCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -6540,7 +6547,7 @@ ${this.getIden(identation)}${returnStatement}`;
 
     // ToString is the identity on a Go string (exchange_helpers.go: derefScalar and `case string`
     // return it unchanged), so a receiver declared `string` prints as itself. An `any` box, a
-    // *string (derefScalar answers nil), an int64 or a float64 keeps the helper's runtime formatting.
+    // *string (derefScalar answers nil) or a float64 keeps the helper's runtime formatting.
     printToStringCall(node, identation, name = undefined) {
         if ((name !== undefined) && (name.indexOf('\n') < 0)) {
             const receiver = (node?.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
@@ -6548,6 +6555,15 @@ ${this.getIden(identation)}${returnStatement}`;
                 : undefined;
             if ((receiver !== undefined) && (this.goOperandStaticType(receiver, name) === 'string')) {
                 return name;
+            }
+            // a non-nil `*string`: derefScalar hands ToString the pointee, returned unchanged
+            if ((receiver !== undefined) && this.goDerefableStringOperand(receiver)) {
+                return '*' + name.trim();
+            }
+            // an int64 prints its decimal digits in both: the helper's Sprintf("%d") and FormatInt
+            if ((receiver !== undefined) && (this.goOperandStaticType(receiver, name) === 'int64') && this.goStdlibImportIsPlaceable()) {
+                this.goFileStdlibImports.add('strconv');
+                return `strconv.FormatInt(${name}, 10)`;
             }
         }
         return `ToString(${name})`;
@@ -6559,12 +6575,12 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printToUpperCaseCall(node, identation, name = undefined) {
         // `s.toUpperCase ()` -> strings.ToUpper
-        return this.goNativeStringCallOr(node, [name], ['string'], `strings.ToUpper(${name})`, `ToUpper(${name})`);
+        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.ToUpper(${o[0]})`, `ToUpper(${name})`);
     }
 
     printToLowerCaseCall(node, identation, name = undefined) {
         // `s.toLowerCase ()` -> strings.ToLower
-        return this.goNativeStringCallOr(node, [name], ['string'], `strings.ToLower(${name})`, `ToLower(${name})`);
+        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.ToLower(${o[0]})`, `ToLower(${name})`);
     }
 
     printShiftCall(node, identation, name = undefined) {
@@ -6711,13 +6727,13 @@ ${this.getIden(identation)}${returnStatement}`;
         // boxed helper (ReplaceAll for every argument) cannot express: with all three operands
         // proven strings, emit the count-1 form and the JS semantics exactly.
         return this.goNativeStringCallOr(node, [name, parsedArg, parsedArg2], ['string', 'string', 'string'],
-            `strings.Replace(${name}, ${parsedArg}, ${parsedArg2}, 1)`, `Replace(${name}, ${parsedArg}, ${parsedArg2})`);
+            (o) => `strings.Replace(${o[0]}, ${o[1]}, ${o[2]}, 1)`, `Replace(${name}, ${parsedArg}, ${parsedArg2})`);
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
         // `s.replaceAll (a, b)` replaces every occurrence, like the helper
         return this.goNativeStringCallOr(node, [name, parsedArg, parsedArg2], ['string', 'string', 'string'],
-            `strings.ReplaceAll(${name}, ${parsedArg}, ${parsedArg2})`, `Replace(${name}, ${parsedArg}, ${parsedArg2})`);
+            (o) => `strings.ReplaceAll(${o[0]}, ${o[1]}, ${o[2]})`, `Replace(${name}, ${parsedArg}, ${parsedArg2})`);
     }
 
     printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
