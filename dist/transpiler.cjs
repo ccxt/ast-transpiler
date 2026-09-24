@@ -25616,6 +25616,38 @@ function memoizeCheckerCalls(checker) {
   memoizeBinaryKindMethod(checker, "getSignaturesOfType");
   memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
   memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+  memoizePairMethod(checker, "getTypeOfSymbolAtLocation");
+}
+function memoizePairMethod(owner, name) {
+  const original = owner[name];
+  if (typeof original !== "function") {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const seed2 = (a, b, value) => {
+    let inner = cache.get(a);
+    if (inner === void 0) {
+      cache.set(a, inner = /* @__PURE__ */ new WeakMap());
+    }
+    inner.set(b, value === void 0 ? UNDEFINED_SENTINEL : value);
+  };
+  const wrapped = function(...args) {
+    const [a, b] = args;
+    if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
+      return original.apply(owner, args);
+    }
+    const cached = _optionalChain([cache, 'access', _2001 => _2001.get, 'call', _2002 => _2002(a), 'optionalAccess', _2003 => _2003.get, 'call', _2004 => _2004(b)]);
+    if (cached !== void 0) {
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
+    }
+    const result = original.call(owner, a, b);
+    seed2(a, b, result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  wrapped.original = original;
+  wrapped.seed2 = seed2;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 function memoizeUnaryMethod(owner, name) {
   const original = owner[name];
@@ -25644,7 +25676,7 @@ function memoizeUnaryMethod(owner, name) {
 }
 function memoizeBinaryKindMethod(owner, name) {
   const unary = owner[name];
-  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2001 => _2001.original]), () => ( unary));
+  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2005 => _2005.original]), () => ( unary));
   if (typeof original !== "function") {
     return;
   }
@@ -25694,17 +25726,17 @@ function prefetchChecker(checker, root, options = {}) {
   const typeNodes = [], symbolNodes = [], callNodes = [];
   const visit = (node) => {
     const kind = node.kind;
-    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _2002 => _2002.has, 'optionalCall', _2003 => _2003(node)]))
+    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _2006 => _2006.has, 'optionalCall', _2007 => _2007(node)]))
       typeNodes.push(node);
-    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _2004 => _2004.has, 'optionalCall', _2005 => _2005(node)]))
+    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _2008 => _2008.has, 'optionalCall', _2009 => _2009(node)]))
       symbolNodes.push(node);
-    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _2006 => _2006.has, 'optionalCall', _2007 => _2007(node)]))
+    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _2010 => _2010.has, 'optionalCall', _2011 => _2011(node)]))
       callNodes.push(node);
     node.forEachChild(visit);
   };
   visit(root);
   const run = (nodes, fn) => {
-    if (_optionalChain([fn, 'optionalAccess', _2008 => _2008.seed]) === void 0 || fn.original === void 0)
+    if (_optionalChain([fn, 'optionalAccess', _2012 => _2012.seed]) === void 0 || fn.original === void 0)
       return;
     for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
       const chunk = nodes.slice(i, i + PREFETCH_BATCH);
@@ -25720,7 +25752,7 @@ function prefetchChecker(checker, root, options = {}) {
   run(typeNodes, getType);
   run(symbolNodes, getSymbol);
   const api = checker.__astTranspilerApi;
-  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _2009 => _2009.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _2010 => _2010.original, 'optionalAccess', _2011 => _2011.gen]) !== void 0) {
+  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _2013 => _2013.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _2014 => _2014.original, 'optionalAccess', _2015 => _2015.gen]) !== void 0) {
     for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
       const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
       const gens = chunk.map((n) => {
@@ -25739,6 +25771,48 @@ function prefetchChecker(checker, root, options = {}) {
           getSig.seed(n, results[j]);
       });
     }
+  }
+  if (wantSignatures && api !== void 0) {
+    prefetchDeclarationSignatures(checker, api, root);
+  }
+}
+function prefetchDeclarationSignatures(checker, api, root) {
+  const getSigDecl = checker.getSignatureFromDeclaration;
+  const getTypeOfSymbolAtLocation = checker.getTypeOfSymbolAtLocation;
+  if (_optionalChain([getSigDecl, 'optionalAccess', _2016 => _2016.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _2017 => _2017.original, 'optionalAccess', _2018 => _2018.gen]) === void 0)
+    return;
+  const decls = [];
+  const visit = (node) => {
+    if (node.kind === _ast.SyntaxKind.MethodDeclaration || node.kind === _ast.SyntaxKind.FunctionDeclaration)
+      decls.push(node);
+    node.forEachChild(visit);
+  };
+  visit(root);
+  const safe = (g) => function* () {
+    try {
+      return yield* g;
+    } catch (e8) {
+      return PREFETCH_FAILED;
+    }
+  }();
+  for (let i = 0; i < decls.length; i += PREFETCH_BATCH) {
+    const chunk = decls.slice(i, i + PREFETCH_BATCH);
+    api.batch(...chunk.map((decl) => safe(function* () {
+      const sig = getSigDecl.has(decl) ? getSigDecl(decl) : yield* getSigDecl.original.gen(decl);
+      getSigDecl.seed(decl, sig);
+      if (sig !== void 0)
+        yield* sig.getReturnType.gen();
+    }())));
+    api.batch(...chunk.map((decl) => safe(function* () {
+      const type = checker.getTypeAtLocation(decl);
+      const symbol = _optionalChain([type, 'optionalAccess', _2019 => _2019.getSymbol, 'optionalAccess', _2020 => _2020.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
+      const location = _optionalChain([symbol, 'optionalAccess', _2021 => _2021.valueDeclaration, 'optionalAccess', _2022 => _2022.resolve, 'call', _2023 => _2023()]);
+      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _2024 => _2024.seed2]) === void 0)
+        return;
+      const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
+      getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
+      yield* symbolType.getCallSignatures.gen();
+    }())));
   }
 }
 var PREFETCH_FAILED = Symbol("prefetchFailed");
@@ -25825,7 +25899,7 @@ var Transpiler = class _Transpiler {
     const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path2.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _2012 => _2012.dispose, 'call', _2013 => _2013()]);
+    _optionalChain([previous, 'optionalAccess', _2025 => _2025.dispose, 'call', _2026 => _2026()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -25849,7 +25923,7 @@ var Transpiler = class _Transpiler {
   // long as the file's text on disk still equals the snapshot's. Replaces any
   // previous shared program; pass [] to drop it.
   setSharedProgram(paths) {
-    _optionalChain([this, 'access', _2014 => _2014.programCache, 'access', _2015 => _2015.shared, 'optionalAccess', _2016 => _2016.snapshot, 'access', _2017 => _2017.dispose, 'call', _2018 => _2018()]);
+    _optionalChain([this, 'access', _2027 => _2027.programCache, 'access', _2028 => _2028.shared, 'optionalAccess', _2029 => _2029.snapshot, 'access', _2030 => _2030.dispose, 'call', _2031 => _2031()]);
     this.programCache.shared = void 0;
     if (paths.length === 0) {
       return;

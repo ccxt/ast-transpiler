@@ -25617,6 +25617,38 @@ function memoizeCheckerCalls(checker) {
   memoizeBinaryKindMethod(checker, "getSignaturesOfType");
   memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
   memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+  memoizePairMethod(checker, "getTypeOfSymbolAtLocation");
+}
+function memoizePairMethod(owner, name) {
+  const original = owner[name];
+  if (typeof original !== "function") {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const seed2 = (a, b, value) => {
+    let inner = cache.get(a);
+    if (inner === void 0) {
+      cache.set(a, inner = /* @__PURE__ */ new WeakMap());
+    }
+    inner.set(b, value === void 0 ? UNDEFINED_SENTINEL : value);
+  };
+  const wrapped = function(...args) {
+    const [a, b] = args;
+    if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
+      return original.apply(owner, args);
+    }
+    const cached = cache.get(a)?.get(b);
+    if (cached !== void 0) {
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
+    }
+    const result = original.call(owner, a, b);
+    seed2(a, b, result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  wrapped.original = original;
+  wrapped.seed2 = seed2;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 function memoizeUnaryMethod(owner, name) {
   const original = owner[name];
@@ -25740,6 +25772,48 @@ function prefetchChecker(checker, root, options = {}) {
           getSig.seed(n, results[j]);
       });
     }
+  }
+  if (wantSignatures && api !== void 0) {
+    prefetchDeclarationSignatures(checker, api, root);
+  }
+}
+function prefetchDeclarationSignatures(checker, api, root) {
+  const getSigDecl = checker.getSignatureFromDeclaration;
+  const getTypeOfSymbolAtLocation = checker.getTypeOfSymbolAtLocation;
+  if (getSigDecl?.seed === void 0 || getSigDecl.original?.gen === void 0)
+    return;
+  const decls = [];
+  const visit = (node) => {
+    if (node.kind === SyntaxKind9.MethodDeclaration || node.kind === SyntaxKind9.FunctionDeclaration)
+      decls.push(node);
+    node.forEachChild(visit);
+  };
+  visit(root);
+  const safe = (g) => function* () {
+    try {
+      return yield* g;
+    } catch {
+      return PREFETCH_FAILED;
+    }
+  }();
+  for (let i = 0; i < decls.length; i += PREFETCH_BATCH) {
+    const chunk = decls.slice(i, i + PREFETCH_BATCH);
+    api.batch(...chunk.map((decl) => safe(function* () {
+      const sig = getSigDecl.has(decl) ? getSigDecl(decl) : yield* getSigDecl.original.gen(decl);
+      getSigDecl.seed(decl, sig);
+      if (sig !== void 0)
+        yield* sig.getReturnType.gen();
+    }())));
+    api.batch(...chunk.map((decl) => safe(function* () {
+      const type = checker.getTypeAtLocation(decl);
+      const symbol = type?.getSymbol?.gen !== void 0 ? yield* type.getSymbol.gen() : void 0;
+      const location = symbol?.valueDeclaration?.resolve();
+      if (location === void 0 || getTypeOfSymbolAtLocation?.seed2 === void 0)
+        return;
+      const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
+      getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
+      yield* symbolType.getCallSignatures.gen();
+    }())));
   }
 }
 var PREFETCH_FAILED = Symbol("prefetchFailed");

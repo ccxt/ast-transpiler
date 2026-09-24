@@ -88,6 +88,40 @@ function memoizeCheckerCalls(checker: Checker): void {
     memoizeBinaryKindMethod(checker, "getSignaturesOfType");
     memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
     memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+    memoizePairMethod(checker, "getTypeOfSymbolAtLocation");
+}
+
+// (object, object) pairs, e.g. getTypeOfSymbolAtLocation(symbol, node); seed2 fills it from a prefetch
+function memoizePairMethod(owner: object, name: string): void {
+    const original = owner[name];
+    if (typeof original !== "function") {
+        return;
+    }
+    const cache = new WeakMap<object, WeakMap<object, unknown>>();
+    const seed2 = (a: object, b: object, value: unknown) => {
+        let inner = cache.get(a);
+        if (inner === undefined) {
+            cache.set(a, inner = new WeakMap());
+        }
+        inner.set(b, value === undefined ? UNDEFINED_SENTINEL : value);
+    };
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const [a, b] = args;
+        if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
+            return original.apply(owner, args);
+        }
+        const cached = cache.get(a as object)?.get(b as object);
+        if (cached !== undefined) {
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
+        }
+        const result = original.call(owner, a, b);
+        seed2(a as object, b as object, result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    (wrapped as any).original = original;
+    (wrapped as any).seed2 = seed2;
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
 }
 
 // the TS7 checker exposes its methods as prototype getters: shadow them on the instance.
@@ -200,6 +234,42 @@ function prefetchChecker(checker: Checker, root: Node, options: { types?: boolea
             const results = api.batch(...gens) as unknown[];
             chunk.forEach((n, j) => { if (results[j] !== PREFETCH_FAILED) getSig.seed(n, results[j]); });
         }
+    }
+    if (wantSignatures && api !== undefined) {
+        prefetchDeclarationSignatures(checker, api, root);
+    }
+}
+
+// Warm the per-declaration chains baseTranspiler walks for every method/function
+// (getFunctionType, getReturnTypeFromMethod) in one pipelined batch per level
+function prefetchDeclarationSignatures(checker: Checker, api: API, root: Node): void {
+    const getSigDecl = checker.getSignatureFromDeclaration as any;
+    const getTypeOfSymbolAtLocation = (checker as any).getTypeOfSymbolAtLocation;
+    if (getSigDecl?.seed === undefined || getSigDecl.original?.gen === undefined) return;
+    const decls: Node[] = [];
+    const visit = (node: Node) => {
+        if (node.kind === SyntaxKind.MethodDeclaration || node.kind === SyntaxKind.FunctionDeclaration) decls.push(node);
+        node.forEachChild(visit);
+    };
+    visit(root);
+    const safe = (g: Generator<any, any, any>) => (function* () { try { return yield* g; } catch { return PREFETCH_FAILED; } })();
+    for (let i = 0; i < decls.length; i += PREFETCH_BATCH) {
+        const chunk = decls.slice(i, i + PREFETCH_BATCH);
+        api.batch(...chunk.map((decl) => safe((function* () {
+            const sig = getSigDecl.has(decl) ? getSigDecl(decl) : yield* getSigDecl.original.gen(decl);
+            getSigDecl.seed(decl, sig);
+            if (sig !== undefined) yield* sig.getReturnType.gen();
+        })())));
+        // getReturnTypeFromMethod: type -> symbol -> type of symbol at its declaration -> call signatures
+        api.batch(...chunk.map((decl) => safe((function* () {
+            const type = checker.getTypeAtLocation(decl) as any;
+            const symbol = type?.getSymbol?.gen !== undefined ? yield* type.getSymbol.gen() : undefined;
+            const location = symbol?.valueDeclaration?.resolve();
+            if (location === undefined || getTypeOfSymbolAtLocation?.seed2 === undefined) return;
+            const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
+            getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
+            yield* symbolType.getCallSignatures.gen();
+        })())));
     }
 }
 const PREFETCH_FAILED = Symbol("prefetchFailed");
