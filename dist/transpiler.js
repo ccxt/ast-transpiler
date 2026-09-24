@@ -7853,6 +7853,33 @@ var GO_GETARG_NIL_MAP_READERS = [
   "SafeBool",
   "SafeTimestamp"
 ];
+var NO_RESULT = Symbol("noResult");
+function memoizeOnChecker(checker, method) {
+  const original = checker[method];
+  const cache = /* @__PURE__ */ new WeakMap();
+  Object.defineProperty(checker, method, { value: (key) => {
+    if (key === void 0 || key === null || typeof key !== "object") {
+      return original(key);
+    }
+    const cached = cache.get(key);
+    if (cached !== void 0) {
+      return cached === NO_RESULT ? void 0 : cached;
+    }
+    const result = original(key);
+    cache.set(key, result === void 0 ? NO_RESULT : result);
+    return result;
+  } });
+}
+var GO_MEMOIZED_CHECKER_METHODS = ["getResolvedSignature", "getSignatureFromDeclaration", "getReturnTypeOfSignature"];
+function memoizeGoCheckerCalls(checker) {
+  if (!checker || checker.__goTranspilerMemoized) {
+    return;
+  }
+  checker.__goTranspilerMemoized = true;
+  for (const method of GO_MEMOIZED_CHECKER_METHODS) {
+    memoizeOnChecker(checker, method);
+  }
+}
 var GoTranspiler = class extends BaseTranspiler {
   // stdlib packages the printed source file references. A Go import must precede the first
   // declaration, so the file-level print (printSourceFileStatements) collects names here and
@@ -8001,6 +8028,11 @@ var GoTranspiler = class extends BaseTranspiler {
     this.wrapThisCalls = config["wrapThisCalls"] ?? false;
     this.wrapCallMethods = config["wrapCallMethods"] ?? [];
     this.asyncMethodSuffix = config["asyncMethodSuffix"] ?? "";
+  }
+  getChecker() {
+    const checker = super.getChecker();
+    memoizeGoCheckerCalls(checker);
+    return checker;
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {

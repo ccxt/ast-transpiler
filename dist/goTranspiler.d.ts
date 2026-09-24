@@ -1,8 +1,10 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
+import { Checker } from 'typescript/unstable/sync';
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
 declare function alignGoTrailingComments(content: string): string;
 export { alignGoTrailingComments, };
 export declare class GoTranspiler extends BaseTranspiler {
+    getChecker(): Checker;
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];

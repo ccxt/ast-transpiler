@@ -719,7 +719,43 @@ const GO_GETARG_NIL_MAP_READERS = [
     'SafeInteger', 'SafeInteger2', 'SafeNumber', 'SafeNumber2', 'SafeFloat', 'SafeBool', 'SafeTimestamp',
 ];
 
+// each TS7 checker call is a sync RPC; the Go printer re-asks the same signature
+// questions per node millions of times, so answers are cached per (checker, key)
+const NO_RESULT = Symbol("noResult");
+function memoizeOnChecker(checker: any, method: string): void {
+    const original = checker[method];
+    const cache = new WeakMap<object, any>();
+    Object.defineProperty(checker, method, { value: (key: any) => {
+        if (key === undefined || key === null || typeof key !== "object") {
+            return original(key);
+        }
+        const cached = cache.get(key);
+        if (cached !== undefined) {
+            return cached === NO_RESULT ? undefined : cached;
+        }
+        const result = original(key);
+        cache.set(key, result === undefined ? NO_RESULT : result);
+        return result;
+    } });
+}
+const GO_MEMOIZED_CHECKER_METHODS = ["getResolvedSignature", "getSignatureFromDeclaration", "getReturnTypeOfSignature"];
+function memoizeGoCheckerCalls(checker: any): void {
+    if (!checker || checker.__goTranspilerMemoized) {
+        return;
+    }
+    checker.__goTranspilerMemoized = true;
+    for (const method of GO_MEMOIZED_CHECKER_METHODS) {
+        memoizeOnChecker(checker, method);
+    }
+}
+
 export class GoTranspiler extends BaseTranspiler {
+
+    getChecker(): Checker {
+        const checker = super.getChecker();
+        memoizeGoCheckerCalls(checker);
+        return checker;
+    }
 
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
