@@ -64,36 +64,99 @@ const globalsShimPath = path.resolve(path.join(__dirname_mock, "__globals-shim.d
 // same nodes (identifiers, binary operands, conditions). Types and symbols are
 // deterministic per (checker, node), so memoize the two hot lookups on the checker
 // instance itself — the caches die with the checker when a new program is created
-const NO_SYMBOL_SENTINEL = Symbol("noSymbol");
+const UNDEFINED_SENTINEL = Symbol("undefined");
+// unary checker queries keyed by a snapshot object (node / type / symbol / signature);
+// the API returns registry-interned objects, so object identity is a stable key
+const MEMOIZED_UNARY_CHECKER_METHODS = [
+    "getTypeAtLocation", "getSymbolAtLocation", "getResolvedSignature", "getContextualType",
+    "getSignaturesOfType", "getSymbolOfType", "getReturnTypeOfSignature", "getSignatureFromDeclaration",
+    "isArrayType", "isArrayLikeType", "isTupleType", "getTypeArguments", "getTypeFromTypeNode",
+    "getDeclaredTypeOfSymbol", "getTypeOfSymbol", "getAliasedSymbol", "getBaseTypeOfLiteralType",
+    "getApparentType", "getPropertiesOfType", "getNonNullableType", "getIndexInfosOfType",
+];
 function memoizeCheckerCalls(checker: Checker): void {
     if ((checker as any).__astTranspilerMemoized) {
         return;
     }
     (checker as any).__astTranspilerMemoized = true;
+    for (const name of MEMOIZED_UNARY_CHECKER_METHODS) {
+        memoizeUnaryMethod(checker, name);
+    }
+    // typeToString(type) with no extra args is the only form worth caching
+    memoizeUnaryMethod(checker, "typeToString");
+    // (type, kind) pairs: a WeakMap per kind
+    memoizeBinaryKindMethod(checker, "getSignaturesOfType");
+    memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
+    memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+}
 
-    // the TS7 checker exposes its methods as prototype getters: shadow them on the instance
-    const typeCache = new WeakMap<Node, Type>();
-    const originalGetTypeAtLocation = checker.getTypeAtLocation;
-    Object.defineProperty(checker, "getTypeAtLocation", { value: (node: Node): Type => {
-        let type = typeCache.get(node);
-        if (type === undefined) {
-            type = originalGetTypeAtLocation(node);
-            typeCache.set(node, type);
+// the TS7 checker exposes its methods as prototype getters: shadow them on the instance.
+// Only single-object-argument calls are cached; anything else goes straight through.
+function memoizeUnaryMethod(owner: object, name: string): void {
+    const original = owner[name];
+    if (typeof original !== "function") {
+        return;
+    }
+    const cache = new WeakMap<object, unknown>();
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const key = args[0];
+        if (args.length !== 1 || key === null || typeof key !== "object" || Array.isArray(key)) {
+            return original.apply(owner, args);
         }
-        return type;
-    } });
-
-    const symbolCache = new WeakMap<Node, TsSymbol | typeof NO_SYMBOL_SENTINEL>();
-    const originalGetSymbolAtLocation = checker.getSymbolAtLocation;
-    Object.defineProperty(checker, "getSymbolAtLocation", { value: (node: Node): TsSymbol | undefined => {
-        const cached = symbolCache.get(node);
+        const cached = cache.get(key);
         if (cached !== undefined) {
-            return cached === NO_SYMBOL_SENTINEL ? undefined : cached;
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
         }
-        const symbol = originalGetSymbolAtLocation(node);
-        symbolCache.set(node, symbol === undefined ? NO_SYMBOL_SENTINEL : symbol);
-        return symbol;
-    } });
+        const result = original.call(owner, key);
+        cache.set(key, result === undefined ? UNDEFINED_SENTINEL : result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    (wrapped as any).original = original;
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+
+function memoizeBinaryKindMethod(owner: object, name: string): void {
+    const unary = owner[name];
+    const original = (unary as any)?.original ?? unary;
+    if (typeof original !== "function") {
+        return;
+    }
+    const caches = new Map<unknown, WeakMap<object, unknown>>();
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const key = args[0];
+        if (args.length === 1) {
+            return unary.call(owner, key);
+        }
+        if (args.length !== 2 || key === null || typeof key !== "object" || typeof args[1] !== "number") {
+            return original.apply(owner, args);
+        }
+        let cache = caches.get(args[1]);
+        if (cache === undefined) {
+            caches.set(args[1], cache = new WeakMap());
+        }
+        const cached = cache.get(key);
+        if (cached !== undefined) {
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
+        }
+        const result = original.call(owner, key, args[1]);
+        cache.set(key, result === undefined ? UNDEFINED_SENTINEL : result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+
+// program-wide diagnostics are identical for every file of a program: fetch them once
+type ProgramWideDiagnostics = { program: readonly { text: string }[], global: readonly { text: string }[] };
+const programDiagnosticsCache = new WeakMap<Program, ProgramWideDiagnostics>();
+function getProgramWideDiagnostics(program: Program): ProgramWideDiagnostics {
+    let diagnostics = programDiagnosticsCache.get(program);
+    if (diagnostics === undefined) {
+        diagnostics = { program: program.getProgramDiagnostics(), global: program.getGlobalDiagnostics() };
+        programDiagnosticsCache.set(program, diagnostics);
+    }
+    return diagnostics;
 }
 
 // one TS7 API server per isolate unless a cache brings its own
@@ -107,7 +170,7 @@ function getApi(cache: ITranspileProgramCache): API {
 function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[], files: Record<string, string>): [Snapshot, Program, Checker] {
     const snapshot = getApi(cache).createSnapshot({
         fileSystem: { kind: "layer", files },
-        createPrograms: [{ rootFiles, compilerOptions: fastCompilerOptions }],
+        createPrograms: [{ rootFiles: rootFiles.map((f) => path.resolve(f)), compilerOptions: fastCompilerOptions }],
     });
     const program = snapshot.operation.createdPrograms[0];
     const checker = snapshot.getProjects().find((p) => p.program === program).checker;
@@ -189,7 +252,7 @@ export default class Transpiler {
 
     // single-file snapshots are released when the next one replaces them; batches own theirs
     private setSnapshotContext(snapshot: Snapshot, program: Program, checker: Checker, fileName: string): ITranspileContext {
-        const src = program.getSourceFile(fileName);
+        const src = program.getSourceFile(fileName) ?? program.getSourceFile(path.resolve(fileName));
         const previous = this.snapshot;
         this.snapshot = snapshot;
         previous?.dispose();
@@ -206,8 +269,38 @@ export default class Transpiler {
     }
 
     createProgramByPathAndSetContext(filePath): ITranspileContext {
+        const shared = this.findSharedProgramFile(filePath);
+        if (shared !== undefined) {
+            return this.setContext(shared);
+        }
         const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
         return this.setSnapshotContext(snapshot, program, checker, filePath);
+    }
+
+    // One snapshot/program for a whole run: later ByPath transpiles of any root (or
+    // imported file) of `paths` reuse it instead of building a program per file, as
+    // long as the file's text on disk still equals the snapshot's. Replaces any
+    // previous shared program; pass [] to drop it.
+    setSharedProgram(paths: string[]): void {
+        this.programCache.shared?.snapshot.dispose();
+        this.programCache.shared = undefined;
+        if (paths.length === 0) {
+            return;
+        }
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [...paths, globalsShimPath], { [globalsShimPath]: globalsShim });
+        this.programCache.shared = { snapshot, program, checker };
+    }
+
+    private findSharedProgramFile(filePath: string): ITranspileContext | undefined {
+        const shared = this.programCache.shared;
+        if (shared === undefined) {
+            return undefined;
+        }
+        const src = shared.program.getSourceFile(path.resolve(filePath));
+        if (src === undefined || !fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") !== src.text) {
+            return undefined;
+        }
+        return { src, checker: shared.checker, program: shared.program };
     }
 
     // One program over N root files, so the bind/check work behind the diagnostics
@@ -245,9 +338,10 @@ export default class Transpiler {
 
     checkFileDiagnostics(context: ITranspileContext = this.context) {
         const fileName = context.src.fileName;
+        const programWide = getProgramWideDiagnostics(context.program);
         const diagnostics = [
-            ...context.program.getProgramDiagnostics(),
-            ...context.program.getSyntacticDiagnostics(fileName), ...context.program.getGlobalDiagnostics(),
+            ...programWide.program,
+            ...context.program.getSyntacticDiagnostics(fileName), ...programWide.global,
             ...context.program.getSemanticDiagnostics(fileName),
         ];
         if (diagnostics.length > 0) {

@@ -28,6 +28,8 @@ export default class Transpiler {
     private setSnapshotContext;
     createProgramInMemoryAndSetContext(content: any): ITranspileContext;
     createProgramByPathAndSetContext(filePath: any): ITranspileContext;
+    setSharedProgram(paths: string[]): void;
+    private findSharedProgramFile;
     createProgramBatch(paths: string[]): TranspileProgramBatch;
     setContext(context: ITranspileContext): ITranspileContext;
     /** @deprecated renamed to createProgramInMemoryAndSetContext */

@@ -7240,6 +7240,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
 
 // src/transpiler.ts
 import * as path2 from "path";
+import * as fs2 from "fs";
 
 // src/goTranspiler.ts
 init_esm_shims();
@@ -25580,33 +25581,104 @@ declare var atob: any;
 declare var btoa: any;
 `;
 var globalsShimPath = path2.resolve(path2.join(__dirname_mock, "__globals-shim.d.ts"));
-var NO_SYMBOL_SENTINEL = Symbol("noSymbol");
+var UNDEFINED_SENTINEL = Symbol("undefined");
+var MEMOIZED_UNARY_CHECKER_METHODS = [
+  "getTypeAtLocation",
+  "getSymbolAtLocation",
+  "getResolvedSignature",
+  "getContextualType",
+  "getSignaturesOfType",
+  "getSymbolOfType",
+  "getReturnTypeOfSignature",
+  "getSignatureFromDeclaration",
+  "isArrayType",
+  "isArrayLikeType",
+  "isTupleType",
+  "getTypeArguments",
+  "getTypeFromTypeNode",
+  "getDeclaredTypeOfSymbol",
+  "getTypeOfSymbol",
+  "getAliasedSymbol",
+  "getBaseTypeOfLiteralType",
+  "getApparentType",
+  "getPropertiesOfType",
+  "getNonNullableType",
+  "getIndexInfosOfType"
+];
 function memoizeCheckerCalls(checker) {
   if (checker.__astTranspilerMemoized) {
     return;
   }
   checker.__astTranspilerMemoized = true;
-  const typeCache = /* @__PURE__ */ new WeakMap();
-  const originalGetTypeAtLocation = checker.getTypeAtLocation;
-  Object.defineProperty(checker, "getTypeAtLocation", { value: (node) => {
-    let type = typeCache.get(node);
-    if (type === void 0) {
-      type = originalGetTypeAtLocation(node);
-      typeCache.set(node, type);
+  for (const name of MEMOIZED_UNARY_CHECKER_METHODS) {
+    memoizeUnaryMethod(checker, name);
+  }
+  memoizeUnaryMethod(checker, "typeToString");
+  memoizeBinaryKindMethod(checker, "getSignaturesOfType");
+  memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
+  memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+}
+function memoizeUnaryMethod(owner, name) {
+  const original = owner[name];
+  if (typeof original !== "function") {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const wrapped = function(...args) {
+    const key = args[0];
+    if (args.length !== 1 || key === null || typeof key !== "object" || Array.isArray(key)) {
+      return original.apply(owner, args);
     }
-    return type;
-  } });
-  const symbolCache = /* @__PURE__ */ new WeakMap();
-  const originalGetSymbolAtLocation = checker.getSymbolAtLocation;
-  Object.defineProperty(checker, "getSymbolAtLocation", { value: (node) => {
-    const cached = symbolCache.get(node);
+    const cached = cache.get(key);
     if (cached !== void 0) {
-      return cached === NO_SYMBOL_SENTINEL ? void 0 : cached;
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
     }
-    const symbol = originalGetSymbolAtLocation(node);
-    symbolCache.set(node, symbol === void 0 ? NO_SYMBOL_SENTINEL : symbol);
-    return symbol;
-  } });
+    const result = original.call(owner, key);
+    cache.set(key, result === void 0 ? UNDEFINED_SENTINEL : result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  wrapped.original = original;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+function memoizeBinaryKindMethod(owner, name) {
+  const unary = owner[name];
+  const original = unary?.original ?? unary;
+  if (typeof original !== "function") {
+    return;
+  }
+  const caches = /* @__PURE__ */ new Map();
+  const wrapped = function(...args) {
+    const key = args[0];
+    if (args.length === 1) {
+      return unary.call(owner, key);
+    }
+    if (args.length !== 2 || key === null || typeof key !== "object" || typeof args[1] !== "number") {
+      return original.apply(owner, args);
+    }
+    let cache = caches.get(args[1]);
+    if (cache === void 0) {
+      caches.set(args[1], cache = /* @__PURE__ */ new WeakMap());
+    }
+    const cached = cache.get(key);
+    if (cached !== void 0) {
+      return cached === UNDEFINED_SENTINEL ? void 0 : cached;
+    }
+    const result = original.call(owner, key, args[1]);
+    cache.set(key, result === void 0 ? UNDEFINED_SENTINEL : result);
+    return result;
+  };
+  wrapped.gen = original.gen;
+  Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+var programDiagnosticsCache = /* @__PURE__ */ new WeakMap();
+function getProgramWideDiagnostics(program) {
+  let diagnostics = programDiagnosticsCache.get(program);
+  if (diagnostics === void 0) {
+    diagnostics = { program: program.getProgramDiagnostics(), global: program.getGlobalDiagnostics() };
+    programDiagnosticsCache.set(program, diagnostics);
+  }
+  return diagnostics;
 }
 var processApi;
 function getApi(cache) {
@@ -25616,7 +25688,7 @@ function getApi(cache) {
 function createSnapshotProgram(cache, rootFiles, files) {
   const snapshot = getApi(cache).createSnapshot({
     fileSystem: { kind: "layer", files },
-    createPrograms: [{ rootFiles, compilerOptions: fastCompilerOptions }]
+    createPrograms: [{ rootFiles: rootFiles.map((f) => path2.resolve(f)), compilerOptions: fastCompilerOptions }]
   });
   const program = snapshot.operation.createdPrograms[0];
   const checker = snapshot.getProjects().find((p) => p.program === program).checker;
@@ -25671,7 +25743,7 @@ var Transpiler = class _Transpiler {
   }
   // single-file snapshots are released when the next one replaces them; batches own theirs
   setSnapshotContext(snapshot, program, checker, fileName) {
-    const src = program.getSourceFile(fileName);
+    const src = program.getSourceFile(fileName) ?? program.getSourceFile(path2.resolve(fileName));
     const previous = this.snapshot;
     this.snapshot = snapshot;
     previous?.dispose();
@@ -25686,8 +25758,36 @@ var Transpiler = class _Transpiler {
     return this.setSnapshotContext(snapshot, program, checker, inMemoryFilePath);
   }
   createProgramByPathAndSetContext(filePath) {
+    const shared = this.findSharedProgramFile(filePath);
+    if (shared !== void 0) {
+      return this.setContext(shared);
+    }
     const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
     return this.setSnapshotContext(snapshot, program, checker, filePath);
+  }
+  // One snapshot/program for a whole run: later ByPath transpiles of any root (or
+  // imported file) of `paths` reuse it instead of building a program per file, as
+  // long as the file's text on disk still equals the snapshot's. Replaces any
+  // previous shared program; pass [] to drop it.
+  setSharedProgram(paths) {
+    this.programCache.shared?.snapshot.dispose();
+    this.programCache.shared = void 0;
+    if (paths.length === 0) {
+      return;
+    }
+    const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [...paths, globalsShimPath], { [globalsShimPath]: globalsShim });
+    this.programCache.shared = { snapshot, program, checker };
+  }
+  findSharedProgramFile(filePath) {
+    const shared = this.programCache.shared;
+    if (shared === void 0) {
+      return void 0;
+    }
+    const src = shared.program.getSourceFile(path2.resolve(filePath));
+    if (src === void 0 || !fs2.existsSync(filePath) || fs2.readFileSync(filePath, "utf8") !== src.text) {
+      return void 0;
+    }
+    return { src, checker: shared.checker, program: shared.program };
   }
   // One program over N root files, so the bind/check work behind the diagnostics
   // pass is paid once for the whole set; files importing each other are fine as
@@ -25720,10 +25820,11 @@ var Transpiler = class _Transpiler {
   }
   checkFileDiagnostics(context = this.context) {
     const fileName = context.src.fileName;
+    const programWide = getProgramWideDiagnostics(context.program);
     const diagnostics = [
-      ...context.program.getProgramDiagnostics(),
+      ...programWide.program,
       ...context.program.getSyntacticDiagnostics(fileName),
-      ...context.program.getGlobalDiagnostics(),
+      ...programWide.global,
       ...context.program.getSemanticDiagnostics(fileName)
     ];
     if (diagnostics.length > 0) {

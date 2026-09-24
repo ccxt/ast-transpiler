@@ -1,5 +1,5 @@
 import { type SourceFile } from "typescript/unstable/ast";
-import { type API, type Checker, type Program } from "typescript/unstable/sync";
+import { type API, type Checker, type Program, type Snapshot } from "typescript/unstable/sync";
 interface IInput {
     language: Languages;
     async: boolean;
@@ -11,6 +11,11 @@ interface ITranspileContext {
 }
 interface ITranspileProgramCache {
     api?: API;
+    shared?: {
+        snapshot: Snapshot;
+        program: Program;
+        checker: Checker;
+    };
 }
 interface IParameterType {
     name: string;
