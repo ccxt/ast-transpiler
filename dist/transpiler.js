@@ -14435,6 +14435,7 @@ var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
 };
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
 var JAVA_TRANSPILE_DELIMITER = "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT";
+var JAVA_HANDWRITTEN_FULL_ARITY = /* @__PURE__ */ new Set(["loadMarkets", "fetchMarkets", "fetchCurrencies"]);
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
 var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
@@ -14621,7 +14622,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName)) {
       const delimiter = file.text.indexOf(JAVA_TRANSPILE_DELIMITER);
-      return delimiter >= 0 && method.pos > delimiter;
+      return delimiter >= 0 && method.pos > delimiter || JAVA_HANDWRITTEN_FULL_ARITY.has(method.name?.escapedText);
     }
     return JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
   }
