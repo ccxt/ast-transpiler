@@ -12326,7 +12326,7 @@ ${this.getIden(level)}}()`;
             safe = this.goGetArgUsesAreSafe(body, target, target.name.escapedText, goType, nilable, seen, true);
             return;
           }
-          if (use !== n) {
+          if (use !== n && (pointer || nilable)) {
             safe = pointer && this.goGetArgPointerStoredAsValue(use, param);
             return;
           }

@@ -6020,10 +6020,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                         safe = this.goGetArgUsesAreSafe(body, target, target.name.escapedText, goType, nilable, seen, true);
                         return;
                     }
-                    if (use !== n) {
+                    if ((use !== n) && (pointer || nilable)) {
                         safe = pointer && this.goGetArgPointerStoredAsValue(use, param);
                         return;
                     }
+                    // a non-nil container arm hands the same map/list value on (as before copies were followed)
                     if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
                         const other: any = (parent.left === n) ? parent.right : parent.left;
                         const isNullTest = (other?.kind === ts.SyntaxKind.NullKeyword)

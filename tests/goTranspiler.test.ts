@@ -327,6 +327,22 @@ describe('go transpiling tests', () => {
         expect(output).toContain("var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})");
         expect(output.indexOf("var params map[string]any = GetArgMap")).toBeGreaterThan(output.indexOf("fetchTickerBody(ch chan any"));
     });
+    test('a {}-defaulted params used as a ternary arm stays a typed map', () => {
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "type Str = string | undefined;\n" +
+        "class Exchange {\n" +
+        "    omit (x: Dict, k: string): Dict { return x; }\n" +
+        "    safeString (x: Dict, k: string): Str { return undefined; }\n" +
+        "    async fetchTicker(symbol: string, params: Dict = {}): Promise<any> {\n" +
+        "        const cost = this.safeString (params, 'cost');\n" +
+        "        const paramsCost = (cost !== undefined) ? this.omit (params, 'cost') : params;\n" +
+        "        return paramsCost;\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})");
+    });
     test('a colliding body name is uniquified instead of clobbered', () => {
         const input =
         "class Exchange {\n" +
