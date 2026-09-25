@@ -5792,12 +5792,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((target?.kind !== ts.SyntaxKind.VariableDeclaration) || (target.name?.kind !== ts.SyntaxKind.Identifier)) {
             return undefined;
         }
+        let inBody = false;
         for (let p: any = target.parent; p !== undefined; p = p.parent) {
-            if (p === body) {
-                return target;
-            }
+            inBody = inBody || (p === body);
         }
-        return undefined;
+        // a value-typed write (`r = "s"`) may type the copy as the pointer's value family
+        let valueWrite = false;
+        const visit = (n: any): void => {
+            if (valueWrite) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === ts.SyntaxKind.EqualsToken)
+                && (n.left?.kind === ts.SyntaxKind.Identifier) && (n.left.escapedText === target.name.escapedText)) {
+                valueWrite = this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0))));
+            }
+            ts.forEachChild(n, visit);
+        };
+        ts.forEachChild(body, visit);
+        return (inBody && !valueWrite) ? target : undefined;
     }
 
     goGetArgUsesAreSafe(body, param, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed = false): boolean {

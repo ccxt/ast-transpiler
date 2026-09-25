@@ -12132,12 +12132,22 @@ ${this.getIden(level)}}()`;
     if (target?.kind !== ts5.SyntaxKind.VariableDeclaration || target.name?.kind !== ts5.SyntaxKind.Identifier) {
       return void 0;
     }
+    let inBody = false;
     for (let p = target.parent; p !== void 0; p = p.parent) {
-      if (p === body) {
-        return target;
-      }
+      inBody = inBody || p === body;
     }
-    return void 0;
+    let valueWrite = false;
+    const visit = (n) => {
+      if (valueWrite) {
+        return;
+      }
+      if (n.kind === ts5.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && n.left?.kind === ts5.SyntaxKind.Identifier && n.left.escapedText === target.name.escapedText) {
+        valueWrite = this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0))));
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(body, visit);
+    return inBody && !valueWrite ? target : void 0;
   }
   goGetArgUsesAreSafe(body, param, name, goType, nilable, seen, boxed = false) {
     seen.add(param);

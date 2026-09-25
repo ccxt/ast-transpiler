@@ -3370,6 +3370,21 @@ describe('go native element assignment', () => {
         expect(output).not.toContain("limitCopy != nil");
         expect(output).toContain("IsEqual(limitCopy, nil)");
     });
+    test('a pointer copied into a local later written a Go string keeps the box', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    f (flag = false, body: Str = undefined, params = {}) {\n" +
+        "        let requestBody = body;\n" +
+        "        if (flag) {\n" +
+        "            requestBody = 'x';\n" +
+        "        }\n" +
+        "        return { 'body': requestBody };\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("GetArgStringPtr(");
+    });
     test('a pointer copied into a local handed to an unknown callee keeps the box', () => {
         const input =
         "type Int = number | undefined;\n" +
