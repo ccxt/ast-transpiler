@@ -9696,7 +9696,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       const nativeRhs = right.kind === ts5.SyntaxKind.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs;
-      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs) : void 0;
+      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) : void 0;
       return native !== void 0 ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (left.kind === ts5.SyntaxKind.TypeOfExpression) {
@@ -10724,12 +10724,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   }
   // native `container[key] = value` when the receiver's Go type is proved by the
   // printer, otherwise undefined and the caller keeps the runtime helper
-  printNativeElementAssignment(containerNode, containerStr, keyNode, keyStr, valueStr, compound = false) {
+  printNativeElementAssignment(containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode) {
     const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
     const fieldType = this.goFieldContainerTypeNative(containerNode);
     if (fieldType !== void 0 || containerType === "map[string]any") {
       if (!this.goIsStringKeyExpression(keyNode)) {
-        return void 0;
+        return this.printNativeGuardedPointerKeyAssignment(containerNode, containerStr, containerType, fieldType, keyNode, keyStr, valueStr, compound, valueNode);
       }
       if (fieldType === "*sync.Map") {
         return compound ? void 0 : `${containerStr}.Store(${keyStr}, ${valueStr})`;
@@ -10740,6 +10740,86 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return `${containerStr}[${keyStr}] = ${valueStr}`;
     }
     return void 0;
+  }
+  // `m[*k] = v` for a fresh unshared map local, a nil-guarded *string key and a
+  // non-pointer value: exactly the helper's map branch minus its lock and derefs
+  printNativeGuardedPointerKeyAssignment(containerNode, containerStr, containerType, fieldType, keyNode, keyStr, valueStr, compound, valueNode) {
+    if (compound || fieldType !== void 0 || containerType !== "map[string]any" || valueNode === void 0) {
+      return void 0;
+    }
+    if (this.goIsNilGuardedStringPointerKey(keyNode) && this.goIsFreshUnsharedMapLocal(containerNode, containerNode) && this.goIsNonPointerValue(valueNode)) {
+      return `${containerStr}[*${keyStr}] = ${valueStr}`;
+    }
+    return void 0;
+  }
+  // a `*string` local the enclosing control flow proves non-nil: the helper's deref
+  // yields the same string key (a nil key would have made it a no-op)
+  goIsNilGuardedStringPointerKey(keyNode) {
+    return keyNode?.kind === ts5.SyntaxKind.Identifier && this.goDeclaredTypeOfIdentifier(keyNode) === "*string" && this.goHasEnclosingNilGuard(keyNode);
+  }
+  // a local bound once to an object literal, never read by a nested function and not handed
+  // out (anything but `m[k]`) before this write: no other goroutine can hold the map yet
+  goIsFreshUnsharedMapLocal(node, writeSite) {
+    if (node?.kind !== ts5.SyntaxKind.Identifier) {
+      return false;
+    }
+    const decl = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration;
+    if (decl?.kind !== ts5.SyntaxKind.VariableDeclaration || decl.name?.kind !== ts5.SyntaxKind.Identifier || decl.initializer?.kind !== ts5.SyntaxKind.ObjectLiteralExpression) {
+      return false;
+    }
+    const scope = this.goEnclosingFunction(decl);
+    if (scope === void 0 || scope.kind === ts5.SyntaxKind.SourceFile || this.goLocalIsRebound(scope, decl.name)) {
+      return false;
+    }
+    const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(decl.name);
+    let captured = false;
+    const visit = (n, nested) => {
+      if (captured) {
+        return;
+      }
+      if (n.kind === ts5.SyntaxKind.Identifier && n !== decl.name && n.escapedText === decl.name.escapedText && this.checkerOrUndefined()?.getSymbolAtLocation(n) === symbol) {
+        const receiver = n.parent?.kind === ts5.SyntaxKind.ElementAccessExpression && n.parent.expression === n;
+        if (nested || !receiver && this.goUseMayPrecede(n, writeSite, scope)) {
+          captured = true;
+        }
+        return;
+      }
+      const inner = nested || ts5.isFunctionLike(n);
+      ts5.forEachChild(n, (c) => visit(c, inner));
+    };
+    ts5.forEachChild(scope, (c) => visit(c, false));
+    return !captured;
+  }
+  // the use runs before the write: earlier in the text, or both inside one loop body
+  goUseMayPrecede(use, writeSite, scope) {
+    if (use.pos < writeSite.pos) {
+      return true;
+    }
+    for (let n = writeSite.parent; n !== void 0 && n !== scope; n = n.parent) {
+      if (ts5.isIterationStatement(n, false) && use.pos >= n.pos && use.end <= n.end) {
+        return true;
+      }
+    }
+    return false;
+  }
+  // the value's printed Go type is concrete and not a pointer, so the helper's derefScalar
+  // leaves it unchanged; an `any` box or a pointer keeps the helper
+  goIsNonPointerValue(valueNode) {
+    const inner = this.goUnwrapParenthesizedNode(valueNode);
+    switch (inner?.kind) {
+      case ts5.SyntaxKind.StringLiteral:
+      case ts5.SyntaxKind.NoSubstitutionTemplateLiteral:
+      case ts5.SyntaxKind.TrueKeyword:
+      case ts5.SyntaxKind.FalseKeyword:
+      case ts5.SyntaxKind.ObjectLiteralExpression:
+      case ts5.SyntaxKind.ArrayLiteralExpression:
+        return true;
+    }
+    if (inner === void 0) {
+      return false;
+    }
+    const goType = this.goPrintedTypeOfExpression(inner, this.printNode(inner, 0));
+    return typeof goType === "string" && goType !== "any" && !goType.startsWith("*");
   }
   // the concrete Go type an *expression* is printed as: a local's declared type,
   // the return type of a runtime helper call, or a literal. undefined when the value
@@ -13311,7 +13391,7 @@ ${this.getIden(identation)}return nil`;
         const leftSide = this.printNode(elementAccess.expression, 0);
         const propName = this.printNode(elementAccess.argumentExpression, 0);
         const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
-        const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value);
+        const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, false, right);
         if (native !== void 0) {
           return native;
         }

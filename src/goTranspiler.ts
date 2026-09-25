@@ -2998,7 +2998,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart()
                 : rhs;
             const native = (keyStrs.length === 1)
-                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs)
+                ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                 : undefined;
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -4188,12 +4188,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // native `container[key] = value` when the receiver's Go type is proved by the
     // printer, otherwise undefined and the caller keeps the runtime helper
-    printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound = false): string | undefined {
+    printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound = false, valueNode?): string | undefined {
         const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
         const fieldType = this.goFieldContainerTypeNative(containerNode);
         if ((fieldType !== undefined) || (containerType === 'map[string]any')) {
             if (!this.goIsStringKeyExpression(keyNode)) {
-                return undefined;
+                return this.printNativeGuardedPointerKeyAssignment(containerNode, containerStr, containerType, fieldType, keyNode, keyStr, valueStr, compound, valueNode);
             }
             if (fieldType === '*sync.Map') {
                 // a `+=` reads the element back through `container[key]`, which a
@@ -4206,6 +4206,94 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `${containerStr}[${keyStr}] = ${valueStr}`;
         }
         return undefined;
+    }
+
+    // `m[*k] = v` for a fresh unshared map local, a nil-guarded *string key and a
+    // non-pointer value: exactly the helper's map branch minus its lock and derefs
+    printNativeGuardedPointerKeyAssignment(containerNode, containerStr: string, containerType, fieldType, keyNode, keyStr: string, valueStr: string, compound: boolean, valueNode): string | undefined {
+        if (compound || (fieldType !== undefined) || (containerType !== 'map[string]any') || (valueNode === undefined)) {
+            return undefined;
+        }
+        if (this.goIsNilGuardedStringPointerKey(keyNode) && this.goIsFreshUnsharedMapLocal(containerNode, containerNode) && this.goIsNonPointerValue(valueNode)) {
+            return `${containerStr}[*${keyStr}] = ${valueStr}`;
+        }
+        return undefined;
+    }
+
+    // a `*string` local the enclosing control flow proves non-nil: the helper's deref
+    // yields the same string key (a nil key would have made it a no-op)
+    goIsNilGuardedStringPointerKey(keyNode): boolean {
+        return (keyNode?.kind === ts.SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(keyNode) === '*string')
+            && this.goHasEnclosingNilGuard(keyNode);
+    }
+
+    // a local bound once to an object literal, never read by a nested function and not handed
+    // out (anything but `m[k]`) before this write: no other goroutine can hold the map yet
+    goIsFreshUnsharedMapLocal(node, writeSite): boolean {
+        if (node?.kind !== ts.SyntaxKind.Identifier) {
+            return false;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration;
+        if ((decl?.kind !== ts.SyntaxKind.VariableDeclaration) || (decl.name?.kind !== ts.SyntaxKind.Identifier)
+            || (decl.initializer?.kind !== ts.SyntaxKind.ObjectLiteralExpression)) {
+            return false;
+        }
+        const scope = this.goEnclosingFunction(decl);
+        if ((scope === undefined) || (scope.kind === ts.SyntaxKind.SourceFile) || this.goLocalIsRebound(scope, decl.name)) {
+            return false;
+        }
+        const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(decl.name);
+        let captured = false;
+        const visit = (n, nested: boolean) => {
+            if (captured) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n !== decl.name) && (n.escapedText === decl.name.escapedText)
+                && (this.checkerOrUndefined()?.getSymbolAtLocation(n) === symbol)) {
+                const receiver = (n.parent?.kind === ts.SyntaxKind.ElementAccessExpression) && (n.parent.expression === n);
+                if (nested || (!receiver && this.goUseMayPrecede(n, writeSite, scope))) {
+                    captured = true;
+                }
+                return;
+            }
+            const inner = nested || ts.isFunctionLike(n);
+            ts.forEachChild(n, (c) => visit(c, inner));
+        };
+        ts.forEachChild(scope, (c) => visit(c, false));
+        return !captured;
+    }
+
+    // the use runs before the write: earlier in the text, or both inside one loop body
+    goUseMayPrecede(use, writeSite, scope): boolean {
+        if (use.pos < writeSite.pos) {
+            return true;
+        }
+        for (let n = writeSite.parent; (n !== undefined) && (n !== scope); n = n.parent) {
+            if (ts.isIterationStatement(n, false) && (use.pos >= n.pos) && (use.end <= n.end)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // the value's printed Go type is concrete and not a pointer, so the helper's derefScalar
+    // leaves it unchanged; an `any` box or a pointer keeps the helper
+    goIsNonPointerValue(valueNode): boolean {
+        const inner = this.goUnwrapParenthesizedNode(valueNode);
+        switch (inner?.kind) {
+        case ts.SyntaxKind.StringLiteral:
+        case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+        case ts.SyntaxKind.ObjectLiteralExpression:
+        case ts.SyntaxKind.ArrayLiteralExpression:
+            return true;
+        }
+        if (inner === undefined) {
+            return false;
+        }
+        const goType = this.goPrintedTypeOfExpression(inner, this.printNode(inner, 0));
+        return (typeof goType === 'string') && (goType !== 'any') && !goType.startsWith('*');
     }
 
     // the concrete Go type an *expression* is printed as: a local's declared type,
@@ -7192,7 +7280,7 @@ ${this.getIden(identation)}${returnStatement}`;
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
                 const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
-                const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value);
+                const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, false, right);
                 if (native !== undefined) {
                     return native;
                 }

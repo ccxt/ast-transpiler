@@ -1059,7 +1059,12 @@ declare class GoTranspiler extends BaseTranspiler {
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
     goRebindingTargetOf(identifier: any): any;
-    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean): string | undefined;
+    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean, valueNode?: any): string | undefined;
+    printNativeGuardedPointerKeyAssignment(containerNode: any, containerStr: string, containerType: any, fieldType: any, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
+    goIsNilGuardedStringPointerKey(keyNode: any): boolean;
+    goIsFreshUnsharedMapLocal(node: any, writeSite: any): boolean;
+    goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
+    goIsNonPointerValue(valueNode: any): boolean;
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
     sliceLengthTypes: string[];
     GO_NATIVE_LENGTH_FIELDS: string[];
