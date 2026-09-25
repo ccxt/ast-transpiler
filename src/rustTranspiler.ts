@@ -225,6 +225,33 @@ export class RustTranspiler extends BaseTranspiler {
         return (rustScopeNameTable(index).get(name) ?? []).map((i) => index.nodes[i]);
     }
 
+    // node kinds the printer types that the core per-file prefetch leaves to single round trips
+    private static readonly RUST_PREFETCH_TYPE_KINDS = new Set<SyntaxKind>([
+        SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword, SyntaxKind.ParenthesizedExpression,
+        SyntaxKind.AwaitExpression, SyntaxKind.PrefixUnaryExpression,
+        SyntaxKind.BooleanKeyword, SyntaxKind.ObjectKeyword, SyntaxKind.UnionType,
+        SyntaxKind.ConditionalExpression, SyntaxKind.AsExpression,
+    ]);
+
+    /** One bulk getTypeAtLocation for the class's nodes of those kinds, seeding the checker memo. */
+    rustPrefetchClassTypes(node: Node): void {
+        const getType: any = this.checkerOrUndefined()?.getTypeAtLocation;
+        if (getType?.seed === undefined || getType.original === undefined) return;
+        const kinds = RustTranspiler.RUST_PREFETCH_TYPE_KINDS;
+        const nodes: Node[] = [];
+        for (const n of this.rustScopeIndex(node).nodes) {
+            if (kinds.has(n.kind) && !getType.has(n)) nodes.push(n);
+        }
+        if (nodes.length === 0) return;
+        let results: unknown[];
+        try {
+            results = getType.original(nodes);
+        } catch (e) {
+            return; // the lazy per-node path answers them
+        }
+        nodes.forEach((n, i) => getType.seed(n, results[i]));
+    }
+
     binaryExpressionsWrappers;
     methodSignatures: Record<string, { requiredCount: number }>;
     forLoopCounter: number;
@@ -2503,6 +2530,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printClass(node, identation) {
+        this.rustPrefetchClassTypes(node);
         this.className = node.name.text;
 
         // First pass: collect method signatures for optional param handling
