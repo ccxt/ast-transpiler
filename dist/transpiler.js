@@ -9875,8 +9875,26 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (this.goAnyLocalHoldsPointerCache.has(decl)) {
       return this.goAnyLocalHoldsPointerCache.get(decl);
     }
+    this.goAnyLocalHoldsPointerCache.set(decl, false);
+    let settled = true;
     const isPointerInit = (expr) => {
       expr = this.goUnwrapParenthesizedNode(expr);
+      if (expr?.kind === ts5.SyntaxKind.ConditionalExpression) {
+        return isPointerInit(expr.whenTrue) || isPointerInit(expr.whenFalse);
+      }
+      if (expr?.kind === ts5.SyntaxKind.Identifier) {
+        const source = this.checkerOrUndefined()?.getSymbolAtLocation(expr)?.valueDeclaration;
+        if (source?.kind === ts5.SyntaxKind.Parameter) {
+          if (this.goGetArgTypeComputing?.has(source)) {
+            settled = false;
+            return true;
+          }
+          return String(this.goGetArgParameterType(source) ?? "").startsWith("*");
+        }
+        const inner = source !== decl && this.goAnyLocalHoldsPointer(source);
+        settled = settled && (source === decl || this.goAnyLocalHoldsPointerCache.has(source));
+        return inner;
+      }
       const callee = expr?.kind === ts5.SyntaxKind.CallExpression ? expr.expression : void 0;
       if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
         return false;
@@ -9903,7 +9921,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         ts5.forEachChild(scope, visit);
       }
     }
-    this.goAnyLocalHoldsPointerCache.set(decl, holds);
+    if (settled) {
+      this.goAnyLocalHoldsPointerCache.set(decl, holds);
+    } else {
+      this.goAnyLocalHoldsPointerCache.delete(decl);
+    }
     return holds;
   }
   // the callee name of a call, read from the AST and capitalised the way the
@@ -12068,7 +12090,57 @@ ${this.getIden(level)}}()`;
   // audited deref consumers (fail-closed); containers are the same map/list, and nil-sensitive
   // consumers are tabled as `container` (goGetArgPassesIntoContainerDefault covers call chains).
   goGetArgConsumersAreSafe(body, param, goType, nilable) {
-    const name = param.name.escapedText;
+    return this.goGetArgUsesAreSafe(body, param, param.name.escapedText, goType, nilable, /* @__PURE__ */ new Set());
+  }
+  // `(x === undefined) ? d : x` / `x !== undefined ? x : d`: the arm holding `n` only runs when
+  // the same name is not nil, so the copy never boxes a typed nil
+  goGetArgArmIsNilGuarded(n, cond) {
+    let test = cond.condition;
+    while (test?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      test = test.expression;
+    }
+    if (test?.kind !== ts5.SyntaxKind.BinaryExpression) {
+      return false;
+    }
+    const isNil = (e) => e?.kind === ts5.SyntaxKind.NullKeyword || e?.kind === ts5.SyntaxKind.Identifier && e.escapedText === "undefined";
+    const sameName = (e) => e?.kind === ts5.SyntaxKind.Identifier && e.escapedText === n.escapedText;
+    if (!(sameName(test.left) && isNil(test.right) || sameName(test.right) && isNil(test.left))) {
+      return false;
+    }
+    const op = test.operatorToken?.kind;
+    const eq = op === ts5.SyntaxKind.EqualsEqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsToken;
+    const ne = op === ts5.SyntaxKind.ExclamationEqualsEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsToken;
+    let arm = n;
+    while (arm.parent !== cond) {
+      arm = arm.parent;
+    }
+    return eq && arm === cond.whenFalse || ne && arm === cond.whenTrue;
+  }
+  // the body-local `r` a copy `let r = x` / `r = x` lands in (the value, not the box, is copied)
+  goGetArgCopyTarget(use, body) {
+    const parent = use.parent;
+    let target;
+    if (parent?.kind === ts5.SyntaxKind.VariableDeclaration && parent.initializer === use) {
+      target = parent;
+    } else if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.right === use && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && parent.left?.kind === ts5.SyntaxKind.Identifier && parent.parent?.kind === ts5.SyntaxKind.ExpressionStatement) {
+      try {
+        target = this.getChecker().getSymbolAtLocation(parent.left)?.valueDeclaration;
+      } catch (e) {
+        target = void 0;
+      }
+    }
+    if (target?.kind !== ts5.SyntaxKind.VariableDeclaration || target.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    for (let p = target.parent; p !== void 0; p = p.parent) {
+      if (p === body) {
+        return target;
+      }
+    }
+    return void 0;
+  }
+  goGetArgUsesAreSafe(body, param, name, goType, nilable, seen, boxed = false) {
+    seen.add(param);
     const table = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
     const pointer = goType.startsWith("*");
     let safe = true;
@@ -12119,10 +12191,32 @@ ${this.getIden(level)}}()`;
               return;
             }
           }
+          let use = n;
+          let guarded = false;
+          while (use.parent?.kind === ts5.SyntaxKind.ParenthesizedExpression || use.parent?.kind === ts5.SyntaxKind.ConditionalExpression && use.parent.condition !== use) {
+            if (use.parent.kind === ts5.SyntaxKind.ConditionalExpression) {
+              guarded = guarded || this.goGetArgArmIsNilGuarded(n, use.parent);
+            }
+            use = use.parent;
+          }
+          const target = pointer || nilable ? this.goGetArgCopyTarget(use, body) : void 0;
+          if (target !== void 0) {
+            if (!pointer && guarded || seen.has(target)) {
+              return;
+            }
+            safe = this.goGetArgUsesAreSafe(body, target, target.name.escapedText, goType, nilable, seen, true);
+            return;
+          }
+          if (use !== n) {
+            safe = pointer && this.goGetArgPointerStoredAsValue(use, param);
+            return;
+          }
           if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
             const other = parent.left === n ? parent.right : parent.left;
             const isNullTest = other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
             if (isNullTest) {
+              safe = pointer || !boxed;
+              return;
               safe = true;
               return;
             }
@@ -12213,7 +12307,11 @@ ${this.getIden(level)}}()`;
   goGetArgPointerStoredAsValue(n, param) {
     const parent = n.parent;
     const stored = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.right === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && parent.left?.kind === ts5.SyntaxKind.ElementAccessExpression || parent?.kind === ts5.SyntaxKind.PropertyAssignment && parent.initializer === n;
-    const methodName = String(param?.parent?.name?.escapedText ?? "");
+    let method = param?.parent;
+    while (method !== void 0 && !ts5.isFunctionLike(method)) {
+      method = method.parent;
+    }
+    const methodName = String(method?.name?.escapedText ?? "");
     return stored && !methodName.endsWith("Request");
   }
   // element `index` of a tuple-typed call result is `Dict` (`[T, Dict]`); the Go tuple holds
@@ -12279,7 +12377,14 @@ ${this.getIden(level)}}()`;
     this.goGetArgTypeCache ??= /* @__PURE__ */ new WeakMap();
     if (!this.goGetArgTypeCache.has(decl)) {
       this.goGetArgTypeCache.set(decl, void 0);
-      const goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+      this.goGetArgTypeComputing ??= /* @__PURE__ */ new Set();
+      this.goGetArgTypeComputing.add(decl);
+      let goType;
+      try {
+        goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+      } finally {
+        this.goGetArgTypeComputing.delete(decl);
+      }
       this.goGetArgTypeCache.set(decl, goType !== void 0 && this.goGetArgTwinName(goType) !== void 0 ? goType : void 0);
     }
     return this.goGetArgTypeCache.get(decl);

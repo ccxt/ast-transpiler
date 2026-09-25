@@ -648,6 +648,7 @@ export class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
+    goGetArgTypeComputing: Set<any>;
     goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
@@ -3230,8 +3231,27 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         // the callee is read from the AST, never printed: printing an operand would
         // re-enter the equality classifier that asks this question
+        this.goAnyLocalHoldsPointerCache.set(decl, false);
+        let settled = true;
         const isPointerInit = (expr): boolean => {
             expr = this.goUnwrapParenthesizedNode(expr);
+            if (expr?.kind === ts.SyntaxKind.ConditionalExpression) {
+                return isPointerInit(expr.whenTrue) || isPointerInit(expr.whenFalse);
+            }
+            if (expr?.kind === ts.SyntaxKind.Identifier) {
+                // a copy of a pointer-bound GetArg parameter (or of a local holding one) boxes it
+                const source: any = this.checkerOrUndefined()?.getSymbolAtLocation(expr)?.valueDeclaration;
+                if (source?.kind === ts.SyntaxKind.Parameter) {
+                    if (this.goGetArgTypeComputing?.has(source)) {
+                        settled = false;
+                        return true;
+                    }
+                    return String(this.goGetArgParameterType(source) ?? '').startsWith('*');
+                }
+                const inner = (source !== decl) && this.goAnyLocalHoldsPointer(source);
+                settled = settled && ((source === decl) || this.goAnyLocalHoldsPointerCache.has(source));
+                return inner;
+            }
             const callee = (expr?.kind === ts.SyntaxKind.CallExpression) ? expr.expression : undefined;
             if (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) {
                 return false;
@@ -3257,7 +3277,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 ts.forEachChild(scope, visit);
             }
         }
-        this.goAnyLocalHoldsPointerCache.set(decl, holds);
+        if (settled) {
+            this.goAnyLocalHoldsPointerCache.set(decl, holds);
+        } else {
+            this.goAnyLocalHoldsPointerCache.delete(decl);
+        }
         return holds;
     }
 
@@ -5722,7 +5746,62 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // audited deref consumers (fail-closed); containers are the same map/list, and nil-sensitive
     // consumers are tabled as `container` (goGetArgPassesIntoContainerDefault covers call chains).
     goGetArgConsumersAreSafe(body, param, goType: string, nilable: boolean): boolean {
-        const name = param.name.escapedText;
+        return this.goGetArgUsesAreSafe(body, param, param.name.escapedText, goType, nilable, new Set());
+    }
+
+    // `(x === undefined) ? d : x` / `x !== undefined ? x : d`: the arm holding `n` only runs when
+    // the same name is not nil, so the copy never boxes a typed nil
+    goGetArgArmIsNilGuarded(n: any, cond: any): boolean {
+        let test: any = cond.condition;
+        while (test?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            test = test.expression;
+        }
+        if ((test?.kind !== ts.SyntaxKind.BinaryExpression)) {
+            return false;
+        }
+        const isNil = (e: any) => (e?.kind === ts.SyntaxKind.NullKeyword) || ((e?.kind === ts.SyntaxKind.Identifier) && (e.escapedText === 'undefined'));
+        const sameName = (e: any) => (e?.kind === ts.SyntaxKind.Identifier) && (e.escapedText === n.escapedText);
+        if (!((sameName(test.left) && isNil(test.right)) || (sameName(test.right) && isNil(test.left)))) {
+            return false;
+        }
+        const op = test.operatorToken?.kind;
+        const eq = (op === ts.SyntaxKind.EqualsEqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsToken);
+        const ne = (op === ts.SyntaxKind.ExclamationEqualsEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsToken);
+        let arm: any = n;
+        while (arm.parent !== cond) {
+            arm = arm.parent;
+        }
+        return (eq && (arm === cond.whenFalse)) || (ne && (arm === cond.whenTrue));
+    }
+
+    // the body-local `r` a copy `let r = x` / `r = x` lands in (the value, not the box, is copied)
+    goGetArgCopyTarget(use: any, body: any): any {
+        const parent: any = use.parent;
+        let target: any;
+        if ((parent?.kind === ts.SyntaxKind.VariableDeclaration) && (parent.initializer === use)) {
+            target = parent;
+        } else if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.right === use)
+            && (parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken) && (parent.left?.kind === ts.SyntaxKind.Identifier)
+            && (parent.parent?.kind === ts.SyntaxKind.ExpressionStatement)) {
+            try {
+                target = this.getChecker().getSymbolAtLocation(parent.left)?.valueDeclaration;
+            } catch (e) {
+                target = undefined;
+            }
+        }
+        if ((target?.kind !== ts.SyntaxKind.VariableDeclaration) || (target.name?.kind !== ts.SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        for (let p: any = target.parent; p !== undefined; p = p.parent) {
+            if (p === body) {
+                return target;
+            }
+        }
+        return undefined;
+    }
+
+    goGetArgUsesAreSafe(body, param, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed = false): boolean {
+        seen.add(param);
         const table: any = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
         const pointer = goType.startsWith('*');
         let safe = true;
@@ -5780,11 +5859,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                             return;
                         }
                     }
+                    // a copy (ternary arm, `let r = x`, `r = x`) hands the value to a body local whose
+                    // own uses must pass the same rules; an `any` alias prints its nil tests via IsEqual,
+                    // which derefs a nil pointer but not a nil map, so containers need a nil-guarded arm
+                    let use: any = n;
+                    let guarded = false;
+                    while ((use.parent?.kind === ts.SyntaxKind.ParenthesizedExpression)
+                        || ((use.parent?.kind === ts.SyntaxKind.ConditionalExpression) && (use.parent.condition !== use))) {
+                        if (use.parent.kind === ts.SyntaxKind.ConditionalExpression) {
+                            guarded = guarded || this.goGetArgArmIsNilGuarded(n, use.parent);
+                        }
+                        use = use.parent;
+                    }
+                    const target = (pointer || nilable) ? this.goGetArgCopyTarget(use, body) : undefined;
+                    if (target !== undefined) {
+                        if ((!pointer && guarded) || seen.has(target)) {
+                            return;
+                        }
+                        safe = this.goGetArgUsesAreSafe(body, target, target.name.escapedText, goType, nilable, seen, true);
+                        return;
+                    }
+                    if (use !== n) {
+                        safe = pointer && this.goGetArgPointerStoredAsValue(use, param);
+                        return;
+                    }
                     if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
                         const other: any = (parent.left === n) ? parent.right : parent.left;
                         const isNullTest = (other?.kind === ts.SyntaxKind.NullKeyword)
                             || ((other?.kind === ts.SyntaxKind.Identifier) && (other.escapedText === 'undefined'));
                         if (isNullTest) {
+                            // an `any` alias tests the box through IsEqual: a nil map box is not nil
+                            safe = pointer || !boxed;
+                            return;
                             // `x == nil` / `x != nil`: native for a pointer and for a container
                             // (a nil map compares equal to nil exactly like the untyped nil box
                             // did when the value came in untyped); a value type never gets here.
@@ -5884,7 +5990,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 && (parent.operatorToken?.kind === ts.SyntaxKind.EqualsToken)
                 && (parent.left?.kind === ts.SyntaxKind.ElementAccessExpression))
             || ((parent?.kind === ts.SyntaxKind.PropertyAssignment) && (parent.initializer === n));
-        const methodName = String(param?.parent?.name?.escapedText ?? '');
+        let method: any = param?.parent;
+        while ((method !== undefined) && !ts.isFunctionLike(method)) {
+            method = method.parent;
+        }
+        const methodName = String(method?.name?.escapedText ?? '');
         return stored && !methodName.endsWith('Request');
     }
 
@@ -5960,7 +6070,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         this.goGetArgTypeCache ??= new WeakMap();
         if (!this.goGetArgTypeCache.has(decl)) {
             this.goGetArgTypeCache.set(decl, undefined);
-            const goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+            this.goGetArgTypeComputing ??= new Set();
+            this.goGetArgTypeComputing.add(decl);
+            let goType: string | undefined;
+            try {
+                goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+            } finally {
+                this.goGetArgTypeComputing.delete(decl);
+            }
             this.goGetArgTypeCache.set(decl, (goType !== undefined) && (this.goGetArgTwinName(goType) !== undefined) ? goType : undefined);
         }
         return this.goGetArgTypeCache.get(decl);

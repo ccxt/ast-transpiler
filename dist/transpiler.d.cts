@@ -786,6 +786,7 @@ declare class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
+    goGetArgTypeComputing: Set<any>;
     goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
@@ -1135,6 +1136,9 @@ declare class GoTranspiler extends BaseTranspiler {
     goGetArgIsValueType(goType: string): boolean;
     goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
     goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
+    goGetArgArmIsNilGuarded(n: any, cond: any): boolean;
+    goGetArgCopyTarget(use: any, body: any): any;
+    goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;

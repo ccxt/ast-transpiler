@@ -3341,6 +3341,48 @@ describe('go native element assignment', () => {
         expect(output).toContain("var c bool = (symbol == nil)");
         expect(output).toContain("var d bool = (flag != nil)");
     });
+    test('a nil-defaulted pointer copied into a local keeps its twin', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    f (symbol: Str = undefined, limit: Int = undefined, since: Int = undefined, params = {}) {\n" +
+        "        const request = {};\n" +
+        "        const limitResolved = (limit === undefined) ? 100 : limit;\n" +
+        "        let limitCopy: Int = since;\n" +
+        "        if (since !== undefined) {\n" +
+        "            limitCopy = since - 1;\n" +
+        "        }\n" +
+        "        if (limitCopy !== undefined) {\n" +
+        "            request['limit'] = limitCopy;\n" +
+        "        }\n" +
+        "        const s = (symbol !== undefined) ? symbol : 'x';\n" +
+        "        request['size'] = limitResolved;\n" +
+        "        request['s'] = s;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var limit *int64 = GetArgInt64Ptr(optionalArgs, 1, nil)");
+        expect(output).toContain("var since *int64 = GetArgInt64Ptr(optionalArgs, 2, nil)");
+        expect(output).toContain("var symbol *string = GetArgStringPtr(optionalArgs, 0, nil)");
+        // the copy boxes the pointer: its nil test must go through the deref-aware helper
+        expect(output).not.toContain("limitCopy != nil");
+        expect(output).toContain("IsEqual(limitCopy, nil)");
+    });
+    test('a pointer copied into a local handed to an unknown callee keeps the box', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    g (x) { return x; }\n" +
+        "    f (limit: Int = undefined, params = {}) {\n" +
+        "        const limitResolved = limit;\n" +
+        "        return this.g (limitResolved);\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("GetArgInt64Ptr(");
+    });
     test('a parameter without a default keeps the helper', () => {
         const input =
         "type Int = number | undefined;\n" +
