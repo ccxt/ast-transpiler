@@ -1857,7 +1857,12 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.isJavaFloatLiteral(node)) {
             return 'double';
         }
-        if (this.isJavaPrimitiveForCounter(node)) {
+        if (this.isJavaPrimitiveForCounter(node) || this.javaPrintedIntCounter(node)) {
+            return 'int';
+        }
+        // `-1`: the sign prints in front of an int literal, still a Java int
+        if (node.kind === ts.SyntaxKind.PrefixUnaryExpression && node.operator === ts.SyntaxKind.MinusToken
+            && this.javaIntegerLiteralKind(node.operand) === 'int') {
             return 'int';
         }
         if (node.kind === ts.SyntaxKind.PropertyAccessExpression && node.name.escapedText === 'length') {
@@ -1866,7 +1871,18 @@ export class JavaTranspiler extends BaseTranspiler {
         if (node.kind === ts.SyntaxKind.CallExpression) {
             return this.javaPrintedCallKind(node);
         }
+        // a nested `+ - * /` this printer emits natively is a Java primitive of its kind
+        if (node.kind === ts.SyntaxKind.BinaryExpression) {
+            return this.javaNativeArithmeticKind(node);
+        }
         return undefined;
+    }
+
+    // a read of a `for (var i = <int literal>; ..; i++)` counter anywhere in the loop: javac types it
+    // int and no box write reaches it; a capture rename (`finalI`) prints an Object copy instead
+    javaPrintedIntCounter(node): boolean {
+        return node?.kind === ts.SyntaxKind.Identifier && this.javaIntForCounter(node)
+            && this.javaIdentifierPrintsDeclaredName(node);
     }
 
     // fractional / exponent literals print as Java double literals (printNumericLiteral)
@@ -2303,7 +2319,155 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const type = this.javaOptionalParameterType(node);
+        if (type === 'Long' && !this.javaParameterIsWritten(node)) {
+            return type; // a read-only copy of the Long core parameter
+        }
         return type === JAVA_STRING_LIST_TYPE ? type : undefined;
+    }
+
+    // any write to the parameter in its method: assignment (plain or compound), a destructuring
+    // target, `++`/`--`, a for-of/in binding
+    javaParameterIsWritten(node): boolean {
+        const method = node?.parent;
+        const checker: any = this.checkerOrUndefined();
+        if (method?.body === undefined || checker === undefined) {
+            return true;
+        }
+        const symbol = checker.getSymbolAtLocation(node.name);
+        if (symbol === undefined) {
+            return true;
+        }
+        const same = (n) => n !== undefined && ts.isIdentifier(n) && checker.getSymbolAtLocation(n) === symbol;
+        let written = false;
+        const visit = (n) => {
+            if (written) {
+                return;
+            }
+            if (ts.isBinaryExpression(n) && JAVA_ASSIGNMENT_OPERATOR_KINDS.has(n.operatorToken.kind)) {
+                const left = n.left;
+                if (same(left) || (ts.isArrayLiteralExpression(left) && left.elements.some(same))) {
+                    written = true;
+                    return;
+                }
+            }
+            if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) && same(n.operand)
+                && (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken)) {
+                written = true;
+                return;
+            }
+            if ((ts.isForOfStatement(n) || ts.isForInStatement(n)) && same(n.initializer)) {
+                written = true;
+                return;
+            }
+            ts.forEachChild(n, visit);
+        };
+        visit(method.body);
+        return written;
+    }
+
+    // a read the enclosing code only reaches with the binding non-null: the right operand of
+    // `x !== undefined && ..`, the matching arm of an `if`/`?:` on that test, or any statement
+    // after `if (x === undefined) { return/throw/.. }`. Callers require an unwritten binding.
+    javaNullGuardAdmitsRead(node): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const symbol = checker?.getSymbolAtLocation(node);
+        if (symbol === undefined) {
+            return false;
+        }
+        let current: any = node;
+        while (current.parent !== undefined) {
+            const parent: any = current.parent;
+            if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+                && parent.right === current && this.javaTestProvesNonNull(parent.left, symbol, true)) {
+                return true;
+            }
+            if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.BarBarToken
+                && parent.right === current && this.javaTestProvesNonNull(parent.left, symbol, false)) {
+                return true;
+            }
+            if ((ts.isIfStatement(parent) || ts.isConditionalExpression(parent))) {
+                const test = ts.isIfStatement(parent) ? parent.expression : parent.condition;
+                const whenTrue = ts.isIfStatement(parent) ? parent.thenStatement : parent.whenTrue;
+                const whenFalse = ts.isIfStatement(parent) ? parent.elseStatement : parent.whenFalse;
+                if ((whenTrue === current && this.javaTestProvesNonNull(test, symbol, true))
+                    || (whenFalse === current && this.javaTestProvesNonNull(test, symbol, false))) {
+                    return true;
+                }
+            }
+            if (ts.isBlock(parent)) {
+                for (const sibling of parent.statements) {
+                    if (sibling === current) {
+                        break;
+                    }
+                    if (ts.isIfStatement(sibling)
+                        && ((this.javaTestProvesNonNull(sibling.expression, symbol, false) && this.javaStatementAlwaysExits(sibling.thenStatement))
+                            || (this.javaTestProvesNonNull(sibling.expression, symbol, true) && this.javaStatementAlwaysExits(sibling.elseStatement)))) {
+                        return true;
+                    }
+                }
+            }
+            current = parent;
+        }
+        return false;
+    }
+
+    // `x !== undefined` / `x != null` (either order) proves x non-null when the test is true;
+    // `x === undefined` when false; `&&` (true) / `||` (false) prove through either side, `!` flips
+    javaTestProvesNonNull(test, symbol, truthy): boolean {
+        if (test === undefined) {
+            return false;
+        }
+        if (ts.isParenthesizedExpression(test)) {
+            return this.javaTestProvesNonNull(test.expression, symbol, truthy);
+        }
+        if (ts.isPrefixUnaryExpression(test) && test.operator === ts.SyntaxKind.ExclamationToken) {
+            return this.javaTestProvesNonNull(test.operand, symbol, !truthy);
+        }
+        if (!ts.isBinaryExpression(test)) {
+            return false;
+        }
+        const op = test.operatorToken.kind;
+        if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+            return truthy && (this.javaTestProvesNonNull(test.left, symbol, true) || this.javaTestProvesNonNull(test.right, symbol, true));
+        }
+        if (op === ts.SyntaxKind.BarBarToken) {
+            return !truthy && (this.javaTestProvesNonNull(test.left, symbol, false) || this.javaTestProvesNonNull(test.right, symbol, false));
+        }
+        const inequality = op === ts.SyntaxKind.ExclamationEqualsToken || op === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+        const equality = op === ts.SyntaxKind.EqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsEqualsToken;
+        if ((!inequality && !equality) || truthy !== inequality) {
+            return false;
+        }
+        const nullish = (n) => n.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(n) && n.escapedText === 'undefined');
+        const tested = nullish(test.right) ? test.left : (nullish(test.left) ? test.right : undefined);
+        const checker: any = this.checkerOrUndefined();
+        return tested !== undefined && ts.isIdentifier(tested) && checker?.getSymbolAtLocation(tested) === symbol;
+    }
+
+    javaStatementAlwaysExits(statement): boolean {
+        if (statement === undefined) {
+            return false;
+        }
+        const exits = (n) => ts.isReturnStatement(n) || ts.isThrowStatement(n) || ts.isContinueStatement(n) || ts.isBreakStatement(n);
+        if (exits(statement)) {
+            return true;
+        }
+        return ts.isBlock(statement) && statement.statements.length > 0 && exits(statement.statements[statement.statements.length - 1]);
+    }
+
+    // `Long` when the body reads this default-valued `Int` parameter as the core's own Long (the
+    // parameter itself or its read-only async copy); undefined otherwise
+    javaLongParameterRead(node): boolean {
+        if (node === undefined || !ts.isIdentifier(node) || !this.javaIdentifierPrintsDeclaredName(node)
+            || !this.javaIdentifierKeepsDeclaredName(node)) {
+            return false;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isParameter(declaration) || declaration.initializer === undefined
+            || !this.hasDefaultedTail(declaration.parent)) {
+            return false;
+        }
+        return this.javaOptionalParameterType(declaration) === 'Long' && !this.javaParameterIsWritten(declaration);
     }
 
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
@@ -3446,6 +3610,12 @@ export class JavaTranspiler extends BaseTranspiler {
             return /[.eE]/.test(text) ? 'double' : 'long';
         }
         if (node.kind === ts.SyntaxKind.Identifier) {
+            if (this.javaPrintedIntCounter(node)) {
+                return 'int';
+            }
+            if (allowDeclaredLocals && this.javaLongParameterRead(node) && this.javaNullGuardAdmitsRead(node)) {
+                return 'long'; // an unwritten Long core parameter behind a null test
+            }
             return allowDeclaredLocals ? this.javaDeclaredNumericLocalKind(node) : undefined;
         }
         if (node.kind === ts.SyntaxKind.CallExpression) {
@@ -3454,10 +3624,18 @@ export class JavaTranspiler extends BaseTranspiler {
             if (this.javaBaseTimeLongCall(node)) {
                 return 'long';
             }
-            return this.javaBaseIntCall(node) ? 'int' : undefined;
+            if (this.javaBaseIntCall(node)) {
+                return 'int';
+            }
+            // indexOf/search print int, Math.round a primitive long (javaPrintedCallKind)
+            const printed = this.javaPrintedCallKind(node);
+            return (printed === 'int' || printed === 'long') ? printed : undefined;
         }
         if (node.kind === ts.SyntaxKind.BinaryExpression) {
             return this.javaNativeArithmeticKind(node, allowDeclaredLocals);
+        }
+        if (this.javaLengthIntRead(node)) {
+            return 'int';
         }
         return undefined;
     }
@@ -3557,10 +3735,26 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaScalarFamily(node.left) !== 'number' || this.javaScalarFamily(node.right) !== 'number') {
             return undefined;
         }
+        if (isMultiply && this.javaLiteralFractionalProduct(node.left, node.right)) {
+            return 'double';
+        }
         const childAllows = allowDeclaredLocals && !isPlus;
         const leftKind = this.javaProvableNumericKind(node.left, childAllows);
         const rightKind = this.javaProvableNumericKind(node.right, childAllows);
         return this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+    }
+
+    // `2 * 1.67`: two decimal literals whose IEEE product is finite and fractional. Helpers.multiply
+    // re-boxes only an integral product as Long, so a fractional one is the native double product.
+    javaLiteralFractionalProduct(left, right): boolean {
+        const value = (node) => ((node !== undefined && ts.isNumericLiteral(node) && !/^0[xXbBoO]/.test(node.text)) ? Number(node.text) : undefined);
+        const a = value(left);
+        const b = value(right);
+        if (a === undefined || b === undefined || (!/[.eE]/.test(left.text) && !/[.eE]/.test(right.text))) {
+            return false;
+        }
+        const product = a * b;
+        return Number.isFinite(product) && !Number.isInteger(product);
     }
 
     // the native operator kind for a proven pair, or undefined. The helper's branch IS this operator:
@@ -3606,6 +3800,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!ts.isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
             return undefined;
         }
+        if (this.javaLongParameterRead(inner)) {
+            return { kind: 'long', boxed: !this.javaNullGuardAdmitsRead(inner) };
+        }
         const declared = this.javaDeclaredNumericFamily(inner);
         if (declared === undefined) {
             return undefined;
@@ -3617,7 +3814,7 @@ export class JavaTranspiler extends BaseTranspiler {
     printDeclaredNumericComparison(left, right, op): string | undefined {
         const l = this.javaComparisonOperand(left);
         const r = this.javaComparisonOperand(right);
-        if (l === undefined || r === undefined || (!l.boxed && !r.boxed)) {
+        if (l === undefined || r === undefined) {
             return undefined;
         }
         if (op !== ts.SyntaxKind.GreaterThanToken && (l.kind !== 'long' || r.kind !== 'long')) {
@@ -3626,6 +3823,9 @@ export class JavaTranspiler extends BaseTranspiler {
         const a = this.printNode(left, 0);
         const b = this.printNode(right, 0);
         const cmp = `${a} ${this.SupportedKindNames[op]} ${b}`;
+        if (!l.boxed && !r.boxed) {
+            return `(${cmp})`; // a guarded Long parameter unboxes like a primitive
+        }
         const aNull = `${a} == null`;
         const aSet = `${a} != null`;
         const bNull = `${b} == null`;
@@ -3796,6 +3996,9 @@ export class JavaTranspiler extends BaseTranspiler {
             // a declared numeric local/parameter (the embedding layer's declaration table,
             // or a native parameter type): an Integer declares as integral, and the helper
             // normalized it to Long anyway
+            if (this.javaLongParameterRead(node) && this.javaNullGuardAdmitsRead(node)) {
+                return 'long';
+            }
             return this.javaDeclaredNumericLocalKind(node);
         }
         if (node.kind === ts.SyntaxKind.BinaryExpression && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
@@ -4015,6 +4218,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 return undefined;
             }
             return `(((double) ${leftText}) % ((double) ${rightText}))`;
+        }
+        if (isMultiply && this.javaLiteralFractionalProduct(left, right)) {
+            return `(${leftText} * ${rightText})`;
         }
         // `+` keeps phase-1's literal-only rule (java-13/14 own Add): its operands must not
         // derive from a retyped local anywhere below

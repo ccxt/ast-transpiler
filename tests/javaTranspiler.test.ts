@@ -4555,7 +4555,7 @@ describe('java widened native add (numeric `+` on provably non-null operands)', 
         expect(output).toContain('Object x = Helpers.add(this.milliseconds(), 1);');
     });
 
-    test('- and * keep their own literal rule (the counters stay on the helper)', () => {
+    test('- and * on a primitive int counter widen to long natively', () => {
         const input =
         "class T {\n" +
         "    f(n: number): void {\n" +
@@ -4566,8 +4566,8 @@ describe('java widened native add (numeric `+` on provably non-null operands)', 
         "    }\n" +
         "}\n"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Object x = Helpers.subtract(i, 1);');
-        expect(output).toContain('Object y = Helpers.multiply(i, 2);');
+        expect(output).toContain('x = (((long) i) - 1L);');
+        expect(output).toContain('y = (((long) i) * 2L);');
     });
 });
 
@@ -7998,4 +7998,93 @@ test('declared-numeric ordered compare in an if condition carries no isTrue wrap
     } finally {
         printer.javaDeclaredLocalTypeResolver = previous;
     }
+});
+
+// java-arith: operands the printer itself proves non-null numeric go native: for-counter reads,
+// indexOf/length ints, `-1`, fractional literal products, and unwritten Long core parameters
+// behind a null test (unguarded reads keep the helper's null table).
+describe('java native arithmetic on printer-proven numeric operands', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-java-arith');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+    let out: string;
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, "export type Int = number | undefined;\n");
+        fs.writeFileSync(BASE_FIXTURE, "export default class Exchange {\n    parseToInt (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import Exchange from './base/Exchange';\n" +
+            "import type { Int } from './base/types';\n" +
+            "export default class probe extends Exchange {\n" +
+            "    async fetchA (symbol: string, since: Int = undefined, limit: Int = undefined, params = {}): Promise<any> {\n" +
+            "        const r = {};\n" +
+            "        if (since !== undefined) {\n" +
+            "            r['start'] = this.parseToInt (since / 1000);\n" +
+            "        }\n" +
+            "        if (limit === undefined || limit > 100) {\n" +
+            "            r['limit'] = 100;\n" +
+            "        }\n" +
+            "        if (limit !== undefined && limit * 2 > 10) {\n" +
+            "            r['x'] = 1;\n" +
+            "        }\n" +
+            "        r['q'] = since - 1;\n" +
+            "        return r;\n" +
+            "    }\n" +
+            "    fetchB (since: Int = undefined, limit: Int = undefined): any {\n" +
+            "        if (limit === undefined) {\n" +
+            "            limit = 5;\n" +
+            "        }\n" +
+            "        if (since === undefined) {\n" +
+            "            return undefined;\n" +
+            "        }\n" +
+            "        return [ since * 1000, limit * 2 ];\n" +
+            "    }\n" +
+            "    counters (s: string, xs: string[]): any {\n" +
+            "        let found = 0;\n" +
+            "        if (s.indexOf ('x') > -1) { found = 1; }\n" +
+            "        for (let i = 0; i < xs.length; i++) {\n" +
+            "            if (i > 0) { found = 2; }\n" +
+            "            const k = xs.length - i - 1;\n" +
+            "            const m = { 'i': i };\n" +
+            "        }\n" +
+            "        return [ found, 1 * 1.67, 2 * 0.5 ];\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('an unwritten Long parameter prints a Long async copy', () => {
+        expect(out).toContain('Long since = since3;');
+    });
+
+    test('guarded Long parameter reads divide, multiply and compare natively', () => {
+        expect(out).toContain('this.parseToInt((((double) since) / ((double) 1000)))');
+        expect(out).toContain('java.util.Objects.equals(limit, null) || (limit > 100)');
+        expect(out).toContain('(limit * 2L) > 10');
+    });
+
+    test('an unguarded Long parameter read keeps the helper', () => {
+        expect(out).toContain('Helpers.subtract(since, 1)');
+    });
+
+    test('a written Long parameter keeps the helper', () => {
+        expect(out).toContain('(since * 1000L)');
+        expect(out).toContain('Helpers.multiply(limit, 2)');
+    });
+
+    test('indexOf, counters and length print native operators', () => {
+        expect(out).toContain('if (((String)s).indexOf("x") > -1)');
+        expect(out).toContain('if (i > 0)');
+        expect(out).toContain('k = ((((long) ((java.util.List<?>)xs).size()) - ((long) i)) - 1L);');
+    });
+
+    test('a fractional literal product is native, an integral one keeps the Long re-box', () => {
+        expect(out).toContain('(1 * 1.67)');
+        expect(out).toContain('Helpers.multiply(2, 0.5)');
+    });
 });

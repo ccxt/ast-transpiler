@@ -1382,6 +1382,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     printJavaLength(expression: any, leftSide: any): string;
     isJavaPrimitiveForCounter(node: any): boolean;
     javaPrimitiveOperandKind(node: any): any;
+    javaPrintedIntCounter(node: any): boolean;
     isJavaFloatLiteral(node: any): boolean;
     javaPrintedCallKind(node: any): "int" | "double" | "long";
     javaComparisonOperandsAreExact(left: any, leftKind: any, right: any, rightKind: any): boolean;
@@ -1406,6 +1407,11 @@ declare class JavaTranspiler extends BaseTranspiler {
     hasDefaultedTail(node: any): boolean;
     javaSplitParameterWriteType(node: any): string | undefined;
     javaAsyncParameterLocalType(node: any): string | undefined;
+    javaParameterIsWritten(node: any): boolean;
+    javaNullGuardAdmitsRead(node: any): boolean;
+    javaTestProvesNonNull(test: any, symbol: any, truthy: any): boolean;
+    javaStatementAlwaysExits(statement: any): boolean;
+    javaLongParameterRead(node: any): boolean;
     javaMethodAssignedNames: WeakMap<ts.Node, Set<string>>;
     javaReturnTypeCache: WeakMap<ts.Node, string | undefined>;
     javaReturnTypeInProgress: Set<ts.Node>;
@@ -1459,6 +1465,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaIdentifierKeepsDeclaredName(node: any): boolean;
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
+    javaLiteralFractionalProduct(left: any, right: any): boolean;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaComparisonOperand(node: any): {
         kind: string;
