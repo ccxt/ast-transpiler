@@ -1378,11 +1378,13 @@ declare class JavaTranspiler extends BaseTranspiler {
     elementWriteValueMayBeNull(value: any): boolean;
     elementWriteKeyText(key: any, keyText: string): string;
     isPlainHashMapReceiver(container: any, keys: any[]): boolean;
+    javaFreshHashMapValue(container: any, value: any): boolean;
     javaPrintsNonNullValue(node: any): boolean;
     javaFreshExtendMap(initializer: any): boolean;
     javaDeclaredChainContainerRead(left: any, keyCount: number): string | undefined;
     unwrapPrintTransparentExpression(node: any): any;
-    javaLocalIsReassigned(node: any): boolean;
+    javaLocalIsReassigned(node: any, admitsWrite?: (rhs: any) => boolean): boolean;
+    javaPatternBindsSymbol(pattern: any, symbol: any): boolean;
     callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;
     returnTypePrintsAsHashMap(declaration: any): boolean;
     isDictionaryType(node: any): boolean;

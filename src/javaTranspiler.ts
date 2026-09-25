@@ -1653,14 +1653,19 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!declaration || declaration.kind !== ts.SyntaxKind.VariableDeclaration || !declaration.initializer) {
             return false; // parameters and receivers without an initializer stay the helper
         }
-        const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
-        const proven = ts.isObjectLiteralExpression(initializer)
-            || (ts.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0))
-            || (this.javaDeclaredMapReceiver(container) && this.javaFreshExtendMap(initializer));
-        if (!proven) {
+        if (!this.javaFreshHashMapValue(container, declaration.initializer)) {
             return false;
         }
-        return !this.javaLocalIsReassigned(container); // a later write can hand the local another type (D2)
+        // every later `x = rhs` must hand the local another fresh map too (D2)
+        return !this.javaLocalIsReassigned(container, (rhs) => this.javaFreshHashMapValue(container, rhs));
+    }
+
+    // a value that is a freshly built HashMap/LinkedHashMap on the Java side
+    javaFreshHashMapValue(container, value): boolean {
+        const initializer = this.unwrapPrintTransparentExpression(value);
+        return initializer !== undefined && (ts.isObjectLiteralExpression(initializer)
+            || (ts.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0))
+            || (this.javaDeclaredMapReceiver(container) && this.javaFreshExtendMap(initializer)));
     }
 
     // a value whose Java print can never be null: non-null literals and fresh containers
@@ -1733,7 +1738,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // Every write of the local in its enclosing function must be the element write
     // itself; an assignment could replace the HashMap with a List or a class instance.
-    javaLocalIsReassigned(node): boolean {
+    javaLocalIsReassigned(node, admitsWrite?: (rhs) => boolean): boolean {
         let scope: any = node;
         while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) {
             scope = scope.parent;
@@ -1751,7 +1756,25 @@ export class JavaTranspiler extends BaseTranspiler {
                 && current.operatorToken.kind === ts.SyntaxKind.EqualsToken
                 && current.left.kind === ts.SyntaxKind.Identifier
                 && this.getChecker().getSymbolAtLocation(current.left) === symbol) {
-                reassigned = true;
+                if (admitsWrite === undefined || !admitsWrite(current.right)) {
+                    reassigned = true;
+                    return;
+                }
+            }
+            if (current.kind === ts.SyntaxKind.BinaryExpression
+                && current.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+                && !ts.isIdentifier(current.left)
+                && !ts.isElementAccessExpression(current.left) && !ts.isPropertyAccessExpression(current.left)
+                && this.javaPatternBindsSymbol(current.left, symbol)) {
+                reassigned = true; // destructuring assignment `[x, p] = ..`
+                return;
+            }
+            if (current.kind === ts.SyntaxKind.BinaryExpression
+                && current.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+                && current.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+                && ts.isIdentifier(current.left)
+                && this.getChecker().getSymbolAtLocation(current.left) === symbol) {
+                reassigned = true; // compound write (`x ??= ..`)
                 return;
             }
             if ((ts.isForOfStatement(current) || ts.isForInStatement(current))
@@ -1764,6 +1787,23 @@ export class JavaTranspiler extends BaseTranspiler {
         };
         walk(scope);
         return reassigned;
+    }
+
+    // true when a destructuring target mentions the symbol anywhere
+    javaPatternBindsSymbol(pattern, symbol): boolean {
+        let found = false;
+        const walk = (n) => {
+            if (found || n === undefined) {
+                return;
+            }
+            if (ts.isIdentifier(n) && this.getChecker().getSymbolAtLocation(n) === symbol) {
+                found = true;
+                return;
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(pattern);
+        return found;
     }
 
     // A call whose callee body returns object literals only, so the value it hands

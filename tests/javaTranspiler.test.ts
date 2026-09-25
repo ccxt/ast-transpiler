@@ -6660,3 +6660,50 @@ describe('java native arithmetic on printer-proven numeric operands', () => {
         expect(out).toContain('Helpers.multiply(2, 0.5)');
     });
 });
+
+describe('java element write on a reassigned fresh map', () => {
+    const t = new Transpiler({ java: { parser: { NUM_LINES_END_FILE: 0 } } } as any);
+    test('reassigned only with fresh maps prints Map.put', () => {
+        const input =
+        "class T {\n" +
+        "    test(): any {\n" +
+        "        let x: any = {};\n" +
+        "        x[\"a\"] = 1;\n" +
+        "        x = {};\n" +
+        "        x[\"b\"] = undefined;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}"
+        const output = t.transpileJava(input).content;
+        expect(output).toContain('((java.util.Map<String, Object>)x).put("a", 1)');
+        expect(output).toContain('((java.util.Map<String, Object>)x).put("b", null)');
+        expect(output).not.toContain("addElementToObject");
+    });
+    test('a reassignment from a non-fresh value keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(y: any): any {\n" +
+        "        let x: any = {};\n" +
+        "        x = y;\n" +
+        "        x[\"a\"] = undefined;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}"
+        const output = t.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(x, "a", null)');
+    });
+    test('a destructuring write keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(y: any): any {\n" +
+        "        let x: any = {};\n" +
+        "        let p: any = {};\n" +
+        "        [x, p] = y;\n" +
+        "        x[\"a\"] = undefined;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}"
+        const output = t.transpileJava(input).content;
+        expect(output).toContain('Helpers.addElementToObject(x, "a", null)');
+    });
+});

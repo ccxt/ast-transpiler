@@ -15306,12 +15306,15 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!declaration || declaration.kind !== ts6.SyntaxKind.VariableDeclaration || !declaration.initializer) {
       return false;
     }
-    const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
-    const proven = ts6.isObjectLiteralExpression(initializer) || ts6.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0) || this.javaDeclaredMapReceiver(container) && this.javaFreshExtendMap(initializer);
-    if (!proven) {
+    if (!this.javaFreshHashMapValue(container, declaration.initializer)) {
       return false;
     }
-    return !this.javaLocalIsReassigned(container);
+    return !this.javaLocalIsReassigned(container, (rhs) => this.javaFreshHashMapValue(container, rhs));
+  }
+  // a value that is a freshly built HashMap/LinkedHashMap on the Java side
+  javaFreshHashMapValue(container, value) {
+    const initializer = this.unwrapPrintTransparentExpression(value);
+    return initializer !== void 0 && (ts6.isObjectLiteralExpression(initializer) || ts6.isCallExpression(initializer) && this.callAlwaysReturnsPlainHashMap(initializer, 0) || this.javaDeclaredMapReceiver(container) && this.javaFreshExtendMap(initializer));
   }
   // a value whose Java print can never be null: non-null literals and fresh containers
   javaPrintsNonNullValue(node) {
@@ -15371,7 +15374,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // Every write of the local in its enclosing function must be the element write
   // itself; an assignment could replace the HashMap with a List or a class instance.
-  javaLocalIsReassigned(node) {
+  javaLocalIsReassigned(node, admitsWrite) {
     let scope = node;
     while (scope && !ts6.isFunctionLike(scope) && !ts6.isSourceFile(scope)) {
       scope = scope.parent;
@@ -15386,6 +15389,16 @@ var JavaTranspiler = class extends BaseTranspiler {
         return;
       }
       if (current.kind === ts6.SyntaxKind.BinaryExpression && current.operatorToken.kind === ts6.SyntaxKind.EqualsToken && current.left.kind === ts6.SyntaxKind.Identifier && this.getChecker().getSymbolAtLocation(current.left) === symbol) {
+        if (admitsWrite === void 0 || !admitsWrite(current.right)) {
+          reassigned = true;
+          return;
+        }
+      }
+      if (current.kind === ts6.SyntaxKind.BinaryExpression && current.operatorToken.kind >= ts6.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts6.SyntaxKind.LastAssignment && !ts6.isIdentifier(current.left) && !ts6.isElementAccessExpression(current.left) && !ts6.isPropertyAccessExpression(current.left) && this.javaPatternBindsSymbol(current.left, symbol)) {
+        reassigned = true;
+        return;
+      }
+      if (current.kind === ts6.SyntaxKind.BinaryExpression && current.operatorToken.kind !== ts6.SyntaxKind.EqualsToken && current.operatorToken.kind >= ts6.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts6.SyntaxKind.LastAssignment && ts6.isIdentifier(current.left) && this.getChecker().getSymbolAtLocation(current.left) === symbol) {
         reassigned = true;
         return;
       }
@@ -15397,6 +15410,22 @@ var JavaTranspiler = class extends BaseTranspiler {
     };
     walk(scope);
     return reassigned;
+  }
+  // true when a destructuring target mentions the symbol anywhere
+  javaPatternBindsSymbol(pattern, symbol) {
+    let found = false;
+    const walk = (n) => {
+      if (found || n === void 0) {
+        return;
+      }
+      if (ts6.isIdentifier(n) && this.getChecker().getSymbolAtLocation(n) === symbol) {
+        found = true;
+        return;
+      }
+      ts6.forEachChild(n, walk);
+    };
+    walk(pattern);
+    return found;
   }
   // A call whose callee body returns object literals only, so the value it hands
   // back is always a freshly built HashMap on the Java side as well.
