@@ -2,7 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
 import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
-import { findAncestor, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
+import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 
 const parserConfig = {
     'ELSEIF_TOKEN': 'else if',
@@ -144,7 +144,75 @@ function rustIsAssignmentOperator(kind: SyntaxKind): boolean {
         (kind >= SyntaxKind.PlusEqualsToken && kind <= SyntaxKind.CaretEqualsToken);
 }
 
+/** Preorder (forEachChild order) of a scope's descendants, decoded once: `end[i]` is the index past
+ *  node i's subtree; `byName` lists identifiers and name-binding declarations per name text. */
+interface RustScopeIndex {
+    nodes: Node[];
+    end: number[];
+    byName: Map<string, number[]>;
+}
+
+const RUST_NAME_BINDER_KINDS = new Set<SyntaxKind>([
+    SyntaxKind.VariableDeclaration, SyntaxKind.Parameter, SyntaxKind.FunctionDeclaration,
+    SyntaxKind.ClassDeclaration, SyntaxKind.PropertyDeclaration, SyntaxKind.FunctionExpression,
+    SyntaxKind.ArrowFunction,
+]);
+
+const RUST_WALK_SKIP = 1;
+const RUST_WALK_STOP = 2;
+
+function rustBuildScopeIndex(scope: Node): RustScopeIndex {
+    const nodes: Node[] = [];
+    const end: number[] = [];
+    const byName = new Map<string, number[]>();
+    const add = (name: string, i: number) => {
+        const list = byName.get(name);
+        if (list === undefined) byName.set(name, [i]);
+        else if (list[list.length - 1] !== i) list.push(i);
+    };
+    const visit = (n: any) => {
+        const i = nodes.length;
+        nodes.push(n);
+        end.push(0);
+        const kind = n.kind;
+        if (RUST_NAME_BINDER_KINDS.has(kind) && n.name?.kind === SyntaxKind.Identifier) add(n.name.text, i);
+        if (kind === SyntaxKind.Identifier) add(n.text, i);
+        n.forEachChild(visit);
+        end[i] = nodes.length;
+    };
+    scope.forEachChild(visit);
+    return { nodes, end, byName };
+}
+
 export class RustTranspiler extends BaseTranspiler {
+
+    private rustScopeIndexes = new WeakMap<Node, RustScopeIndex>();
+
+    rustScopeIndex(scope: Node): RustScopeIndex {
+        let index = this.rustScopeIndexes.get(scope);
+        if (index === undefined) {
+            index = rustBuildScopeIndex(scope);
+            this.rustScopeIndexes.set(scope, index);
+        }
+        return index;
+    }
+
+    /** `scope.forEachChild(visit)` recursion over the cached preorder: `visit` answers
+     *  RUST_WALK_SKIP to skip the node's subtree, RUST_WALK_STOP to end the walk. */
+    rustWalkScope(scope: Node, visit: (n: any) => number | void): void {
+        const { nodes, end } = this.rustScopeIndex(scope);
+        for (let i = 0; i < nodes.length;) {
+            const r = visit(nodes[i]);
+            if (r === RUST_WALK_STOP) return;
+            i = r === RUST_WALK_SKIP ? end[i] : i + 1;
+        }
+    }
+
+    /** Scope nodes that are an identifier or a name-binding declaration spelled `name`, in walk order. */
+    rustScopeNameNodes(scope: Node, name: string): Node[] {
+        const index = this.rustScopeIndex(scope);
+        return (index.byName.get(name) ?? []).map((i) => index.nodes[i]);
+    }
 
     binaryExpressionsWrappers;
     methodSignatures: Record<string, { requiredCount: number }>;
@@ -996,9 +1064,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const declarationSymbol = this.rustSymbolOf(declaration.name as Identifier);
         let plain = true;
-        const visit = (n) => {
+        this.rustWalkScope(scope, (n) => {
             if (!plain || !isBinaryExpression(n) || n.operatorToken.kind !== SyntaxKind.EqualsToken) {
-                n.forEachChild(visit);
                 return;
             }
             const left: any = n.left;
@@ -1009,9 +1076,7 @@ export class RustTranspiler extends BaseTranspiler {
                 && left.elements.some((e) => isIdentifier(e) && String(e.text) === name)) {
                 plain = this.rustHandlerTupleCall(n.right);
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        });
         return plain;
     }
 
@@ -1117,23 +1182,18 @@ export class RustTranspiler extends BaseTranspiler {
         }
         let safe = this.rustWriteDictShape(this.typeOfNodeIfAny(ident))
             && this.rustWriteDictShape(this.typeOfNodeIfAny(initializer));
-        const visit = (n) => {
-            if (!safe) {
-                return;
-            }
+        this.rustWalkScope(scope, (n) => {
             if (n !== declaration && this.rustBindsName(n, name)) {
                 safe = false; // a second binding of the name in scope — stay boxed
-                return;
+                return RUST_WALK_STOP;
             }
             if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
                 && isIdentifier(n.left) && n.left.text === name
                 && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
                 safe = false;
-                return;
+                return RUST_WALK_STOP;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        });
         return safe;
     }
 
@@ -1151,20 +1211,15 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         let safe = true;
-        const visit = (n) => {
-            if (!safe) {
-                return;
-            }
+        this.rustWalkScope(scope, (n) => {
             if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
                 && isPropertyAccessExpression(n.left) && n.left.expression.kind === SyntaxKind.ThisKeyword
                 && n.left.name?.text === fieldName
                 && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
                 safe = false;
-                return;
+                return RUST_WALK_STOP;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        });
         return safe;
     }
 
@@ -1182,26 +1237,21 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const name = String((declaration.name as Identifier).text);
         let plain = true;
-        const visit = (n) => {
-            if (!plain) {
-                return;
-            }
+        this.rustWalkScope(scope, (n) => {
             if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind)
                 && isIdentifier(n.left) && n.left.text === name
                 && !this.rustPlainDictPreservingRhs(n.right, name)) {
                 plain = false;
-                return;
+                return RUST_WALK_STOP;
             }
             if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
                 && isArrayLiteralExpression(n.left)
                 && n.left.elements.some((e) => isIdentifier(e) && String((e as Identifier).text) === name)
                 && !this.rustHandlerTupleCall(n.right)) {
                 plain = false; // a tuple write keeps only the handle-arg family
-                return;
+                return RUST_WALK_STOP;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        });
         return plain;
     }
 
@@ -1801,20 +1851,17 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         let safe = true;
-        const visit = (n) => {
-            if (!safe) return;
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
             if (n !== declaration && this.rustBindsName(n, name)) {
                 safe = false; // a second binding of the name in scope — stay boxed
-                return;
+                break;
             }
-            if (n.kind === SyntaxKind.Identifier && n.text === name && n !== declaration.name
+            if (n.kind === SyntaxKind.Identifier && n !== declaration.name
                 && !(skipPropertyNames && this.rustIdentifierIsPropertyName(n)) && !acceptUse(n)) {
                 safe = false;
-                return;
+                break;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        }
         return safe;
     }
 
@@ -1962,6 +2009,44 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustNativeStrReturnDecisions.set(node, decision);
         }
         return decision ? 'str' : undefined;
+    }
+
+    private rustMethodOverrides = new WeakMap<Node, Node | null>();
+    private rustClassMethodsByName = new WeakMap<Node, Map<string, Node>>();
+
+    // base getMethodOverride rescans every parent member (getText) per call; same walk, memoized
+    getMethodOverride(node: Node): Node {
+        if (node === undefined || !isClassDeclaration(node.parent) || !(node.parent as any).heritageClauses) {
+            return undefined;
+        }
+        const cached = this.rustMethodOverrides.get(node);
+        if (cached !== undefined) {
+            return cached ?? undefined;
+        }
+        let method = undefined;
+        let parentClass = getAllSuperTypeNodes(node.parent)[0];
+        while (parentClass !== undefined) {
+            const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+            if (parentClassDecl === undefined) {
+                this.warn(node, "Parent class", "Parent class not found");
+                method = undefined;
+                break;
+            }
+            let byName = this.rustClassMethodsByName.get(parentClassDecl);
+            if (byName === undefined) {
+                byName = new Map();
+                for (const elem of (parentClassDecl as any).members ?? []) {
+                    if (isMethodDeclaration(elem)) {
+                        byName.set(elem.name.getText().trim(), elem);
+                    }
+                }
+                this.rustClassMethodsByName.set(parentClassDecl, byName);
+            }
+            method = byName.get((node as any).name.text) ?? method;
+            parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? undefined;
+        }
+        this.rustMethodOverrides.set(node, method ?? null);
+        return method;
     }
 
     private rustNativeStrReturnDecisionUncached(node): boolean {
@@ -2276,13 +2361,12 @@ export class RustTranspiler extends BaseTranspiler {
         const scope = this.rustEnclosingFunction(declaration);
         if (scope === undefined) return { stable, uses };
         const declarationSymbol = this.rustSymbolOf(declaration.name as Identifier);
-        const visit = (node) => {
-            if (!stable) return;
+        this.rustWalkScope(scope, (node) => {
             if (node !== declaration && this.rustBindsName(node, name)) {
                 const otherSymbol = this.rustSymbolOf((node as any).name);
                 if (declarationSymbol === undefined || otherSymbol === undefined || otherSymbol === declarationSymbol) {
                     stable = false; // same binding, or the checker cannot tell them apart
-                    return;
+                    return RUST_WALK_STOP;
                 }
             }
             if (node.kind === SyntaxKind.Identifier && node.text === name && node !== declaration.name &&
@@ -2293,17 +2377,15 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustAssignmentWritesWholeLocal(node.left, declaration) &&
                 !this.rustDictProvenExpression(node.right, table, declaration.getStart())) {
                 stable = false; // the local itself is reassigned a non-Dict value
-                return;
+                return RUST_WALK_STOP;
             }
             // `for (x of list)` / `for (x in obj)` rebind an existing local.
             if ((isForOfStatement(node) || isForInStatement(node)) &&
                 this.rustAssignmentWritesWholeLocal(node.initializer, declaration)) {
                 stable = false;
-                return;
+                return RUST_WALK_STOP;
             }
-            node.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        });
         return { stable, uses };
     }
 
