@@ -969,11 +969,11 @@ export class RustTranspiler extends BaseTranspiler {
     // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
     // In the TS AST `key` is the left operand and `obj` the right one.
     printNativeInOperator(key, obj) {
-        if (!ts.isStringLiteral(key)) {
-            return undefined;
-        }
         if (!this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
             return undefined;
+        }
+        if (!ts.isStringLiteral(key)) {
+            return this.printNativeInOperatorDynamicKey(key, obj);
         }
         const printedKey = this.printStringLiteral(key);
         const keyLiteral = this.rustStringLiteralOf(printedKey);
@@ -982,6 +982,32 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const objExpr = this.printNode(obj, 0);
         return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral})))`;
+    }
+
+    // `k in obj` with a checker-proven string `k` (a plain identifier) →
+    // `matches!((&obj, &k), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))`
+    // — `in_op`'s own Dict/Str arm; a Null key or non-Dict receiver answers false in both.
+    printNativeInOperatorDynamicKey(key, obj) {
+        if (!ts.isIdentifier(key) || String(key.escapedText) === 'undefined') {
+            return undefined;
+        }
+        if (!this.rustKeyIsProvenString(key) || !this.printsValueExpression(obj)) {
+            return undefined;
+        }
+        // A retyped `Option<String>` local is no `Value::Str`; the key must stay a boxed place.
+        const declaration: any = this.rustDeclarationOfIdentifier(key);
+        if (declaration === undefined || !this.isDeclaredValueIdentifier(key)) {
+            return undefined;
+        }
+        if (ts.isVariableDeclaration(declaration) && this.rustSafeStringLocalIsTyped(declaration)) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) {
+            return undefined;
+        }
+        const objExpr = this.printNode(obj, 0);
+        return `Value::Bool(matches!((&${objExpr}, &${keyText}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
     }
 
     // The Rust string literal behind a printed TS string literal — the boxed

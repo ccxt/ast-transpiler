@@ -27,9 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/cjs_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "node_modules/tsup/assets/cjs_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -19979,11 +19979,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // `"key" in obj` → `matches!(&obj, Value::Dict(__d) if __d.contains_key("key"))`
   // In the TS AST `key` is the left operand and `obj` the right one.
   printNativeInOperator(key, obj) {
-    if (!_typescript2.default.isStringLiteral(key)) {
-      return void 0;
-    }
     if (!this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
       return void 0;
+    }
+    if (!_typescript2.default.isStringLiteral(key)) {
+      return this.printNativeInOperatorDynamicKey(key, obj);
     }
     const printedKey = this.printStringLiteral(key);
     const keyLiteral = this.rustStringLiteralOf(printedKey);
@@ -19992,6 +19992,30 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     const objExpr = this.printNode(obj, 0);
     return `Value::Bool(matches!(&${objExpr}, Value::Dict(__d) if __d.contains_key(${keyLiteral})))`;
+  }
+  // `k in obj` with a checker-proven string `k` (a plain identifier) →
+  // `matches!((&obj, &k), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))`
+  // — `in_op`'s own Dict/Str arm; a Null key or non-Dict receiver answers false in both.
+  printNativeInOperatorDynamicKey(key, obj) {
+    if (!_typescript2.default.isIdentifier(key) || String(key.escapedText) === "undefined") {
+      return void 0;
+    }
+    if (!this.rustKeyIsProvenString(key) || !this.printsValueExpression(obj)) {
+      return void 0;
+    }
+    const declaration = this.rustDeclarationOfIdentifier(key);
+    if (declaration === void 0 || !this.isDeclaredValueIdentifier(key)) {
+      return void 0;
+    }
+    if (_typescript2.default.isVariableDeclaration(declaration) && this.rustSafeStringLocalIsTyped(declaration)) {
+      return void 0;
+    }
+    const keyText = this.printNode(key, 0).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) {
+      return void 0;
+    }
+    const objExpr = this.printNode(obj, 0);
+    return `Value::Bool(matches!((&${objExpr}, &${keyText}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
   }
   // The Rust string literal behind a printed TS string literal — the boxed
   // shapes the printer emits today (`Value::Str("k".to_string())`,

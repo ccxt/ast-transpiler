@@ -1667,6 +1667,7 @@ declare class RustTranspiler extends BaseTranspiler {
     nativeValuePredicateText(kind: string, operandNode: any, printedOperand: string): string | undefined;
     isDictShapedType(type: ts.Type | undefined): boolean;
     printNativeInOperator(key: any, obj: any): string;
+    printNativeInOperatorDynamicKey(key: any, obj: any): string;
     rustStringLiteralOf(printedKey: string): string | undefined;
     printNativeDictInsert(baseExpr: any, keyNode: any, keyText: any, valueText: any): string | undefined;
     /** The `insert` key argument. A literal becomes `"k".into()`; a proven

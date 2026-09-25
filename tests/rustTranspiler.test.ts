@@ -781,6 +781,70 @@ describe('rust transpiling tests', () => {
         expect(output).toContain('in_op(&params,');
     });
 
+    // Dynamic key: a checker-proven string identifier against a dict receiver
+    // prints `in_op`'s own `(Dict, Str)` arm; every other key kind keeps the helper.
+    const DYN_IN = 'matches!((&o, &k), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))';
+    test('in operator native for a proven-string key on a dict receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (o: Dictionary<any>, k: string) {\n    return k in o;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(DYN_IN);
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator native for a nullable-string key (Str) on a dict receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\ntype Str = string | undefined;\nfunction f (o: Dictionary<any>, k: Str) {\n    if (k in o) {\n        return 1;\n    }\n    return 2;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain(DYN_IN);
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator native for a string local key on a this-field dict receiver', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nclass Test {\n    markets: Dictionary<any> = {};\n    f (symbol: string) {\n        const key = symbol + "x";\n        return key in this.markets;\n    }\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('matches!((&self.markets, &key), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))');
+        expect(output).not.toContain('in_op(');
+    });
+
+    test('in operator keeps the helper for a number key', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (o: Dictionary<any>, k: number) {\n    return k in o;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&o, &k)');
+    });
+
+    test('in operator keeps the helper for an any key', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (o: Dictionary<any>, k: any) {\n    return k in o;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&o, &k)');
+    });
+
+    test('in operator keeps the helper for a string | number key', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (o: Dictionary<any>, k: string | number) {\n    return k in o;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&o, &k)');
+    });
+
+    test('in operator keeps the helper for a string key on an array receiver', () => {
+        const ts = 'function f (a: string[], k: string) {\n    return k in a;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&a, &k)');
+    });
+
+    test('in operator keeps the helper for a non-identifier string key', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nfunction f (o: Dictionary<any>, m: Dictionary<string>) {\n    return m["id"] in o;\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('in_op(&o,');
+    });
+
+    // A `safeString` local read by `in` is never retyped `Option<String>` (the
+    // retype needs every use native), so the key is a `Value` place and inlines.
+    test('in operator: safeString key local stays a Value and inlines', () => {
+        const ts = 'interface Dictionary<T> { [key: string]: T }\nclass Test {\n    markets: Dictionary<any> = {};\n    safeString (o: any, k: string): string { return ""; }\n    f (raw: any) {\n        const id = this.safeString (raw, "id");\n        if (id !== undefined) {\n            return id in this.markets;\n        }\n        return false;\n    }\n}'
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut id: Value = ');
+        expect(output).toContain('matches!((&self.markets, &id), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))');
+        expect(output).not.toContain('in_op(');
+    });
+
     // Checker-proven helper removal: negate of a numeric literal folds
     test('negate literal folds to a literal', () => {
         const intOutput = transpiler.transpileRust('const x = -1;').content;
