@@ -791,6 +791,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goGetArgTypeCache: WeakMap<any, string | undefined>;
     goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     goLocalTypeResolution: Set<any>;
+    goSelfConcatLeafCache: WeakMap<any, boolean>;
     asyncMethodSuffix: string;
     classNameMap: {
         [key: string]: string;
@@ -935,6 +936,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
     goNativeAppendReceiver(pushNode: any): string | undefined;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
+    goSelfConcatIsString(node: any, varName: string): boolean;
     goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
     goPointerWriteText(node: any, identation: any): string | undefined;
     goSafeDictLocalArgs(initializer: any): {

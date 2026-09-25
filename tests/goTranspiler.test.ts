@@ -6188,3 +6188,20 @@ describe('unified string parameters (unifiedStringParams)', () => {
         expect(() => unified.transpileGo(input)).toThrow(/unifiedStringParams/);
     });
 });
+
+describe('go string locals rewritten by self-concatenation', () => {
+    const run = (body: string) => new Transpiler({ verbose: false }).transpileGo(
+        'type Str = string | undefined;\nclass T {\n    safeString (o, k): Str { return o[k]; }\n    f (q: string, o): string {\n' + body + '    }\n}\n').content;
+    test('x = x + proven strings keeps the local a Go string and prints native +', () => {
+        const output = run("        const q2 = 'z';\n        let p = '';\n        if (q.length > 0) { p = p + '&' + q2; }\n        p += 'x';\n        return p;\n");
+        expect(output).toContain('var p string = ""');
+        expect(output).toContain('p = p + "&" + q2');
+        expect(output).toContain('p += "x"');
+    });
+    test('a nilable or boxed operand keeps the local any and the helper', () => {
+        const output = run("        let a = '';\n        a = a + this.safeString (o, 'k');\n        let b = '';\n        b = b + o['k'];\n        return a + b;\n");
+        expect(output).toContain('var a any = ""');
+        expect(output).toContain('a = Add(a, this.SafeString(o, "k"))');
+        expect(output).toContain('var b any = ""');
+    });
+});

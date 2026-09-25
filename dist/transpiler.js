@@ -7613,6 +7613,8 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedStringParams = {};
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     this.goLocalTypeResolution = /* @__PURE__ */ new Set();
+    // goSelfConcatIsString's answer per non-self leaf node
+    this.goSelfConcatLeafCache = /* @__PURE__ */ new WeakMap();
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     this.asyncMethodSuffix = "";
@@ -8861,9 +8863,14 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
           const op = parent.operatorToken.kind;
           if (op === ts5.SyntaxKind.EqualsToken) {
+            if (goType === "string" && this.goSelfConcatIsString(parent.right, varName)) {
+              return false;
+            }
             if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === ts5.SyntaxKind.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0)) {
               return true;
             }
+          } else if (op === ts5.SyntaxKind.PlusEqualsToken && goType === "string" && this.goSelfConcatIsString(parent.right, varName)) {
+            return false;
           } else if (op >= ts5.SyntaxKind.FirstCompoundAssignment && op <= ts5.SyntaxKind.LastCompoundAssignment) {
             return true;
           }
@@ -8872,6 +8879,33 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return false;
     });
     return safe;
+  }
+  // a `+` chain written back into a `string` local (`x = x + "&" + y`, `x += y`): every leaf is
+  // the local itself (a Go string by the typing being proven) or a proven non-nil Go string,
+  // so the chain prints native and the local only ever holds a string
+  goSelfConcatIsString(node, varName) {
+    while (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    if (node?.kind === ts5.SyntaxKind.Identifier && node.escapedText === varName) {
+      return true;
+    }
+    if (node?.kind === ts5.SyntaxKind.BinaryExpression && node.operatorToken.kind === ts5.SyntaxKind.PlusToken) {
+      return this.goSelfConcatIsString(node.left, varName) && this.goSelfConcatIsString(node.right, varName);
+    }
+    if (this.hasNodeWhere(node, (n) => n.kind === ts5.SyntaxKind.Identifier && n.escapedText === varName)) {
+      return false;
+    }
+    const cache = this.goSelfConcatLeafCache;
+    if (cache.has(node)) {
+      return cache.get(node);
+    }
+    const settled = this.goLocalTypeResolution.size === 0;
+    const result = this.goStringConcatOperandType(node, this.printNode(node, 0)) === "string";
+    if (settled) {
+      cache.set(node, result);
+    }
+    return result;
   }
   // How a write of another shape reaches a pointer-typed local: 'nil' (undefined/null prints nil),
   // 'wrap' (a Go string becomes SafeStringPtr(v), never nil), or undefined (not convertible).

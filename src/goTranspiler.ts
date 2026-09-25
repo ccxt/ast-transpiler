@@ -654,6 +654,8 @@ export class GoTranspiler extends BaseTranspiler {
     goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
+    // goSelfConcatIsString's answer per non-self leaf node
+    goSelfConcatLeafCache = new WeakMap<any, boolean>();
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     asyncMethodSuffix = '';
@@ -1942,10 +1944,15 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
                     const op = parent.operatorToken.kind;
                     if (op === ts.SyntaxKind.EqualsToken) {
+                        if ((goType === 'string') && this.goSelfConcatIsString(parent.right, varName)) {
+                            return false;
+                        }
                         if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
                             && !((declaration.kind === ts.SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)) {
                             return true;
                         }
+                    } else if ((op === ts.SyntaxKind.PlusEqualsToken) && (goType === 'string') && this.goSelfConcatIsString(parent.right, varName)) {
+                        return false;
                     } else if ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment)) {
                         return true;
                     }
@@ -1954,6 +1961,35 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         });
         return safe;
+    }
+
+    // a `+` chain written back into a `string` local (`x = x + "&" + y`, `x += y`): every leaf is
+    // the local itself (a Go string by the typing being proven) or a proven non-nil Go string,
+    // so the chain prints native and the local only ever holds a string
+    goSelfConcatIsString(node, varName: string): boolean {
+        while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if ((node?.kind === ts.SyntaxKind.Identifier) && (node.escapedText === varName)) {
+            return true;
+        }
+        if ((node?.kind === ts.SyntaxKind.BinaryExpression) && (node.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
+            return this.goSelfConcatIsString(node.left, varName) && this.goSelfConcatIsString(node.right, varName);
+        }
+        if (this.hasNodeWhere(node, (n: any) => (n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === varName))) {
+            return false;
+        }
+        const cache = this.goSelfConcatLeafCache;
+        if (cache.has(node)) {
+            return cache.get(node);
+        }
+        // an answer computed while another local is being resolved may be the guard's `any`
+        const settled = (this.goLocalTypeResolution.size === 0);
+        const result = this.goStringConcatOperandType(node, this.printNode(node, 0)) === 'string';
+        if (settled) {
+            cache.set(node, result);
+        }
+        return result;
     }
 
     // How a write of another shape reaches a pointer-typed local: 'nil' (undefined/null prints nil),
