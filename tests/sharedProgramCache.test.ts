@@ -40,21 +40,17 @@ describe('shared program cache', () => {
         expect(b.transpilePython("const beta = 2;").content).toBe("beta = 2");
     });
 
-    test('a shared cache reuses parsed lib SourceFiles across instances', () => {
+    test('instances on a shared cache create their programs on one TS7 API server', () => {
         const cache = Transpiler.createProgramCache();
         const a = new Transpiler(config, cache);
         a.transpilePython("const x = 1;");
-        const parsedAfterFirst = cache.sourceFiles.size;
-        expect(parsedAfterFirst).toBeGreaterThan(0);
+        expect(cache.api).toBeDefined();
+        const api = cache.api;
 
-        // a second instance on the same cache must not re-parse the lib chain
         const b = new Transpiler(config, cache);
         const bContext = (b as any).createProgramInMemoryAndSetContext("const y = 2;");
-        expect(cache.sourceFiles.size).toBe(parsedAfterFirst);
-
-        const libName = [ ...cache.sourceFiles.keys() ].find((f) => f.includes("lib.esnext"));
-        expect(libName).toBeDefined();
-        expect(bContext.program.getSourceFile(libName)).toBe(cache.sourceFiles.get(libName).sourceFile);
+        expect(cache.api).toBe(api);
+        expect(bContext.program.getSourceFile(bContext.src.fileName)).toBeDefined();
     });
 
     test('sharing a cache does not change transpilation output', () => {

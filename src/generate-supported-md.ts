@@ -119,12 +119,12 @@ const KIND_TO_KEYWORD: Record<string, string> = {
 function getSupportedConstructs(base: string): string[] {
     const body = extractMethodBody(base, 'printNode');
     const constructs = new Set<string>();
-    // ts.isXxx(node)
-    for (const m of body.matchAll(/ts\.is([A-Za-z]+)\s*\(/g)) {
+    // isXxx(node)
+    for (const m of body.matchAll(/(?<![\w.])(?:ts\.)?is([A-Z][A-Za-z]+)\s*\(/g)) {
         constructs.add(humanize(m[1]));
     }
-    // ts.SyntaxKind.Xxx === node.kind
-    for (const m of body.matchAll(/ts\.SyntaxKind\.([A-Za-z]+)\s*===\s*node\.kind/g)) {
+    // SyntaxKind.Xxx === node.kind
+    for (const m of body.matchAll(/(?:ts\.)?SyntaxKind\.([A-Za-z]+)\s*===\s*node\.kind/g)) {
         constructs.add(humanize(m[1].replace(/Keyword$/, ' keyword')));
     }
     return [...constructs].sort();
@@ -136,7 +136,7 @@ function getSupportedConstructs(base: string): string[] {
 function getOperatorsAndKeywords(base: string): { operators: string[], keywords: string[] } {
     const body = extractMethodBody(base, 'initOperators');
     const kinds = new Set<string>();
-    for (const m of body.matchAll(/ts\.SyntaxKind\.([A-Za-z]+)\]/g)) {
+    for (const m of body.matchAll(/(?:ts\.)?SyntaxKind\.([A-Za-z]+)\]/g)) {
         kinds.add(m[1]);
     }
     const operators: string[] = [];

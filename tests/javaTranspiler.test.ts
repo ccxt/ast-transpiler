@@ -1385,7 +1385,7 @@ ${body}
         const original = printer.javaDeclaredLocalTypeResolver;
         try {
             printer.javaDeclaredLocalTypeResolver = (declaration: any) => {
-                const name = declaration?.name?.escapedText;
+                const name = declaration?.name?.text;
                 if (name === 'boxed') { return 'Boolean'; }
                 if (name === 'primitive') { return 'boolean'; }
                 return undefined;
@@ -1524,7 +1524,7 @@ class T {
         const original = printer.javaNativeParameterType;
         try {
             printer.javaNativeParameterType = (node: any) => {
-                const name = node?.name?.escapedText;
+                const name = node?.name?.text;
                 if (name === 'trigger') { return 'Boolean'; }
                 if (name === 'enabled') { return 'boolean'; }
                 if (name === 'parameters') { return 'java.util.Map<String, Object>'; }
@@ -2706,7 +2706,7 @@ describe('java string-concat chains anchored by a declared String', () => {
     // and calls to hand-written `public String` runtime methods come back through
     // javaExpressionTypeResolver — these tests stub that resolver with a name map
     const withStrings = (strings, input) => {
-        transpiler.javaTranspiler.javaExpressionTypeResolver = (node) => strings[node?.escapedText];
+        transpiler.javaTranspiler.javaExpressionTypeResolver = (node) => strings[node?.text];
         try {
             return transpiler.transpileJava(input).content;
         } finally {
@@ -2783,7 +2783,7 @@ describe('java string-concat chains anchored by a declared String', () => {
 
 describe('java literal-anchored concat (`a + "lit"` whatever the other operand is)', () => {
     const withStrings = (strings, input) => {
-        transpiler.javaTranspiler.javaExpressionTypeResolver = (node) => strings[node?.escapedText];
+        transpiler.javaTranspiler.javaExpressionTypeResolver = (node) => strings[node?.text];
         try {
             return transpiler.transpileJava(input).content;
         } finally {
@@ -3948,7 +3948,7 @@ describe('java inOp -> containsKey: declared Map receivers and nullable dicts', 
         declared.clear();
         entries.forEach(([name, type]) => declared.set(name, type));
         (transpiler as any).javaTranspiler.javaDeclaredLocalTypeResolver =
-            (declaration: any) => declared.get(String(declaration?.name?.escapedText));
+            (declaration: any) => declared.get(String(declaration?.name?.text));
     };
     afterEach(() => {
         (transpiler as any).javaTranspiler.javaDeclaredLocalTypeResolver = undefined;
@@ -4165,7 +4165,7 @@ describe('java replaceAll native emission', () => {
     const withNumericLocals = (javaTypes: any, body: () => void) => {
         const printer: any = (transpiler as any).javaTranspiler;
         const previous = printer.javaExpressionTypeResolver;
-        printer.javaExpressionTypeResolver = (node: any) => javaTypes[node.escapedText];
+        printer.javaExpressionTypeResolver = (node: any) => javaTypes[node.text];
         try {
             body();
         } finally {
@@ -4268,7 +4268,7 @@ describe('java replaceAll native emission', () => {
     const withDeclaredLocalTypes = (javaTypes: any, body: () => void) => {
         const printer: any = (transpiler as any).javaTranspiler;
         const previous = printer.javaDeclaredLocalTypeResolver;
-        printer.javaDeclaredLocalTypeResolver = (declaration: any) => javaTypes[declaration?.name?.escapedText];
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => javaTypes[declaration?.name?.text];
         try {
             body();
         } finally {
@@ -5898,7 +5898,7 @@ describe('java typed parameters (b-09)', () => {
     test('a core argument declared with the core type, or an int literal for Long, needs no conversion', () => {
         const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         const printer: any = (byPath as any).javaTranspiler;
-        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.escapedText === 'm' ? 'java.util.Map<String, Object>' : undefined);
+        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'm' ? 'java.util.Map<String, Object>' : undefined);
         const out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
         expect(out).toContain('this.fetchDepth("x", 50L, m);');
         expect(out).toContain('this.fetchDepth("x", -7L, Helpers.toMapArg(o));');
@@ -6077,7 +6077,7 @@ describe('isEqual on printed Java primitives and declared numerics', () => {
         "    const z = b === 2;\n" +
         "    return [ x, y, z ];\n" +
         "}\n"
-        withResolver((declaration: any) => declaration.name?.escapedText === 'a' ? 'Long' : 'Double', () => {
+        withResolver((declaration: any) => declaration.name?.text === 'a' ? 'Long' : 'Double', () => {
             const output = transpiler.transpileJava(input).content;
             expect(output).toContain('(a != null && a == 1)');
             expect(output).toContain('(a == null || a != 1)');
@@ -6093,7 +6093,7 @@ describe('isEqual on printed Java primitives and declared numerics', () => {
         "    const y = a === n;\n" +
         "    return [ x, y ];\n" +
         "}\n"
-        withResolver((declaration: any) => declaration.name?.escapedText === 'a' ? 'String' : undefined, () => {
+        withResolver((declaration: any) => declaration.name?.text === 'a' ? 'String' : undefined, () => {
             const output = transpiler.transpileJava(input).content;
             expect(output).toContain('java.util.Objects.equals(a, 1)');
             expect(output).toContain('java.util.Objects.equals(a, n)');
@@ -6395,7 +6395,7 @@ describe('declared container writes: native put / chain container reads', () => 
         }
     };
     const resolver = (d: any) => {
-        const n = d.name?.escapedText;
+        const n = d.name?.text;
         return n === 'm' ? 'java.util.Map<String, Object>' : n === 'l' ? 'java.util.List<Object>' : n === 'k' ? 'String' : undefined;
     };
     test('non-null values put natively, nullable values keep the helper', () => {
@@ -6504,7 +6504,7 @@ describe('ordered comparison over declared numeric locals', () => {
     const withTypes = (types: any, body: () => void) => {
         const printer: any = (transpiler as any).javaTranspiler;
         const previous = printer.javaDeclaredLocalTypeResolver;
-        printer.javaDeclaredLocalTypeResolver = (d: any) => types[String(d?.name?.escapedText)];
+        printer.javaDeclaredLocalTypeResolver = (d: any) => types[String(d?.name?.text)];
         try {
             body();
         } finally {
@@ -6561,7 +6561,7 @@ describe('ordered comparison over declared numeric locals', () => {
 test('declared-numeric ordered compare in an if condition carries no isTrue wrapper', () => {
     const printer: any = (transpiler as any).javaTranspiler;
     const previous = printer.javaDeclaredLocalTypeResolver;
-    printer.javaDeclaredLocalTypeResolver = (d: any) => (String(d?.name?.escapedText) === 'a' ? 'Long' : undefined);
+    printer.javaDeclaredLocalTypeResolver = (d: any) => (String(d?.name?.text) === 'a' ? 'Long' : undefined);
     try {
         const input = "class T {\\n    f(p: any): void {\\n        const a = p;\\n        if (a > 5) {\\n            return;\\n        }\\n    }\\n}";
         const output = transpiler.transpileJava(input).content;

@@ -161,7 +161,7 @@ function runCommandJava(command) {
 }
 
 async function runTS() {
-    const command = "node --no-warnings --loader ts-node/esm " + TS_FILE;
+    const command = "npx tsx " + TS_FILE;
     const result = await runCommand(command);
     console.log(blue("Executed TS"))
     return result;
