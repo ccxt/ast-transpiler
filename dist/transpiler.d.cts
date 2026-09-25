@@ -1323,6 +1323,7 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaCoreParameterTypes(method: any): string[];
     javaCoreDefaultArgument(param: any, type: string): string;
     javaConvertToCoreType(type: string, printed: string, node: any): string;
+    javaLocalDeclaredAs(node: any, printed: string, type: string): boolean;
     javaErasure(type: string): string;
     printOverrideBridges(node: any, identation: any): string;
     printOverrideBridge(node: any, ancestor: any, ancestorTypes: string[], ownTypes: string[], identation: any): string;

@@ -5786,6 +5786,12 @@ describe('java typed parameters (b-09)', () => {
             "    }\n" +
             "    fetchDepth (symbol: Str, limit: Int = 100, params: Dict = {}): void {\n" +
             "    }\n" +
+            "    useCores (row: Dict, other: any): void {\n" +
+            "        const m: Dict = this.safeTitle (row);\n" +
+            "        const o = other;\n" +
+            "        this.fetchDepth ('x', 50, m);\n" +
+            "        this.fetchDepth ('x', -7, o);\n" +
+            "    }\n" +
                         "    pageRows (limit: Int = undefined, raw = undefined): void {\n" +
             "        limit = raw;\n" +
             "        [ limit, raw ] = [ raw, limit ];\n" +
@@ -5887,6 +5893,16 @@ describe('java typed parameters (b-09)', () => {
     test('a super call into a split method binds the typed core at full arity', () => {
         expect(venueOutput).toContain('return super.networkIdToCode(Helpers.toStringArg(title), currencyCode);');
         expect(venueOutput).not.toContain('super.networkIdToCode(title, ');
+    });
+
+    test('a core argument declared with the core type, or an int literal for Long, needs no conversion', () => {
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.escapedText === 'm' ? 'java.util.Map<String, Object>' : undefined);
+        const out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+        expect(out).toContain('this.fetchDepth("x", 50L, m);');
+        expect(out).toContain('this.fetchDepth("x", -7L, Helpers.toMapArg(o));');
+        expect(venueOutput).toContain('this.fetchDepth("x", 50L, Helpers.toMapArg(m));');
     });
 
     test('an integer default of a Long slot prints as a long literal', () => {

@@ -712,7 +712,13 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === 'Object') {
             return `(Object) (${printed})`;
         }
+        if (this.javaLocalDeclaredAs(node, printed, type)) {
+            return printed;
+        }
         if (type === 'Long') {
+            if (/^-?\d+$/.test(printed) && ts.isNumericLiteral(ts.isPrefixUnaryExpression(node) ? node.operand : node)) {
+                return printed + 'L';
+            }
             return /^-?\d+L$/.test(printed) ? printed : `Helpers.toLongOrNull(${printed})`;
         }
         if (type === 'String') {
@@ -725,6 +731,22 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.toStringListArg(${printed})`;
         }
         return `(${type}) (${printed})`;
+    }
+
+    // an identifier whose final Java declaration (the build layer's table, or a natively typed
+    // parameter) is exactly the core type and which prints under its own name: no conversion
+    javaLocalDeclaredAs(node, printed: string, type: string): boolean {
+        if (node === undefined || !ts.isIdentifier(node) || printed !== node.escapedText) {
+            return false;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !ts.isVariableDeclaration(declaration)) {
+            return this.javaArgumentHasType(node, type)
+                && (type !== JAVA_STRING_LIST_TYPE || this.javaDeclaredTypeOf(node) === JAVA_STRING_LIST_TYPE);
+        }
+        const declared = this.javaDeclaredTypeOf(node);
+        return declared !== undefined && declared.replace(/\s+/g, '').replace(/^java\.util\./, '')
+            === type.replace(/\s+/g, '').replace(/^java\.util\./, '');
     }
 
     // Java erasure of a printed type, for override/bridge comparisons
