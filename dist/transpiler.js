@@ -13,12 +13,18 @@ import {
   typeParts,
   typeTarget
 <<<<<<< HEAD
+<<<<<<< HEAD
 } from "./chunk-WSDQRN6Z.js";
 ||||||| 9f1db622a03
 } from "./chunk-VNDHHGGT.js";
 =======
 } from "./chunk-CJKIOENV.js";
 >>>>>>> ts7perf2/java-B
+||||||| 9f1db622a03
+} from "./chunk-VNDHHGGT.js";
+=======
+} from "./chunk-IHAORD2S.js";
+>>>>>>> ts7perf2/rust-B
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -19459,15 +19465,69 @@ var RUST_DECLARED_DICT_LOCALS = {
 function rustIsAssignmentOperator(kind) {
   return kind === SyntaxKind7.EqualsToken || kind >= SyntaxKind7.PlusEqualsToken && kind <= SyntaxKind7.CaretEqualsToken;
 }
+var RUST_NAME_BINDER_KINDS = /* @__PURE__ */ new Set([
+  SyntaxKind7.VariableDeclaration,
+  SyntaxKind7.Parameter,
+  SyntaxKind7.FunctionDeclaration,
+  SyntaxKind7.ClassDeclaration,
+  SyntaxKind7.PropertyDeclaration,
+  SyntaxKind7.FunctionExpression,
+  SyntaxKind7.ArrowFunction
+]);
+var RUST_WALK_SKIP = 1;
+var RUST_WALK_STOP = 2;
+function rustBuildScopeIndex(scope) {
+  const nodes = [];
+  const end = [];
+  const visit = (n) => {
+    const i = nodes.length;
+    nodes.push(n);
+    end.push(0);
+    n.forEachChild(visit);
+    end[i] = nodes.length;
+  };
+  scope.forEachChild(visit);
+  return { nodes, end, byName: void 0 };
+}
+function rustScopeNameTable(index) {
+  if (index.byName !== void 0)
+    return index.byName;
+  const byName = /* @__PURE__ */ new Map();
+  const add = (name, i) => {
+    const list = byName.get(name);
+    if (list === void 0)
+      byName.set(name, [i]);
+    else if (list[list.length - 1] !== i)
+      list.push(i);
+  };
+  const nodes = index.nodes;
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const kind = n.kind;
+    if (RUST_NAME_BINDER_KINDS.has(kind) && n.name?.kind === SyntaxKind7.Identifier)
+      add(n.name.text, i);
+    if (kind === SyntaxKind7.Identifier)
+      add(n.text, i);
+  }
+  index.byName = byName;
+  return byName;
+}
 var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig6, config["parser"] ?? {});
     super(config);
+    this.rustScopeIndexes = /* @__PURE__ */ new WeakMap();
     this.rustStringLocalDecisions = /* @__PURE__ */ new Map();
     // ── native `Option<String>` returns (`: Str` methods) ─────────────────────
     //
     // An internal, non-override, non-async method declared `: Str`
     this.rustNativeStrReturnDecisions = /* @__PURE__ */ new WeakMap();
+    this.rustMethodOverrides = /* @__PURE__ */ new WeakMap();
+    this.rustClassAncestorTables = /* @__PURE__ */ new WeakMap();
+    /** The callee declaration behind `self.<method>(..)` when it is emitted
+     *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+    // call node -> resolved signature's declaration (null: none); a handle resolve per call is JS-heavy
+    this.rustCallDeclarations = /* @__PURE__ */ new WeakMap();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -19478,6 +19538,51 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.forLoopCounter = 0;
     this.initConfig();
     this.applyUserOverrides(config);
+  }
+  rustScopeIndex(scope) {
+    let index = this.rustScopeIndexes.get(scope);
+    if (index === void 0) {
+      index = rustBuildScopeIndex(scope);
+      this.rustScopeIndexes.set(scope, index);
+    }
+    return index;
+  }
+  /** `scope.forEachChild(visit)` recursion over the cached preorder: `visit` answers
+   *  RUST_WALK_SKIP to skip the node's subtree, RUST_WALK_STOP to end the walk. */
+  rustWalkScope(scope, visit) {
+    const { nodes, end } = this.rustScopeIndex(scope);
+    for (let i = 0; i < nodes.length; ) {
+      const r = visit(nodes[i]);
+      if (r === RUST_WALK_STOP)
+        return;
+      i = r === RUST_WALK_SKIP ? end[i] : i + 1;
+    }
+  }
+  /** Scope nodes that are an identifier or a name-binding declaration spelled `name`, in walk order. */
+  rustScopeNameNodes(scope, name) {
+    const index = this.rustScopeIndex(scope);
+    return (rustScopeNameTable(index).get(name) ?? []).map((i) => index.nodes[i]);
+  }
+  /** One bulk getTypeAtLocation for the class's nodes of those kinds, seeding the checker memo. */
+  rustPrefetchClassTypes(node) {
+    const getType = this.checkerOrUndefined()?.getTypeAtLocation;
+    if (getType?.seed === void 0 || getType.original === void 0)
+      return;
+    const kinds = _RustTranspiler.RUST_PREFETCH_TYPE_KINDS;
+    const nodes = [];
+    for (const n of this.rustScopeIndex(node).nodes) {
+      if (kinds.has(n.kind) && !getType.has(n))
+        nodes.push(n);
+    }
+    if (nodes.length === 0)
+      return;
+    let results;
+    try {
+      results = getType.original(nodes);
+    } catch (e) {
+      return;
+    }
+    nodes.forEach((n, i) => getType.seed(n, results[i]));
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {};
@@ -20134,9 +20239,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     const declarationSymbol = this.rustSymbolOf(declaration.name);
     let plain = true;
-    const visit = (n) => {
+    this.rustWalkScope(scope, (n) => {
       if (!plain || !isBinaryExpression5(n) || n.operatorToken.kind !== SyntaxKind7.EqualsToken) {
-        n.forEachChild(visit);
         return;
       }
       const left = n.left;
@@ -20145,9 +20249,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       } else if (isArrayLiteralExpression4(left) && left.elements.some((e) => isIdentifier3(e) && String(e.text) === name)) {
         plain = this.rustHandlerTupleCall(n.right);
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    });
     return plain;
   }
   /** An object literal with no runtime tag key — the transpiler built it, so
@@ -20235,21 +20337,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     let safe = this.rustWriteDictShape(this.typeOfNodeIfAny(ident)) && this.rustWriteDictShape(this.typeOfNodeIfAny(initializer));
-    const visit = (n) => {
-      if (!safe) {
-        return;
-      }
+    this.rustWalkScope(scope, (n) => {
       if (n !== declaration && this.rustBindsName(n, name)) {
         safe = false;
-        return;
+        return RUST_WALK_STOP;
       }
       if (isBinaryExpression5(n) && n.operatorToken.kind === SyntaxKind7.EqualsToken && isIdentifier3(n.left) && n.left.text === name && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
         safe = false;
-        return;
+        return RUST_WALK_STOP;
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    });
     return safe;
   }
   // `this.<field>` receivers: the field is a plain dict (object-shaped checker type, or held as one
@@ -20264,17 +20361,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     let safe = true;
-    const visit = (n) => {
-      if (!safe) {
-        return;
-      }
+    this.rustWalkScope(scope, (n) => {
       if (isBinaryExpression5(n) && n.operatorToken.kind === SyntaxKind7.EqualsToken && isPropertyAccessExpression3(n.left) && n.left.expression.kind === SyntaxKind7.ThisKeyword && n.left.name?.text === fieldName && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
         safe = false;
-        return;
+        return RUST_WALK_STOP;
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    });
     return safe;
   }
   // A parameter the checker proves is a plain dict (`Dict`, `Dictionary<T>`,
@@ -20291,21 +20383,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     const name = String(declaration.name.text);
     let plain = true;
-    const visit = (n) => {
-      if (!plain) {
-        return;
-      }
+    this.rustWalkScope(scope, (n) => {
       if (isBinaryExpression5(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier3(n.left) && n.left.text === name && !this.rustPlainDictPreservingRhs(n.right, name)) {
         plain = false;
-        return;
+        return RUST_WALK_STOP;
       }
       if (isBinaryExpression5(n) && n.operatorToken.kind === SyntaxKind7.EqualsToken && isArrayLiteralExpression4(n.left) && n.left.elements.some((e) => isIdentifier3(e) && String(e.text) === name) && !this.rustHandlerTupleCall(n.right)) {
         plain = false;
-        return;
+        return RUST_WALK_STOP;
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    });
     return plain;
   }
   /** RHS of a write to a plain-dict parameter that keeps the shape. */
@@ -20799,20 +20886,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     let safe = true;
-    const visit = (n) => {
-      if (!safe)
-        return;
+    for (const n of this.rustScopeNameNodes(scope, name)) {
       if (n !== declaration && this.rustBindsName(n, name)) {
         safe = false;
-        return;
+        break;
       }
-      if (n.kind === SyntaxKind7.Identifier && n.text === name && n !== declaration.name && !(skipPropertyNames && this.rustIdentifierIsPropertyName(n)) && !acceptUse(n)) {
+      if (n.kind === SyntaxKind7.Identifier && n !== declaration.name && !(skipPropertyNames && this.rustIdentifierIsPropertyName(n)) && !acceptUse(n)) {
         safe = false;
-        return;
+        break;
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    }
     return safe;
   }
   rustLocalUsesAcceptBool(declaration, sourceName) {
@@ -20930,6 +21013,56 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return decision ? "str" : void 0;
   }
+  /** Per ancestor class (nearest first): method name -> its LAST declaration; undefined when a
+   *  parent class does not resolve. */
+  rustAncestorMethodTables(classDecl) {
+    const cached = this.rustClassAncestorTables.get(classDecl);
+    if (cached !== void 0) {
+      return cached ?? void 0;
+    }
+    const chain = [];
+    let parentClass = getAllSuperTypeNodes(classDecl)[0];
+    let ok = true;
+    while (parentClass !== void 0) {
+      const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+      if (parentClassDecl === void 0) {
+        ok = false;
+        break;
+      }
+      const byName = /* @__PURE__ */ new Map();
+      for (const elem of parentClassDecl.members ?? []) {
+        if (isMethodDeclaration5(elem)) {
+          byName.set(elem.name.getText().trim(), elem);
+        }
+      }
+      chain.push(byName);
+      parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? void 0;
+    }
+    this.rustClassAncestorTables.set(classDecl, ok ? chain : null);
+    return ok ? chain : void 0;
+  }
+  // base getMethodOverride rescans every parent member (getText) per call; same walk, memoized
+  getMethodOverride(node) {
+    if (node === void 0 || !isClassDeclaration4(node.parent) || !node.parent.heritageClauses) {
+      return void 0;
+    }
+    const cached = this.rustMethodOverrides.get(node);
+    if (cached !== void 0) {
+      return cached ?? void 0;
+    }
+    const chain = this.rustAncestorMethodTables(node.parent);
+    let method = void 0;
+    if (chain === void 0) {
+      this.warn(node, "Parent class", "Parent class not found");
+    } else {
+      const name = node.name.text;
+      for (const byName of chain) {
+        method = byName.get(name) ?? method;
+      }
+    }
+    this.rustMethodOverrides.set(node, method ?? null);
+    return method;
+  }
   rustNativeStrReturnDecisionUncached(node) {
     if (node.type === void 0 || this.isAsyncFunction(node) || this.getMethodOverride(node) !== void 0 || _RustTranspiler.RUST_BASE_TIER_FILE.test(node.getSourceFile().fileName)) {
       return false;
@@ -20994,17 +21127,18 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     return current;
   }
-  /** The callee declaration behind `self.<method>(..)` when it is emitted
-   *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
   rustNativeStrCalleeKind(node) {
     if (node === void 0 || node.kind !== SyntaxKind7.CallExpression) {
       return void 0;
     }
-    let declaration;
-    try {
-      declaration = signatureDeclaration(this.getChecker().getResolvedSignature(node));
-    } catch (e) {
-      return void 0;
+    let declaration = this.rustCallDeclarations.get(node);
+    if (declaration === void 0) {
+      try {
+        declaration = signatureDeclaration(this.getChecker().getResolvedSignature(node)) ?? null;
+      } catch (e) {
+        return void 0;
+      }
+      this.rustCallDeclarations.set(node, declaration);
     }
     return declaration?.kind === SyntaxKind7.MethodDeclaration ? this.rustNativeStrReturnKind(declaration) : void 0;
   }
@@ -21137,16 +21271,14 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   collectRustDeclaredDictLocals(src) {
     const candidates = [];
-    const collect = (node) => {
+    this.rustWalkScope(src, (node) => {
       if (isVariableDeclaration3(node) && node.initializer !== void 0 && node.name.kind === SyntaxKind7.Identifier) {
         const info = this.rustDictInitializerInfo(node.initializer);
         if (info !== void 0) {
           candidates.push({ declaration: node, name: String(node.name.text), source: info.source, defaultNode: info.defaultNode });
         }
       }
-      node.forEachChild(collect);
-    };
-    src.forEachChild(collect);
+    });
     candidates.sort((a, b) => a.declaration.getStart() - b.declaration.getStart());
     const table = /* @__PURE__ */ new Map();
     for (const candidate of candidates) {
@@ -21234,30 +21366,33 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (scope === void 0)
       return { stable, uses };
     const declarationSymbol = this.rustSymbolOf(declaration.name);
-    const visit = (node) => {
-      if (!stable)
-        return;
+    for (const node of this.rustScopeNameNodes(scope, name)) {
       if (node !== declaration && this.rustBindsName(node, name)) {
         const otherSymbol = this.rustSymbolOf(node.name);
         if (declarationSymbol === void 0 || otherSymbol === void 0 || otherSymbol === declarationSymbol) {
           stable = false;
-          return;
+          break;
         }
       }
-      if (node.kind === SyntaxKind7.Identifier && node.text === name && node !== declaration.name && this.rustIdentifierRefersToDeclaration(node, declaration)) {
+      if (node.kind !== SyntaxKind7.Identifier)
+        continue;
+      if (node !== declaration.name && this.rustIdentifierRefersToDeclaration(node, declaration)) {
         this.rustDictLocalClassifyUse(node, uses);
       }
-      if (isBinaryExpression5(node) && rustIsAssignmentOperator(node.operatorToken.kind) && this.rustAssignmentWritesWholeLocal(node.left, declaration) && !this.rustDictProvenExpression(node.right, table, declaration.getStart())) {
-        stable = false;
-        return;
+      let target = node;
+      while (target.parent !== void 0 && (isParenthesizedExpression3(target.parent) || isArrayLiteralExpression4(target.parent) || isShorthandPropertyAssignment(target.parent) || isObjectLiteralExpression4(target.parent))) {
+        target = target.parent;
       }
-      if ((isForOfStatement2(node) || isForInStatement2(node)) && this.rustAssignmentWritesWholeLocal(node.initializer, declaration)) {
+      const holder = target.parent;
+      if (holder !== void 0 && isBinaryExpression5(holder) && holder.left === target && rustIsAssignmentOperator(holder.operatorToken.kind) && this.rustAssignmentWritesWholeLocal(holder.left, declaration) && !this.rustDictProvenExpression(holder.right, table, declaration.getStart())) {
         stable = false;
-        return;
+        break;
       }
-      node.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+      if (holder !== void 0 && (isForOfStatement2(holder) || isForInStatement2(holder)) && holder.initializer === target && this.rustAssignmentWritesWholeLocal(holder.initializer, declaration)) {
+        stable = false;
+        break;
+      }
+    }
     return { stable, uses };
   }
   /** True when this assignment target writes the local ITSELF (`x = ..`,
@@ -21337,6 +21472,7 @@ ${this.getIden(identation + 1)}}
 }`;
   }
   printClass(node, identation) {
+    this.rustPrefetchClassTypes(node);
     this.className = node.name.text;
     const methods = node.members.filter((m) => m.kind === SyntaxKind7.MethodDeclaration);
     methods.forEach((method) => {
@@ -21960,18 +22096,14 @@ ${classMethods}
   /** True when the enclosing function already binds this name somewhere. */
   rustFunctionDeclaresName(fn, name) {
     let found = false;
-    const visit = (node) => {
-      if (found)
-        return;
-      if (node !== fn && isFunctionLike(node))
-        return;
+    this.rustWalkScope(fn, (node) => {
+      if (isFunctionLike(node))
+        return RUST_WALK_SKIP;
       if ((isVariableDeclaration3(node) || isParameterDeclaration3(node)) && isIdentifier3(node.name) && node.name.text === name) {
         found = true;
-        return;
+        return RUST_WALK_STOP;
       }
-      node.forEachChild(visit);
-    };
-    fn.forEachChild(visit);
+    });
     return found;
   }
   collectRustParamShadows(fn) {
@@ -22247,18 +22379,14 @@ ${classMethods}
       return true;
     const merging = ["deepExtend", "extend", "addElementToObject", "remove"];
     let written = false;
-    const visit = (n) => {
-      if (written)
-        return;
+    this.rustWalkScope(scope, (n) => {
       if (isCallExpression6(n) && n.arguments.length > 0 && isIdentifier3(n.arguments[0]) && n.arguments[0].text === name) {
         const callee = n.expression;
         written = merging.includes(isPropertyAccessExpression3(callee) ? String(callee.name?.text ?? "") : isIdentifier3(callee) ? String(callee.text ?? "") : "");
         if (written)
-          return;
+          return RUST_WALK_STOP;
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    });
     return written;
   }
   /** Shadow plan for a handler: the parameter plus the two binding lines,
@@ -22273,16 +22401,12 @@ ${classMethods}
     this.rustProHandlerShadowParam = param;
     let hasRead = false;
     const scope = this.rustEnclosingFunction(param);
-    const visit = (n) => {
-      if (hasRead)
-        return;
+    this.rustWalkScope(scope, (n) => {
       if (isCallExpression6(n) && this.printProHandlerShadowRead(n, true) !== void 0) {
         hasRead = true;
-        return;
+        return RUST_WALK_STOP;
       }
-      n.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
+    });
     this.rustProHandlerShadowParam = saved;
     if (!hasRead)
       return void 0;
@@ -22439,18 +22563,10 @@ ${ind}let ${view}: &${map} = &${arc};
       scope = scope.parent;
     if (scope === void 0)
       return true;
-    let reassigned = false;
-    const visit = (node) => {
-      if (reassigned)
-        return;
-      if (isBinaryExpression5(node) && node.operatorToken.kind >= SyntaxKind7.FirstAssignment && node.operatorToken.kind <= SyntaxKind7.LastAssignment && isIdentifier3(node.left) && node.left.text === name) {
-        reassigned = true;
-        return;
-      }
-      node.forEachChild(visit);
-    };
-    scope.forEachChild(visit);
-    return reassigned;
+    return this.rustScopeNameNodes(scope, name).some((id) => {
+      const node = id.parent;
+      return id.kind === SyntaxKind7.Identifier && node !== void 0 && isBinaryExpression5(node) && node.left === id && node.operatorToken.kind >= SyntaxKind7.FirstAssignment && node.operatorToken.kind <= SyntaxKind7.LastAssignment;
+    });
   }
   /** True when the receiver is a local declared as (or provably holding) a
    *  plain dict — `get_value(_k)` and this read agree on every key the
@@ -23061,6 +23177,19 @@ ${iden}}`;
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
   }
 };
+// node kinds the printer types that the core per-file prefetch leaves to single round trips
+_RustTranspiler.RUST_PREFETCH_TYPE_KINDS = /* @__PURE__ */ new Set([
+  SyntaxKind7.FalseKeyword,
+  SyntaxKind7.TrueKeyword,
+  SyntaxKind7.ParenthesizedExpression,
+  SyntaxKind7.AwaitExpression,
+  SyntaxKind7.PrefixUnaryExpression,
+  SyntaxKind7.BooleanKeyword,
+  SyntaxKind7.ObjectKeyword,
+  SyntaxKind7.UnionType,
+  SyntaxKind7.ConditionalExpression,
+  SyntaxKind7.AsExpression
+]);
 // ── native equality emission ────────────────────────────────────────────
 // When the checker proves both operands hold the same primitive payload
 // (string / number / boolean, or one side is a matching literal) the
