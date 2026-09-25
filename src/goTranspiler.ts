@@ -1848,6 +1848,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 return concat;
             }
         }
+        const pointerSubtraction = this.goNonNilPointerSubtractionText(node, leftText, rightText);
+        if (pointerSubtraction !== undefined) {
+            return { 'goType': 'int64', 'text': pointerSubtraction };
+        }
         const pointerDivision = this.goNonNilPointerDivisionText(node, leftText, rightText);
         if (pointerDivision !== undefined) {
             return { 'goType': 'float64', 'text': pointerDivision };
@@ -1872,6 +1876,55 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return { goType, 'text': this.goFloatDivisionText(node, leftType, rightType, leftText, rightText) };
         }
         return { goType, 'text': this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+    }
+
+    // `a - b` where each side is a non-nil `*int64` (dereferenced), an int64 value or an int literal and at
+    // least one side is a pointer: Subtract's integral result is the same int64 box
+    goNonNilPointerSubtractionText(node, leftText: string, rightText: string): string | undefined {
+        if (node.operatorToken.kind !== SyntaxKind.MinusToken) {
+            return undefined;
+        }
+        const left = this.goInt64SubtractionOperand(node.left, leftText);
+        const right = (left === undefined) ? undefined : this.goInt64SubtractionOperand(node.right, rightText);
+        if ((right === undefined) || (!left.pointer && !right.pointer)) {
+            return undefined;
+        }
+        return left.text + ' - ' + right.text;
+    }
+
+    goInt64SubtractionOperand(node, printedText: string): { pointer: boolean, text: string } | undefined {
+        const text = this.goUnwrapPrintedParens(printedText.trim());
+        if (node?.kind === SyntaxKind.ParenthesizedExpression) {
+            return this.goInt64SubtractionOperand(node.expression, text);
+        }
+        if (node?.kind === SyntaxKind.NumericLiteral) {
+            return (/^[0-9]+$/.test(node.text) && (Number(node.text) <= Number.MAX_SAFE_INTEGER)) ? { 'pointer': false, text } : undefined;
+        }
+        if (node?.kind === SyntaxKind.Identifier) {
+            if ((this.goDeclaredTypeOfIdentifier(node) === '*int64') && this.goPointerNumberIsNonNil(node)) {
+                return { 'pointer': true, 'text': '*' + text };
+            }
+            return (this.goOperandStaticType(node, text) === 'int64') ? { 'pointer': false, text } : undefined;
+        }
+        if (this.goDefaultedSafeIntegerCall(node)) {
+            return { 'pointer': true, 'text': '*' + text };
+        }
+        if ((node?.kind === SyntaxKind.CallExpression) && (this.goOperandStaticType(node, text) === 'int64')) {
+            return { 'pointer': false, text };
+        }
+        return undefined;
+    }
+
+    // this.safeInteger{,2,N} with an integer literal default: the Go method returns &default on every nil path
+    goDefaultedSafeIntegerCall(node): boolean {
+        if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const arity = { 'safeInteger': 3, 'safeInteger2': 4, 'safeIntegerN': 3 }[node.expression.name?.text];
+        const last = node.arguments?.[arity - 1];
+        return (arity !== undefined) && (node.arguments.length === arity) && (last?.kind === SyntaxKind.NumericLiteral)
+            && /^[0-9]+$/.test(last.text);
     }
 
     // `x / N` on a non-nil `*int64` with a nonzero integer literal N, passed whole to Math.floor/ceil/round

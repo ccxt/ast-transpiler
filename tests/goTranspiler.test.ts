@@ -3035,6 +3035,34 @@ describe('go native element assignment', () => {
         expect(output).toContain("Divide(since, 0)");
         expect(output).toContain("this.ParseToInt(Divide(until, 1000))");
     });
+    test('Subtract on a non-nil *int64 prints the native int64 subtraction', () => {
+        const input =
+        "class T {\n" +
+        "    options = {};\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    safeInteger (o: any, k: any, d: any = undefined): Int { return 1; }\n" +
+        "    f (since: Int = undefined, until: Int = undefined, params = {}) {\n" +
+        "        const request = {};\n" +
+        "        const now = this.milliseconds ();\n" +
+        "        if (since !== undefined) {\n" +
+        "            request['a'] = Math.max (since - 1, 0);\n" +
+        "            request['b'] = now - since;\n" +
+        "            request['c'] = since - 1.5;\n" +
+        "        }\n" +
+        "        request['d'] = until - 1;\n" +
+        "        request['e'] = this.milliseconds () - this.safeInteger (this.options, 'td', 0);\n" +
+        "        request['f'] = this.milliseconds () - this.safeInteger (this.options, 'td');\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("*since - 1, 0)");
+        expect(output).toContain("= now - *since");
+        expect(output).toContain("Subtract(since, 1.5)");
+        expect(output).toContain("Subtract(until, 1)");
+        expect(output).toContain("= this.Milliseconds() - *this.SafeInteger(this.Options, \"td\", 0)");
+        expect(output).toContain("Subtract(this.Milliseconds(), this.SafeInteger(this.Options, \"td\"))");
+    });
     test('Divide inlines a literal divisor but keeps the helper for a zero divisor', () => {
         const input =
         "class T {\n" +

@@ -160,6 +160,12 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         text: string;
     } | undefined;
+    goNonNilPointerSubtractionText(node: any, leftText: string, rightText: string): string | undefined;
+    goInt64SubtractionOperand(node: any, printedText: string): {
+        pointer: boolean;
+        text: string;
+    } | undefined;
+    goDefaultedSafeIntegerCall(node: any): boolean;
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
