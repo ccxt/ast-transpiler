@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CJKIOENV.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -13893,7 +13893,7 @@ function prefetchByFile(checker, name, kinds) {
       done.add(sf);
       const nodes = [];
       const visit = (n) => {
-        if (kinds.has(n.kind)) {
+        if (kinds.has(n.kind) && !original.has?.(n)) {
           nodes.push(n);
         }
         n.forEachChild(visit);
@@ -13931,7 +13931,7 @@ function prefetchResolvedSignatures(checker) {
       done.add(sf);
       const calls = [];
       const visit = (n) => {
-        if (n.kind === SyntaxKind6.CallExpression) {
+        if (n.kind === SyntaxKind6.CallExpression && !original.has?.(n)) {
           calls.push(n);
         }
         n.forEachChild(visit);
@@ -13993,6 +13993,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     super(config);
     // override lookups repeat per method on every printed call and hook; the answer is fixed per node
     this.methodOverrideCache = /* @__PURE__ */ new WeakMap();
+    // BaseTranspiler.getMethodOverride answered from a per-class ancestor chain of
+    // name -> last method maps (the furthest ancestor declaring the name wins, as there)
+    this.overrideChainCache = /* @__PURE__ */ new WeakMap();
     this.varListFromObjectLiterals = {};
     // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
     // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
@@ -14052,9 +14055,45 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (cached !== void 0) {
       return cached === JAVA_MEMO_UNDEFINED ? void 0 : cached;
     }
-    const result = super.getMethodOverride(node);
+    const result = this.javaMethodOverrideFromIndex(node);
     this.methodOverrideCache.set(node, result === void 0 ? JAVA_MEMO_UNDEFINED : result);
     return result;
+  }
+  javaMethodOverrideFromIndex(node) {
+    const classDeclaration = node.parent;
+    if (!isClassDeclaration3(classDeclaration) || !classDeclaration.heritageClauses) {
+      return void 0;
+    }
+    let chain = this.overrideChainCache.get(classDeclaration);
+    if (chain === void 0) {
+      chain = [];
+      let parentClass = getAllSuperTypeNodes(classDeclaration)[0];
+      while (parentClass !== void 0) {
+        const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+        if (parentClassDecl === void 0) {
+          chain = null;
+          break;
+        }
+        const byName = /* @__PURE__ */ new Map();
+        for (const elem of parentClassDecl.members ?? []) {
+          if (isMethodDeclaration4(elem)) {
+            byName.set(elem.name.getText().trim(), elem);
+          }
+        }
+        chain.push(byName);
+        parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? void 0;
+      }
+      this.overrideChainCache.set(classDeclaration, chain);
+    }
+    if (chain === null) {
+      return super.getMethodOverride(node);
+    }
+    const name = node.name.text;
+    let method = void 0;
+    for (const byName of chain) {
+      method = byName.get(name) ?? method;
+    }
+    return method;
   }
   checkerOrUndefined() {
     const checker = super.checkerOrUndefined();
