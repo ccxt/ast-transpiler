@@ -27,24 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-<<<<<<<< HEAD:dist/chunk-WSDQRN6Z.js
-// ../../../ts7perf2-nm/go-B-nm/tsup/assets/esm_shims.js
-|||||||| 9f1db622a03:dist/chunk-VNDHHGGT.js
 // node_modules/tsup/assets/esm_shims.js
-========
-// ../../../ts7perf2-nm/java-B-nm/tsup/assets/esm_shims.js
->>>>>>>> ts7perf2/java-B:dist/chunk-CJKIOENV.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-<<<<<<<< HEAD:dist/chunk-WSDQRN6Z.js
-  "../../../ts7perf2-nm/go-B-nm/tsup/assets/esm_shims.js"() {
-|||||||| 9f1db622a03:dist/chunk-VNDHHGGT.js
   "node_modules/tsup/assets/esm_shims.js"() {
-========
-  "../../../ts7perf2-nm/java-B-nm/tsup/assets/esm_shims.js"() {
->>>>>>>> ts7perf2/java-B:dist/chunk-CJKIOENV.js
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -166,10 +154,4 @@ export {
   typeParts,
   typeTarget
 };
-<<<<<<<< HEAD:dist/chunk-WSDQRN6Z.js
-//# sourceMappingURL=chunk-WSDQRN6Z.js.map
-|||||||| 9f1db622a03:dist/chunk-VNDHHGGT.js
 //# sourceMappingURL=chunk-VNDHHGGT.js.map
-========
-//# sourceMappingURL=chunk-CJKIOENV.js.map
->>>>>>>> ts7perf2/java-B:dist/chunk-CJKIOENV.js

@@ -27,21 +27,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-<<<<<<<< HEAD:dist/chunk-4VYXIXH6.cjs
-// ../../../ts7perf2-nm/go-B-nm/tsup/assets/cjs_shims.js
-|||||||| 9f1db622a03:dist/chunk-4FDYB2TT.cjs
 // node_modules/tsup/assets/cjs_shims.js
-========
-// ../../../ts7perf2-nm/java-B-nm/tsup/assets/cjs_shims.js
->>>>>>>> ts7perf2/java-B:dist/chunk-ISN5W3W3.cjs
 var init_cjs_shims = __esm({
-<<<<<<<< HEAD:dist/chunk-4VYXIXH6.cjs
-  "../../../ts7perf2-nm/go-B-nm/tsup/assets/cjs_shims.js"() {
-|||||||| 9f1db622a03:dist/chunk-4FDYB2TT.cjs
   "node_modules/tsup/assets/cjs_shims.js"() {
-========
-  "../../../ts7perf2-nm/java-B-nm/tsup/assets/cjs_shims.js"() {
->>>>>>>> ts7perf2/java-B:dist/chunk-ISN5W3W3.cjs
   }
 });
 
@@ -159,10 +147,4 @@ function typeTarget(type) {
 
 
 exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers; exports.symbolDeclarations = symbolDeclarations; exports.symbolValueDeclaration = symbolValueDeclaration; exports.signatureDeclaration = signatureDeclaration; exports.typeParts = typeParts; exports.typeTarget = typeTarget;
-<<<<<<<< HEAD:dist/chunk-4VYXIXH6.cjs
-//# sourceMappingURL=chunk-4VYXIXH6.cjs.map
-|||||||| 9f1db622a03:dist/chunk-4FDYB2TT.cjs
 //# sourceMappingURL=chunk-4FDYB2TT.cjs.map
-========
-//# sourceMappingURL=chunk-ISN5W3W3.cjs.map
->>>>>>>> ts7perf2/java-B:dist/chunk-ISN5W3W3.cjs
