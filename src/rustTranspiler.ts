@@ -149,7 +149,7 @@ function rustIsAssignmentOperator(kind: SyntaxKind): boolean {
 interface RustScopeIndex {
     nodes: Node[];
     end: number[];
-    byName: Map<string, number[]>;
+    byName: Map<string, number[]> | undefined;
 }
 
 const RUST_NAME_BINDER_KINDS = new Set<SyntaxKind>([
@@ -164,24 +164,35 @@ const RUST_WALK_STOP = 2;
 function rustBuildScopeIndex(scope: Node): RustScopeIndex {
     const nodes: Node[] = [];
     const end: number[] = [];
+    const visit = (n: any) => {
+        const i = nodes.length;
+        nodes.push(n);
+        end.push(0);
+        n.forEachChild(visit);
+        end[i] = nodes.length;
+    };
+    scope.forEachChild(visit);
+    return { nodes, end, byName: undefined };
+}
+
+// name text decoding is the costly part, so the name table is built on first use only
+function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
+    if (index.byName !== undefined) return index.byName;
     const byName = new Map<string, number[]>();
     const add = (name: string, i: number) => {
         const list = byName.get(name);
         if (list === undefined) byName.set(name, [i]);
         else if (list[list.length - 1] !== i) list.push(i);
     };
-    const visit = (n: any) => {
-        const i = nodes.length;
-        nodes.push(n);
-        end.push(0);
+    const nodes: any[] = index.nodes;
+    for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
         const kind = n.kind;
         if (RUST_NAME_BINDER_KINDS.has(kind) && n.name?.kind === SyntaxKind.Identifier) add(n.name.text, i);
         if (kind === SyntaxKind.Identifier) add(n.text, i);
-        n.forEachChild(visit);
-        end[i] = nodes.length;
-    };
-    scope.forEachChild(visit);
-    return { nodes, end, byName };
+    }
+    index.byName = byName;
+    return byName;
 }
 
 export class RustTranspiler extends BaseTranspiler {
@@ -211,7 +222,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Scope nodes that are an identifier or a name-binding declaration spelled `name`, in walk order. */
     rustScopeNameNodes(scope: Node, name: string): Node[] {
         const index = this.rustScopeIndex(scope);
-        return (index.byName.get(name) ?? []).map((i) => index.nodes[i]);
+        return (rustScopeNameTable(index).get(name) ?? []).map((i) => index.nodes[i]);
     }
 
     binaryExpressionsWrappers;
@@ -2382,31 +2393,40 @@ export class RustTranspiler extends BaseTranspiler {
         const scope = this.rustEnclosingFunction(declaration);
         if (scope === undefined) return { stable, uses };
         const declarationSymbol = this.rustSymbolOf(declaration.name as Identifier);
-        this.rustWalkScope(scope, (node) => {
+        // every event of the scan is rooted at a node spelled `name`: a re-binding, a use, or the
+        // identifier inside an assignment target / for-of-in head (the target's own node is an ancestor)
+        for (const node of this.rustScopeNameNodes(scope, name) as any[]) {
             if (node !== declaration && this.rustBindsName(node, name)) {
                 const otherSymbol = this.rustSymbolOf((node as any).name);
                 if (declarationSymbol === undefined || otherSymbol === undefined || otherSymbol === declarationSymbol) {
                     stable = false; // same binding, or the checker cannot tell them apart
-                    return RUST_WALK_STOP;
+                    break;
                 }
             }
-            if (node.kind === SyntaxKind.Identifier && node.text === name && node !== declaration.name &&
-                this.rustIdentifierRefersToDeclaration(node, declaration)) {
+            if (node.kind !== SyntaxKind.Identifier) continue;
+            if (node !== declaration.name && this.rustIdentifierRefersToDeclaration(node, declaration)) {
                 this.rustDictLocalClassifyUse(node, uses);
             }
-            if (isBinaryExpression(node) && rustIsAssignmentOperator(node.operatorToken.kind) &&
-                this.rustAssignmentWritesWholeLocal(node.left, declaration) &&
-                !this.rustDictProvenExpression(node.right, table, declaration.getStart())) {
+            let target: any = node;
+            while (target.parent !== undefined && (isParenthesizedExpression(target.parent) || isArrayLiteralExpression(target.parent)
+                || isShorthandPropertyAssignment(target.parent) || isObjectLiteralExpression(target.parent))) {
+                target = target.parent;
+            }
+            const holder: any = target.parent;
+            if (holder !== undefined && isBinaryExpression(holder) && holder.left === target
+                && rustIsAssignmentOperator(holder.operatorToken.kind) &&
+                this.rustAssignmentWritesWholeLocal(holder.left, declaration) &&
+                !this.rustDictProvenExpression(holder.right, table, declaration.getStart())) {
                 stable = false; // the local itself is reassigned a non-Dict value
-                return RUST_WALK_STOP;
+                break;
             }
             // `for (x of list)` / `for (x in obj)` rebind an existing local.
-            if ((isForOfStatement(node) || isForInStatement(node)) &&
-                this.rustAssignmentWritesWholeLocal(node.initializer, declaration)) {
+            if (holder !== undefined && (isForOfStatement(holder) || isForInStatement(holder)) && holder.initializer === target &&
+                this.rustAssignmentWritesWholeLocal(holder.initializer, declaration)) {
                 stable = false;
-                return RUST_WALK_STOP;
+                break;
             }
-        });
+        }
         return { stable, uses };
     }
 
