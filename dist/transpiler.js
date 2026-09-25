@@ -10128,19 +10128,33 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     const parseParam = fn.name.escapedText.startsWith("parse");
     const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
-    if (!parseParam && !handlerParam) {
-      return void 0;
-    }
-    if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
+    if (this.goMethodKeepsBaseSignature(fn)) {
       return void 0;
     }
     const index = fn.parameters.indexOf(param);
+    if (!parseParam && !handlerParam) {
+      const goType = this.goRequiredStringParameterType(param);
+      return goType !== void 0 && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType) ? goType : void 0;
+    }
+    if (this.isAsyncFunction(fn)) {
+      return void 0;
+    }
     for (const goType of this.goNativeParameterTypeCandidates(param, handlerParam)) {
       if (this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) {
         return goType;
       }
     }
     return void 0;
+  }
+  // `string` for a parameter whose declared TS type is string (or a string-literal union) with no
+  // undefined/null member; a nullable one stays boxed here (callers pass *string or nil)
+  goRequiredStringParameterType(param) {
+    const type = this.checkerOrUndefined()?.getTypeAtLocation(param);
+    if (type === void 0) {
+      return void 0;
+    }
+    const parts = typeof type.isUnion === "function" && type.isUnion() ? type.types : [type];
+    return parts.every((p) => (p.flags & (ts5.TypeFlags.String | ts5.TypeFlags.StringLiteral)) !== 0) ? "string" : void 0;
   }
   // The boxed object parameter prints `x === undefined` as a native `x == nil`
   // (goObjectBoxParameter); a parameter the printer typed as a Go map/slice would fall
@@ -10259,6 +10273,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
     }
     return false;
+  }
+  goHasTreeCallSite(fn) {
+    const name = fn.name.escapedText;
+    if (this.goSameFileCallsOf(fn, name).length > 0) {
+      return true;
+    }
+    const tree = this.goTsSrcTree(fn.getSourceFile());
+    const myClass = this.goEnclosingClassName(fn);
+    return (tree?.callIndex.get(name) ?? []).some((site) => this.goTsSrcFileDerivesFrom(tree, site.file, myClass));
   }
   // every call site of `fn` in the whole tree must pass exactly `goType` at `index`
   goParameterCallSitesPassType(fn, index, goType) {
@@ -10449,6 +10472,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const match = declRe.exec(fileText);
       return match !== null && accept(match[1].trim());
     };
+    if (goType === "string") {
+      return /^(?:'[^'\\]*'|"[^"\\]*")$/.test(text);
+    }
     if (goType === "*string") {
       if (isStringProducer(text)) {
         return true;

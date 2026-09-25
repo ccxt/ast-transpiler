@@ -5321,6 +5321,56 @@ describe('native parameter types (B-02)', () => {
     });
 });
 
+describe('required string parameters of exchange-local methods', () => {
+    const base =
+        "class Base {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    createOrder (symbol: string, type: string) { return undefined; }\n" +
+        "}\n";
+
+    test('a string parameter every caller passes a literal or a proven param prints string and == goes native', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async createSpotOrder (symbol: string, type: string) {\n" +
+            "        if (type === 'limit') {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return this.requestType (type);\n" +
+            "    }\n" +
+            "    requestType (type: string) {\n" +
+            "        return (type === 'market');\n" +
+            "    }\n" +
+            "    async use () {\n" +
+            "        return await this.createSpotOrder ('BTC/USDT', 'limit');\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) createSpotOrderBody(ch chan any, symbol string, typeVar string) any {');
+        expect(output).toContain('func (this *Test) RequestType(typeVar string) any {');
+        expect(output).toContain('typeVar == "limit"');
+        expect(output).not.toContain('IsEqual(typeVar, "limit")');
+    });
+
+    test('an inherited method, a nullable or nil-compared parameter, or an unproven caller keeps the box', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    createOrder (symbol: string, type: string) { return type === 'limit'; }\n" +
+            "    a (x: string | undefined) { return x === 'y'; }\n" +
+            "    b (x: string) { return x === undefined; }\n" +
+            "    c (x: string) { return x === 'y'; }\n" +
+            "    use (o) {\n" +
+            "        this.a ('y'); this.b ('y');\n" +
+            "        return this.c (this.safeString (o, 'k'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) CreateOrder(symbol any, typeVar any) any {');
+        expect(output).toContain('func (this *Test) A(x any) any {');
+        expect(output).toContain('func (this *Test) B(x any) any {');
+        expect(output).toContain('func (this *Test) C(x any) any {');
+    });
+});
+
 describe('native parameter types across the ts/src tree (B-02)', () => {
     // a scoped run's program holds one file, so the sibling files of the same ts/src
     // tree (pro/ and the derived exchanges) are only provable textually: the fixture

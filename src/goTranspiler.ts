@@ -3550,13 +3550,21 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // D-03: a pro handler's frame parameter (`handleX (client: Client, message: Dict)`)
         // is the second family whose call-site proof can name a Go type
         const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
-        if (!parseParam && !handlerParam) {
-            return undefined; // internal parseX helpers and pro handlers only: the unified API is public surface
-        }
-        if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
-            return undefined;
+        if (this.goMethodKeepsBaseSignature(fn)) {
+            return undefined; // inherited/base methods are pinned by the base class and IDerivedExchange
         }
         const index = fn.parameters.indexOf(param);
+        if (!parseParam && !handlerParam) {
+            // any other exchange-local method: only a non-nullable TS `string` becomes a Go `string`
+            // at least one proven caller: an uncalled method's signature is outside API only by accident
+            const goType = this.goRequiredStringParameterType(param);
+            return ((goType !== undefined) && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType)
+                && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)
+                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) ? goType : undefined;
+        }
+        if (this.isAsyncFunction(fn)) {
+            return undefined;
+        }
         for (const goType of this.goNativeParameterTypeCandidates(param, handlerParam)) {
             if (this.goParameterCallSitesPassType(fn, index, goType)
                 && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)
@@ -3565,6 +3573,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         return undefined;
+    }
+
+    // `string` for a parameter whose declared TS type is string (or a string-literal union) with no
+    // undefined/null member; a nullable one stays boxed here (callers pass *string or nil)
+    goRequiredStringParameterType(param): string | undefined {
+        const type = this.checkerOrUndefined()?.getTypeAtLocation(param);
+        if (type === undefined) {
+            return undefined;
+        }
+        const parts = ((typeof type.isUnion === 'function') && type.isUnion()) ? type.types : [type];
+        return parts.every(p => (p.flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) !== 0) ? 'string' : undefined;
     }
 
     // The boxed object parameter prints `x === undefined` as a native `x == nil`
@@ -3698,6 +3717,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         return false;
+    }
+
+    goHasTreeCallSite(fn): boolean {
+        const name = fn.name.escapedText;
+        if (this.goSameFileCallsOf(fn, name).length > 0) {
+            return true;
+        }
+        const tree = this.goTsSrcTree(fn.getSourceFile());
+        const myClass = this.goEnclosingClassName(fn);
+        return (tree?.callIndex.get(name) ?? []).some(site => this.goTsSrcFileDerivesFrom(tree, site.file, myClass));
     }
 
     // every call site of `fn` in the whole tree must pass exactly `goType` at `index`
@@ -3897,6 +3926,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const match = declRe.exec(fileText);
             return (match !== null) && accept(match[1].trim());
         };
+        if (goType === 'string') {
+            return /^(?:'[^'\\]*'|"[^"\\]*")$/.test(text); // a sibling file proves only a plain literal
+        }
         if (goType === '*string') {
             if (isStringProducer(text)) {
                 return true;
