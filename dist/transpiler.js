@@ -8824,6 +8824,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (pointerSubtraction !== void 0) {
       return { "goType": "int64", "text": pointerSubtraction };
     }
+    const pointerProduct = this.goNonNilPointerProductText(node, leftText, rightText);
+    if (pointerProduct !== void 0) {
+      return { "goType": "int64", "text": pointerProduct };
+    }
     const pointerDivision = this.goNonNilPointerDivisionText(node, leftText, rightText);
     if (pointerDivision !== void 0) {
       return { "goType": "float64", "text": pointerDivision };
@@ -8855,17 +8859,17 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (node.operatorToken.kind !== SyntaxKind5.MinusToken) {
       return void 0;
     }
-    const left = this.goInt64SubtractionOperand(node.left, leftText);
-    const right = left === void 0 ? void 0 : this.goInt64SubtractionOperand(node.right, rightText);
+    const left = this.goInt64Operand(node.left, leftText);
+    const right = left === void 0 ? void 0 : this.goInt64Operand(node.right, rightText);
     if (right === void 0 || !left.pointer && !right.pointer) {
       return void 0;
     }
     return left.text + " - " + right.text;
   }
-  goInt64SubtractionOperand(node, printedText) {
+  goInt64Operand(node, printedText) {
     const text = this.goUnwrapPrintedParens(printedText.trim());
     if (node?.kind === SyntaxKind5.ParenthesizedExpression) {
-      return this.goInt64SubtractionOperand(node.expression, text);
+      return this.goInt64Operand(node.expression, text);
     }
     if (node?.kind === SyntaxKind5.NumericLiteral) {
       return /^[0-9]+$/.test(node.text) && Number(node.text) <= Number.MAX_SAFE_INTEGER ? { "pointer": false, text } : void 0;
@@ -8883,6 +8887,30 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return { "pointer": false, text };
     }
     return void 0;
+  }
+  // `a * b` over the same operands as the subtraction (or a nested int64 product): Multiply's
+  // Int-kind branch returns the same wrapping int64 product
+  goNonNilPointerProductText(node, leftText, rightText) {
+    if (node.operatorToken.kind !== SyntaxKind5.AsteriskToken) {
+      return void 0;
+    }
+    const left = this.goInt64ProductOperand(node.left, leftText);
+    const right = left === void 0 ? void 0 : this.goInt64ProductOperand(node.right, rightText);
+    if (right === void 0 || !left.pointer && !right.pointer) {
+      return void 0;
+    }
+    return left.text + " * " + right.text;
+  }
+  goInt64ProductOperand(node, printedText) {
+    let inner = node;
+    while (inner?.kind === SyntaxKind5.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner?.kind === SyntaxKind5.BinaryExpression && this.goNativeArithmeticType(inner) === "int64") {
+      const text = printedText.trim();
+      return { "pointer": false, "text": text.startsWith("(") ? text : "(" + text + ")" };
+    }
+    return this.goInt64Operand(node, printedText);
   }
   // this.safeInteger{,2,N} with an integer literal default: the Go method returns &default on every nil path
   goDefaultedSafeIntegerCall(node) {

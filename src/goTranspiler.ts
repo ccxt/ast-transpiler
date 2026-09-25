@@ -1852,6 +1852,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (pointerSubtraction !== undefined) {
             return { 'goType': 'int64', 'text': pointerSubtraction };
         }
+        const pointerProduct = this.goNonNilPointerProductText(node, leftText, rightText);
+        if (pointerProduct !== undefined) {
+            return { 'goType': 'int64', 'text': pointerProduct };
+        }
         const pointerDivision = this.goNonNilPointerDivisionText(node, leftText, rightText);
         if (pointerDivision !== undefined) {
             return { 'goType': 'float64', 'text': pointerDivision };
@@ -1884,18 +1888,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (node.operatorToken.kind !== SyntaxKind.MinusToken) {
             return undefined;
         }
-        const left = this.goInt64SubtractionOperand(node.left, leftText);
-        const right = (left === undefined) ? undefined : this.goInt64SubtractionOperand(node.right, rightText);
+        const left = this.goInt64Operand(node.left, leftText);
+        const right = (left === undefined) ? undefined : this.goInt64Operand(node.right, rightText);
         if ((right === undefined) || (!left.pointer && !right.pointer)) {
             return undefined;
         }
         return left.text + ' - ' + right.text;
     }
 
-    goInt64SubtractionOperand(node, printedText: string): { pointer: boolean, text: string } | undefined {
+    goInt64Operand(node, printedText: string): { pointer: boolean, text: string } | undefined {
         const text = this.goUnwrapPrintedParens(printedText.trim());
         if (node?.kind === SyntaxKind.ParenthesizedExpression) {
-            return this.goInt64SubtractionOperand(node.expression, text);
+            return this.goInt64Operand(node.expression, text);
         }
         if (node?.kind === SyntaxKind.NumericLiteral) {
             return (/^[0-9]+$/.test(node.text) && (Number(node.text) <= Number.MAX_SAFE_INTEGER)) ? { 'pointer': false, text } : undefined;
@@ -1913,6 +1917,32 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return { 'pointer': false, text };
         }
         return undefined;
+    }
+
+    // `a * b` over the same operands as the subtraction (or a nested int64 product): Multiply's
+    // Int-kind branch returns the same wrapping int64 product
+    goNonNilPointerProductText(node, leftText: string, rightText: string): string | undefined {
+        if (node.operatorToken.kind !== SyntaxKind.AsteriskToken) {
+            return undefined;
+        }
+        const left = this.goInt64ProductOperand(node.left, leftText);
+        const right = (left === undefined) ? undefined : this.goInt64ProductOperand(node.right, rightText);
+        if ((right === undefined) || (!left.pointer && !right.pointer)) {
+            return undefined;
+        }
+        return left.text + ' * ' + right.text;
+    }
+
+    goInt64ProductOperand(node, printedText: string): { pointer: boolean, text: string } | undefined {
+        let inner = node;
+        while (inner?.kind === SyntaxKind.ParenthesizedExpression) {
+            inner = inner.expression;
+        }
+        if ((inner?.kind === SyntaxKind.BinaryExpression) && (this.goNativeArithmeticType(inner) === 'int64')) {
+            const text = printedText.trim();
+            return { 'pointer': false, 'text': text.startsWith('(') ? text : '(' + text + ')' };
+        }
+        return this.goInt64Operand(node, printedText);
     }
 
     // this.safeInteger{,2,N} with an integer literal default: the Go method returns &default on every nil path

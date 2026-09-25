@@ -3063,6 +3063,37 @@ describe('go native element assignment', () => {
         expect(output).toContain("= this.Milliseconds() - *this.SafeInteger(this.Options, \"td\", 0)");
         expect(output).toContain("Subtract(this.Milliseconds(), this.SafeInteger(this.Options, \"td\"))");
     });
+    test('Multiply on a non-nil *int64 prints the native int64 product', () => {
+        const input =
+        "class T {\n" +
+        "    options = {};\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    safeInteger (o: any, k: any, d: any = undefined): Int { return 1; }\n" +
+        "    f (since: Int = undefined, limit: Int = undefined, params = {}) {\n" +
+        "        const request = {};\n" +
+        "        const duration = this.milliseconds ();\n" +
+        "        const x: any = params['x'];\n" +
+        "        if ((since !== undefined) && (limit !== undefined)) {\n" +
+        "            request['a'] = since * 1000;\n" +
+        "            request['b'] = limit * duration;\n" +
+        "            request['c'] = (duration * limit) * 1000;\n" +
+        "            request['d'] = since * 1.5;\n" +
+        "            request['e'] = since * x;\n" +
+        "        }\n" +
+        "        request['f'] = limit * 2;\n" +
+        "        request['g'] = this.safeInteger (this.options, 'm', 0) * 1000;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("= *since * 1000");
+        expect(output).toContain("= *limit * duration");
+        expect(output).toContain("= (duration * *limit) * 1000");
+        expect(output).toContain("Multiply(since, 1.5)");
+        expect(output).toContain("Multiply(since, x)");
+        expect(output).toContain("Multiply(limit, 2)");
+        expect(output).toContain("= *this.SafeInteger(this.Options, \"m\", 0) * 1000");
+    });
     test('Divide inlines a literal divisor but keeps the helper for a zero divisor', () => {
         const input =
         "class T {\n" +
