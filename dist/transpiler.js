@@ -8606,7 +8606,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case SyntaxKind5.ParenthesizedExpression:
         return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
       case SyntaxKind5.BinaryExpression:
-        return this.goNativeArithmeticType(node);
+        return this.goConstantProductKind(node) ?? this.goNativeArithmeticType(node);
       case SyntaxKind5.Identifier:
         return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
       case SyntaxKind5.PropertyAccessExpression:
@@ -8707,6 +8707,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const isFloatKind = (kind) => kind === "float64" || kind === "const-float";
     const leftNode = node.left;
     const rightNode = node.right;
+    const constKinds = ["const-int", "const-float"];
+    if (op === SyntaxKind5.AsteriskToken && constKinds.includes(leftType) && constKinds.includes(rightType)) {
+      return this.goNativeConstantProductType(node, leftType, rightType);
+    }
     if (isFloatKind(leftType) !== isFloatKind(rightType)) {
       return void 0;
     }
@@ -8738,6 +8742,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (op === SyntaxKind5.PlusToken) {
       return operands;
     }
+    if (op === SyntaxKind5.SlashToken && this.isNonZeroIntegerLiteral(rightNode)) {
+      return "float64";
+    }
     if (operands === "int" && this.goInsideTypedDeclarationInitializer(node)) {
       return void 0;
     }
@@ -8748,6 +8755,36 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return void 0;
     }
     return operands;
+  }
+  // a literal-only `*` chain is itself an untyped Go constant, so an enclosing product folds too
+  goConstantProductKind(node) {
+    if (node?.kind === SyntaxKind5.ParenthesizedExpression) {
+      return this.goConstantProductKind(node.expression);
+    }
+    if (node?.kind === SyntaxKind5.NumericLiteral) {
+      return /^[0-9]+$/.test(node.text) ? "const-int" : this.goConstFloatStaticType(node);
+    }
+    if (node?.kind !== SyntaxKind5.BinaryExpression || node.operatorToken.kind !== SyntaxKind5.AsteriskToken) {
+      return void 0;
+    }
+    const left = this.goConstantProductKind(node.left);
+    const right = left === void 0 ? void 0 : this.goConstantProductKind(node.right);
+    if (right === void 0 || this.goNativeConstantProductType(node, left, right) === void 0) {
+      return void 0;
+    }
+    return left === "const-float" || right === "const-float" ? "const-float" : "const-int";
+  }
+  // `2 * 1.67` is an untyped float constant (float64); an integer chain stays an untyped int
+  // constant, which a typed `var x int64 = ...` declaration converts, so it is named int64 there.
+  goNativeConstantProductType(node, leftType, rightType) {
+    if (leftType === "const-float" || rightType === "const-float") {
+      return "float64";
+    }
+    const value = this.goConstantIntValue(node);
+    if (value === void 0 || Math.abs(value) > Number.MAX_SAFE_INTEGER) {
+      return void 0;
+    }
+    return this.goInsideTypedDeclarationInitializer(node) ? "int64" : "int";
   }
   // an operand that is itself a bare operator expression needs parens under a
   // tighter parent operator; a whole helper call is already delimited
@@ -8798,7 +8835,21 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (goType === void 0) {
       return void 0;
     }
+    const isIntKind = (kind) => kind === "int" || kind === "int64" || kind === "const-int";
+    if (op === SyntaxKind5.SlashToken && isIntKind(leftType) && isIntKind(rightType)) {
+      return { goType, "text": this.goFloatDivisionText(node, leftType, rightType, leftText, rightText) };
+    }
     return { goType, "text": this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+  }
+  // int / int is a float64 division as in JS: typed operands convert, and with two constants
+  // the left one does (an untyped constant operand then converts implicitly)
+  goFloatDivisionText(node, leftType, rightType, leftText, rightText) {
+    const castLeft = leftType !== "const-int" || rightType === "const-int";
+    const castRight = rightType !== "const-int";
+    const cast = (printed) => "float64(" + this.goUnwrapPrintedParens(printed.trim()) + ")";
+    const left = castLeft ? cast(leftText) : this.goNativeOperandText(node.left, leftText);
+    const right = castRight ? cast(rightText) : this.goNativeOperandText(node.right, rightText);
+    return left + " / " + right;
   }
   // the operator line gofmt prints for a natively emitted arithmetic expression: the
   // blanks follow go/printer's cutoff at the current depth, and a binary operand is
@@ -13904,7 +13955,7 @@ ${this.getIden(level)}}()`;
         return this.goIntOperandIdentifier(node);
       case SyntaxKind5.BinaryExpression: {
         const op = node.operatorToken?.kind;
-        if (op === SyntaxKind5.PlusToken || op === SyntaxKind5.MinusToken || op === SyntaxKind5.AsteriskToken || op === SyntaxKind5.SlashToken || op === SyntaxKind5.PercentToken) {
+        if (op === SyntaxKind5.PlusToken || op === SyntaxKind5.MinusToken || op === SyntaxKind5.AsteriskToken || op === SyntaxKind5.PercentToken) {
           return this.goIntIndexExpression(node.left) && this.goIntIndexExpression(node.right);
         }
         return false;

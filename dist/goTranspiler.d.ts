@@ -152,12 +152,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     goConstantIntValue(node: any): number | undefined;
     goInsideTypedDeclarationInitializer(node: any): boolean;
     goNativeNumericResultType(op: any, leftType: string, rightType: string, node: any): string | undefined;
+    goConstantProductKind(node: any): string | undefined;
+    goNativeConstantProductType(node: any, leftType: string, rightType: string): string | undefined;
     goNativeOperandText(node: any, printedText: string): string;
     goNativeArithmeticType(node: any): string | undefined;
     goNativeArithmetic(node: any, leftText?: any, rightText?: any): {
         goType: string;
         text: string;
     } | undefined;
+    goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;

@@ -3022,7 +3022,7 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var q any = this.Milliseconds() / 2");
+        expect(output).toContain("var q any = float64(this.Milliseconds()) / 2");
         expect(output).toContain("var z any = Divide(this.Milliseconds(), 0)");
     });
     test('Mod inlines an int64 value with a nonzero literal, a zero divisor or a float operand keeps the helper', () => {
@@ -5122,7 +5122,7 @@ describe('go native arithmetic result rows (Divide/Multiply/Subtract/Mod)', () =
     });
     test('literal-only integer expressions fold to the operator', () => {
         expect(body(main("        return { 'a': 10 * 1000, 'b': 1440 * 3, 'c': 10 / 3 };\n")))
-            .toContain("\"a\": 10 * 1000, \"b\": 1440 * 3, \"c\": 10 / 3");
+            .toContain("\"a\": 10 * 1000, \"b\": 1440 * 3, \"c\": float64(10) / 3");
     });
     test('float64 operands next to a float literal use the float operator', () => {
         expect(body(main("        const floor = Math.floor(value);\n        const half = floor * 2.5;\n        const less = floor - 0.5;\n        const part = floor / 2.5;\n        return [half, less, part];\n")))
@@ -5142,17 +5142,31 @@ describe('go native arithmetic result rows (Divide/Multiply/Subtract/Mod)', () =
         expect(body(main("        const last = arr.length - 1;\n        const rest = arr.length % 7;\n        return [last, rest];\n")))
             .toContain("var last any = Subtract(GetArrayLength(arr), 1) var rest any = Mod(GetArrayLength(arr), 7)");
         expect(body(main("        const scaled = 10 * 1000;\n        return scaled;\n")))
-            .toContain("var scaled any = Multiply(10, 1000)");
+            .toContain("var scaled any = 10 * 1000");
     });
-    test('an int literal next to a float64 operand keeps the helper frontend int path', () => {
+    test('an int literal next to a float64 operand keeps the helper; two literals fold natively', () => {
         expect(body(main("        const floor = Math.floor(value);\n        const scaled = floor * 1000;\n        return scaled;\n")))
             .toContain("var scaled any = Multiply(floor, 1000)");
         expect(body(main("        return { 'a': 100 * 1.1, 'b': 5 * 1.67 };\n")))
-            .toContain("\"a\": Multiply(100, 1.1), \"b\": Multiply(5, 1.67)");
+            .toContain("\"a\": 100 * 1.1, \"b\": 5 * 1.67");
     });
-    test('two float literals keep the helper: Go folds them exactly, the helper rounds', () => {
-        expect(body(main("        return { 'a': 2.5 * 1.5, 'b': 2.5 - 1.5 };\n")))
-            .toContain("\"a\": Multiply(2.5, 1.5), \"b\": Subtract(2.5, 1.5)");
+    test('a literal product folds natively (exact Go constant); literal Subtract keeps the helper', () => {
+        expect(body(main("        return { 'a': 2.5 * 1.5, 'b': 2.5 - 1.5, 'c': 7 * 24 * 60 };\n")))
+            .toContain("\"a\": 2.5 * 1.5, \"b\": Subtract(2.5, 1.5), \"c\": (7 * 24) * 60");
+    });
+    test('int / int divides as float64 like JS', () => {
+        expect(body(main("        return { 'cost': 20 / 15, 'b': 2 / 3 };\n")))
+            .toContain("\"cost\": float64(20) / 15, \"b\": float64(2) / 3");
+        expect(body(main("        const now = this.milliseconds();\n        const days = now / 86400000;\n        return days;\n")))
+            .toContain("float64(now) / 86400000");
+        expect(body(main("        const a = this.milliseconds();\n        const b = this.milliseconds() + 1;\n        const r = a / (b * 2);\n        return r;\n")))
+            .toContain("Divide(a, (Multiply(b, 2)))");
+        expect(body(main("        const floor = Math.floor(value);\n        return floor / 2.5;\n")))
+            .toContain("floor / 2.5");
+    });
+    test('a float64 local receives int / int', () => {
+        expect(body(main("        const ratio = 20 / 15;\n        return ratio;\n")))
+            .toMatch(/var ratio (any|float64) = float64\(20\) \/ 15/);
     });
     test('float64 modulo keeps the helper: Go has no float operator', () => {
         expect(body(main("        const floor = Math.floor(value);\n        const rest = floor % 2.5;\n        return rest;\n")))
