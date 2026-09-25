@@ -14247,6 +14247,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     // Static method emitted in place of java.util.concurrent.CompletableFuture.supplyAsync
     // for async methods. The callee owns the executor choice, so no second argument is emitted.
     this.asyncSupplier = "";
+    this.javaHandBackVisiting = /* @__PURE__ */ new Set();
     // method declarations (first per name) of the `Exchange` class of ts/src/base/Exchange.ts, read off the
     // program the warp ran on. A prediction venue's method with one of these names overrides
     // the tier body javaTranspiler.ts injects into PredictionExchange.java.
@@ -15394,7 +15395,7 @@ var JavaTranspiler = class extends BaseTranspiler {
           return;
         }
       }
-      if (current.kind === ts6.SyntaxKind.BinaryExpression && current.operatorToken.kind >= ts6.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts6.SyntaxKind.LastAssignment && !ts6.isIdentifier(current.left) && !ts6.isElementAccessExpression(current.left) && !ts6.isPropertyAccessExpression(current.left) && this.javaPatternBindsSymbol(current.left, symbol)) {
+      if (current.kind === ts6.SyntaxKind.BinaryExpression && current.operatorToken.kind >= ts6.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts6.SyntaxKind.LastAssignment && !ts6.isIdentifier(current.left) && !ts6.isElementAccessExpression(current.left) && !ts6.isPropertyAccessExpression(current.left) && this.javaPatternBindsSymbol(current.left, symbol) && !this.javaDestructuringHandsBackLocal(current, symbol)) {
         reassigned = true;
         return;
       }
@@ -15410,6 +15411,55 @@ var JavaTranspiler = class extends BaseTranspiler {
     };
     walk(scope);
     return reassigned;
+  }
+  // `[.., x, ..] = this.m(.., x, ..)` where every return of m is an array literal whose
+  // element at x's position is the never-reassigned parameter x was passed to: x keeps its object
+  javaDestructuringHandsBackLocal(assignment, symbol) {
+    const checker = this.getChecker();
+    const left = assignment.left;
+    const call = this.unwrapPrintTransparentExpression(assignment.right);
+    if (!ts6.isArrayLiteralExpression(left) || call === void 0 || !ts6.isCallExpression(call)) {
+      return false;
+    }
+    const index = left.elements.findIndex((e) => ts6.isIdentifier(e) && checker.getSymbolAtLocation(e) === symbol);
+    if (index < 0 || left.elements.some((e, i) => i !== index && this.javaPatternBindsSymbol(e, symbol))) {
+      return false;
+    }
+    const declaration = checker.getResolvedSignature(call)?.declaration;
+    if (!declaration || !ts6.isMethodDeclaration(declaration) || !declaration.body) {
+      return false;
+    }
+    const argIndex = call.arguments.findIndex((a) => ts6.isIdentifier(a) && checker.getSymbolAtLocation(a) === symbol);
+    const parameter = argIndex >= 0 ? declaration.parameters[argIndex] : void 0;
+    if (parameter === void 0 || !ts6.isIdentifier(parameter.name) || parameter.dotDotDotToken) {
+      return false;
+    }
+    const parameterSymbol = checker.getSymbolAtLocation(parameter.name);
+    let returns = 0;
+    let proven = true;
+    const walk = (n) => {
+      if (!proven || n === void 0 || n !== declaration.body && ts6.isFunctionLike(n)) {
+        return;
+      }
+      if (ts6.isReturnStatement(n)) {
+        returns++;
+        const value = this.unwrapPrintTransparentExpression(n.expression);
+        const element = value !== void 0 && ts6.isArrayLiteralExpression(value) ? value.elements[index] : void 0;
+        proven = element !== void 0 && ts6.isIdentifier(element) && checker.getSymbolAtLocation(element) === parameterSymbol;
+        return;
+      }
+      ts6.forEachChild(n, walk);
+    };
+    walk(declaration.body);
+    if (!proven || returns === 0 || this.javaHandBackVisiting.has(declaration)) {
+      return false;
+    }
+    this.javaHandBackVisiting.add(declaration);
+    try {
+      return !this.javaLocalIsReassigned(parameter.name);
+    } finally {
+      this.javaHandBackVisiting.delete(declaration);
+    }
   }
   // true when a destructuring target mentions the symbol anywhere
   javaPatternBindsSymbol(pattern, symbol) {

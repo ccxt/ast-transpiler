@@ -1765,7 +1765,8 @@ export class JavaTranspiler extends BaseTranspiler {
                 && current.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts.SyntaxKind.LastAssignment
                 && !ts.isIdentifier(current.left)
                 && !ts.isElementAccessExpression(current.left) && !ts.isPropertyAccessExpression(current.left)
-                && this.javaPatternBindsSymbol(current.left, symbol)) {
+                && this.javaPatternBindsSymbol(current.left, symbol)
+                && !this.javaDestructuringHandsBackLocal(current, symbol)) {
                 reassigned = true; // destructuring assignment `[x, p] = ..`
                 return;
             }
@@ -1788,6 +1789,58 @@ export class JavaTranspiler extends BaseTranspiler {
         walk(scope);
         return reassigned;
     }
+
+    // `[.., x, ..] = this.m(.., x, ..)` where every return of m is an array literal whose
+    // element at x's position is the never-reassigned parameter x was passed to: x keeps its object
+    javaDestructuringHandsBackLocal(assignment, symbol): boolean {
+        const checker: any = this.getChecker();
+        const left = assignment.left;
+        const call = this.unwrapPrintTransparentExpression(assignment.right);
+        if (!ts.isArrayLiteralExpression(left) || call === undefined || !ts.isCallExpression(call)) {
+            return false;
+        }
+        const index = left.elements.findIndex((e) => ts.isIdentifier(e) && checker.getSymbolAtLocation(e) === symbol);
+        if (index < 0 || left.elements.some((e, i) => i !== index && this.javaPatternBindsSymbol(e, symbol))) {
+            return false;
+        }
+        const declaration: any = checker.getResolvedSignature(call)?.declaration;
+        if (!declaration || !ts.isMethodDeclaration(declaration) || !declaration.body) {
+            return false;
+        }
+        const argIndex = call.arguments.findIndex((a) => ts.isIdentifier(a) && checker.getSymbolAtLocation(a) === symbol);
+        const parameter = argIndex >= 0 ? declaration.parameters[argIndex] : undefined;
+        if (parameter === undefined || !ts.isIdentifier(parameter.name) || parameter.dotDotDotToken) {
+            return false;
+        }
+        const parameterSymbol = checker.getSymbolAtLocation(parameter.name);
+        let returns = 0;
+        let proven = true;
+        const walk = (n) => {
+            if (!proven || n === undefined || (n !== declaration.body && ts.isFunctionLike(n))) {
+                return;
+            }
+            if (ts.isReturnStatement(n)) {
+                returns++;
+                const value = this.unwrapPrintTransparentExpression(n.expression);
+                const element = value !== undefined && ts.isArrayLiteralExpression(value) ? value.elements[index] : undefined;
+                proven = element !== undefined && ts.isIdentifier(element) && checker.getSymbolAtLocation(element) === parameterSymbol;
+                return;
+            }
+            ts.forEachChild(n, walk);
+        };
+        walk(declaration.body);
+        if (!proven || returns === 0 || this.javaHandBackVisiting.has(declaration)) {
+            return false; // a recursive hand-back chain stays unproven
+        }
+        this.javaHandBackVisiting.add(declaration);
+        try {
+            return !this.javaLocalIsReassigned(parameter.name);
+        } finally {
+            this.javaHandBackVisiting.delete(declaration);
+        }
+    }
+
+    javaHandBackVisiting = new Set<any>();
 
     // true when a destructuring target mentions the symbol anywhere
     javaPatternBindsSymbol(pattern, symbol): boolean {

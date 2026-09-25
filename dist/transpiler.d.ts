@@ -1384,6 +1384,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredChainContainerRead(left: any, keyCount: number): string | undefined;
     unwrapPrintTransparentExpression(node: any): any;
     javaLocalIsReassigned(node: any, admitsWrite?: (rhs: any) => boolean): boolean;
+    javaDestructuringHandsBackLocal(assignment: any, symbol: any): boolean;
+    javaHandBackVisiting: Set<any>;
     javaPatternBindsSymbol(pattern: any, symbol: any): boolean;
     callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;
     returnTypePrintsAsHashMap(declaration: any): boolean;

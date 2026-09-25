@@ -6707,3 +6707,29 @@ describe('java element write on a reassigned fresh map', () => {
         expect(output).toContain('Helpers.addElementToObject(x, "a", null)');
     });
 });
+
+describe('java element write after a hand-back destructuring', () => {
+    const t = new Transpiler({ java: { parser: { NUM_LINES_END_FILE: 0 } } } as any);
+    const body = (ret: string) =>
+        "class T {\n" +
+        "    h(k: string, r: any, p: any): any[] {\n" +
+        "        r[k] = 1;\n" +
+        "        return " + ret + ";\n" +
+        "    }\n" +
+        "    test(params: any): any {\n" +
+        "        let request: any = {};\n" +
+        "        let pp = params;\n" +
+        "        [ request, pp ] = this.h('a', request, pp);\n" +
+        "        request['b'] = undefined;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}";
+    test('a callee returning the same map argument keeps Map.put', () => {
+        const output = t.transpileJava(body("[ r, p ]")).content;
+        expect(output).toContain('((java.util.Map<String, Object>)request).put("b", null)');
+    });
+    test('a callee returning another value keeps the helper', () => {
+        const output = t.transpileJava(body("[ p, r ]")).content;
+        expect(output).toContain('Helpers.addElementToObject(request, "b", null)');
+    });
+});
