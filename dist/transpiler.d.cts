@@ -783,6 +783,9 @@ declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    unifiedStringParams: {
+        [method: string]: number[];
+    };
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
@@ -1027,6 +1030,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goTsSrcTreeCache: Map<string, any>;
     goNativeParameterType(param: any): string | undefined;
     goNativeParameterTypeOf(param: any): string | undefined;
+    goIsUnifiedStringParameter(methodName: string, index: number): boolean;
+    goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
     goRequiredStringParameterType(param: any): string | undefined;
     goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
     goIsProHandlerMethod(fn: any): boolean;

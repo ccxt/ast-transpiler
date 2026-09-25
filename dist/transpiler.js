@@ -7608,6 +7608,9 @@ var GoTranspiler = class extends BaseTranspiler {
     config["parser"] = Object.assign({}, parserConfig4, config["parser"] ?? {});
     super(config);
     this.wrapCallMethods = [];
+    // inherited method name -> indexes of required params that print `string` on the base and every
+    // override (the caller audits all declarations); other callers convert through StringArg
+    this.unifiedStringParams = {};
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     this.goLocalTypeResolution = /* @__PURE__ */ new Set();
     // appended to every async (channel returning) Go method/function name and to each
@@ -7763,6 +7766,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.wrapThisCalls = config["wrapThisCalls"] ?? false;
     this.wrapCallMethods = config["wrapCallMethods"] ?? [];
     this.asyncMethodSuffix = config["asyncMethodSuffix"] ?? "";
+    this.unifiedStringParams = config["unifiedStringParams"] ?? {};
   }
   initConfig() {
     this.LeftPropertyAccessReplacements = {
@@ -9603,7 +9607,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       if (node.expression.expression.kind === ts5.SyntaxKind.ThisKeyword) {
         const methodName = this.printNode(node.expression.name, 0);
         if (this.wrapThisCalls || this.wrapCallMethods.includes(methodName)) {
-          const argsParsed = args.map((a) => this.printNode(a, 0)).join(", ");
+          const argsParsed = this.goUnifiedStringCallArgs(node, 0, true) ?? args.map((a) => this.printNode(a, 0)).join(", ");
           return `<-this.callInternal("${methodName}"${args.length > 0 ? ", " + argsParsed : ""})`;
         }
       }
@@ -10193,6 +10197,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
     const parseParam = fn.name.escapedText.startsWith("parse");
     const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
+    if (this.goIsUnifiedStringParameter(fn.name.escapedText, fn.parameters.indexOf(param))) {
+      if (this.goRequiredStringParameterType(param) !== "string" || !this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, "string") || !this.goParameterKeepsNilCompareNative(fn.body, param, "string")) {
+        throw new Error(`unifiedStringParams: ${fn.name.escapedText} parameter ${param.name.escapedText} is not a required string written only as string`);
+      }
+      return "string";
+    }
     if (this.goMethodKeepsBaseSignature(fn)) {
       return void 0;
     }
@@ -10210,6 +10220,31 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
     }
     return void 0;
+  }
+  goIsUnifiedStringParameter(methodName, index) {
+    const indexes = Object.prototype.hasOwnProperty.call(this.unifiedStringParams, methodName) ? this.unifiedStringParams[methodName] : void 0;
+    return Array.isArray(indexes) && indexes.includes(index);
+  }
+  // the call arguments of a unified method whose parameter prints `string`: an argument the
+  // printer cannot prove a Go string goes through StringArg, which panics on any other value
+  goUnifiedStringCallArgs(node, identation, flat = false) {
+    const callee = node.expression;
+    const name = callee?.kind === ts5.SyntaxKind.PropertyAccessExpression ? callee.name?.escapedText : void 0;
+    if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(this.unifiedStringParams, name)) {
+      return void 0;
+    }
+    const args = node.arguments ?? [];
+    if (args.some((a) => a.kind === ts5.SyntaxKind.SpreadElement)) {
+      return void 0;
+    }
+    const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
+    return args.map((a, i) => {
+      const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+      if (!this.goIsUnifiedStringParameter(name, i) || this.goPrintedArgType(a) === "string") {
+        return printed;
+      }
+      return `StringArg(${printed})`;
+    }).join(", ");
   }
   // `string` for a parameter whose declared TS type is string (or a string-literal union) with no
   // undefined/null member; a nullable one stays boxed here (callers pass *string or nil)
@@ -10363,7 +10398,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const tree = this.goTsSrcTree(fn.getSourceFile());
     if (tree !== void 0) {
       const myClass = this.goEnclosingClassName(fn);
-      const myFile = tree.relativeOf.get(fn.getSourceFile().fileName);
+      const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
       for (const site of tree.callIndex.get(name) ?? []) {
         if (site.file === myFile) {
           continue;
@@ -10438,7 +10473,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   // `this.x(...)`, each file's text and its class -> base map. A scoped run's
   // program holds one exchange, so the sibling files are only provable textually.
   goTsSrcTree(file) {
-    const fileName = file.fileName;
+    const fileName = path2.resolve(file.fileName);
     const marker = "/ts/src/";
     const at = fileName.lastIndexOf(marker);
     if (at < 0) {
@@ -12692,6 +12727,10 @@ ${this.getIden(identation)}${returnStatement}`;
     return arrayOpen + elements + this.ARRAY_CLOSING_TOKEN;
   }
   printArgsForCallExpression(node, identation) {
+    const unified = this.goUnifiedStringCallArgs(node, identation);
+    if (unified !== void 0) {
+      return unified;
+    }
     if (node.arguments && node.arguments.length > 1) {
       return this.goWithExprDepth(this.goExprDepth + 1, () => super.printArgsForCallExpression(node, identation));
     }
