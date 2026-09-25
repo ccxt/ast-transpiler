@@ -616,6 +616,7 @@ declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeParseCall(node: any): string;
     csharpCalleeIsGlobalFunction(node: any): boolean;
     csharpNativeParseCallOnDeclaredLocal(callee: any, arg: any): string;
+    csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
     csharpNativeReceiver(node: any): {
@@ -1093,6 +1094,7 @@ declare class GoTranspiler extends BaseTranspiler {
     goIsReadOnlyCallArgument(node: any): boolean;
     goIsBareStringOperand(node: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goNativeNumericEqualityKind(left: any, leftText: string, right: any, rightText: string): string | undefined;
     goOperandNumericKind(node: any, printedText: string): string | undefined;
     goLiteralTypedLocalKind(node: any): string | undefined;
     goNumericLiteralKind(node: any): string | undefined;
@@ -1441,6 +1443,11 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
+    javaComparisonOperand(node: any): {
+        kind: string;
+        boxed: boolean;
+    } | undefined;
+    printDeclaredNumericComparison(left: any, right: any, op: any): string | undefined;
     javaBaseTimeLongCall(node: any): boolean;
     javaBaseIntCall(node: any): boolean;
     javaThisCallName(node: any): any;

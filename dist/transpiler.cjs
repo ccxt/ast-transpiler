@@ -4772,6 +4772,26 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return kind === "int" ? `((Int64)${text})` : void 0;
   }
+  // `multiply(N, M)` over two unsigned numeric literals: two integers box the Int64 product
+  // (`NL * ML`, the same value while it is a safe integer); otherwise the helper multiplies the
+  // doubles and re-boxes an integral product as Int64, so only a fractional product goes native.
+  csharpNativeLiteralProduct(left, right) {
+    if (!_typescript2.default.isNumericLiteral(left) || !_typescript2.default.isNumericLiteral(right)) {
+      return void 0;
+    }
+    const leftText = left.text;
+    const rightText = right.text;
+    if (/^\d+$/.test(leftText) && /^\d+$/.test(rightText)) {
+      const product = Number(leftText) * Number(rightText);
+      return Number.isSafeInteger(product) ? `(${leftText}L * ${rightText}L)` : void 0;
+    }
+    const decimal = /^\d+(\.\d+)?$/;
+    const rounded = Number((Number(leftText) * Number(rightText)).toPrecision(15));
+    if (!decimal.test(leftText) || !decimal.test(rightText) || Number.isInteger(rounded)) {
+      return void 0;
+    }
+    return `(${leftText} * ${rightText})`;
+  }
   // `a % b` prints `mod(a, b)`: the helper takes the double remainder and converts back to Int64. An
   // Int32 dividend with a nonzero integer literal divisor is exact as double, so the native Int64
   // remainder matches. Int64 dividends (rounded above 2^53) and possibly-zero divisors keep helper.
@@ -5277,6 +5297,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
         if (nativeConcat !== void 0) {
           return nativeConcat;
+        }
+      }
+      if (op === _typescript2.default.SyntaxKind.AsteriskToken) {
+        const nativeProduct = this.csharpNativeLiteralProduct(left, right);
+        if (nativeProduct !== void 0) {
+          return nativeProduct;
         }
       }
       const [open, close] = this.binaryExpressionsWrappers[op];
@@ -11296,6 +11322,10 @@ ${this.getIden(level)}}()`;
     if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
+    const numericKind = !lPtr && !rPtr ? this.goNativeNumericEqualityKind(left, leftText, right, rightText) : void 0;
+    if (numericKind !== void 0) {
+      return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
     if (!lPtr && !rPtr) {
       if (this.goIsBareStringOperand(left) && this.goIsStringLiteralNode(right) || this.goIsBareStringOperand(right) && this.goIsStringLiteralNode(left)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
@@ -11353,6 +11383,19 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     return void 0;
+  }
+  // the kind a native `==` compares two numeric operands in; undefined keeps IsEqual. Two
+  // constants are left to the helper (nothing to type), as is any mix Go would refuse.
+  goNativeNumericEqualityKind(left, leftText, right, rightText) {
+    if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+      return void 0;
+    }
+    const leftKind = this.goOperandNumericKind(left, leftText);
+    const rightKind = this.goOperandNumericKind(right, rightText);
+    if (leftKind === void 0 || rightKind === void 0) {
+      return void 0;
+    }
+    return this.goComparisonKind(left, leftKind, right, rightKind);
   }
   // the Go numeric kind an operand's static type is, or undefined when it stays
   // `any` (unknown helper result, union, pointer box): only a concrete kind can
@@ -15927,6 +15970,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (leftKind !== void 0 && rightKind !== void 0 && orderingSafe) {
         return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
       }
+      const declaredCompare = this.printDeclaredNumericComparison(left, right, op);
+      if (declaredCompare !== void 0) {
+        return declaredCompare;
+      }
     }
     if (op === _typescript2.default.SyntaxKind.PlusEqualsToken || op === _typescript2.default.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
       const leftText = this.printNode(left, 0);
@@ -16594,6 +16641,63 @@ var JavaTranspiler = class extends BaseTranspiler {
       return leftKind === rightKind ? leftKind : void 0;
     }
     return hasDouble ? "double" : "long";
+  }
+  // ---- ordered comparison over declared numeric locals ----
+  // Helpers.isGreaterThan answers its own predicate when an operand is null (GT: a != null && b == null;
+  // LT = !GT && !EQ; GE = GT || EQ; LE = LT || EQ), so a Long/Integer/Double box compares natively
+  // inside that exact null table. `>` is a toDouble compare for every numeric pair; `>= < <=` also go
+  // through isEqual, so they stay native only for integral pairs (no NaN / BigDecimal rounding arm).
+  // 'long' | 'double' for an operand the printer proves: a primitive-printing expression, or an
+  // identifier whose printed declaration is a numeric type (boxed = may be null)
+  javaComparisonOperand(node) {
+    let inner = node;
+    while (inner !== void 0 && inner.kind === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner === void 0) {
+      return void 0;
+    }
+    const primitive = this.javaPrimitiveOperandKind(inner);
+    if (primitive !== void 0) {
+      return { kind: primitive === "double" ? "double" : "long", boxed: false };
+    }
+    if (!_typescript2.default.isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
+      return void 0;
+    }
+    const declared = this.javaDeclaredNumericFamily(inner);
+    if (declared === void 0) {
+      return void 0;
+    }
+    const kind = declared === "Double" || declared === "double" ? "double" : "long";
+    return { kind, boxed: JAVA_BOXED_NUMERIC_TYPES.has(declared) };
+  }
+  printDeclaredNumericComparison(left, right, op) {
+    const l = this.javaComparisonOperand(left);
+    const r = this.javaComparisonOperand(right);
+    if (l === void 0 || r === void 0 || !l.boxed && !r.boxed) {
+      return void 0;
+    }
+    if (op !== _typescript2.default.SyntaxKind.GreaterThanToken && (l.kind !== "long" || r.kind !== "long")) {
+      return void 0;
+    }
+    const a = this.printNode(left, 0);
+    const b = this.printNode(right, 0);
+    const cmp = `${a} ${this.SupportedKindNames[op]} ${b}`;
+    const aNull = `${a} == null`;
+    const aSet = `${a} != null`;
+    const bNull = `${b} == null`;
+    const bSet = `${b} != null`;
+    switch (op) {
+      case _typescript2.default.SyntaxKind.GreaterThanToken:
+        return `(${[l.boxed ? aSet : void 0, r.boxed ? `(${bNull} || ${cmp})` : cmp].filter((x) => x !== void 0).join(" && ")})`;
+      case _typescript2.default.SyntaxKind.LessThanToken:
+        return `(${[r.boxed ? bSet : void 0, l.boxed ? `(${aNull} || ${cmp})` : cmp].filter((x) => x !== void 0).join(" && ")})`;
+      case _typescript2.default.SyntaxKind.GreaterThanEqualsToken:
+        return `(${[r.boxed ? bNull : void 0, l.boxed ? `(${aSet} && ${cmp})` : cmp].filter((x) => x !== void 0).join(" || ")})`;
+      case _typescript2.default.SyntaxKind.LessThanEqualsToken:
+        return `(${[l.boxed ? aNull : void 0, r.boxed ? `(${bSet} && ${cmp})` : cmp].filter((x) => x !== void 0).join(" || ")})`;
+    }
+    return void 0;
   }
   // ---- widened native add (`+` only) ----
   // Helpers.add normalizes Integer to Long, boxes Long for integral operands and Double otherwise
