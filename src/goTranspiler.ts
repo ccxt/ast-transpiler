@@ -7123,7 +7123,7 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printToLowerCaseCall(node, identation, name = undefined) {
         // `s.toLowerCase ()` -> strings.ToLower
-        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.ToLower(${o[0]})`, `ToLower(${name})`);
+        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.ToLower(${o[0]})`, `ToLower(${name})`, true);
     }
 
     printShiftCall(node, identation, name = undefined) {

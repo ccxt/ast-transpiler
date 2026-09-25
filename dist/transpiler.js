@@ -13300,7 +13300,7 @@ ${this.getIden(level)}}()`;
     return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.ToUpper(${o[0]})`, `ToUpper(${name})`, true);
   }
   printToLowerCaseCall(node, identation, name = void 0) {
-    return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.ToLower(${o[0]})`, `ToLower(${name})`);
+    return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.ToLower(${o[0]})`, `ToLower(${name})`, true);
   }
   printShiftCall(node, identation, name = void 0) {
     return `Shift(${name})`;
