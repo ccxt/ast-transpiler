@@ -9925,8 +9925,26 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (this.goAnyLocalHoldsPointerCache.has(decl)) {
       return this.goAnyLocalHoldsPointerCache.get(decl);
     }
+    this.goAnyLocalHoldsPointerCache.set(decl, false);
+    let settled = true;
     const isPointerInit = (expr) => {
       expr = this.goUnwrapParenthesizedNode(expr);
+      if (expr?.kind === ts5.SyntaxKind.ConditionalExpression) {
+        return isPointerInit(expr.whenTrue) || isPointerInit(expr.whenFalse);
+      }
+      if (expr?.kind === ts5.SyntaxKind.Identifier) {
+        const source = this.checkerOrUndefined()?.getSymbolAtLocation(expr)?.valueDeclaration;
+        if (source?.kind === ts5.SyntaxKind.Parameter) {
+          if (this.goGetArgTypeComputing?.has(source)) {
+            settled = false;
+            return true;
+          }
+          return String(this.goGetArgParameterType(source) ?? "").startsWith("*");
+        }
+        const inner = source !== decl && this.goAnyLocalHoldsPointer(source);
+        settled = settled && (source === decl || this.goAnyLocalHoldsPointerCache.has(source));
+        return inner;
+      }
       const callee = expr?.kind === ts5.SyntaxKind.CallExpression ? expr.expression : void 0;
       if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts5.SyntaxKind.ThisKeyword) {
         return false;
@@ -9953,7 +9971,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         ts5.forEachChild(scope, visit);
       }
     }
-    this.goAnyLocalHoldsPointerCache.set(decl, holds);
+    if (settled) {
+      this.goAnyLocalHoldsPointerCache.set(decl, holds);
+    } else {
+      this.goAnyLocalHoldsPointerCache.delete(decl);
+    }
     return holds;
   }
   // the callee name of a call, read from the AST and capitalised the way the
@@ -12229,7 +12251,67 @@ ${this.getIden(level)}}()`;
   // audited deref consumers (fail-closed); containers are the same map/list, and nil-sensitive
   // consumers are tabled as `container` (goGetArgPassesIntoContainerDefault covers call chains).
   goGetArgConsumersAreSafe(body, param, goType, nilable) {
-    const name = param.name.escapedText;
+    return this.goGetArgUsesAreSafe(body, param, param.name.escapedText, goType, nilable, /* @__PURE__ */ new Set());
+  }
+  // `(x === undefined) ? d : x` / `x !== undefined ? x : d`: the arm holding `n` only runs when
+  // the same name is not nil, so the copy never boxes a typed nil
+  goGetArgArmIsNilGuarded(n, cond) {
+    let test = cond.condition;
+    while (test?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      test = test.expression;
+    }
+    if (test?.kind !== ts5.SyntaxKind.BinaryExpression) {
+      return false;
+    }
+    const isNil = (e) => e?.kind === ts5.SyntaxKind.NullKeyword || e?.kind === ts5.SyntaxKind.Identifier && e.escapedText === "undefined";
+    const sameName = (e) => e?.kind === ts5.SyntaxKind.Identifier && e.escapedText === n.escapedText;
+    if (!(sameName(test.left) && isNil(test.right) || sameName(test.right) && isNil(test.left))) {
+      return false;
+    }
+    const op = test.operatorToken?.kind;
+    const eq = op === ts5.SyntaxKind.EqualsEqualsEqualsToken || op === ts5.SyntaxKind.EqualsEqualsToken;
+    const ne = op === ts5.SyntaxKind.ExclamationEqualsEqualsToken || op === ts5.SyntaxKind.ExclamationEqualsToken;
+    let arm = n;
+    while (arm.parent !== cond) {
+      arm = arm.parent;
+    }
+    return eq && arm === cond.whenFalse || ne && arm === cond.whenTrue;
+  }
+  // the body-local `r` a copy `let r = x` / `r = x` lands in (the value, not the box, is copied)
+  goGetArgCopyTarget(use, body) {
+    const parent = use.parent;
+    let target;
+    if (parent?.kind === ts5.SyntaxKind.VariableDeclaration && parent.initializer === use) {
+      target = parent;
+    } else if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.right === use && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && parent.left?.kind === ts5.SyntaxKind.Identifier && parent.parent?.kind === ts5.SyntaxKind.ExpressionStatement) {
+      try {
+        target = this.getChecker().getSymbolAtLocation(parent.left)?.valueDeclaration;
+      } catch (e) {
+        target = void 0;
+      }
+    }
+    if (target?.kind !== ts5.SyntaxKind.VariableDeclaration || target.name?.kind !== ts5.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    let inBody = false;
+    for (let p = target.parent; p !== void 0; p = p.parent) {
+      inBody = inBody || p === body;
+    }
+    let valueWrite = false;
+    const visit = (n) => {
+      if (valueWrite) {
+        return;
+      }
+      if (n.kind === ts5.SyntaxKind.BinaryExpression && n.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && n.left?.kind === ts5.SyntaxKind.Identifier && n.left.escapedText === target.name.escapedText) {
+        valueWrite = this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0))));
+      }
+      ts5.forEachChild(n, visit);
+    };
+    ts5.forEachChild(body, visit);
+    return inBody && !valueWrite ? target : void 0;
+  }
+  goGetArgUsesAreSafe(body, param, name, goType, nilable, seen, boxed = false) {
+    seen.add(param);
     const table = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
     const pointer = goType.startsWith("*");
     let safe = true;
@@ -12280,10 +12362,32 @@ ${this.getIden(level)}}()`;
               return;
             }
           }
+          let use = n;
+          let guarded = false;
+          while (use.parent?.kind === ts5.SyntaxKind.ParenthesizedExpression || use.parent?.kind === ts5.SyntaxKind.ConditionalExpression && use.parent.condition !== use) {
+            if (use.parent.kind === ts5.SyntaxKind.ConditionalExpression) {
+              guarded = guarded || this.goGetArgArmIsNilGuarded(n, use.parent);
+            }
+            use = use.parent;
+          }
+          const target = pointer || nilable ? this.goGetArgCopyTarget(use, body) : void 0;
+          if (target !== void 0) {
+            if (!pointer && guarded || seen.has(target)) {
+              return;
+            }
+            safe = this.goGetArgUsesAreSafe(body, target, target.name.escapedText, goType, nilable, seen, true);
+            return;
+          }
+          if (use !== n && (pointer || nilable)) {
+            safe = pointer && this.goGetArgPointerStoredAsValue(use, param);
+            return;
+          }
           if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
             const other = parent.left === n ? parent.right : parent.left;
             const isNullTest = other?.kind === ts5.SyntaxKind.NullKeyword || other?.kind === ts5.SyntaxKind.Identifier && other.escapedText === "undefined";
             if (isNullTest) {
+              safe = pointer || !boxed;
+              return;
               safe = true;
               return;
             }
@@ -12374,7 +12478,11 @@ ${this.getIden(level)}}()`;
   goGetArgPointerStoredAsValue(n, param) {
     const parent = n.parent;
     const stored = parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.right === n && parent.operatorToken?.kind === ts5.SyntaxKind.EqualsToken && parent.left?.kind === ts5.SyntaxKind.ElementAccessExpression || parent?.kind === ts5.SyntaxKind.PropertyAssignment && parent.initializer === n;
-    const methodName = String(param?.parent?.name?.escapedText ?? "");
+    let method = param?.parent;
+    while (method !== void 0 && !ts5.isFunctionLike(method)) {
+      method = method.parent;
+    }
+    const methodName = String(method?.name?.escapedText ?? "");
     return stored && !methodName.endsWith("Request");
   }
   // element `index` of a tuple-typed call result is `Dict` (`[T, Dict]`); the Go tuple holds
@@ -12440,7 +12548,14 @@ ${this.getIden(level)}}()`;
     this.goGetArgTypeCache ??= /* @__PURE__ */ new WeakMap();
     if (!this.goGetArgTypeCache.has(decl)) {
       this.goGetArgTypeCache.set(decl, void 0);
-      const goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+      this.goGetArgTypeComputing ??= /* @__PURE__ */ new Set();
+      this.goGetArgTypeComputing.add(decl);
+      let goType;
+      try {
+        goType = this.goGetArgLocalType(decl.parent.body, decl, this.printNode(decl.initializer, 0));
+      } finally {
+        this.goGetArgTypeComputing.delete(decl);
+      }
       this.goGetArgTypeCache.set(decl, goType !== void 0 && this.goGetArgTwinName(goType) !== void 0 ? goType : void 0);
     }
     return this.goGetArgTypeCache.get(decl);
@@ -14070,6 +14185,9 @@ var JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS = {
   "watch": [0, 1]
 };
 var JAVA_NATIVE_PARAMETER_GENERATED_FILES = /(^|\/)ts\/src\/(?:pro\/|prediction\/)?[a-z0-9_]+\.ts$/;
+var JAVA_TRANSPILE_DELIMITER = "METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT";
+var JAVA_HANDWRITTEN_FULL_ARITY = /* @__PURE__ */ new Set(["loadMarkets", "fetchMarkets", "fetchCurrencies", "exceptionMessage"]);
+var JAVA_HANDWRITTEN_TIER_FILES = /(^|\/)ts\/src\/(?:base|static_dependencies)\//;
 var JAVA_NATIVE_PARAMETER_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](Prediction)?Exchange(\.nooverloads[^/]*)?\.ts$/;
 var JAVA_NATIVE_RETURN_MAP_TYPE = "java.util.Map<String, Object>";
 var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
@@ -14100,6 +14218,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
     super(config);
+    this._baseExchangeMethodsByName = /* @__PURE__ */ new WeakMap();
     this.varListFromObjectLiterals = {};
     // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
     // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
@@ -14125,17 +14244,26 @@ var JavaTranspiler = class extends BaseTranspiler {
     // Static method emitted in place of java.util.concurrent.CompletableFuture.supplyAsync
     // for async methods. The callee owns the executor choice, so no second argument is emitted.
     this.asyncSupplier = "";
-    // method names declared by the `Exchange` class of ts/src/base/Exchange.ts, read off the
+    // method declarations (first per name) of the `Exchange` class of ts/src/base/Exchange.ts, read off the
     // program the warp ran on. A prediction venue's method with one of these names overrides
     // the tier body javaTranspiler.ts injects into PredictionExchange.java.
-    this._exchangeTierMethodNames = void 0;
+    this._exchangeTierMethods = void 0;
     // the names the enclosing method body assigns with a compound operator (`x += ..`),
     // by method node; a plain assignment is handled by javaParameterAssignmentCast
     this.javaMethodAssignedNames = /* @__PURE__ */ new WeakMap();
     // D-09 memo/cycle guard for javaNativeReturnType (mutually recursive return chains)
     this.javaReturnTypeCache = /* @__PURE__ */ new WeakMap();
     this.javaReturnTypeInProgress = /* @__PURE__ */ new Set();
+    // a literal-defaulted parameter is read as `Objects.requireNonNullElse(x, <default>)`: a dynamic
+    // caller pads omitted slots with null, and the parameter stays final with no local copy
+    this.javaDefaultedLocalNames = /* @__PURE__ */ new Map();
+    // `file:method` of every async method whose body reassigns a parameter (unsupported in Java lambdas)
+    this.javaReassigningMethods = [];
+    // the embedding build turns a reassigned async parameter into a hard transpile error
+    this.javaStrictEffectivelyFinal = false;
     this.csModifiers = {};
+    // literals printed as `Helpers.newMap(k, v, ...)` (no anonymous class, so no capture rule)
+    this.builderObjectLiterals = /* @__PURE__ */ new WeakSet();
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = true;
@@ -14155,6 +14283,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     return (declaration?.parameters ?? []).filter((p) => p.initializer === void 0 && p.questionToken === void 0 && p.dotDotDotToken === void 0).length;
   }
   printArgsForCallExpression(node, identation) {
+    const fullArity = this.javaFullArityCallArguments(node.arguments ?? [], node, identation);
+    if (fullArity !== void 0) {
+      return fullArity;
+    }
     let args = node.arguments ?? [];
     const callee = node.expression;
     const isThisCall = callee?.kind === ts6.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts6.SyntaxKind.ThisKeyword;
@@ -14183,6 +14315,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (superCore !== void 0) {
       return superCore;
     }
+    const scheduled = this.javaScheduledCallArguments(args, node, identation);
+    if (scheduled !== void 0) {
+      return scheduled;
+    }
     const spawnTypes = this.javaSpawnCallParameterTypes(node);
     const parameterTypes = spawnTypes !== void 0 ? spawnTypes : this.javaNativeCallParameterTypes(node);
     return args.map((a, i) => {
@@ -14194,7 +14330,142 @@ var JavaTranspiler = class extends BaseTranspiler {
       return `(${type}) (${parsedArg})`;
     }).join(", ");
   }
-  // `super.x(..)` into a split method must bind the typed core: the untyped front re-dispatches
+  // the implementation declaration of a resolved method (an overload signature has no body)
+  javaMethodImplementation(declaration) {
+    if (declaration === void 0 || !ts6.isMethodDeclaration(declaration)) {
+      return void 0;
+    }
+    if (declaration.body !== void 0) {
+      return declaration;
+    }
+    try {
+      const symbol = this.getChecker().getSymbolAtLocation(declaration.name);
+      return symbol?.declarations?.find((d) => ts6.isMethodDeclaration(d) && d.body !== void 0);
+    } catch (e) {
+      return void 0;
+    }
+  }
+  // a method this printer emits with its single typed signature: hand-written Java declares
+  // ts/src/base/** except the base tiers below their transpile delimiter
+  javaIsPrintedMethod(method) {
+    if (method === void 0 || !ts6.isMethodDeclaration(method) || method.body === void 0 || !ts6.isClassDeclaration(method.parent)) {
+      return false;
+    }
+    const file = method.getSourceFile();
+    const fileName = file.fileName.replace(/\\/g, "/");
+    if (!/(^|\/)ts\/src\//.test(fileName)) {
+      return true;
+    }
+    if (JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName)) {
+      const delimiter = file.text.indexOf(JAVA_TRANSPILE_DELIMITER);
+      return delimiter >= 0 && method.pos > delimiter || JAVA_HANDWRITTEN_FULL_ARITY.has(method.name?.escapedText);
+    }
+    return !JAVA_HANDWRITTEN_TIER_FILES.test(fileName);
+  }
+  javaHasOptionalParameter(method) {
+    return (method?.parameters ?? []).some((p) => p.initializer !== void 0 || p.questionToken !== void 0);
+  }
+  // a call into a printed method with optional parameters passes every parameter: omitted or
+  // `undefined` slots take the TS default, fixed slots keep the native checkcast
+  javaFullArityCallArguments(args, node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind === ts6.SyntaxKind.SuperKeyword) {
+      return void 0;
+    }
+    let method;
+    try {
+      method = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration) ?? this.javaAnyReceiverBaseMethod(callee);
+    } catch (e) {
+      return void 0;
+    }
+    return this.javaFullArityArguments(method, args, identation);
+  }
+  // an `any` receiver (the tests' `exchange: any`) compiles against the Java Exchange class:
+  // bind the base Exchange method of that name when it is implemented exactly once
+  javaAnyReceiverBaseMethod(callee) {
+    const type = this.getChecker().getTypeAtLocation(callee.expression);
+    if ((type.flags & ts6.TypeFlags.Any) === 0) {
+      return void 0;
+    }
+    const methods = this.baseExchangeMethodsByName().get(callee.name?.escapedText);
+    return methods?.length === 1 ? methods[0] : void 0;
+  }
+  baseExchangeMethodsByName() {
+    const program = this.getProgram();
+    const cached = this._baseExchangeMethodsByName.get(program);
+    if (cached !== void 0) {
+      return cached;
+    }
+    const names = /* @__PURE__ */ new Map();
+    const file = program.getSourceFiles().find((sf) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(sf.fileName));
+    for (const className of ["BaseExchange", "Exchange"]) {
+      const cls = file?.statements.find((s) => ts6.isClassDeclaration(s) && s.name?.text === className);
+      const own = /* @__PURE__ */ new Map();
+      for (const member of cls?.members ?? []) {
+        if (ts6.isMethodDeclaration(member) && member.body !== void 0 && ts6.isIdentifier(member.name)) {
+          own.set(member.name.text, (own.get(member.name.text) ?? []).concat([member]));
+        }
+      }
+      own.forEach((methods, key) => names.has(key) || names.set(key, methods));
+    }
+    this._baseExchangeMethodsByName.set(program, names);
+    return names;
+  }
+  javaFullArityArguments(method, args, identation) {
+    if (!this.javaIsPrintedMethod(method) || !this.javaHasOptionalParameter(method)) {
+      return void 0;
+    }
+    const params = method.parameters;
+    if (args.length > params.length || params.some((p) => p.dotDotDotToken !== void 0) || args.some((a) => a.kind === ts6.SyntaxKind.SpreadElement)) {
+      return void 0;
+    }
+    const types = this.javaCoreParameterTypes(method);
+    return params.map((p, i) => {
+      const arg = args[i];
+      if (arg === void 0 || p.initializer !== void 0 && this.javaIsUndefinedLiteral(arg)) {
+        return this.javaCoreDefaultArgument(p, types[i]);
+      }
+      const printed = this.printNode(arg, identation).trim();
+      if (p.initializer !== void 0) {
+        return this.javaArgumentHasType(arg, types[i]) || types[i] === "Object" ? this.javaIsUndefinedLiteral(arg) ? "null" : printed : this.javaConvertToCoreType(types[i], printed, arg);
+      }
+      const native = this.javaNativeParameterType(p);
+      if (native === void 0 || this.javaNativeArgumentAlreadyTyped(arg, native)) {
+        return printed;
+      }
+      return `(${native}) (${printed})`;
+    }).join(", ");
+  }
+  javaIsUndefinedLiteral(node) {
+    return node?.kind === ts6.SyntaxKind.Identifier && node.escapedText === "undefined";
+  }
+  // `this.spawn(this.m, a..)` / `this.delay(ms, this.m, a..)`: the ccxt post-pass turns the
+  // reference into a lambda calling `this.m(a..)`, so those arguments take m's full arity
+  javaScheduledCallArguments(args, node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== ts6.SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    const at = callee.name?.escapedText === "spawn" ? 0 : callee.name?.escapedText === "delay" ? 1 : -1;
+    const reference = at >= 0 ? args[at] : void 0;
+    if (reference?.kind !== ts6.SyntaxKind.PropertyAccessExpression || reference.expression?.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return void 0;
+    }
+    let method;
+    try {
+      const symbol = this.getChecker().getSymbolAtLocation(reference.name);
+      method = this.javaMethodImplementation(symbol?.valueDeclaration ?? symbol?.declarations?.[0]);
+    } catch (e) {
+      return void 0;
+    }
+    const forwarded = this.javaFullArityArguments(method, args.slice(at + 1), identation);
+    if (forwarded === void 0) {
+      return void 0;
+    }
+    const head = args.slice(0, at + 1).map((a) => this.printNode(a, identation).trim());
+    return head.concat(forwarded.length > 0 ? [forwarded] : []).join(", ");
+  }
+  // `super.x(..)` into a split method must bind the typed core: an ancestor bridge re-dispatches
   // through `this`, which lands back in the overriding core (infinite recursion)
   javaSuperCoreCallArguments(args, node, identation) {
     const callee = node.expression;
@@ -14203,7 +14474,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+      declaration = this.javaMethodImplementation(this.getChecker().getResolvedSignature(node)?.declaration);
     } catch (e) {
       return void 0;
     }
@@ -14211,6 +14482,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const params = declaration.parameters;
+    if (params.some((p) => p.dotDotDotToken !== void 0)) {
+      return void 0;
+    }
     if (args.length > params.length) {
       return void 0;
     }
@@ -14232,7 +14506,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     const method = declaration.parent;
-    if (this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
+    if (!ts6.isMethodDeclaration(method) && this.ReassignedVars[this.getVarKey(declaration)] && this.isAsyncFunction(method)) {
       return false;
     }
     const printed = declaration.initializer !== void 0 ? this.hasDefaultedTail(method) ? this.javaOptionalParameterJavaType(declaration) : "Object" : (this.printParameterType(declaration) || "Object").trim();
@@ -14244,17 +14518,21 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // an omitted parameter of a typed-core call: its TS default, typed like the front's reader
   javaCoreDefaultArgument(param, type) {
-    if (param.initializer === void 0) {
-      return `(${type}) null`;
-    }
-    let value = this.printNode(param.initializer, 0);
+    const initializer = param.initializer;
+    const value = initializer === void 0 || !this.isPureInitializer(initializer) ? "null" : this.printNode(initializer, 0);
     if (value === "null") {
       return `(${type}) null`;
     }
     if (type === "Long" && /^-?\d+$/.test(value)) {
-      value += "L";
+      return value + "L";
     }
-    return this.javaConvertToCoreType(type, value, param.initializer);
+    if (type === JAVA_STRING_LIST_TYPE && ts6.isArrayLiteralExpression(initializer) && initializer.elements.length === 0) {
+      return "new java.util.ArrayList<String>()";
+    }
+    if (type === "Object" || type === "String" && ts6.isStringLiteralLike(initializer) || type === "java.util.Map<String, Object>" && ts6.isObjectLiteralExpression(initializer)) {
+      return value;
+    }
+    return this.javaConvertToCoreType(type, value, initializer);
   }
   // a value of any static type converted to a typed-core parameter, with the fronts' semantics
   javaConvertToCoreType(type, printed, node) {
@@ -14499,6 +14777,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (idValue === "undefined") {
       return this.UNDEFINED_TOKEN;
     }
+    const defaulted = this.javaDefaultedLocalName(node);
+    if (defaulted !== void 0) {
+      return defaulted;
+    }
     const isInsideNewExpression = node?.parent?.kind === ts6.SyntaxKind.NewExpression;
     const isInsideCatch = node?.parent?.kind === ts6.SyntaxKind.ThrowStatement;
     const isLeftSide = node?.parent?.name === node || node?.parent?.left === node;
@@ -14554,21 +14836,24 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return void 0;
   }
-  getExpressionStatementPrefixesIfAny(node, identation) {
-    const finalVars = [];
-    if (node.expression?.kind === ts6.SyntaxKind.CallExpression) {
-      for (const objLiteral of this.getObjectLiteralFromCallExpressionArguments(node.expression)) {
-        finalVars.push(...this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral));
-      }
-      if (finalVars.length > 0) {
-        const decls = this.buildFinalVarDeclarations(finalVars, identation);
-        if (decls) {
-          return decls + "\n" + this.getIden(identation);
-        }
-      }
-    }
-    return void 0;
-  }
+  // printElementAccessExpressionExceptionIfAny(node) {
+  //     const tsKind = ts.SyntaxKind;
+  //     if (node.expression.kind === tsKind.CallExpression) {
+  //         const callExp = node.expression;
+  //         const calleeText = callExp.expression.getText();
+  //         if (calleeText.endsWith('.split') || calleeText.toLowerCase().includes('split')) {
+  //             // print Split call normally (should already close with ))
+  //             let splitCall = this.printNode(callExp, 0).trim();
+  //             if (!splitCall.endsWith(')')) {
+  //                 splitCall += ')';
+  //             }
+  //             const idxArg = this.printNode(node.argumentExpression, 0);
+  //             return `GetValue(${splitCall}, ${idxArg})`;
+  //         }
+  //     }
+  //     // default: no exception
+  //     return undefined;
+  // }
   printWrappedUnknownThisProperty(node) {
     const type = this.getChecker().getResolvedSignature(node);
     if (type?.declaration === void 0) {
@@ -14954,7 +15239,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // exists for receivers the printer cannot type (Lists, arbitrary objects via
   // reflection) and for ConcurrentHashMap null-removal, so the native Map.put is
   // printed only when the checker excludes all of those.
-  elementWriteTargetsMap(container, base, keys) {
+  elementWriteTargetsMap(container, base, keys, value) {
     const lastKey = keys[keys.length - 1];
     if (!ts6.isStringLiteral(lastKey) && !this.isJavaStringType(this.getChecker().getTypeAtLocation(lastKey))) {
       return false;
@@ -14962,7 +15247,21 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (ts6.isPropertyAccessExpression(base) && base.expression.kind === ts6.SyntaxKind.ThisKeyword) {
       return false;
     }
-    return this.isDictionaryType(container) || this.isPlainHashMapReceiver(container, keys);
+    if (this.isPlainHashMapReceiver(container, keys)) {
+      return true;
+    }
+    return this.isDictionaryType(container) && !this.elementWriteValueMayBeNull(value);
+  }
+  // true unless the checker proves the written value is never null/undefined
+  elementWriteValueMayBeNull(value) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0 || value === void 0) {
+      return true;
+    }
+    const type = checker.getTypeAtLocation(value);
+    const parts = type.flags & ts6.TypeFlags.Union ? type.types ?? [] : [type];
+    const nullable = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown | JAVA_NULLISH_TYPE_FLAGS | ts6.TypeFlags.TypeParameter;
+    return parts.length === 0 || parts.some((t) => (t.flags & nullable) !== 0);
   }
   // a key proven by the checker to be a string prints as a java String: the read is
   // the same expression, only the key needs the (String) cast the typed put demands
@@ -15544,8 +15843,11 @@ var JavaTranspiler = class extends BaseTranspiler {
       const method = node.parent;
       const index = method.parameters.indexOf(node);
       let override = this.getMethodOverride(method);
-      if (override === void 0 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName) && method.name !== void 0 && this.exchangeTierMethodNames().has(method.name.getText().trim())) {
-        return void 0;
+      if (override === void 0 && JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName) && method.name !== void 0) {
+        const tier = this.exchangeTierMethods().get(method.name.getText().trim());
+        if (tier !== void 0 && !this.javaParameterPrintsType(tier.parameters?.[index], type)) {
+          return void 0;
+        }
       }
       while (override !== void 0) {
         const baseParam = override.parameters?.[index];
@@ -15559,18 +15861,19 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return type;
   }
-  exchangeTierMethodNames() {
-    if (this._exchangeTierMethodNames !== void 0) {
-      return this._exchangeTierMethodNames;
+  exchangeTierMethods() {
+    if (this._exchangeTierMethods !== void 0) {
+      return this._exchangeTierMethods;
     }
-    const names = /* @__PURE__ */ new Set();
+    const names = /* @__PURE__ */ new Map();
     try {
       const file = this.getProgram().getSourceFiles().find((sf) => JAVA_NATIVE_PARAMETER_BASE_FILES.test(sf.fileName));
       const collect = (node) => {
         if (ts6.isClassDeclaration(node) && node.name?.text === "Exchange") {
           for (const member of node.members) {
-            if (ts6.isMethodDeclaration(member) && member.name !== void 0) {
-              names.add(member.name.getText().trim());
+            const key = member.name?.getText().trim();
+            if (ts6.isMethodDeclaration(member) && key !== void 0 && !names.has(key)) {
+              names.set(key, member);
             }
           }
         }
@@ -15581,7 +15884,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
     } catch (e) {
     }
-    this._exchangeTierMethodNames = names;
+    this._exchangeTierMethods = names;
     return names;
   }
   // the same parameter position of an ancestor declaration prints this native type: its
@@ -15738,22 +16041,17 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return -1;
   }
-  // >=1 parameter with a default value: the method splits into typed core + untyped front.
-  // A method whose only optional markers are `?` keeps today's single declaration.
+  // a method with >=1 optional parameter prints one typed full signature (callers pass every slot).
   hasDefaultedTail(node) {
     if (node === void 0 || !ts6.isMethodDeclaration(node)) {
       return false;
     }
-    return (node.parameters ?? []).some((p) => p.initializer !== void 0);
+    return this.javaHasOptionalParameter(node);
   }
-  // a typed default-valued parameter of a sync core is written in place (async cores copy it
-  // into an Object local first), so its writes convert to the declared type
+  // a typed default-valued method parameter is written in place, so its writes convert to the declared type
   javaSplitParameterWriteType(node) {
     if (node?.initializer === void 0 || !this.hasDefaultedTail(node.parent)) {
       return void 0;
-    }
-    if (this.isAsyncFunction(node.parent)) {
-      return this.javaAsyncParameterLocalType(node);
     }
     return this.javaOptionalParameterType(node);
   }
@@ -16139,11 +16437,11 @@ var JavaTranspiler = class extends BaseTranspiler {
       for (let i = firstKey; i < keyStrs.length - 1; i++) {
         acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
       }
-      const prefixes = this.getBinaryExpressionPrefixes(node, identation) || "";
+      const prefixes = "";
       const lastKey = keyStrs[keyStrs.length - 1];
       const rhs = this.printNode(right, 0);
       const keyArg = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
-      if (this.elementWriteTargetsMap(left.expression, baseExpr, keys)) {
+      if (this.elementWriteTargetsMap(left.expression, baseExpr, keys, right)) {
         const target = keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr) ? acc : `((${this.OBJECT_KEYWORD})${acc})`;
         return `${prefixes}${target}.put(${keyArg}, ${rhs})`;
       }
@@ -17567,66 +17865,6 @@ var JavaTranspiler = class extends BaseTranspiler {
   javaProvableNumericDoubleOperand(node) {
     return this.javaProvableNumericKind(node) !== void 0 || this.javaProvableCounterInt(node);
   }
-  getObjectLiteralFromCallExpressionArguments(node) {
-    const res = [];
-    if (!node?.arguments) {
-      return res;
-    }
-    for (const arg of node.arguments) {
-      if (arg.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-        res.push(arg);
-      } else if (arg.kind === ts6.SyntaxKind.CallExpression) {
-        res.push(...this.getObjectLiteralFromCallExpressionArguments(arg));
-      }
-    }
-    return res;
-  }
-  // Finds every ObjectLiteralExpression nested anywhere inside an RHS/initializer
-  // expression that would produce an anonymous-inner-class capture in Java
-  // (HashMap double-brace init). Stops descending at each ObjectLiteralExpression
-  // because nested literals are walked recursively inside
-  // getVarListFromObjectLiteralAndUpdateInPlace. Skips function/arrow bodies so
-  // we don't capture literals that evaluate in a different scope.
-  //
-  // Unifies the previously-narrow matching in printVariableDeclarationList and
-  // getBinaryExpressionPrefixes which only handled ObjectLiteralExpression or
-  // CallExpression directly — missing wrappers like AwaitExpression,
-  // ParenthesizedExpression, NewExpression, and ConditionalExpression.
-  collectCapturingObjectLiterals(node) {
-    const found = [];
-    const walk = (n) => {
-      if (!n)
-        return;
-      if (n.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-        found.push(n);
-        return;
-      }
-      if (n.kind === ts6.SyntaxKind.FunctionExpression || n.kind === ts6.SyntaxKind.ArrowFunction || n.kind === ts6.SyntaxKind.MethodDeclaration || n.kind === ts6.SyntaxKind.FunctionDeclaration) {
-        return;
-      }
-      ts6.forEachChild(n, walk);
-    };
-    walk(node);
-    return found;
-  }
-  getBinaryExpressionPrefixes(node, identation) {
-    let right = node?.right;
-    if (right?.kind === ts6.SyntaxKind.AwaitExpression) {
-      right = right.expression;
-    }
-    if (!right) {
-      return void 0;
-    }
-    const objectLiterals = right.kind === ts6.SyntaxKind.ObjectLiteralExpression ? [right] : right.kind === ts6.SyntaxKind.CallExpression ? this.getObjectLiteralFromCallExpressionArguments(right) : [];
-    const allVars = objectLiterals.flatMap((lit) => this.getVarListFromObjectLiteralAndUpdateInPlace(lit));
-    if (allVars.length > 0) {
-      const decls = this.buildFinalVarDeclarations(allVars, identation);
-      if (decls) {
-        return decls + "\n" + this.getIden(identation);
-      }
-    }
-    return void 0;
-  }
   getFinalVarName(varName) {
     varName = this.getOriginalVarName(varName);
     if (varName.startsWith("final")) {
@@ -17862,48 +18100,6 @@ var JavaTranspiler = class extends BaseTranspiler {
       });
     }
   }
-  finalNameInAncestorScope(finalName) {
-    for (const scope of this.finalVarScopeStack) {
-      if (scope.has(finalName))
-        return true;
-    }
-    return false;
-  }
-  buildFinalVarDeclarations(pairs, identation) {
-    if (pairs.length === 0)
-      return "";
-    const current = this.finalVarScopeStack.length > 0 ? this.finalVarScopeStack[this.finalVarScopeStack.length - 1] : null;
-    const lines = [];
-    const seenHere = /* @__PURE__ */ new Set();
-    for (const p of pairs) {
-      if (seenHere.has(p.final))
-        continue;
-      if (this.finalNameInAncestorScope(p.final))
-        continue;
-      seenHere.add(p.final);
-      if (current)
-        current.add(p.final);
-      const indent = lines.length === 0 ? 0 : identation;
-      lines.push(`${this.getIden(indent)}final Object ${p.final} = ${this.getOriginalVarName(p.orig)};`);
-    }
-    return lines.join("\n");
-  }
-  getObjectLiteralId(node) {
-    const start = node.getStart();
-    const end = node.getEnd();
-    const fileName = node.getSourceFile?.()?.fileName ?? "";
-    return `${fileName}:${start}-${end}`;
-  }
-  // Remember an identifier's pre-rewrite state so restoreFinalVarMutations can put
-  // the shared AST back exactly as it was parsed.
-  recordFinalVarMutation(node) {
-    this.finalVarMutations.push({
-      node,
-      escapedText: node.escapedText,
-      ownGetFullText: Object.prototype.hasOwnProperty.call(node, "getFullText"),
-      getFullText: node.getFullText
-    });
-  }
   // Undo every in-place identifier rewrite made during the current emit, newest
   // first so repeated rewrites of one node unwind to the original value.
   restoreFinalVarMutations() {
@@ -17933,66 +18129,34 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return super.printNode(node, identation);
   }
-  getVarListFromObjectLiteralAndUpdateInPlace(node) {
-    let res = [];
-    const nodeId = this.getObjectLiteralId(node);
-    if (nodeId in this.varListFromObjectLiterals) {
-      return this.varListFromObjectLiterals[nodeId];
-    }
-    const finalNameFor = (n, origName) => {
-      return this.usageToFinalName.get(n) ?? this.getFinalVarName(origName);
-    };
-    const traverseAndReplace = (n) => {
+  // true when a property value reads a local the body reassigns (or the analyzer saw
+  // reassigned ahead): a double-brace anonymous class could not capture it
+  objectLiteralCapturesReassigned(node) {
+    return this.objectLiteralCapturedKeys(node).length > 0;
+  }
+  // ReassignedVars keys of the reassigned locals a literal's property values read
+  objectLiteralCapturedKeys(node) {
+    const keys = [];
+    const walk = (n) => {
       if (!n)
         return;
       if (n.kind === ts6.SyntaxKind.Identifier) {
         const name = n.escapedText;
-        if (name && name !== "undefined" && !name.startsWith("null")) {
-          const isReassignedAhead = this.usageToFinalName.has(n);
-          if (isReassignedAhead || this.ReassignedVars[this.getVarKey(n)]) {
-            const finalName = finalNameFor(n, name);
-            res.push({ orig: name, final: finalName });
-            this.recordFinalVarMutation(n);
-            n.escapedText = finalName;
-            n.getFullText = () => finalName;
-          }
+        const key = this.getVarKey(n);
+        if (name && name !== "undefined" && !name.startsWith("null") && (this.usageToFinalName.has(n) || this.ReassignedVars[key])) {
+          keys.push(key);
         }
         return;
       }
-      if (n.kind === ts6.SyntaxKind.ObjectLiteralExpression) {
-        const innerVars = this.getVarListFromObjectLiteralAndUpdateInPlace(n);
-        res = res.concat(innerVars);
-        return;
-      }
-      ts6.forEachChild(n, traverseAndReplace);
+      ts6.forEachChild(n, walk);
     };
-    node.properties.forEach((prop) => {
-      if (!prop.initializer)
-        return;
-      traverseAndReplace(prop.initializer);
-    });
-    const seen = /* @__PURE__ */ new Set();
-    const dedup = [];
-    for (const p of res) {
-      const key = `${p.orig}|${p.final}`;
-      if (seen.has(key))
-        continue;
-      seen.add(key);
-      dedup.push(p);
+    for (const prop of node.properties) {
+      walk(prop.initializer);
     }
-    this.varListFromObjectLiterals[nodeId] = dedup;
-    return dedup;
+    return keys;
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    let finalVars = "";
-    if (declaration.initializer) {
-      const objLiterals = this.collectCapturingObjectLiterals(declaration.initializer);
-      const varObj = objLiterals.flatMap((lit) => this.getVarListFromObjectLiteralAndUpdateInPlace(lit));
-      if (varObj.length > 0) {
-        finalVars = this.buildFinalVarDeclarations(varObj, identation);
-      }
-    }
     if (this.removeVariableDeclarationForFunctionExpression && declaration?.initializer && ts6.isFunctionExpression(declaration.initializer)) {
       return this.printNode(declaration.initializer, identation).trimEnd();
     }
@@ -18036,13 +18200,12 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       return this.getIden(identation) + specificVarToken + " " + this.printNode(declaration.name) + " = " + parsedValue;
     }
-    finalVars = finalVars.length > 0 ? this.getIden(identation) + finalVars + "\n" : finalVars;
-    return finalVars + this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
+    return this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
   }
   printThisKeyword(node, identation) {
     let current = node?.parent;
     while (current) {
-      if (current.kind === ts6.SyntaxKind.PropertyAssignment) {
+      if (current.kind === ts6.SyntaxKind.PropertyAssignment && !this.builderObjectLiterals.has(current.parent)) {
         const className = this.currentClassName;
         return `${this.capitalize(className)}.this`;
       }
@@ -18120,6 +18283,48 @@ var JavaTranspiler = class extends BaseTranspiler {
         return false;
     }
   }
+  javaDefaultedParameterLocals(node) {
+    if (node.body === void 0) {
+      return [];
+    }
+    const types = this.javaCoreParameterTypes(node);
+    node.parameters.forEach((param, i) => {
+      if (!this.javaIsLiteralDefault(param.initializer) || !ts6.isIdentifier(param.name)) {
+        return;
+      }
+      const symbol = this.javaSymbolOf(param.name);
+      if (symbol === void 0) {
+        return;
+      }
+      const name = this.printNode(param.name, 0);
+      const value = this.javaCoreDefaultArgument(param, types[i]);
+      this.javaDefaultedLocalNames.set(symbol, `java.util.Objects.requireNonNullElse(${name}, ${value})`);
+    });
+    return [];
+  }
+  // a string, number or boolean literal default (null, `undefined` and `{}` / `[]` keep the parameter)
+  javaIsLiteralDefault(initializer) {
+    let node = initializer;
+    while (node !== void 0 && (ts6.isParenthesizedExpression(node) || ts6.isAsExpression(node))) {
+      node = node.expression;
+    }
+    if (node !== void 0 && ts6.isPrefixUnaryExpression(node) && node.operator === ts6.SyntaxKind.MinusToken) {
+      node = node.operand;
+    }
+    return node !== void 0 && (ts6.isStringLiteralLike(node) || ts6.isNumericLiteral(node) || node.kind === ts6.SyntaxKind.TrueKeyword || node.kind === ts6.SyntaxKind.FalseKeyword);
+  }
+  javaDefaultedLocalName(node) {
+    if (this.javaDefaultedLocalNames.size === 0 || ts6.isParameter(node.parent) || ts6.isPropertyAccessExpression(node.parent) && node.parent.name === node || ts6.isPropertyAssignment(node.parent) && node.parent.name === node) {
+      return void 0;
+    }
+    let symbol;
+    try {
+      symbol = this.getChecker().getSymbolAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    return symbol === void 0 ? void 0 : this.javaDefaultedLocalNames.get(symbol);
+  }
   printFunctionBody(node, identation) {
     const savedVarList = this.varListFromObjectLiterals;
     const savedUsageToFinalName = this.usageToFinalName;
@@ -18130,8 +18335,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     const funcParams = node.parameters ?? [];
     const bodyStatements = node.body.statements;
     const isAsync = this.isAsyncFunction(node);
-    const splitCore = this.hasDefaultedTail(node);
-    const initParams = [];
+    const splitCore = ts6.isMethodDeclaration(node);
+    const initParams = splitCore ? this.javaDefaultedParameterLocals(node) : [];
     const processedParts = [];
     try {
       for (let i = 0; i < bodyStatements.length; i++) {
@@ -18149,6 +18354,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       const initializer = param.initializer;
       if (initializer) {
         if (splitCore) {
+          if (!this.isPureInitializer(initializer) && !this.javaDefaultedLocalNames.has(this.javaSymbolOf(param.name))) {
+            const name = this.printNode(param.name, 0);
+            initParams.push(`if (${name} == null) { ${name} = ${this.printNode(initializer, 0)}; }`);
+          }
           return;
         }
         const index = i + offSetIndex;
@@ -18174,9 +18383,18 @@ var JavaTranspiler = class extends BaseTranspiler {
     const blockOpen = this.getBlockOpen(identation);
     const blockClose = this.getBlockClose(identation);
     firstStatement = remainingString.length > 0 ? firstStatement + "\n" : firstStatement;
+    if (isAsync && ts6.isMethodDeclaration(node) && this.javaReassignsParameter(node)) {
+      const where = `${node.getSourceFile().fileName}:${node.name.escapedText}`;
+      this.javaReassigningMethods.push(where);
+      const message = `[Java] async method reassigns a parameter (not effectively final, the TS source must use a new local): ${where}`;
+      if (this.javaStrictEffectivelyFinal) {
+        throw new Error(message);
+      }
+      Logger.warning(message);
+    }
     if (isAsync) {
-      const finalWrapperVars = this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
-      const insideWrappers = this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
+      const finalWrapperVars = ts6.isMethodDeclaration(node) ? "\n" : this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
+      const insideWrappers = ts6.isMethodDeclaration(node) ? "\n" : this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
       const body = (firstStatement + remainingString).split("\n").map((line) => this.getIden(identation) + line).join("\n");
       const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : bodyStatements.length > 0 ? bodyStatements[0] : void 0;
       const lastStmtIsReturn = lastStatement && (ts6.isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
@@ -18254,8 +18472,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // the typed core signature: every parameter prints its Java type, the default-valued ones
   // included (a Java signature cannot carry a default - the front supplies it)
   printCoreMethodParameters(node) {
-    const isAsyncMethod = this.isAsyncFunction(node);
-    return node.parameters.map((param) => this.javaAsyncSignatureParameter(param, isAsyncMethod, param.initializer !== void 0 ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}` : this.printParameter(param))).join(", ");
+    return node.parameters.map((param) => param.initializer !== void 0 ? `${this.javaOptionalParameterJavaType(param)} ${this.printNode(param.name, 0)}` : this.printParameter(param)).join(", ");
   }
   // an async method's reassigned parameter prints under sigName (post keyword-remap),
   // freeing the original name for the lambda body to bind
@@ -18266,43 +18483,68 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return printedParam;
   }
-  // the front's arguments: omitted slot -> TS default, explicit null -> null, typed slots widened
-  printFrontForwardedArguments(node) {
-    const out = [];
-    let offSetIndex = 0;
-    (node.parameters ?? []).forEach((param, i) => {
-      const name = this.printNode(param.name, 0);
-      if (param.initializer === void 0) {
-        offSetIndex--;
-        out.push(name);
-        return;
+  // the async method body writes one of its parameters, or a non-pure default must be applied
+  // by an `if (x == null) { x = init; }` inside the lambda (both break effective finality)
+  javaReassignsParameter(node) {
+    const params = node.parameters ?? [];
+    if (params.some((p) => p.initializer !== void 0 && !this.isPureInitializer(p.initializer) && this.isAsyncFunction(node))) {
+      return true;
+    }
+    const symbols = /* @__PURE__ */ new Set();
+    params.forEach((p) => {
+      const symbol = this.javaSymbolOf(p.name);
+      if (symbol !== void 0) {
+        symbols.add(symbol);
       }
-      const index = i + offSetIndex;
-      const javaType = this.javaOptionalParameterJavaType(param);
-      const getter = javaType === "Long" ? "getArgLong" : javaType === "String" ? "getArgString" : javaType === "java.util.Map<String, Object>" ? "getArgMap" : javaType === JAVA_STRING_LIST_TYPE ? "getArgStringList" : void 0;
-      if (getter === void 0) {
-        out.push(this.printOptionalArgExpression(index, param.initializer));
-        return;
-      }
-      let defaultValue = this.printNode(param.initializer, 0);
-      if (getter === "getArgLong" && /^-?\d+$/.test(defaultValue)) {
-        defaultValue += "L";
-      }
-      if (getter === "getArgStringList" && ts6.isArrayLiteralExpression(param.initializer) && param.initializer.elements.length === 0) {
-        defaultValue = "new java.util.ArrayList<String>()";
-      }
-      out.push(`Helpers.${getter}(optionalArgs, ${index}, ${defaultValue})`);
     });
-    return out.join(", ");
+    return symbols.size > 0 && node.body !== void 0 && this.javaWritesSymbol(node.body, symbols);
   }
-  // the front keeps today's `Object...` signature for TypedSurface, findMethod and legacy callers
-  printFrontMethodDeclaration(node, identation) {
-    const name = this.transformMethodNameIfNeeded(node.name.escapedText);
-    const methodDef = this.printMethodDefinition(node, identation, (n) => n.parameters.filter((p) => p.initializer === void 0).map((p) => this.printParameter(p)).concat(["Object... optionalArgs"]).join(", "));
-    const args = this.printFrontForwardedArguments(node);
-    const call = `this.${name}(${args});`;
-    const isVoid = /(^|\s)void\s+\w+\s*\(/.test(methodDef);
-    return "\n" + methodDef + this.getBlockOpen(identation) + this.getIden(identation + 1) + (isVoid ? call : `return ${call}`) + this.getBlockClose(identation);
+  javaSymbolOf(node) {
+    return this.getChecker().getSymbolAtLocation(node);
+  }
+  // syntactic walk: assignment targets, ++/--, destructuring targets and for-in/of expression heads
+  javaWritesSymbol(node, symbols) {
+    if (ts6.isBinaryExpression(node)) {
+      const op = node.operatorToken.kind;
+      if (op >= ts6.SyntaxKind.FirstAssignment && op <= ts6.SyntaxKind.LastAssignment && this.javaTargetWritesSymbol(node.left, symbols, op === ts6.SyntaxKind.EqualsToken)) {
+        return true;
+      }
+    } else if ((ts6.isPrefixUnaryExpression(node) || ts6.isPostfixUnaryExpression(node)) && (node.operator === ts6.SyntaxKind.PlusPlusToken || node.operator === ts6.SyntaxKind.MinusMinusToken) && this.javaTargetWritesSymbol(node.operand, symbols, false)) {
+      return true;
+    } else if ((ts6.isForInStatement(node) || ts6.isForOfStatement(node)) && !ts6.isVariableDeclarationList(node.initializer) && this.javaTargetWritesSymbol(node.initializer, symbols, true)) {
+      return true;
+    }
+    return ts6.forEachChild(node, (child) => this.javaWritesSymbol(child, symbols) || void 0) === true;
+  }
+  javaTargetWritesSymbol(target, symbols, destructuring) {
+    if (ts6.isParenthesizedExpression(target) || ts6.isNonNullExpression(target) || ts6.isAsExpression(target)) {
+      return this.javaTargetWritesSymbol(target.expression, symbols, destructuring);
+    }
+    if (ts6.isIdentifier(target)) {
+      const symbol = this.javaSymbolOf(target);
+      return symbol !== void 0 && symbols.has(symbol);
+    }
+    if (!destructuring) {
+      return false;
+    }
+    if (ts6.isArrayLiteralExpression(target)) {
+      return target.elements.some((e) => this.javaTargetWritesSymbol(ts6.isSpreadElement(e) ? e.expression : e, symbols, true));
+    }
+    if (ts6.isObjectLiteralExpression(target)) {
+      return target.properties.some((p) => {
+        if (ts6.isShorthandPropertyAssignment(p)) {
+          return this.javaTargetWritesSymbol(p.name, symbols, true);
+        }
+        if (ts6.isPropertyAssignment(p)) {
+          return this.javaTargetWritesSymbol(p.initializer, symbols, true);
+        }
+        return ts6.isSpreadAssignment(p) && this.javaTargetWritesSymbol(p.expression, symbols, true);
+      });
+    }
+    if (ts6.isBinaryExpression(target) && target.operatorToken.kind === ts6.SyntaxKind.EqualsToken) {
+      return this.javaTargetWritesSymbol(target.left, symbols, true);
+    }
+    return false;
   }
   printMethodParameters(node) {
     const isAsyncMethod = this.isAsyncFunction(node);
@@ -18347,10 +18589,10 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   printMethodDeclaration(node, identation) {
     const funcBody = this.printFunctionBody(node, identation);
-    if (this.hasDefaultedTail(node)) {
-      return this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n)) + funcBody + this.printFrontMethodDeclaration(node, identation) + this.printOverrideBridges(node, identation);
-    }
-    return this.printMethodDefinition(node, identation) + funcBody + this.printOverrideBridges(node, identation);
+    let methodDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
+    methodDef += funcBody;
+    methodDef += this.printOverrideBridges(node, identation);
+    return methodDef;
   }
   printMethodDefinition(node, identation, paramsPrinter = void 0) {
     const name = this.transformMethodNameIfNeeded(node.name.escapedText);
@@ -19408,9 +19650,42 @@ var JavaTranspiler = class extends BaseTranspiler {
     return modifiers.map((modifier) => this.FuncModifiers[modifier.kind]).join(" ");
   }
   printObjectLiteralExpression(node, identation) {
+    if (node.properties.length > 0 && node.properties.every((p) => ts6.isPropertyAssignment(p)) && this.objectLiteralCapturesReassigned(node)) {
+      this.builderObjectLiterals.add(node);
+      return this.printObjectLiteralBuilder(node, identation);
+    }
+    this.builderObjectLiterals.delete(node);
     const objectBody = this.printObjectLiteralBody(node, identation);
     const formattedObjectBody = objectBody ? "\n" + objectBody + "\n" + this.getIden(identation) : objectBody;
     return this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
+  }
+  printObjectLiteralBuilder(node, identation) {
+    const keys = this.objectLiteralCapturedKeys(node);
+    const saved = keys.map((key) => this.ReassignedVars[key]);
+    try {
+      return this.printObjectLiteralBuilderText(node, identation);
+    } finally {
+      keys.forEach((key, i) => {
+        if (saved[i] === void 0) {
+          delete this.ReassignedVars[key];
+        } else {
+          this.ReassignedVars[key] = saved[i];
+        }
+      });
+    }
+  }
+  printObjectLiteralBuilderText(node, identation) {
+    const props = node.properties;
+    const lines = props.map((prop, i) => {
+      const name = this.printNode(prop.name, 0);
+      const custom = this.printCustomRightSidePropertyAssignment(prop.initializer, identation + 1);
+      const value = (custom ? custom : this.printNode(prop.initializer, identation + 1)).trim();
+      let comment = this.printTraillingComment(prop, identation + 1);
+      comment = comment ? " " + comment : "";
+      const sep = i < props.length - 1 ? "," : "";
+      return this.getIden(identation + 1) + name + ", " + value + sep + comment;
+    });
+    return "Helpers.newMap(\n" + lines.join("\n") + "\n" + this.getIden(identation) + ")";
   }
   printObjectLiteralBody(node, identation) {
     const body = node.properties.map((p) => this.printNode(p, identation + 1)).join("\n");
@@ -19431,15 +19706,6 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (exp && exp.kind === ts6.SyntaxKind.AsExpression && (exp.expression.kind === ts6.SyntaxKind.ObjectLiteralExpression || ts6.SyntaxKind.CallExpression)) {
       exp = exp.expression;
     }
-    const allVarNames = [];
-    if (exp) {
-      const objLiterals = this.collectCapturingObjectLiterals(exp);
-      for (const objLiteral of objLiterals) {
-        const varsList = this.getVarListFromObjectLiteralAndUpdateInPlace(objLiteral);
-        allVarNames.push(...varsList);
-      }
-    }
-    let finalVars = allVarNames.length > 0 ? this.buildFinalVarDeclarations(allVarNames, identation) : "";
     let rightPart = exp ? " " + this.printNode(exp, identation) : "";
     rightPart = rightPart.trim();
     if (!rightPart) {
@@ -19455,8 +19721,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
     }
     rightPart = rightPart ? " " + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
-    finalVars = finalVars.length > 0 ? this.getIden(identation) + finalVars + "\n" : finalVars;
-    return leadingComment + finalVars + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+    return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
   }
   allBranchesTerminate(node) {
     if (ts6.isReturnStatement(node) || ts6.isThrowStatement(node)) {
