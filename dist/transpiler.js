@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-YTJO6U6G.js";
+} from "./chunk-VNDHHGGT.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -26,7 +26,7 @@ var require_dirname = __commonJS({
 init_esm_shims();
 var import_dirname = __toESM(require_dirname(), 1);
 import { ScriptTarget, SyntaxKind as SyntaxKind9 } from "typescript/unstable/ast";
-import { API, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags7, TypeFormatFlags } from "typescript/unstable/sync";
+import { API as API2, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags7, TypeFormatFlags } from "typescript/unstable/sync";
 
 // src/pythonTranspiler.ts
 init_esm_shims();
@@ -2988,6 +2988,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     // declaration node -> 'bool' | 'bool?' | '' (the printer cannot name it); see
     // csharpConditionOperandType — asked once per condition operand
     this.conditionOperandTypes = /* @__PURE__ */ new WeakMap();
+    // method node -> base-class method it overrides (null: none); see getMethodOverride
+    this.csharpMethodOverrides = /* @__PURE__ */ new WeakMap();
+    // class declaration -> member name -> its LAST method of that name (base scan order)
+    this.csharpClassMethodsByName = /* @__PURE__ */ new WeakMap();
     this.csModifiers = {};
     this.requiresParameterType = true;
     this.requiresReturnType = true;
@@ -3083,6 +3087,44 @@ var CSharpTranspiler = class extends BaseTranspiler {
   }
   printSuperCallInsideConstructor(node, identation) {
     return "";
+  }
+  csharpMethodsByName(classDecl) {
+    let byName = this.csharpClassMethodsByName.get(classDecl);
+    if (byName === void 0) {
+      byName = /* @__PURE__ */ new Map();
+      for (const elem of classDecl.members ?? []) {
+        if (isMethodDeclaration2(elem)) {
+          byName.set(elem.name.getText().trim(), elem);
+        }
+      }
+      this.csharpClassMethodsByName.set(classDecl, byName);
+    }
+    return byName;
+  }
+  // base getMethodOverride rescans every parent member with getText() on each call; the
+  // printer asks per method several times, so memoize it (same walk, same result)
+  getMethodOverride(node) {
+    if (node === void 0 || !isClassDeclaration2(node.parent) || !node.parent.heritageClauses) {
+      return void 0;
+    }
+    const cached = this.csharpMethodOverrides.get(node);
+    if (cached !== void 0) {
+      return cached ?? void 0;
+    }
+    let method = void 0;
+    let parentClass = getAllSuperTypeNodes(node.parent)[0];
+    while (parentClass !== void 0) {
+      const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+      if (parentClassDecl === void 0) {
+        this.warn(node, "Parent class", "Parent class not found");
+        method = void 0;
+        break;
+      }
+      method = this.csharpMethodsByName(parentClassDecl).get(node.name.text) ?? method;
+      parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? void 0;
+    }
+    this.csharpMethodOverrides.set(node, method ?? null);
+    return method;
   }
   printIdentifier(node) {
     let idValue = node.text ?? node.text;
@@ -14245,7 +14287,7 @@ init_esm_shims();
 import { NodeFlags, SyntaxKind as SyntaxKind6 } from "typescript/unstable/ast";
 import { isArrayLiteralExpression as isArrayLiteralExpression3, isArrowFunction as isArrowFunction4, isAsExpression as isAsExpression2, isBinaryExpression as isBinaryExpression4, isBlock as isBlock3, isBooleanLiteral as isBooleanLiteral4, isCallExpression as isCallExpression5, isClassDeclaration as isClassDeclaration3, isElementAccessExpression as isElementAccessExpression3, isExpressionStatement as isExpressionStatement3, isForInStatement, isForOfStatement, isFunctionDeclaration as isFunctionDeclaration4, isFunctionExpression as isFunctionExpression5, isIdentifier as isIdentifier2, isIfStatement as isIfStatement3, isMethodDeclaration as isMethodDeclaration4, isNonNullExpression, isNumericLiteral as isNumericLiteral3, isObjectLiteralExpression as isObjectLiteralExpression3, isParameterDeclaration as isParameterDeclaration2, isParenthesizedExpression as isParenthesizedExpression2, isPostfixUnaryExpression as isPostfixUnaryExpression2, isPrefixUnaryExpression as isPrefixUnaryExpression2, isPropertyAccessExpression as isPropertyAccessExpression2, isPropertyAssignment, isReturnStatement as isReturnStatement3, isSourceFile as isSourceFile4, isStringLiteral as isStringLiteral2, isStringLiteralLikeNode as isStringLiteralLikeNode3, isThrowStatement as isThrowStatement3, isTypeAssertion as isTypeAssertion2, isTypeOfExpression, isTypeReferenceNode, isVariableDeclaration as isVariableDeclaration2, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { createIdentifier } from "typescript/unstable/ast/factory";
-import { ElementFlags, IndexKind as IndexKind3, SymbolFlags as SymbolFlags2, TypeFlags as TypeFlags5 } from "typescript/unstable/sync";
+import { API, ElementFlags, IndexKind as IndexKind3, SymbolFlags as SymbolFlags2, TypeFlags as TypeFlags5 } from "typescript/unstable/sync";
 var parserConfig5 = {
   EXTENDS_TOKEN: "extends",
   PROMISE_TYPE_KEYWORD: "java.util.concurrent.CompletableFuture",
@@ -14510,10 +14552,126 @@ var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
   "handleParamBool",
   "handleParamBool2"
 ]);
+var JAVA_MEMO_UNDEFINED = Symbol("javaMemoUndefined");
+var JAVA_MEMOIZED_METHODS = ["getSignatureFromDeclaration", "isArrayType", "isTupleType", "getAliasedSymbol", "getTypeArguments", "getDeclaredTypeOfSymbol", "getReturnTypeOfSignature", "getSymbolOfType", "getTypeOfSymbolAtLocation", "getSignaturesOfType", "typeToString", "getTypesOfType"];
+var JAVA_TYPE_PREFETCH_KINDS = /* @__PURE__ */ new Set([SyntaxKind6.Identifier, SyntaxKind6.BinaryExpression, SyntaxKind6.Parameter, SyntaxKind6.VariableDeclaration, SyntaxKind6.StringLiteral, SyntaxKind6.MethodDeclaration, SyntaxKind6.PropertyAccessExpression, SyntaxKind6.ParenthesizedExpression, SyntaxKind6.ElementAccessExpression]);
+var JAVA_SYMBOL_PREFETCH_KINDS = /* @__PURE__ */ new Set([SyntaxKind6.Identifier]);
+function prefetchByFile(checker, name, kinds) {
+  const original = checker[name];
+  const cache = /* @__PURE__ */ new WeakMap();
+  const done = /* @__PURE__ */ new WeakSet();
+  Object.defineProperty(checker, name, { configurable: true, value: (node) => {
+    if (Array.isArray(node)) {
+      return original(node);
+    }
+    if (cache.has(node)) {
+      return cache.get(node);
+    }
+    const sf = node.getSourceFile?.();
+    if (sf !== void 0 && !done.has(sf)) {
+      done.add(sf);
+      const nodes = [];
+      const visit = (n) => {
+        if (kinds.has(n.kind)) {
+          nodes.push(n);
+        }
+        n.forEachChild(visit);
+      };
+      sf.forEachChild(visit);
+      if (nodes.length > 0) {
+        const results = original(nodes);
+        for (let i = 0; i < nodes.length; i++) {
+          cache.set(nodes[i], results[i]);
+        }
+      }
+      if (cache.has(node)) {
+        return cache.get(node);
+      }
+    }
+    const result = original(node);
+    cache.set(node, result);
+    return result;
+  } });
+}
+function prefetchResolvedSignatures(checker) {
+  const original = checker.getResolvedSignature;
+  const client = checker.client;
+  if (client === void 0) {
+    return;
+  }
+  const cache = /* @__PURE__ */ new WeakMap();
+  const done = /* @__PURE__ */ new WeakSet();
+  Object.defineProperty(checker, "getResolvedSignature", { configurable: true, value: (node) => {
+    if (cache.has(node)) {
+      return cache.get(node);
+    }
+    const sf = node?.getSourceFile?.();
+    if (sf !== void 0 && !done.has(sf)) {
+      done.add(sf);
+      const calls = [];
+      const visit = (n) => {
+        if (n.kind === SyntaxKind6.CallExpression) {
+          calls.push(n);
+        }
+        n.forEachChild(visit);
+      };
+      sf.forEachChild(visit);
+      if (calls.length > 0) {
+        const results = API.prototype.batch.call({ client }, ...calls.map((c) => original.gen(c)));
+        for (let i = 0; i < calls.length; i++) {
+          cache.set(calls[i], results[i]);
+        }
+      }
+      if (cache.has(node)) {
+        return cache.get(node);
+      }
+    }
+    const result = original(node);
+    cache.set(node, result);
+    return result;
+  } });
+}
+function memoizeJavaCheckerCalls(checker) {
+  if (checker.__javaMemoized) {
+    return checker;
+  }
+  Object.defineProperty(checker, "__javaMemoized", { value: true });
+  prefetchByFile(checker, "getTypeAtLocation", JAVA_TYPE_PREFETCH_KINDS);
+  prefetchByFile(checker, "getSymbolAtLocation", JAVA_SYMBOL_PREFETCH_KINDS);
+  prefetchResolvedSignatures(checker);
+  for (const name of JAVA_MEMOIZED_METHODS) {
+    const original = checker[name];
+    if (typeof original !== "function") {
+      continue;
+    }
+    const byFirst = /* @__PURE__ */ new WeakMap();
+    Object.defineProperty(checker, name, { configurable: true, value: (first, ...rest) => {
+      if (first === null || typeof first !== "object" && typeof first !== "function" || rest.some((a) => a !== void 0 && typeof a === "object")) {
+        return original(first, ...rest);
+      }
+      let byRest = byFirst.get(first);
+      if (byRest === void 0) {
+        byRest = /* @__PURE__ */ new Map();
+        byFirst.set(first, byRest);
+      }
+      const key = rest.length === 0 ? "" : JSON.stringify(rest);
+      const cached = byRest.get(key);
+      if (cached !== void 0) {
+        return cached === JAVA_MEMO_UNDEFINED ? void 0 : cached;
+      }
+      const result = original(first, ...rest);
+      byRest.set(key, result === void 0 ? JAVA_MEMO_UNDEFINED : result);
+      return result;
+    } });
+  }
+  return checker;
+}
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
     config["parser"] = Object.assign({}, parserConfig5, config["parser"] ?? {});
     super(config);
+    // override lookups repeat per method on every printed call and hook; the answer is fixed per node
+    this.methodOverrideCache = /* @__PURE__ */ new WeakMap();
     this.varListFromObjectLiterals = {};
     // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
     // negated `!Helpers.isEqual` / `<` / `>` / `<=` / `>=` family), Helpers.inOp,
@@ -14574,6 +14732,25 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.applyUserOverrides(config);
     this.asyncExecutor = config["asyncExecutor"] ?? "";
     this.asyncSupplier = config["asyncSupplier"] ?? "";
+  }
+  getChecker() {
+    return memoizeJavaCheckerCalls(super.getChecker());
+  }
+  getMethodOverride(node) {
+    if (node === void 0 || node === null) {
+      return super.getMethodOverride(node);
+    }
+    const cached = this.methodOverrideCache.get(node);
+    if (cached !== void 0) {
+      return cached === JAVA_MEMO_UNDEFINED ? void 0 : cached;
+    }
+    const result = super.getMethodOverride(node);
+    this.methodOverrideCache.set(node, result === void 0 ? JAVA_MEMO_UNDEFINED : result);
+    return result;
+  }
+  checkerOrUndefined() {
+    const checker = super.checkerOrUndefined();
+    return checker === void 0 ? void 0 : memoizeJavaCheckerCalls(checker);
   }
   // the embedding build layer (build/java-local-types.js) installs this: it names the
   // Java type of a local whose printed declaration line it rewrote (`Long`/`Double`).
@@ -25873,7 +26050,7 @@ function getProgramWideDiagnostics(program) {
 }
 var processApi;
 function getApi(cache) {
-  cache.api ??= processApi ??= new API({ cwd: process.cwd() });
+  cache.api ??= processApi ??= new API2({ cwd: process.cwd() });
   return cache.api;
 }
 function createSnapshotProgram(cache, rootFiles, files) {

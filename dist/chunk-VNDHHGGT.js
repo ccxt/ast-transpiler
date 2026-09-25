@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../.hermes/profiles/deepseek/campaigns/ts7perf/tools/go/nm/go-ast/node_modules/tsup/assets/esm_shims.js
+// node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "../../../.hermes/profiles/deepseek/campaigns/ts7perf/tools/go/nm/go-ast/node_modules/tsup/assets/esm_shims.js"() {
+  "node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -154,4 +154,4 @@ export {
   typeParts,
   typeTarget
 };
-//# sourceMappingURL=chunk-YTJO6U6G.js.map
+//# sourceMappingURL=chunk-VNDHHGGT.js.map

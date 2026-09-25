@@ -13,7 +13,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-YTJO6U6G.js";
+} from "./chunk-VNDHHGGT.js";
 export {
   ModifierFlags,
   canHaveModifiers,
