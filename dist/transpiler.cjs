@@ -14206,7 +14206,10 @@ var JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS = _typescript2.default.TypeFlags.Any | _typ
 var JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS = _typescript2.default.TypeFlags.Boolean | _typescript2.default.TypeFlags.BooleanLiteral | _typescript2.default.TypeFlags.Undefined | _typescript2.default.TypeFlags.Null | _typescript2.default.TypeFlags.Void;
 var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
   "handleParamBool",
-  "handleParamBool2"
+  "handleParamBool2",
+  "handleOptionBoolAndParams",
+  // element 0 is checkOptionBool's Boolean-or-null (throws otherwise)
+  "handleOptionBoolAndParams2"
 ]);
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
@@ -19350,6 +19353,13 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
   // Helpers.isTrue would only re-test a value the checker proves is boolean
   javaConditionPrintsBoolean(node) {
+    let inner = node;
+    while (inner.kind === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner.kind === _typescript2.default.SyntaxKind.PrefixUnaryExpression && inner.operator === _typescript2.default.SyntaxKind.ExclamationToken) {
+      return true;
+    }
     if (this.javaBooleanCondition(node)) {
       return (this.getChecker().getTypeAtLocation(node).flags & _typescript2.default.TypeFlags.Boolean) !== 0;
     }
@@ -19472,18 +19482,41 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaPreciseBooleanCall(node)) {
       return true;
     }
+    if (this.javaStringAffixCall(node)) {
+      return true;
+    }
     const callee = node.expression;
     if (_typescript2.default.isPropertyAccessExpression(callee) && callee.expression.kind === _typescript2.default.SyntaxKind.ThisKeyword && JAVA_BOOLEAN_BASE_CALLS.has(String(callee.name.escapedText))) {
       return true;
     }
     return this.javaCallReturnsBooleanBox(node, seen, depth);
   }
+  // `s.startsWith(x)` / `s.endsWith(x)` on a checker-proven string receiver prints
+  // `((String)s).startsWith(..)`, a primitive boolean (String.startsWith/endsWith)
+  javaStringAffixCall(node) {
+    if (_optionalChain([node, 'optionalAccess', _1683 => _1683.kind]) !== _typescript2.default.SyntaxKind.CallExpression || (_nullishCoalesce(_optionalChain([node, 'access', _1684 => _1684.arguments, 'optionalAccess', _1685 => _1685.length]), () => ( 0))) !== 1) {
+      return false;
+    }
+    const callee = node.expression;
+    if (!_typescript2.default.isPropertyAccessExpression(callee)) {
+      return false;
+    }
+    const name = String(callee.name.escapedText);
+    if (name !== "startsWith" && name !== "endsWith") {
+      return false;
+    }
+    const type = this.javaTypeOfNode(callee.expression);
+    if (type === void 0 || !this.isStringType(type.flags)) {
+      return false;
+    }
+    return /^\(\(String\)[\s\S]*\.(startsWith|endsWith)\([\s\S]*\)$/.test(this.printNode(node, 0));
+  }
   isArrayIsArrayCall(node) {
     if (node === void 0 || node.kind !== _typescript2.default.SyntaxKind.CallExpression) {
       return false;
     }
     const callee = node.expression;
-    return _typescript2.default.isPropertyAccessExpression(callee) && String(callee.name.escapedText) === "isArray" && callee.expression.kind === _typescript2.default.SyntaxKind.Identifier && String(callee.expression.escapedText) === "Array" && (_nullishCoalesce(_optionalChain([node, 'access', _1683 => _1683.arguments, 'optionalAccess', _1684 => _1684.length]), () => ( 0))) === 1;
+    return _typescript2.default.isPropertyAccessExpression(callee) && String(callee.name.escapedText) === "isArray" && callee.expression.kind === _typescript2.default.SyntaxKind.Identifier && String(callee.expression.escapedText) === "Array" && (_nullishCoalesce(_optionalChain([node, 'access', _1686 => _1686.arguments, 'optionalAccess', _1687 => _1687.length]), () => ( 0))) === 1;
   }
   // `this.<name>` read of a hand-written base field declared `boolean`, or undefined. The
   // TsChecker guard keeps a field the hand-written base declares Object (or String) out.
@@ -19495,7 +19528,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!JAVA_BOOLEAN_BASE_FIELDS.has(printed)) {
       return void 0;
     }
-    const declaration = _optionalChain([this, 'access', _1685 => _1685.checkerOrUndefined, 'call', _1686 => _1686(), 'access', _1687 => _1687.getSymbolAtLocation, 'call', _1688 => _1688(node.name), 'optionalAccess', _1689 => _1689.valueDeclaration]);
+    const declaration = _optionalChain([this, 'access', _1688 => _1688.checkerOrUndefined, 'call', _1689 => _1689(), 'access', _1690 => _1690.getSymbolAtLocation, 'call', _1691 => _1691(node.name), 'optionalAccess', _1692 => _1692.valueDeclaration]);
     const type = _nullishCoalesce(this.javaTypeOfDeclaration(declaration), () => ( this.javaTypeOfNode(node)));
     return this.javaBooleanBoxType(type) ? printed : void 0;
   }
@@ -19503,7 +19536,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // IS `Boolean.TRUE.equals(x)`. Proof: the TS type (`boolean`, never `any`/`undefined`-able) plus
   // the D2 write scan: every write in the enclosing function must print a Java boolean value.
   javaBooleanBoxIdentifier(node, seen) {
-    if (_optionalChain([node, 'optionalAccess', _1690 => _1690.kind]) !== _typescript2.default.SyntaxKind.Identifier || seen.has(node)) {
+    if (_optionalChain([node, 'optionalAccess', _1693 => _1693.kind]) !== _typescript2.default.SyntaxKind.Identifier || seen.has(node)) {
       return void 0;
     }
     const checker = this.checkerOrUndefined();
@@ -19511,7 +19544,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const symbol = checker.getSymbolAtLocation(node);
-    const decl = _optionalChain([symbol, 'optionalAccess', _1691 => _1691.valueDeclaration]);
+    const decl = _optionalChain([symbol, 'optionalAccess', _1694 => _1694.valueDeclaration]);
     if (decl === void 0) {
       return void 0;
     }
@@ -19590,7 +19623,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // primitive, so the identifier IS the condition; `Boolean` is the nullable box (isTrue = equals).
   javaDeclaredBooleanKind(node) {
     const declaration = this.javaDeclarationOfIdentifier(node);
-    if (declaration === void 0 || node.escapedText !== _optionalChain([declaration, 'access', _1692 => _1692.name, 'optionalAccess', _1693 => _1693.escapedText])) {
+    if (declaration === void 0 || node.escapedText !== _optionalChain([declaration, 'access', _1695 => _1695.name, 'optionalAccess', _1696 => _1696.escapedText])) {
       return void 0;
     }
     let declared;
@@ -19605,7 +19638,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // equivalent union. Every member must be boolean or nullish - an `Int`/`Str`/`any` member can
   // hold a box the isTrue helper tests with its runtime truthiness, so the helper must stay.
   javaNullableBooleanDeclaration(declaration) {
-    if (_optionalChain([declaration, 'optionalAccess', _1694 => _1694.kind]) !== _typescript2.default.SyntaxKind.VariableDeclaration) {
+    if (_optionalChain([declaration, 'optionalAccess', _1697 => _1697.kind]) !== _typescript2.default.SyntaxKind.VariableDeclaration) {
       return false;
     }
     const type = this.javaTypeOfDeclaration(declaration);
@@ -19626,8 +19659,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (members.length === 0) {
       return false;
     }
-    const booleanish = (member) => ((_nullishCoalesce(_optionalChain([member, 'optionalAccess', _1695 => _1695.flags]), () => ( 0))) & JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS) !== 0;
-    const hasBoolean = members.some((member) => ((_nullishCoalesce(_optionalChain([member, 'optionalAccess', _1696 => _1696.flags]), () => ( 0))) & (_typescript2.default.TypeFlags.Boolean | _typescript2.default.TypeFlags.BooleanLiteral)) !== 0);
+    const booleanish = (member) => ((_nullishCoalesce(_optionalChain([member, 'optionalAccess', _1698 => _1698.flags]), () => ( 0))) & JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS) !== 0;
+    const hasBoolean = members.some((member) => ((_nullishCoalesce(_optionalChain([member, 'optionalAccess', _1699 => _1699.flags]), () => ( 0))) & (_typescript2.default.TypeFlags.Boolean | _typescript2.default.TypeFlags.BooleanLiteral)) !== 0);
     return hasBoolean && members.every(booleanish);
   }
   // a value the nullable-boolean write scan accepts: a Java boolean value this printer proves, a
@@ -19652,6 +19685,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (node.kind === _typescript2.default.SyntaxKind.Identifier && this.javaNullableBooleanBoxIdentifier(node, seen) !== void 0) {
       return true;
     }
+    if (node.kind === _typescript2.default.SyntaxKind.Identifier && this.javaBooleanTupleBindingIdentifier(node, seen) !== void 0) {
+      return true;
+    }
     if (node.kind === _typescript2.default.SyntaxKind.CallExpression) {
       return this.javaCallBooleanKind(node) !== void 0;
     }
@@ -19661,7 +19697,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // box: those accessors return a safeBool result, never the raw member when not a Boolean. The
   // handleOptionAndParams family returns the raw member and is deliberately not a box proof.
   javaBooleanBoxTupleElement(node, index) {
-    if (_optionalChain([node, 'optionalAccess', _1697 => _1697.kind]) !== _typescript2.default.SyntaxKind.CallExpression) {
+    if (_optionalChain([node, 'optionalAccess', _1700 => _1700.kind]) !== _typescript2.default.SyntaxKind.CallExpression) {
       return false;
     }
     const callee = node.expression;
@@ -19672,11 +19708,39 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (!JAVA_BOOLEAN_BOX_TUPLE_METHODS.has(name)) {
       return false;
     }
-    const declaration = _optionalChain([this, 'access', _1698 => _1698.getChecker, 'call', _1699 => _1699(), 'access', _1700 => _1700.getResolvedSignature, 'call', _1701 => _1701(node), 'optionalAccess', _1702 => _1702.declaration]);
-    if (_optionalChain([declaration, 'optionalAccess', _1703 => _1703.name, 'optionalAccess', _1704 => _1704.escapedText]) !== name) {
+    const declaration = _optionalChain([this, 'access', _1701 => _1701.getChecker, 'call', _1702 => _1702(), 'access', _1703 => _1703.getResolvedSignature, 'call', _1704 => _1704(node), 'optionalAccess', _1705 => _1705.declaration]);
+    if (_optionalChain([declaration, 'optionalAccess', _1706 => _1706.name, 'optionalAccess', _1707 => _1707.escapedText]) !== name) {
       return false;
     }
     return index === 0;
+  }
+  // `const [ x, p ] = this.handle*Bool (...)` binds x to element 0, a Boolean-or-null box; any
+  // later identifier or tuple write must also be a proven box (the D2 scan over the function)
+  javaBooleanTupleBindingIdentifier(node, seen = /* @__PURE__ */ new Set()) {
+    if (_optionalChain([node, 'optionalAccess', _1708 => _1708.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    const symbol = checker.getSymbolAtLocation(node);
+    const element = _optionalChain([symbol, 'optionalAccess', _1709 => _1709.valueDeclaration]);
+    if (element === void 0 || element.kind !== _typescript2.default.SyntaxKind.BindingElement || element.initializer !== void 0 || element.dotDotDotToken !== void 0 || _optionalChain([element, 'access', _1710 => _1710.name, 'optionalAccess', _1711 => _1711.escapedText]) !== node.escapedText || seen.has(element)) {
+      return void 0;
+    }
+    const pattern = element.parent;
+    const declaration = _optionalChain([pattern, 'optionalAccess', _1712 => _1712.parent]);
+    if (_optionalChain([pattern, 'optionalAccess', _1713 => _1713.kind]) !== _typescript2.default.SyntaxKind.ArrayBindingPattern || _optionalChain([declaration, 'optionalAccess', _1714 => _1714.kind]) !== _typescript2.default.SyntaxKind.VariableDeclaration || !this.javaBooleanBoxTupleElement(declaration.initializer, pattern.elements.indexOf(element))) {
+      return void 0;
+    }
+    const next = new Set(seen);
+    next.add(element);
+    const binding = { initializer: void 0, parent: declaration };
+    if (!this.javaWritesAreBoxed(symbol, binding, next, (value) => this.javaPrintsBooleanBoxValue(value, next), true)) {
+      return void 0;
+    }
+    return this.printNode(node, 0);
   }
   // the D2 scan over a nullable boolean local: every write prints a Java boolean value or a
   // proven Boolean-or-null box, so no path can leave a truthy non-boolean box in it
@@ -19690,7 +19754,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // proven Boolean-or-null box: `Boolean.TRUE.equals(x)` is exactly what the helper answers on
   // such a box (null and FALSE test false, TRUE tests true)
   javaNullableBooleanBoxIdentifier(node, seen = /* @__PURE__ */ new Set()) {
-    if (_optionalChain([node, 'optionalAccess', _1705 => _1705.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
+    if (_optionalChain([node, 'optionalAccess', _1715 => _1715.kind]) !== _typescript2.default.SyntaxKind.Identifier) {
       return void 0;
     }
     const checker = this.checkerOrUndefined();
@@ -19698,8 +19762,8 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const symbol = checker.getSymbolAtLocation(node);
-    const declaration = _optionalChain([symbol, 'optionalAccess', _1706 => _1706.valueDeclaration]);
-    if (declaration === void 0 || _optionalChain([declaration, 'access', _1707 => _1707.name, 'optionalAccess', _1708 => _1708.escapedText]) !== node.escapedText) {
+    const declaration = _optionalChain([symbol, 'optionalAccess', _1716 => _1716.valueDeclaration]);
+    if (declaration === void 0 || _optionalChain([declaration, 'access', _1717 => _1717.name, 'optionalAccess', _1718 => _1718.escapedText]) !== node.escapedText) {
       return void 0;
     }
     if (seen.has(declaration)) {
@@ -19726,6 +19790,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.isArrayIsArrayCall(node)) {
       return `(${this.printNode(node.arguments[0], 0)} instanceof java.util.List)`;
     }
+    if (this.javaStringAffixCall(node)) {
+      return this.printNode(node, 0);
+    }
     const field = this.javaBooleanBaseField(node);
     if (field !== void 0) {
       return field;
@@ -19742,7 +19809,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
       }
     }
-    const box = _nullishCoalesce(this.javaBooleanBoxIdentifier(node, /* @__PURE__ */ new Set()), () => ( this.javaNullableBooleanBoxIdentifier(node)));
+    const box = _nullishCoalesce(_nullishCoalesce(this.javaBooleanBoxIdentifier(node, /* @__PURE__ */ new Set()), () => ( this.javaNullableBooleanBoxIdentifier(node))), () => ( this.javaBooleanTupleBindingIdentifier(node)));
     return box === void 0 ? void 0 : `Boolean.TRUE.equals(${box})`;
   }
   printCondition(node, identation) {
@@ -19780,7 +19847,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1709 => _1709.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1719 => _1719.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(","), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
@@ -19788,7 +19855,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         const exceptionName = id.escapedText === "Error" ? "RuntimeException" : id.escapedText;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1710 => _1710.getChecker, 'call', _1711 => _1711(), 'access', _1712 => _1712.getDeclaredTypeOfSymbol, 'call', _1713 => _1713(symbol), 'access', _1714 => _1714.symbol, 'optionalAccess', _1715 => _1715.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1720 => _1720.getChecker, 'call', _1721 => _1721(), 'access', _1722 => _1722.getDeclaredTypeOfSymbol, 'call', _1723 => _1723(symbol), 'access', _1724 => _1724.symbol, 'optionalAccess', _1725 => _1725.declarations]), () => ( []));
           const isClassDeclaration = declarations.find(
             (l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration
           );
@@ -20229,7 +20296,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return true;
     }
     const declaration = current.parent;
-    if (declaration === void 0 || !_typescript2.default.isVariableDeclaration(declaration) || declaration.initializer !== current || _optionalChain([declaration, 'access', _1716 => _1716.name, 'optionalAccess', _1717 => _1717.kind]) !== SyntaxKind4.Identifier) {
+    if (declaration === void 0 || !_typescript2.default.isVariableDeclaration(declaration) || declaration.initializer !== current || _optionalChain([declaration, 'access', _1726 => _1726.name, 'optionalAccess', _1727 => _1727.kind]) !== SyntaxKind4.Identifier) {
       return false;
     }
     return this.rustNodeIsBoolExpression(declaration.initializer) && this.rustTypeIsBoolean(declaration.initializer) && this.rustLocalUsesAcceptBool(declaration, String(declaration.name.escapedText));
@@ -20330,10 +20397,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (node.kind !== SyntaxKind4.Identifier)
       return false;
     const symbol = this.getChecker().getSymbolAtLocation(node);
-    const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1718 => _1718.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1728 => _1728.declarations]), () => ( []));
     if (declarations.length === 0)
       return false;
-    return declarations.every((declaration) => _typescript2.default.isParameter(declaration) || _typescript2.default.isVariableDeclaration(declaration) && _optionalChain([declaration, 'access', _1719 => _1719.initializer, 'optionalAccess', _1720 => _1720.kind]) !== SyntaxKind4.NewExpression);
+    return declarations.every((declaration) => _typescript2.default.isParameter(declaration) || _typescript2.default.isVariableDeclaration(declaration) && _optionalChain([declaration, 'access', _1729 => _1729.initializer, 'optionalAccess', _1730 => _1730.kind]) !== SyntaxKind4.NewExpression);
   }
   // Can the checked type only hold a Bool, Null/undefined or a non-numeric
   // string? Then `x.as_bool() == Some(b)` answers exactly what is_equal(x, b)
@@ -20413,7 +20480,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // is exactly what the runtime helper computes; only then is the helper
   // call dropped, anything unproven keeps the helper.
   typeOfNodeIfAny(node) {
-    return _optionalChain([this, 'access', _1721 => _1721.checkerOrUndefined, 'call', _1722 => _1722(), 'optionalAccess', _1723 => _1723.getTypeAtLocation, 'call', _1724 => _1724(node)]);
+    return _optionalChain([this, 'access', _1731 => _1731.checkerOrUndefined, 'call', _1732 => _1732(), 'optionalAccess', _1733 => _1733.getTypeAtLocation, 'call', _1734 => _1734(node)]);
   }
   // Arrays/tuples/strings: `.length` is exactly what `Value::len()` returns.
   // Other shapes (Dict) keep the helper — ArrayCache / OrderBookSide markers
@@ -20458,7 +20525,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // `x.indexOf("lit")` on a proven string receiver: `str::find` is exactly
   // the helper's `Value::Str` arm (byte index, `-1` when absent).
   printNativeStringIndexOf(node, receiverText) {
-    if (node === void 0 || !_typescript2.default.isCallExpression(node) || !_typescript2.default.isPropertyAccessExpression(node.expression) || _optionalChain([node, 'access', _1725 => _1725.arguments, 'optionalAccess', _1726 => _1726.length]) !== 1) {
+    if (node === void 0 || !_typescript2.default.isCallExpression(node) || !_typescript2.default.isPropertyAccessExpression(node.expression) || _optionalChain([node, 'access', _1735 => _1735.arguments, 'optionalAccess', _1736 => _1736.length]) !== 1) {
       return void 0;
     }
     if (this.primitiveKindOfType(this.typeOfNodeIfAny(node.expression.expression)) !== "string")
@@ -20502,7 +20569,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // every one of them as `Value`. Imports, classes and function names print
   // as Rust items rather than as values, so they keep the helper.
   isDeclaredValueIdentifier(node) {
-    const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1727 => _1727.getChecker, 'call', _1728 => _1728(), 'access', _1729 => _1729.getSymbolAtLocation, 'call', _1730 => _1730(node), 'optionalAccess', _1731 => _1731.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1737 => _1737.getChecker, 'call', _1738 => _1738(), 'access', _1739 => _1739.getSymbolAtLocation, 'call', _1740 => _1740(node), 'optionalAccess', _1741 => _1741.declarations]), () => ( []));
     return declarations.length > 0 && declarations.every((d) => _typescript2.default.isVariableDeclaration(d) || _typescript2.default.isParameter(d) || _typescript2.default.isBindingElement(d));
   }
   // A declared `Value` place: a local/param identifier, or a field/element
@@ -20626,7 +20693,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const plain = this.rustInsertIdentifierReceiver(expr);
       return plain === void 0 ? void 0 : { text: expr.text, isField: false, plain, nameNode: expr };
     }
-    if (_typescript2.default.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind4.ThisKeyword && _optionalChain([expr, 'access', _1732 => _1732.name, 'optionalAccess', _1733 => _1733.kind]) === SyntaxKind4.Identifier) {
+    if (_typescript2.default.isPropertyAccessExpression(expr) && expr.expression.kind === SyntaxKind4.ThisKeyword && _optionalChain([expr, 'access', _1742 => _1742.name, 'optionalAccess', _1743 => _1743.kind]) === SyntaxKind4.Identifier) {
       return {
         text: `self.${expr.name.text}`,
         isField: true,
@@ -20738,7 +20805,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
    *  family; each returns its own request/params dict arguments. */
   rustHandlerTupleCall(node) {
     const callee = node !== void 0 && _typescript2.default.isCallExpression(node) ? node.expression : void 0;
-    return callee !== void 0 && _typescript2.default.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind4.ThisKeyword && _optionalChain([callee, 'access', _1734 => _1734.name, 'optionalAccess', _1735 => _1735.kind]) === SyntaxKind4.Identifier && /^handle[A-Z]/.test(callee.name.text);
+    return callee !== void 0 && _typescript2.default.isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind4.ThisKeyword && _optionalChain([callee, 'access', _1744 => _1744.name, 'optionalAccess', _1745 => _1745.kind]) === SyntaxKind4.Identifier && /^handle[A-Z]/.test(callee.name.text);
   }
   /** A `null`/`undefined` write leaves the receiver a non-dict, which the
    *  emitted `if let Value::Dict` no-ops exactly like the helper. */
@@ -20756,7 +20823,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (checker === void 0) {
       return void 0;
     }
-    const declarations = _nullishCoalesce(_optionalChain([checker, 'access', _1736 => _1736.getSymbolAtLocation, 'call', _1737 => _1737(ident), 'optionalAccess', _1738 => _1738.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([checker, 'access', _1746 => _1746.getSymbolAtLocation, 'call', _1747 => _1747(ident), 'optionalAccess', _1748 => _1748.declarations]), () => ( []));
     const declaration = declarations.length === 1 ? declarations[0] : void 0;
     return declaration !== void 0 && (_typescript2.default.isVariableDeclaration(declaration) || _typescript2.default.isParameter(declaration)) ? declaration : void 0;
   }
@@ -20800,7 +20867,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const name = ident.text;
     const initializer = declaration.initializer;
     const scope = this.rustEnclosingFunction(declaration);
-    if (initializer === void 0 || _typescript2.default.isElementAccessExpression(initializer) || _optionalChain([declaration, 'access', _1739 => _1739.name, 'optionalAccess', _1740 => _1740.kind]) !== SyntaxKind4.Identifier || scope === void 0) {
+    if (initializer === void 0 || _typescript2.default.isElementAccessExpression(initializer) || _optionalChain([declaration, 'access', _1749 => _1749.name, 'optionalAccess', _1750 => _1750.kind]) !== SyntaxKind4.Identifier || scope === void 0) {
       return false;
     }
     let safe = this.rustWriteDictShape(this.typeOfNodeIfAny(ident)) && this.rustWriteDictShape(this.typeOfNodeIfAny(initializer));
@@ -20837,7 +20904,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       if (!safe) {
         return;
       }
-      if (_typescript2.default.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind4.EqualsToken && _typescript2.default.isPropertyAccessExpression(n.left) && n.left.expression.kind === SyntaxKind4.ThisKeyword && _optionalChain([n, 'access', _1741 => _1741.left, 'access', _1742 => _1742.name, 'optionalAccess', _1743 => _1743.text]) === fieldName && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
+      if (_typescript2.default.isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind4.EqualsToken && _typescript2.default.isPropertyAccessExpression(n.left) && n.left.expression.kind === SyntaxKind4.ThisKeyword && _optionalChain([n, 'access', _1751 => _1751.left, 'access', _1752 => _1752.name, 'optionalAccess', _1753 => _1753.text]) === fieldName && !this.rustWriteDictShape(this.typeOfNodeIfAny(n.right))) {
         safe = false;
         return;
       }
@@ -20850,7 +20917,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // a `Market`-style alias — the proof B-25's native reads use) whose every
   // write in the body keeps that shape: an object literal with no runtime tag
   rustParamStaysPlainDict(declaration) {
-    if (declaration.type === void 0 || _optionalChain([declaration, 'access', _1744 => _1744.name, 'optionalAccess', _1745 => _1745.kind]) !== SyntaxKind4.Identifier) {
+    if (declaration.type === void 0 || _optionalChain([declaration, 'access', _1754 => _1754.name, 'optionalAccess', _1755 => _1755.kind]) !== SyntaxKind4.Identifier) {
       return false;
     }
     const type = this.getCheckedTypeOf(declaration.type);
@@ -21170,7 +21237,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
     const indent = this.getIden(identation);
-    if (_optionalChain([declaration, 'optionalAccess', _1746 => _1746.name, 'access', _1747 => _1747.kind]) === SyntaxKind4.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _1756 => _1756.name, 'access', _1757 => _1757.kind]) === SyntaxKind4.ArrayBindingPattern) {
       const parsedElements = declaration.name.elements.map((e) => this.printNode(e.name, 0));
       const syntheticName = parsedElements.join("") + "Variable";
       const head = `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};
@@ -21201,11 +21268,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // Call to a hand-written `-> bool` fn: the checker must agree the TS call
   // is boolean-typed and the callee must be in the verified table above.
   rustCallPrintsBool(node) {
-    if (_optionalChain([node, 'optionalAccess', _1748 => _1748.kind]) !== SyntaxKind4.CallExpression) {
+    if (_optionalChain([node, 'optionalAccess', _1758 => _1758.kind]) !== SyntaxKind4.CallExpression) {
       return false;
     }
     const callee = node.expression;
-    const name = _optionalChain([callee, 'optionalAccess', _1749 => _1749.kind]) === SyntaxKind4.Identifier ? callee.escapedText : _optionalChain([callee, 'optionalAccess', _1750 => _1750.kind]) === SyntaxKind4.PropertyAccessExpression ? _optionalChain([callee, 'access', _1751 => _1751.name, 'optionalAccess', _1752 => _1752.escapedText]) : void 0;
+    const name = _optionalChain([callee, 'optionalAccess', _1759 => _1759.kind]) === SyntaxKind4.Identifier ? callee.escapedText : _optionalChain([callee, 'optionalAccess', _1760 => _1760.kind]) === SyntaxKind4.PropertyAccessExpression ? _optionalChain([callee, 'access', _1761 => _1761.name, 'optionalAccess', _1762 => _1762.escapedText]) : void 0;
     return name !== void 0 && _RustTranspiler.RUST_BOOL_RESULT_CALLEES.has(name) && this.rustTypeIsBoolean(node);
   }
   // Index just past the `"..."` literal opening at `i` (escapes skipped).
@@ -21274,7 +21341,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // Source shapes the printer turns into a bool: comparisons, `&&`/`||`
   // (each operand is is_true-wrapped), `!`, `in`, `instanceof`, true/false.
   rustNodeIsBoolExpression(node) {
-    switch (_optionalChain([node, 'optionalAccess', _1753 => _1753.kind])) {
+    switch (_optionalChain([node, 'optionalAccess', _1763 => _1763.kind])) {
       case SyntaxKind4.TrueKeyword:
       case SyntaxKind4.FalseKeyword:
         return true;
@@ -21302,7 +21369,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     return checker !== void 0 && this.isStringLikeType(checker.getTypeAtLocation(node));
   }
   rustEnclosingFunction(node) {
-    for (let current = _optionalChain([node, 'optionalAccess', _1754 => _1754.parent]); current; current = current.parent) {
+    for (let current = _optionalChain([node, 'optionalAccess', _1764 => _1764.parent]); current; current = current.parent) {
       switch (current.kind) {
         case SyntaxKind4.MethodDeclaration:
         case SyntaxKind4.FunctionDeclaration:
@@ -21316,7 +21383,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     return void 0;
   }
   rustBindsName(node, name) {
-    switch (_optionalChain([node, 'optionalAccess', _1755 => _1755.kind])) {
+    switch (_optionalChain([node, 'optionalAccess', _1765 => _1765.kind])) {
       case SyntaxKind4.VariableDeclaration:
       case SyntaxKind4.Parameter:
       case SyntaxKind4.FunctionDeclaration:
@@ -21324,7 +21391,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       case SyntaxKind4.PropertyDeclaration:
       case SyntaxKind4.FunctionExpression:
       case SyntaxKind4.ArrowFunction:
-        return _optionalChain([node, 'access', _1756 => _1756.name, 'optionalAccess', _1757 => _1757.kind]) === SyntaxKind4.Identifier && node.name.escapedText === name;
+        return _optionalChain([node, 'access', _1766 => _1766.name, 'optionalAccess', _1767 => _1767.kind]) === SyntaxKind4.Identifier && node.name.escapedText === name;
     }
     return false;
   }
@@ -21392,7 +21459,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // method) is the same payload without the unwrap.
   rustSafeStringLocalInitializer(declaration) {
     const initializer = declaration.initializer;
-    if (_optionalChain([declaration, 'access', _1758 => _1758.name, 'optionalAccess', _1759 => _1759.kind]) !== SyntaxKind4.Identifier || _optionalChain([initializer, 'optionalAccess', _1760 => _1760.kind]) !== SyntaxKind4.CallExpression) {
+    if (_optionalChain([declaration, 'access', _1768 => _1768.name, 'optionalAccess', _1769 => _1769.kind]) !== SyntaxKind4.Identifier || _optionalChain([initializer, 'optionalAccess', _1770 => _1770.kind]) !== SyntaxKind4.CallExpression) {
       return false;
     }
     if (this.rustNativeStrCalleeKind(initializer) === "str") {
@@ -21400,16 +21467,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     const callee = initializer.expression;
     const helpers = _RustTranspiler.RUST_STRING_LOCAL_HELPERS;
-    if (_optionalChain([callee, 'optionalAccess', _1761 => _1761.kind]) === SyntaxKind4.PropertyAccessExpression) {
-      return _optionalChain([callee, 'access', _1762 => _1762.expression, 'optionalAccess', _1763 => _1763.kind]) === SyntaxKind4.ThisKeyword && helpers.has(callee.name.escapedText);
+    if (_optionalChain([callee, 'optionalAccess', _1771 => _1771.kind]) === SyntaxKind4.PropertyAccessExpression) {
+      return _optionalChain([callee, 'access', _1772 => _1772.expression, 'optionalAccess', _1773 => _1773.kind]) === SyntaxKind4.ThisKeyword && helpers.has(callee.name.escapedText);
     }
-    return _optionalChain([callee, 'optionalAccess', _1764 => _1764.kind]) === SyntaxKind4.Identifier && helpers.has(callee.escapedText);
+    return _optionalChain([callee, 'optionalAccess', _1774 => _1774.kind]) === SyntaxKind4.Identifier && helpers.has(callee.escapedText);
   }
   // The two uses that compile against an `Option<String>` local and print
   // natively: `x ==/!= null|undefined` and `x ==/!= "lit"`.
   rustStringLocalUseIsNative(node) {
     const parent = node.parent;
-    if (_optionalChain([parent, 'optionalAccess', _1765 => _1765.kind]) !== SyntaxKind4.BinaryExpression) {
+    if (_optionalChain([parent, 'optionalAccess', _1775 => _1775.kind]) !== SyntaxKind4.BinaryExpression) {
       return false;
     }
     const op = parent.operatorToken.kind;
@@ -21451,7 +21518,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // `x.foo` / `{ foo: 1 }` — a property name is not a use of the local.
   rustIdentifierIsPropertyName(node) {
     const parent = node.parent;
-    switch (_optionalChain([parent, 'optionalAccess', _1766 => _1766.kind])) {
+    switch (_optionalChain([parent, 'optionalAccess', _1776 => _1776.kind])) {
       case SyntaxKind4.PropertyAccessExpression:
       case SyntaxKind4.PropertyAssignment:
       case SyntaxKind4.PropertySignature:
@@ -21462,18 +21529,18 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   // Is this identifier occurrence bound to a typed string local?
   rustStringLocalIdentifierIsTyped(node) {
-    const checker = _optionalChain([node, 'optionalAccess', _1767 => _1767.kind]) === SyntaxKind4.Identifier ? this.checkerOrUndefined() : void 0;
+    const checker = _optionalChain([node, 'optionalAccess', _1777 => _1777.kind]) === SyntaxKind4.Identifier ? this.checkerOrUndefined() : void 0;
     if (checker === void 0) {
       return false;
     }
     const symbol = checker.getSymbolAtLocation(node);
-    const declaration = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1768 => _1768.valueDeclaration]), () => ( _optionalChain([symbol, 'optionalAccess', _1769 => _1769.declarations, 'optionalAccess', _1770 => _1770[0]])));
-    return _optionalChain([declaration, 'optionalAccess', _1771 => _1771.kind]) === SyntaxKind4.VariableDeclaration && this.rustSafeStringLocalIsTyped(declaration);
+    const declaration = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1778 => _1778.valueDeclaration]), () => ( _optionalChain([symbol, 'optionalAccess', _1779 => _1779.declarations, 'optionalAccess', _1780 => _1780[0]])));
+    return _optionalChain([declaration, 'optionalAccess', _1781 => _1781.kind]) === SyntaxKind4.VariableDeclaration && this.rustSafeStringLocalIsTyped(declaration);
   }
   // `let x = <bool expr>` → the printed bool expression, or undefined.
   getRustBoolLocalInitializer(declaration, printedValue) {
     const initializer = declaration.initializer;
-    if (initializer === void 0 || _optionalChain([declaration, 'access', _1772 => _1772.name, 'optionalAccess', _1773 => _1773.kind]) !== SyntaxKind4.Identifier) {
+    if (initializer === void 0 || _optionalChain([declaration, 'access', _1782 => _1782.name, 'optionalAccess', _1783 => _1783.kind]) !== SyntaxKind4.Identifier) {
       return void 0;
     }
     const inner = this.stripOuterParens(printedValue);
@@ -21515,7 +21582,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
    *  statement is one of them (so Rust sees no `()`-valued tail the
    *  `-> Value` post-passes would have patched with `Value::Null`). */
   rustStrReturnPathsConvert(body) {
-    const last = _optionalChain([body, 'optionalAccess', _1774 => _1774.statements, 'access', _1775 => _1775[body.statements.length - 1]]);
+    const last = _optionalChain([body, 'optionalAccess', _1784 => _1784.statements, 'access', _1785 => _1785[body.statements.length - 1]]);
     if (last === void 0 || !_typescript2.default.isReturnStatement(last)) {
       return false;
     }
@@ -21571,11 +21638,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     let declaration;
     try {
-      declaration = _optionalChain([this, 'access', _1776 => _1776.getChecker, 'call', _1777 => _1777(), 'access', _1778 => _1778.getResolvedSignature, 'call', _1779 => _1779(node), 'optionalAccess', _1780 => _1780.declaration]);
+      declaration = _optionalChain([this, 'access', _1786 => _1786.getChecker, 'call', _1787 => _1787(), 'access', _1788 => _1788.getResolvedSignature, 'call', _1789 => _1789(node), 'optionalAccess', _1790 => _1790.declaration]);
     } catch (e) {
       return void 0;
     }
-    return _optionalChain([declaration, 'optionalAccess', _1781 => _1781.kind]) === SyntaxKind4.MethodDeclaration ? this.rustNativeStrReturnKind(declaration) : void 0;
+    return _optionalChain([declaration, 'optionalAccess', _1791 => _1791.kind]) === SyntaxKind4.MethodDeclaration ? this.rustNativeStrReturnKind(declaration) : void 0;
   }
   /** `Option<String>` → `Value` (exact inverse of the return conversion). */
   rustNativeStrValueBox(text) {
@@ -21611,7 +21678,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
    *  source file, keyed by local name in declaration order. */
   rustDeclaredDictLocals() {
     const src = this.getSrc();
-    if (_optionalChain([this, 'access', _1782 => _1782.declaredDictLocalsCache, 'optionalAccess', _1783 => _1783.src]) !== src) {
+    if (_optionalChain([this, 'access', _1792 => _1792.declaredDictLocalsCache, 'optionalAccess', _1793 => _1793.src]) !== src) {
       let table;
       try {
         table = this.collectRustDeclaredDictLocals(src);
@@ -21627,7 +21694,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
    *  Accepts the receiver node of the helper call (identifier, `x['k']` chain,
    *  `this.x` chain) or the declaration itself. */
   rustDeclaredLocalTypeResolver(node) {
-    return _optionalChain([this, 'access', _1784 => _1784.rustDeclaredLocalEntry, 'call', _1785 => _1785(node), 'optionalAccess', _1786 => _1786.kind]);
+    return _optionalChain([this, 'access', _1794 => _1794.rustDeclaredLocalEntry, 'call', _1795 => _1795(node), 'optionalAccess', _1796 => _1796.kind]);
   }
   /** The table entry a use site resolves to (the declaration whose binding the
    *  use refers to, proven), or undefined. */
@@ -21678,7 +21745,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   /** Binding symbol of an identifier, or undefined when the checker cannot
    *  answer (ByContent probes without a class context, for instance). */
   rustSymbolOf(node) {
-    return _optionalChain([this, 'access', _1787 => _1787.checkerOrUndefined, 'call', _1788 => _1788(), 'optionalAccess', _1789 => _1789.getSymbolAtLocation, 'call', _1790 => _1790(node)]);
+    return _optionalChain([this, 'access', _1797 => _1797.checkerOrUndefined, 'call', _1798 => _1798(), 'optionalAccess', _1799 => _1799.getSymbolAtLocation, 'call', _1800 => _1800(node)]);
   }
   /** True when this identifier is a use of the given declaration's binding.
    *  Without a checker answer the callers stay conservative (reject). */
@@ -21964,11 +22031,11 @@ ${classMethods}
       this.rustProHandlerShadowParam = shadowPlan.param;
     const statements = node.body.statements.map((s) => this.printNode(s, identation + 2)).join("\n");
     this.rustProHandlerShadowParam = savedShadowParam;
-    const body = blockOpen + optionalInits + shadows + (_nullishCoalesce(_optionalChain([shadowPlan, 'optionalAccess', _1791 => _1791.lines]), () => ( ""))) + statements + blockClose;
+    const body = blockOpen + optionalInits + shadows + (_nullishCoalesce(_optionalChain([shadowPlan, 'optionalAccess', _1801 => _1801.lines]), () => ( ""))) + statements + blockClose;
     return this.printNodeCommentsIfAny(node, identation, methodDef + body);
   }
   printFunctionDefinition(node, identation) {
-    const name = _nullishCoalesce(_optionalChain([node, 'access', _1792 => _1792.name, 'optionalAccess', _1793 => _1793.escapedText]), () => ( ""));
+    const name = _nullishCoalesce(_optionalChain([node, 'access', _1802 => _1802.name, 'optionalAccess', _1803 => _1803.escapedText]), () => ( ""));
     const params = node.parameters;
     const parsedArgs = params.map((p) => `${this.printNode(p.name, 0)}: Value`).join(", ");
     const returnType = this.printRustFunctionType(node);
@@ -22048,7 +22115,7 @@ ${classMethods}
   // A string literal prints as the bare `"lit"` (`&str` — no String
   // allocation); a checker-proven string drops the redundant `Value::Str` box.
   printErrorConstructorArg(name, index, node, identation) {
-    const kind = _optionalChain([_RustTranspiler, 'access', _1794 => _1794.RUST_ERROR_CONSTRUCTOR_ARGS, 'access', _1795 => _1795[name], 'optionalAccess', _1796 => _1796[index]]);
+    const kind = _optionalChain([_RustTranspiler, 'access', _1804 => _1804.RUST_ERROR_CONSTRUCTOR_ARGS, 'access', _1805 => _1805[name], 'optionalAccess', _1806 => _1806[index]]);
     if (kind === void 0) {
       return this.printNode(node, identation);
     }
@@ -22068,7 +22135,7 @@ ${classMethods}
     return this.toSnakeCaseName(className);
   }
   printNewExpression(node, identation) {
-    let expression = _optionalChain([node, 'access', _1797 => _1797.expression, 'optionalAccess', _1798 => _1798.escapedText]);
+    let expression = _optionalChain([node, 'access', _1807 => _1807.expression, 'optionalAccess', _1808 => _1808.escapedText]);
     expression = expression ? expression : this.printNode(node.expression);
     if (expression === "Error") {
       const args2 = node.arguments.map((a) => this.printNode(a, identation)).join(", ");
@@ -22111,19 +22178,19 @@ ${classMethods}
     return String(text).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
   }
   getCheckedTypeOf(node) {
-    return _optionalChain([this, 'access', _1799 => _1799.checkerOrUndefined, 'call', _1800 => _1800(), 'optionalAccess', _1801 => _1801.getTypeAtLocation, 'call', _1802 => _1802(node)]);
+    return _optionalChain([this, 'access', _1809 => _1809.checkerOrUndefined, 'call', _1810 => _1810(), 'optionalAccess', _1811 => _1811.getTypeAtLocation, 'call', _1812 => _1812(node)]);
   }
   typeSymbolOf(type) {
     if (type === void 0 || type === null)
       return void 0;
-    return _nullishCoalesce(_nullishCoalesce(_optionalChain([type, 'access', _1803 => _1803.getSymbol, 'optionalCall', _1804 => _1804()]), () => ( type.symbol)), () => ( type.aliasSymbol));
+    return _nullishCoalesce(_nullishCoalesce(_optionalChain([type, 'access', _1813 => _1813.getSymbol, 'optionalCall', _1814 => _1814()]), () => ( type.symbol)), () => ( type.aliasSymbol));
   }
   /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
    *  backed by a plain `Value` map in the rust port. */
   isLibDeclaredType(type) {
-    const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1805 => _1805.typeSymbolOf, 'call', _1806 => _1806(type), 'optionalAccess', _1807 => _1807.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1815 => _1815.typeSymbolOf, 'call', _1816 => _1816(type), 'optionalAccess', _1817 => _1817.declarations]), () => ( []));
     return declarations.some((d) => {
-      const file = _nullishCoalesce(_optionalChain([d, 'optionalAccess', _1808 => _1808.getSourceFile, 'optionalCall', _1809 => _1809(), 'optionalAccess', _1810 => _1810.fileName]), () => ( ""));
+      const file = _nullishCoalesce(_optionalChain([d, 'optionalAccess', _1818 => _1818.getSourceFile, 'optionalCall', _1819 => _1819(), 'optionalAccess', _1820 => _1820.fileName]), () => ( ""));
       return /[\\/]lib\.[^\\/]*\.d\.ts$/.test(file) || /[\\/]node_modules[\\/]typescript[\\/]/.test(file);
     });
   }
@@ -22134,9 +22201,9 @@ ${classMethods}
       return (_nullishCoalesce(type.types, () => ( []))).some((member) => this.isClassInstanceType(member));
     }
     const symbol = _nullishCoalesce(this.typeSymbolOf(type), () => ( type.aliasSymbol));
-    if (_optionalChain([symbol, 'optionalAccess', _1811 => _1811.flags]) & _typescript2.default.SymbolFlags.Class)
+    if (_optionalChain([symbol, 'optionalAccess', _1821 => _1821.flags]) & _typescript2.default.SymbolFlags.Class)
       return true;
-    const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1812 => _1812.declarations]), () => ( []));
+    const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1822 => _1822.declarations]), () => ( []));
     return declarations.some((d) => _typescript2.default.isClassDeclaration(d) || _typescript2.default.isClassExpression(d));
   }
   hasCallableShape(type) {
@@ -22146,13 +22213,13 @@ ${classMethods}
   isProvenListType(type) {
     if (!(type.flags & _typescript2.default.TypeFlags.Object))
       return false;
-    const objectFlags = (_nullishCoalesce(type.objectFlags, () => ( 0))) | (_nullishCoalesce(_optionalChain([type, 'access', _1813 => _1813.target, 'optionalAccess', _1814 => _1814.objectFlags]), () => ( 0)));
+    const objectFlags = (_nullishCoalesce(type.objectFlags, () => ( 0))) | (_nullishCoalesce(_optionalChain([type, 'access', _1823 => _1823.target, 'optionalAccess', _1824 => _1824.objectFlags]), () => ( 0)));
     if (objectFlags & _typescript2.default.ObjectFlags.Tuple)
       return true;
-    const name = _optionalChain([this, 'access', _1815 => _1815.typeSymbolOf, 'call', _1816 => _1816(type), 'optionalAccess', _1817 => _1817.getName, 'optionalCall', _1818 => _1818()]);
+    const name = _optionalChain([this, 'access', _1825 => _1825.typeSymbolOf, 'call', _1826 => _1826(type), 'optionalAccess', _1827 => _1827.getName, 'optionalCall', _1828 => _1828()]);
     if (name === "Array" || name === "ReadonlyArray")
       return true;
-    const targetName = _optionalChain([this, 'access', _1819 => _1819.typeSymbolOf, 'call', _1820 => _1820(type.target), 'optionalAccess', _1821 => _1821.getName, 'optionalCall', _1822 => _1822()]);
+    const targetName = _optionalChain([this, 'access', _1829 => _1829.typeSymbolOf, 'call', _1830 => _1830(type.target), 'optionalAccess', _1831 => _1831.getName, 'optionalCall', _1832 => _1832()]);
     return targetName === "Array" || targetName === "ReadonlyArray";
   }
   /** True only for object types the rust port represents as `Value::Dict`
@@ -22227,7 +22294,7 @@ ${classMethods}
     if (!_typescript2.default.isPropertyAccessExpression(node.expression))
       return void 0;
     try {
-      return _nullishCoalesce(_optionalChain([this, 'access', _1823 => _1823.getChecker, 'call', _1824 => _1824(), 'access', _1825 => _1825.getResolvedSignature, 'call', _1826 => _1826(node), 'optionalAccess', _1827 => _1827.declaration]), () => ( void 0));
+      return _nullishCoalesce(_optionalChain([this, 'access', _1833 => _1833.getChecker, 'call', _1834 => _1834(), 'access', _1835 => _1835.getResolvedSignature, 'call', _1836 => _1836(node), 'optionalAccess', _1837 => _1837.declaration]), () => ( void 0));
     } catch (e) {
       return void 0;
     }
@@ -22323,7 +22390,7 @@ ${classMethods}
     let statement = declaration;
     while (statement !== void 0 && !_typescript2.default.isStatement(statement))
       statement = statement.parent;
-    const siblings = _nullishCoalesce(_optionalChain([statement, 'optionalAccess', _1828 => _1828.parent, 'optionalAccess', _1829 => _1829.statements]), () => ( []));
+    const siblings = _nullishCoalesce(_optionalChain([statement, 'optionalAccess', _1838 => _1838.parent, 'optionalAccess', _1839 => _1839.statements]), () => ( []));
     const at = siblings.indexOf(statement);
     if (at < 0 || at + 1 >= siblings.length)
       return false;
@@ -22578,17 +22645,17 @@ ${classMethods}
       return false;
     if (!(type.flags & _typescript2.default.TypeFlags.Object))
       return false;
-    const objectFlags = (_nullishCoalesce(type.objectFlags, () => ( 0))) | (_nullishCoalesce(_optionalChain([type, 'access', _1830 => _1830.target, 'optionalAccess', _1831 => _1831.objectFlags]), () => ( 0)));
+    const objectFlags = (_nullishCoalesce(type.objectFlags, () => ( 0))) | (_nullishCoalesce(_optionalChain([type, 'access', _1840 => _1840.target, 'optionalAccess', _1841 => _1841.objectFlags]), () => ( 0)));
     if (objectFlags & _typescript2.default.ObjectFlags.Tuple)
       return false;
     if (this.hasCallableShape(type))
       return false;
     if (this.isClassInstanceType(type))
       return false;
-    const name = _optionalChain([this, 'access', _1832 => _1832.typeSymbolOf, 'call', _1833 => _1833(type), 'optionalAccess', _1834 => _1834.getName, 'optionalCall', _1835 => _1835()]);
+    const name = _optionalChain([this, 'access', _1842 => _1842.typeSymbolOf, 'call', _1843 => _1843(type), 'optionalAccess', _1844 => _1844.getName, 'optionalCall', _1845 => _1845()]);
     if (name === "Array" || name === "ReadonlyArray")
       return true;
-    const targetName = _optionalChain([this, 'access', _1836 => _1836.typeSymbolOf, 'call', _1837 => _1837(type.target), 'optionalAccess', _1838 => _1838.getName, 'optionalCall', _1839 => _1839()]);
+    const targetName = _optionalChain([this, 'access', _1846 => _1846.typeSymbolOf, 'call', _1847 => _1847(type.target), 'optionalAccess', _1848 => _1848.getName, 'optionalCall', _1849 => _1849()]);
     return targetName === "Array" || targetName === "ReadonlyArray";
   }
   /** Every reference to the parameter must be a printable read, and at least
@@ -22821,7 +22888,7 @@ ${classMethods}
         return;
       if (_typescript2.default.isCallExpression(n) && n.arguments.length > 0 && _typescript2.default.isIdentifier(n.arguments[0]) && n.arguments[0].escapedText === name) {
         const callee = n.expression;
-        written = merging.includes(_typescript2.default.isPropertyAccessExpression(callee) ? String(_nullishCoalesce(_optionalChain([callee, 'access', _1840 => _1840.name, 'optionalAccess', _1841 => _1841.escapedText]), () => ( ""))) : _typescript2.default.isIdentifier(callee) ? String(_nullishCoalesce(callee.escapedText, () => ( ""))) : "");
+        written = merging.includes(_typescript2.default.isPropertyAccessExpression(callee) ? String(_nullishCoalesce(_optionalChain([callee, 'access', _1850 => _1850.name, 'optionalAccess', _1851 => _1851.escapedText]), () => ( ""))) : _typescript2.default.isIdentifier(callee) ? String(_nullishCoalesce(callee.escapedText, () => ( ""))) : "");
         if (written)
           return;
       }
@@ -22878,7 +22945,7 @@ ${ind}let ${view}: &${map} = &${arc};
       return void 0;
     if (callee.expression.kind !== SyntaxKind4.ThisKeyword)
       return void 0;
-    const kind = _RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS[String(_nullishCoalesce(_optionalChain([callee, 'access', _1842 => _1842.name, 'optionalAccess', _1843 => _1843.escapedText]), () => ( "")))];
+    const kind = _RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS[String(_nullishCoalesce(_optionalChain([callee, 'access', _1852 => _1852.name, 'optionalAccess', _1853 => _1853.escapedText]), () => ( "")))];
     if (kind === void 0)
       return void 0;
     const args = _nullishCoalesce(node.arguments, () => ( []));
@@ -22959,7 +23026,7 @@ ${ind}let ${view}: &${map} = &${arc};
       return void 0;
     try {
       const symbol = this.getChecker().getSymbolAtLocation(node);
-      return _optionalChain([symbol, 'optionalAccess', _1844 => _1844.valueDeclaration]);
+      return _optionalChain([symbol, 'optionalAccess', _1854 => _1854.valueDeclaration]);
     } catch (e) {
       return void 0;
     }
@@ -23028,7 +23095,7 @@ ${ind}let ${view}: &${map} = &${arc};
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration === void 0)
       return false;
-    const name = _optionalChain([declaration, 'access', _1845 => _1845.name, 'optionalAccess', _1846 => _1846.text]);
+    const name = _optionalChain([declaration, 'access', _1855 => _1855.name, 'optionalAccess', _1856 => _1856.text]);
     if (typeof name !== "string")
       return false;
     if (_typescript2.default.isParameter(declaration)) {
@@ -23050,7 +23117,7 @@ ${ind}let ${view}: &${map} = &${arc};
       if (type2 === void 0)
         return false;
       const symbol = this.typeSymbolOf(type2);
-      const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1847 => _1847.declarations]), () => ( []));
+      const declarations = _nullishCoalesce(_optionalChain([symbol, 'optionalAccess', _1857 => _1857.declarations]), () => ( []));
       return declarations.some((d) => {
         if (!_typescript2.default.isClassDeclaration(d) || d.name === void 0 || d.name.text !== "Client")
           return false;
@@ -23061,7 +23128,7 @@ ${ind}let ${view}: &${map} = &${arc};
     const type = this.getCheckedTypeOf(declaration.name);
     if (named(type))
       return true;
-    return (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _1848 => _1848.types]), () => ( []))).some((member) => named(member));
+    return (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _1858 => _1858.types]), () => ( []))).some((member) => named(member));
   }
   /** Constant string argument of `parseInt`/`parseFloat` folded the way rust's
    *  `str::parse` would; undefined when the fold is not obviously exact. */
@@ -23394,9 +23461,9 @@ ${idn}}`;
     const ifBody = this.printBlock(node.thenStatement, identation, elseStatement !== void 0);
     const head = node.parent.kind === SyntaxKind4.IfStatement ? "else if " : `${this.getIden(identation)}if `;
     let ifComplete = `${head}${this.printCondition(node.expression, 0)}${ifBody}`;
-    if (_optionalChain([elseStatement, 'optionalAccess', _1849 => _1849.kind]) === SyntaxKind4.Block) {
+    if (_optionalChain([elseStatement, 'optionalAccess', _1859 => _1859.kind]) === SyntaxKind4.Block) {
       ifComplete += ` else${this.printBlock(elseStatement, identation)}`;
-    } else if (_optionalChain([elseStatement, 'optionalAccess', _1850 => _1850.kind]) === SyntaxKind4.IfStatement) {
+    } else if (_optionalChain([elseStatement, 'optionalAccess', _1860 => _1860.kind]) === SyntaxKind4.IfStatement) {
       ifComplete += " " + this.printIfStatement(elseStatement, identation);
     }
     return this.printNodeCommentsIfAny(node, identation, ifComplete);
@@ -23496,7 +23563,7 @@ ${this.getIden(identation)}})`;
   }
   // Built-in method call overrides
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
-    return `Value::Bool(${_nullishCoalesce(this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1851 => _1851.arguments, 'optionalAccess', _1852 => _1852[0]]), parsedArg), () => ( `is_array(&${parsedArg})`))})`;
+    return `Value::Bool(${_nullishCoalesce(this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _1861 => _1861.arguments, 'optionalAccess', _1862 => _1862[0]]), parsedArg), () => ( `is_array(&${parsedArg})`))})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
     return `object_keys(&${parsedArg})`;
@@ -23593,7 +23660,7 @@ ${this.getIden(identation)}})`;
   }
   printTryStatement(node, identation) {
     const body = (block) => block.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
-    const rawName = _optionalChain([node, 'access', _1853 => _1853.catchClause, 'optionalAccess', _1854 => _1854.variableDeclaration, 'optionalAccess', _1855 => _1855.name, 'optionalAccess', _1856 => _1856.escapedText]);
+    const rawName = _optionalChain([node, 'access', _1863 => _1863.catchClause, 'optionalAccess', _1864 => _1864.variableDeclaration, 'optionalAccess', _1865 => _1865.name, 'optionalAccess', _1866 => _1866.escapedText]);
     const iden = this.getIden(identation);
     const errorName = rawName ? `_${rawName}` : "_e";
     return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -24058,7 +24125,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _1857 => _1857.body, 'optionalAccess', _1858 => _1858.statements, 'access', _1859 => _1859.forEach, 'call', _1860 => _1860((statement) => {
+    _optionalChain([node, 'access', _1867 => _1867.body, 'optionalAccess', _1868 => _1868.statements, 'access', _1869 => _1869.forEach, 'call', _1870 => _1870((statement) => {
       if (_typescript2.default.isExpressionStatement(statement)) {
         const expression = statement.expression;
         if (_typescript2.default.isCallExpression(expression)) {
@@ -24219,7 +24286,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _1861 => _1861.name, 'access', _1862 => _1862.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _1871 => _1871.name, 'access', _1872 => _1872.kind]) === _typescript2.default.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -24472,14 +24539,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _typescript2.default.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1863 => _1863.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _1873 => _1873.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _typescript2.default.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1864 => _1864.getChecker, 'call', _1865 => _1865(), 'access', _1866 => _1866.getDeclaredTypeOfSymbol, 'call', _1867 => _1867(symbol), 'access', _1868 => _1868.symbol, 'optionalAccess', _1869 => _1869.declarations]), () => ( []));
+          const declarations = _nullishCoalesce(_optionalChain([this, 'access', _1874 => _1874.getChecker, 'call', _1875 => _1875(), 'access', _1876 => _1876.getDeclaredTypeOfSymbol, 'call', _1877 => _1877(symbol), 'access', _1878 => _1878.symbol, 'optionalAccess', _1879 => _1879.declarations]), () => ( []));
           const isClassDeclaration = declarations.find((l) => l.kind === _typescript2.default.SyntaxKind.InterfaceDeclaration || l.kind === _typescript2.default.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.escapedText}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -24614,7 +24681,7 @@ function getProgramAndTypeCheckerFromMemory(rootDir, text, options = {}, cache) 
     options,
     rootNames: [inMemoryFilePath, globalsShimPath],
     host,
-    oldProgram: _optionalChain([cache, 'optionalAccess', _1870 => _1870.memoryOldProgram])
+    oldProgram: _optionalChain([cache, 'optionalAccess', _1880 => _1880.memoryOldProgram])
   });
   if (cache !== void 0) {
     cache.memoryOldProgram = program;

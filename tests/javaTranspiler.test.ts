@@ -1314,6 +1314,7 @@ class T {
     safeBoolN(d: any, k: any): boolean | undefined { return true; }
     handleParamBool(params: object, name: string, defaultValue: boolean | undefined = undefined): [boolean | undefined, object] { return [ undefined, params ]; }
     handleOptionAndParams(params: object, name: string, option: string, defaultValue: any = undefined): [any, object] { return [ undefined, params ]; }
+    handleOptionBoolAndParams(params: object, name: string, option: string, defaultValue: boolean | undefined = undefined): [boolean | undefined, object] { return [ undefined, params ]; }
     safeString(d: any, k: any, defaultValue: any = undefined): string | undefined { return undefined; }
     other(x: any): any { return x; }
     test(params: object): void {
@@ -1347,6 +1348,24 @@ ${body}
         // the helper tests with its runtime truthiness
         const output = outputOf("let x: boolean | undefined = undefined;\n        [ x, params ] = this.handleOptionAndParams(params, 'm', 'x', false);\n        if (x) { return; }");
         expect(output).toContain('if (Helpers.isTrue(x))');
+    });
+
+    test('a const handleOptionBoolAndParams binding is a Boolean-or-null box', () => {
+        const output = outputOf("const [ x, rest ] = this.handleOptionBoolAndParams(params, 'm', 'x', false);\n        if (x && rest) { return; }\n        if (!x) { return; }");
+        expect(output).toContain('Boolean.TRUE.equals(x)');
+        expect(output).not.toContain('Helpers.isTrue(x)');
+        expect(output).toContain('if (!Boolean.TRUE.equals(x))');
+    });
+
+    test('a handleOptionBoolAndParams binding re-written with a non-boolean keeps the helper', () => {
+        const output = outputOf("let [ x, rest ] = this.handleOptionBoolAndParams(params, 'm', 'x', false);\n        x = this.other(rest);\n        if (x) { return; }");
+        expect(output).toContain('Helpers.isTrue(x)');
+    });
+
+    test('startsWith/endsWith on a string print a primitive boolean condition', () => {
+        const output = outputOf("const s: string = this.safeString(params, 'k') as string;\n        if (s.startsWith('a') || s.endsWith('b')) { return; }");
+        expect(output).toContain("((String)s).startsWith(((String)\"a\"))");
+        expect(output).not.toContain('Helpers.isTrue(((String)s)');
     });
 
     test('non-boolean writes keep the helper', () => {

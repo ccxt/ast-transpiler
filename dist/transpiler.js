@@ -14212,7 +14212,10 @@ var JAVA_BOOLEAN_EXCLUDED_TYPE_FLAGS = ts6.TypeFlags.Any | ts6.TypeFlags.Unknown
 var JAVA_NULLABLE_BOOLEAN_MEMBER_FLAGS = ts6.TypeFlags.Boolean | ts6.TypeFlags.BooleanLiteral | ts6.TypeFlags.Undefined | ts6.TypeFlags.Null | ts6.TypeFlags.Void;
 var JAVA_BOOLEAN_BOX_TUPLE_METHODS = /* @__PURE__ */ new Set([
   "handleParamBool",
-  "handleParamBool2"
+  "handleParamBool2",
+  "handleOptionBoolAndParams",
+  // element 0 is checkOptionBool's Boolean-or-null (throws otherwise)
+  "handleOptionBoolAndParams2"
 ]);
 var JavaTranspiler = class extends BaseTranspiler {
   constructor(config = {}) {
@@ -19356,6 +19359,13 @@ var JavaTranspiler = class extends BaseTranspiler {
   // `in`/`instanceof` and the logical operators all return/print primitive boolean), so
   // Helpers.isTrue would only re-test a value the checker proves is boolean
   javaConditionPrintsBoolean(node) {
+    let inner = node;
+    while (inner.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner.kind === ts6.SyntaxKind.PrefixUnaryExpression && inner.operator === ts6.SyntaxKind.ExclamationToken) {
+      return true;
+    }
     if (this.javaBooleanCondition(node)) {
       return (this.getChecker().getTypeAtLocation(node).flags & ts6.TypeFlags.Boolean) !== 0;
     }
@@ -19478,11 +19488,34 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaPreciseBooleanCall(node)) {
       return true;
     }
+    if (this.javaStringAffixCall(node)) {
+      return true;
+    }
     const callee = node.expression;
     if (ts6.isPropertyAccessExpression(callee) && callee.expression.kind === ts6.SyntaxKind.ThisKeyword && JAVA_BOOLEAN_BASE_CALLS.has(String(callee.name.escapedText))) {
       return true;
     }
     return this.javaCallReturnsBooleanBox(node, seen, depth);
+  }
+  // `s.startsWith(x)` / `s.endsWith(x)` on a checker-proven string receiver prints
+  // `((String)s).startsWith(..)`, a primitive boolean (String.startsWith/endsWith)
+  javaStringAffixCall(node) {
+    if (node?.kind !== ts6.SyntaxKind.CallExpression || (node.arguments?.length ?? 0) !== 1) {
+      return false;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee)) {
+      return false;
+    }
+    const name = String(callee.name.escapedText);
+    if (name !== "startsWith" && name !== "endsWith") {
+      return false;
+    }
+    const type = this.javaTypeOfNode(callee.expression);
+    if (type === void 0 || !this.isStringType(type.flags)) {
+      return false;
+    }
+    return /^\(\(String\)[\s\S]*\.(startsWith|endsWith)\([\s\S]*\)$/.test(this.printNode(node, 0));
   }
   isArrayIsArrayCall(node) {
     if (node === void 0 || node.kind !== ts6.SyntaxKind.CallExpression) {
@@ -19658,6 +19691,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (node.kind === ts6.SyntaxKind.Identifier && this.javaNullableBooleanBoxIdentifier(node, seen) !== void 0) {
       return true;
     }
+    if (node.kind === ts6.SyntaxKind.Identifier && this.javaBooleanTupleBindingIdentifier(node, seen) !== void 0) {
+      return true;
+    }
     if (node.kind === ts6.SyntaxKind.CallExpression) {
       return this.javaCallBooleanKind(node) !== void 0;
     }
@@ -19683,6 +19719,34 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     return index === 0;
+  }
+  // `const [ x, p ] = this.handle*Bool (...)` binds x to element 0, a Boolean-or-null box; any
+  // later identifier or tuple write must also be a proven box (the D2 scan over the function)
+  javaBooleanTupleBindingIdentifier(node, seen = /* @__PURE__ */ new Set()) {
+    if (node?.kind !== ts6.SyntaxKind.Identifier) {
+      return void 0;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    const symbol = checker.getSymbolAtLocation(node);
+    const element = symbol?.valueDeclaration;
+    if (element === void 0 || element.kind !== ts6.SyntaxKind.BindingElement || element.initializer !== void 0 || element.dotDotDotToken !== void 0 || element.name?.escapedText !== node.escapedText || seen.has(element)) {
+      return void 0;
+    }
+    const pattern = element.parent;
+    const declaration = pattern?.parent;
+    if (pattern?.kind !== ts6.SyntaxKind.ArrayBindingPattern || declaration?.kind !== ts6.SyntaxKind.VariableDeclaration || !this.javaBooleanBoxTupleElement(declaration.initializer, pattern.elements.indexOf(element))) {
+      return void 0;
+    }
+    const next = new Set(seen);
+    next.add(element);
+    const binding = { initializer: void 0, parent: declaration };
+    if (!this.javaWritesAreBoxed(symbol, binding, next, (value) => this.javaPrintsBooleanBoxValue(value, next), true)) {
+      return void 0;
+    }
+    return this.printNode(node, 0);
   }
   // the D2 scan over a nullable boolean local: every write prints a Java boolean value or a
   // proven Boolean-or-null box, so no path can leave a truthy non-boolean box in it
@@ -19732,6 +19796,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.isArrayIsArrayCall(node)) {
       return `(${this.printNode(node.arguments[0], 0)} instanceof java.util.List)`;
     }
+    if (this.javaStringAffixCall(node)) {
+      return this.printNode(node, 0);
+    }
     const field = this.javaBooleanBaseField(node);
     if (field !== void 0) {
       return field;
@@ -19748,7 +19815,7 @@ var JavaTranspiler = class extends BaseTranspiler {
         return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
       }
     }
-    const box = this.javaBooleanBoxIdentifier(node, /* @__PURE__ */ new Set()) ?? this.javaNullableBooleanBoxIdentifier(node);
+    const box = this.javaBooleanBoxIdentifier(node, /* @__PURE__ */ new Set()) ?? this.javaNullableBooleanBoxIdentifier(node) ?? this.javaBooleanTupleBindingIdentifier(node);
     return box === void 0 ? void 0 : `Boolean.TRUE.equals(${box})`;
   }
   printCondition(node, identation) {
