@@ -5468,6 +5468,41 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
         expect(output).toContain('func (this *ex) ParseStatus(status any) any {');
     });
+
+    test('a sibling caller passing its own any parameter keeps a local string parameter any on the relative driver path', () => {
+        const name = 'tmp-b02-tree-anyarg';
+        const src = nodepath.join(__dirname, 'files', name, 'ts', 'src');
+        nodefs.mkdirSync(nodepath.join(src, 'base'), { recursive: true });
+        nodefs.mkdirSync(nodepath.join(src, 'pro'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
+        nodefs.writeFileSync(nodepath.join(src, 'ex.ts'),
+            "import { Exchange } from './base/Exchange';\n" +
+            "export class ex extends Exchange {\n" +
+            "    async createOrder (symbol: string, side: string) {\n" +
+            "        return await this.orderRequest (symbol, 'buy');\n" +
+            "    }\n" +
+            "    async orderRequest (symbol: string, side: string) {\n" +
+            "        return symbol + side;\n" +
+            "    }\n" +
+            "}\n");
+        nodefs.writeFileSync(nodepath.join(src, 'pro', 'ex.ts'),
+            "import { ex } from '../ex';\n" +
+            "export class expro extends ex {\n" +
+            "    async createOrderWs (symbol: string, side: string) {\n" +
+            "        return await this.orderRequest (symbol, side);\n" +
+            "    }\n" +
+            "}\n");
+        const cwd = process.cwd();
+        let output;
+        try {
+            process.chdir(nodepath.join(__dirname, 'files', name));
+            output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath('ts/src/ex.ts').content;
+        } finally {
+            process.chdir(cwd);
+            nodefs.rmSync(nodepath.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+        expect(output).toMatch(/func \(this \*ex\) OrderRequest\(symbol any, side any\)/);
+    });
 });
 
 describe('native parameter types, Dict/List (D-01)', () => {
@@ -6106,5 +6141,50 @@ describe('go long + chains', () => {
         const output = new Transpiler({ verbose: false }).transpileGo(input).content;
         expect(Date.now() - start).toBeLessThan(5000);
         expect(output).toContain('r = ');
+    });
+});
+
+describe('unified string parameters (unifiedStringParams)', () => {
+    const unified = new Transpiler({ verbose: false, go: { unifiedStringParams: { 'createOrder': [ 1, 2 ], 'createMarketOrder': [ 1 ] } } });
+    const base =
+        "class Base {\n" +
+        "    capitalize (s: string): string { return s; }\n" +
+        "    async createOrder (symbol: string, type: string, side: string, amount: number) { return undefined; }\n" +
+        "}\n";
+
+    test('the base and overrides print string, literal/proven callers pass through and any callers go through StringArg', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async createOrder (symbol: string, type: string, side: string, amount: number) {\n" +
+            "        type = type.toUpperCase ();\n" +
+            "        side = (side === 'buy') ? 'sell' : 'buy';\n" +
+            "        if (type === 'LIMIT') {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return this.capitalize (type);\n" +
+            "    }\n" +
+            "    async closePosition (symbol: string, side = undefined) {\n" +
+            "        return await this.createOrder (symbol, 'market', side, 0);\n" +
+            "    }\n" +
+            "    async createMarketOrder (symbol: string, side: string, amount: number) {\n" +
+            "        return await this.createOrder (symbol, 'market', side, amount);\n" +
+            "    }\n" +
+            "}\n";
+        const output = unified.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) createOrderBody(ch chan any, symbol any, typeVar string, side string, amount any) any {');
+        expect(output).toContain('typeVar == "LIMIT"');
+        expect(output).toContain('this.CreateOrder(symbol, "market", StringArg(side), 0)');
+        expect(output).toContain('this.CreateOrder(symbol, "market", side, amount)');
+        expect(output).toContain('createMarketOrderBody(ch chan any, symbol any, side string, amount any) any {');
+    });
+
+    test('a nil-compared table parameter fails the transpile', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async createOrder (symbol: string, type: string, side: string, amount: number) {\n" +
+            "        return (side === undefined);\n" +
+            "    }\n" +
+            "}\n";
+        expect(() => unified.transpileGo(input)).toThrow(/unifiedStringParams/);
     });
 });
