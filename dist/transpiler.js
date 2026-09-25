@@ -16293,23 +16293,95 @@ var JavaTranspiler = class extends BaseTranspiler {
     return result;
   }
   javaNativeReturnTypeUncached(node) {
-    if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
-      return void 0;
-    }
-    if (this.isAsyncFunction(node)) {
-      return void 0;
-    }
-    if (this.getMethodOverride(node) !== void 0) {
+    const fileName = node.getSourceFile().fileName;
+    const generated = JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
+    const baseTier = !generated && JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName) && this.javaIsPrintedMethod(node);
+    if (!generated && !baseTier || this.isAsyncFunction(node)) {
       return void 0;
     }
     const target = this.javaNativeReturnTypeTarget(node);
-    if (target === void 0) {
+    if (target === void 0 || baseTier && target !== "Boolean") {
+      return void 0;
+    }
+    const ancestor = this.getMethodOverride(node);
+    const ancestorBoolean = ancestor !== void 0 && this.javaNativeReturnType(ancestor) === "Boolean";
+    if (ancestorBoolean && (target !== "Boolean" || !this.javaReturnSitesPrintType(node, target) || this.javaMethodReturnsNonNullBoolean(ancestor, 0) && !this.javaMethodReturnsNonNullBoolean(node, 0))) {
+      throw new Error(`java: ${String(node.name.escapedText)} overrides a Boolean base method but its returns do not all print Boolean`);
+    }
+    if (ancestor !== void 0 && !ancestorBoolean) {
       return void 0;
     }
     if (!this.javaReturnSitesPrintType(node, target)) {
       return void 0;
     }
     return target;
+  }
+  // a native-Boolean method whose every return prints a primitive Java boolean (never null):
+  // a call to it can be a condition as is (unboxing cannot throw)
+  javaMethodReturnsNonNullBoolean(method, depth) {
+    if (method === void 0 || depth > 3 || method.body === void 0) {
+      return false;
+    }
+    const name = String(method.name?.escapedText);
+    if (this.javaNativeReturnType(method) !== "Boolean" && !JAVA_THIS_BOOLEAN_METHODS.has(name)) {
+      return false;
+    }
+    let returns = 0;
+    let ok = true;
+    const scan = (n) => {
+      if (!ok || n !== method && ts6.isFunctionLike(n)) {
+        return;
+      }
+      if (ts6.isReturnStatement(n)) {
+        returns++;
+        ok = n.expression !== void 0 && this.javaPrintsNonNullBoolean(n.expression, depth);
+        return;
+      }
+      ts6.forEachChild(n, scan);
+    };
+    scan(method.body);
+    return ok && returns > 0;
+  }
+  javaPrintsNonNullBoolean(node, depth) {
+    switch (node?.kind) {
+      case ts6.SyntaxKind.TrueKeyword:
+      case ts6.SyntaxKind.FalseKeyword:
+        return true;
+      case ts6.SyntaxKind.ParenthesizedExpression:
+        return this.javaPrintsNonNullBoolean(node.expression, depth);
+      case ts6.SyntaxKind.PrefixUnaryExpression:
+        return node.operator === ts6.SyntaxKind.ExclamationToken;
+      case ts6.SyntaxKind.BinaryExpression:
+        return JAVA_BOOLEAN_OPERATOR_KINDS.has(node.operatorToken.kind);
+      case ts6.SyntaxKind.ConditionalExpression:
+        return this.javaPrintsNonNullBoolean(node.whenTrue, depth) && this.javaPrintsNonNullBoolean(node.whenFalse, depth);
+      case ts6.SyntaxKind.CallExpression:
+        return this.javaCallPrintsNonNullBoolean(node, depth + 1);
+    }
+    return false;
+  }
+  // `this.<name>(...)` resolving to a method proven by javaMethodReturnsNonNullBoolean
+  javaCallPrintsNonNullBoolean(node, depth) {
+    if (this.isArrayIsArrayCall(node) || this.javaPreciseBooleanCall(node) || this.javaStringAffixCall(node)) {
+      return true;
+    }
+    const callee = node.expression;
+    if (!ts6.isPropertyAccessExpression(callee) || callee.expression.kind !== ts6.SyntaxKind.ThisKeyword) {
+      return false;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || declaration.kind !== ts6.SyntaxKind.MethodDeclaration) {
+      return false;
+    }
+    if (JAVA_THIS_BOOLEAN_METHODS.has(String(callee.name.escapedText))) {
+      return this.javaCallBooleanKind(node) === "boolean";
+    }
+    return this.javaMethodReturnsNonNullBoolean(declaration, depth);
   }
   javaNativeReturnTypeTarget(node) {
     let type;
@@ -16332,7 +16404,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (type.flags === ts6.TypeFlags.String) {
       return "String";
     }
-    if (type.flags === ts6.TypeFlags.Boolean) {
+    if (aliasSymbol === void 0 && (type.flags & ts6.TypeFlags.Boolean) !== 0) {
       return "Boolean";
     }
     return this.isJavaMapStructureType(type) ? JAVA_NATIVE_RETURN_MAP_TYPE : void 0;
@@ -19822,11 +19894,18 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaConditionPrintsBoolean(node)) {
       return this.getIden(identation) + this.printNode(node, 0);
     }
+    let bareCall = node;
+    while (bareCall.kind === ts6.SyntaxKind.ParenthesizedExpression) {
+      bareCall = bareCall.expression;
+    }
+    if (bareCall.kind === ts6.SyntaxKind.CallExpression && this.javaCallPrintsNonNullBoolean(bareCall, 0)) {
+      return this.getIden(identation) + this.printNode(node, 0);
+    }
     const wrapperFree = this.javaBooleanWrapperFreeCondition(node);
     if (wrapperFree !== void 0) {
       return this.getIden(identation) + wrapperFree;
     }
-    const callKind = this.javaCallBooleanKind(node);
+    const callKind = this.javaCallBooleanKind(bareCall);
     if (callKind === "boolean") {
       return this.getIden(identation) + this.printNode(node, 0);
     }
