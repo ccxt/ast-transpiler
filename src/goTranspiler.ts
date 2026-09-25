@@ -4646,8 +4646,43 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     return `-${printedText}`;
                 }
             }
+            if (this.goOpNegLiteralConsumerNormalizes(node)) {
+                return `-${printedText}`;
+            }
         }
         return undefined;
+    }
+
+    // positions whose consumer reads an int box exactly like OpNeg's int64: a `.slice` bound
+    // (ParseInt), a Multiply/Divide/Subtract/Mod operand (ToFloat64 / reflect Convert) and an
+    // equality operand (IsEqual's cross-width rows). Add keeps its int row, so `+` stays boxed.
+    goOpNegLiteralConsumerNormalizes(node): boolean {
+        let child = node;
+        let parent = node?.parent;
+        while (parent?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            child = parent;
+            parent = parent.parent;
+        }
+        if (parent?.kind === ts.SyntaxKind.BinaryExpression) {
+            switch (parent.operatorToken.kind) {
+            case ts.SyntaxKind.AsteriskToken:
+            case ts.SyntaxKind.SlashToken:
+            case ts.SyntaxKind.MinusToken:
+            case ts.SyntaxKind.PercentToken:
+            case ts.SyntaxKind.EqualsEqualsToken:
+            case ts.SyntaxKind.EqualsEqualsEqualsToken:
+            case ts.SyntaxKind.ExclamationEqualsToken:
+            case ts.SyntaxKind.ExclamationEqualsEqualsToken:
+                return true;
+            }
+            return false;
+        }
+        if (parent?.kind === ts.SyntaxKind.CallExpression) {
+            const callee = parent.expression;
+            return (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) && (callee.name?.text === 'slice')
+                && ((parent.arguments ?? []).indexOf(child) >= 0);
+        }
+        return false;
     }
 
     // JS truthiness of an operand whose Go type the printer knows, expressed with

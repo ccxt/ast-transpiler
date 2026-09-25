@@ -2272,6 +2272,60 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
     });
 });
 
+describe('go OpNeg on an integer literal under a width-normalizing consumer', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    const main = (statements: string) =>
+        "class Exchange {\n" +
+        "    safeString (a, b, c = undefined) { return a; }\n" +
+        "    main (params, amount, hash) {\n" +
+        statements +
+        "    }\n" +
+        "}\n";
+    test('a slice bound prints the signed literal: Slice parses either box through ParseInt', () => {
+        const output = squash(transpiler.transpileGo(main(
+            "        const sig = hash.slice (-64);\n" +
+            "        const tail = hash.slice (0, -1);\n" +
+            "        return [ sig, tail ];\n")).content);
+        expect(output).toContain("Slice(hash, -64, nil)");
+        expect(output).toContain("Slice(hash, 0, -1)");
+        expect(output).not.toContain("OpNeg(");
+    });
+    test('a Multiply/Divide/Subtract/Mod operand prints the signed literal', () => {
+        const output = squash(transpiler.transpileGo(main(
+            "        const neg = amount * -1;\n" +
+            "        const off = amount - -1000;\n" +
+            "        const d = amount / -2;\n" +
+            "        const m = amount % -3;\n" +
+            "        return [ neg, off, d, m ];\n")).content);
+        expect(output).toContain("Multiply(amount, -1)");
+        expect(output).toContain("Subtract(amount, -1000)");
+        expect(output).toContain("Divide(amount, -2)");
+        expect(output).toContain("Mod(amount, -3)");
+        expect(output).not.toContain("OpNeg(");
+    });
+    test('an equality operand prints the signed literal: IsEqual has the int/int64 rows', () => {
+        const output = squash(transpiler.transpileGo(main(
+            "        const isBad = params === -1;\n" +
+            "        const isOk = (params) !== (-1);\n" +
+            "        return [ isBad, isOk ];\n")).content);
+        expect(output).toContain("IsEqual(params, -1)");
+        expect(output).toContain("!IsEqual((params), (-1))");
+        expect(output).not.toContain("OpNeg(");
+    });
+    test('an Add operand, a bare value, a call argument and a return keep the helper box', () => {
+        const output = squash(transpiler.transpileGo(main(
+            "        const sum = amount + -1;\n" +
+            "        const box = -1;\n" +
+            "        const s = this.safeString (params, 'k', -1);\n" +
+            "        if (params) { return -1; }\n" +
+            "        return [ sum, box, s ];\n")).content);
+        expect(output).toContain("Add(amount, OpNeg(1))");
+        expect(output).toContain("var box any = OpNeg(1)");
+        expect(output).toContain("this.SafeString(params, \"k\", OpNeg(1))");
+        expect(output).toContain("return OpNeg(1)");
+    });
+});
+
 describe('go native element assignment', () => {
     // the printer indents nested call expressions; gofmt collapses that downstream
     const squash = (output: string) => output.replace(/ +/g, ' ');

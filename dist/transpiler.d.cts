@@ -1052,6 +1052,7 @@ declare class GoTranspiler extends BaseTranspiler {
     printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
     comparisonHelpers: string[];
     printInlineOpNeg(node: any, printedText: string): string | undefined;
+    goOpNegLiteralConsumerNormalizes(node: any): boolean;
     printInlineTruthy(node: any): string | undefined;
     printInlineBoolBoxTruthy(node: any): string | undefined;
     printInlineBoolPointerTruthy(node: any, printedText: string): string | undefined;

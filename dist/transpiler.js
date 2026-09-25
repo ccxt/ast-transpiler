@@ -11260,8 +11260,41 @@ ${this.getIden(level)}}()`;
           return `-${printedText}`;
         }
       }
+      if (this.goOpNegLiteralConsumerNormalizes(node)) {
+        return `-${printedText}`;
+      }
     }
     return void 0;
+  }
+  // positions whose consumer reads an int box exactly like OpNeg's int64: a `.slice` bound
+  // (ParseInt), a Multiply/Divide/Subtract/Mod operand (ToFloat64 / reflect Convert) and an
+  // equality operand (IsEqual's cross-width rows). Add keeps its int row, so `+` stays boxed.
+  goOpNegLiteralConsumerNormalizes(node) {
+    let child = node;
+    let parent = node?.parent;
+    while (parent?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      child = parent;
+      parent = parent.parent;
+    }
+    if (parent?.kind === ts5.SyntaxKind.BinaryExpression) {
+      switch (parent.operatorToken.kind) {
+        case ts5.SyntaxKind.AsteriskToken:
+        case ts5.SyntaxKind.SlashToken:
+        case ts5.SyntaxKind.MinusToken:
+        case ts5.SyntaxKind.PercentToken:
+        case ts5.SyntaxKind.EqualsEqualsToken:
+        case ts5.SyntaxKind.EqualsEqualsEqualsToken:
+        case ts5.SyntaxKind.ExclamationEqualsToken:
+        case ts5.SyntaxKind.ExclamationEqualsEqualsToken:
+          return true;
+      }
+      return false;
+    }
+    if (parent?.kind === ts5.SyntaxKind.CallExpression) {
+      const callee = parent.expression;
+      return callee?.kind === ts5.SyntaxKind.PropertyAccessExpression && callee.name?.text === "slice" && (parent.arguments ?? []).indexOf(child) >= 0;
+    }
+    return false;
   }
   // JS truthiness of an operand whose Go type the printer knows, expressed with
   // plain Go instead of boxing the value into `EvalTruthy(any)`. Each arm mirrors the
