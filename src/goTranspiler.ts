@@ -648,6 +648,7 @@ export class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
+    goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
     // appended to every async (channel returning) Go method/function name and to each
@@ -1553,7 +1554,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case ts.SyntaxKind.ParenthesizedExpression:
             return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
         case ts.SyntaxKind.BinaryExpression:
-            return this.goNativeArithmetic(node)?.goType;
+            return this.goNativeArithmeticType(node);
         case ts.SyntaxKind.Identifier:
             return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
         case ts.SyntaxKind.PropertyAccessExpression:
@@ -1767,6 +1768,24 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         return { goType, 'text': this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+    }
+
+    // goNativeArithmetic's type for an operand, once per node within one outermost query:
+    // re-deriving it re-prints the subtree at every level of a `+` chain (exponential)
+    goNativeArithmeticType(node): string | undefined {
+        const outermost = (this.goNativeArithmeticTypeCache === undefined);
+        const cache = this.goNativeArithmeticTypeCache ??= new Map();
+        try {
+            if (!cache.has(node)) {
+                cache.set(node, undefined);
+                cache.set(node, this.goNativeArithmetic(node)?.goType);
+            }
+            return cache.get(node);
+        } finally {
+            if (outermost) {
+                this.goNativeArithmeticTypeCache = undefined;
+            }
+        }
     }
 
     // the operator line gofmt prints for a natively emitted arithmetic expression: the

@@ -786,6 +786,7 @@ declare class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
+    goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     goLocalTypeResolution: Set<any>;
     asyncMethodSuffix: string;
     classNameMap: {
@@ -923,6 +924,7 @@ declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         text: string;
     } | undefined;
+    goNativeArithmeticType(node: any): string | undefined;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;

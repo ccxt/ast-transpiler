@@ -5996,3 +5996,18 @@ describe('go native numeric equality', () => {
         expect(go).toContain('IsEqual(x, 1)');
     });
 });
+
+describe('go long + chains', () => {
+    test('a 25-term chain of typed operands prints in linear time', () => {
+        const terms: string[] = [];
+        for (let i = 0; i < 25; i++) {
+            terms.push((i % 2) ? "'-'" : ('a' + i));
+        }
+        const params = terms.filter((t) => t[0] === 'a').map((t) => t + ': string').join(', ');
+        const input = 'class T {\n    f (' + params + '): string {\n        let r = \'\';\n        r = ' + terms.join(' + ') + ';\n        return r;\n    }\n}\n';
+        const start = Date.now();
+        const output = new Transpiler({ verbose: false }).transpileGo(input).content;
+        expect(Date.now() - start).toBeLessThan(5000);
+        expect(output).toContain('r = ');
+    });
+});

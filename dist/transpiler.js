@@ -8515,7 +8515,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case ts5.SyntaxKind.ParenthesizedExpression:
         return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
       case ts5.SyntaxKind.BinaryExpression:
-        return this.goNativeArithmetic(node)?.goType;
+        return this.goNativeArithmeticType(node);
       case ts5.SyntaxKind.Identifier:
         return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
       case ts5.SyntaxKind.PropertyAccessExpression:
@@ -8703,6 +8703,23 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return void 0;
     }
     return { goType, "text": this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+  }
+  // goNativeArithmetic's type for an operand, once per node within one outermost query:
+  // re-deriving it re-prints the subtree at every level of a `+` chain (exponential)
+  goNativeArithmeticType(node) {
+    const outermost = this.goNativeArithmeticTypeCache === void 0;
+    const cache = this.goNativeArithmeticTypeCache ??= /* @__PURE__ */ new Map();
+    try {
+      if (!cache.has(node)) {
+        cache.set(node, void 0);
+        cache.set(node, this.goNativeArithmetic(node)?.goType);
+      }
+      return cache.get(node);
+    } finally {
+      if (outermost) {
+        this.goNativeArithmeticTypeCache = void 0;
+      }
+    }
   }
   // the operator line gofmt prints for a natively emitted arithmetic expression: the
   // blanks follow go/printer's cutoff at the current depth, and a binary operand is
