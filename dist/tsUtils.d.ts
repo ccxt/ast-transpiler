@@ -1,0 +1,16 @@
+import { NodeFlags, ModifierFlags, type Node } from "typescript/unstable/ast";
+declare function isFunctionLike(node: Node | undefined): boolean;
+declare function isClassLike(node: Node | undefined): boolean;
+declare function isStringLiteralLike(node: Node | undefined): boolean;
+declare function findAncestor<T extends Node = Node>(node: Node | undefined, callback: (element: Node) => boolean | "quit"): T | undefined;
+declare function getAllSuperTypeNodes(node: Node): readonly Node[];
+declare function getCombinedNodeFlags(node: Node): NodeFlags;
+declare function canHaveModifiers(node: Node): boolean;
+declare function getModifiers(node: Node): readonly Node[] | undefined;
+export { ModifierFlags, isFunctionLike, isClassLike, isStringLiteralLike, findAncestor, getAllSuperTypeNodes, getCombinedNodeFlags, canHaveModifiers, getModifiers, };
+declare function symbolDeclarations(symbol: any): Node[];
+declare function symbolValueDeclaration(symbol: any): any;
+declare function signatureDeclaration(signature: any): Node | undefined;
+declare function typeParts(type: any): any[] | undefined;
+declare function typeTarget(type: any): any;
+export { symbolDeclarations, symbolValueDeclaration, signatureDeclaration, typeParts, typeTarget };

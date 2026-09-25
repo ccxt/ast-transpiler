@@ -1,4 +1,5 @@
-import ts from 'typescript';
+import { ScriptTarget, SyntaxKind, type Node, type SourceFile } from "typescript/unstable/ast";
+import { API, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type CompilerOptions, type Program, type Snapshot } from "typescript/unstable/sync";
 import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
@@ -21,8 +22,8 @@ const __dirname_mock = currentPath;
 // with the es-only lib chain. Neither dom nor @types globals affect transpilation
 // output, but they dominate program creation time (~10x) and make the type
 // environment depend on whatever @types happen to be installed in the host project.
-const fastCompilerOptions: ts.CompilerOptions = {
-    target: ts.ScriptTarget.Latest,
+const fastCompilerOptions: CompilerOptions = {
+    target: ScriptTarget.Latest,
     lib: ["lib.esnext.d.ts"],
     types: [],
 };
@@ -59,108 +60,251 @@ declare var btoa: any;
 `;
 const globalsShimPath = path.resolve(path.join(__dirname_mock, "__globals-shim.d.ts"));
 
-function overrideHostForVirtualFiles(host: ts.CompilerHost, files: Map<string, ts.SourceFile>) {
-    const originalGetSourceFile = host.getSourceFile.bind(host);
-    const originalReadFile = host.readFile.bind(host);
-    const originalFileExists = host.fileExists.bind(host);
-    // resolve paths because typescript will normalize them
-    // to forward slashes on windows
-    host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-        const virtual = files.get(path.resolve(fileName));
-        return virtual !== undefined ? virtual : originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-    };
-    host.readFile = (fileName: string) => {
-        const virtual = files.get(path.resolve(fileName));
-        return virtual !== undefined ? virtual.text : originalReadFile(fileName);
-    };
-    host.fileExists = (fileName: string) => {
-        return files.has(path.resolve(fileName)) || originalFileExists(fileName);
-    };
-}
-
 // transpiling one file to several languages queries the checker repeatedly for the
 // same nodes (identifiers, binary operands, conditions). Types and symbols are
 // deterministic per (checker, node), so memoize the two hot lookups on the checker
 // instance itself — the caches die with the checker when a new program is created
-const NO_SYMBOL_SENTINEL = Symbol("noSymbol");
-function memoizeCheckerCalls(checker: ts.TypeChecker): void {
+const UNDEFINED_SENTINEL = Symbol("undefined");
+// unary checker queries keyed by a snapshot object (node / type / symbol / signature);
+// the API returns registry-interned objects, so object identity is a stable key
+const MEMOIZED_UNARY_CHECKER_METHODS = [
+    "getTypeAtLocation", "getSymbolAtLocation", "getResolvedSignature", "getContextualType",
+    "getSignaturesOfType", "getSymbolOfType", "getReturnTypeOfSignature", "getSignatureFromDeclaration",
+    "isArrayType", "isArrayLikeType", "isTupleType", "getTypeArguments", "getTypeFromTypeNode",
+    "getDeclaredTypeOfSymbol", "getTypeOfSymbol", "getAliasedSymbol", "getBaseTypeOfLiteralType",
+    "getApparentType", "getPropertiesOfType", "getNonNullableType", "getIndexInfosOfType",
+];
+function memoizeCheckerCalls(checker: Checker): void {
     if ((checker as any).__astTranspilerMemoized) {
         return;
     }
     (checker as any).__astTranspilerMemoized = true;
-
-    const typeCache = new WeakMap<ts.Node, ts.Type>();
-    const originalGetTypeAtLocation = checker.getTypeAtLocation.bind(checker);
-    checker.getTypeAtLocation = (node: ts.Node): ts.Type => {
-        let type = typeCache.get(node);
-        if (type === undefined) {
-            type = originalGetTypeAtLocation(node);
-            typeCache.set(node, type);
-        }
-        return type;
-    };
-
-    const symbolCache = new WeakMap<ts.Node, ts.Symbol | typeof NO_SYMBOL_SENTINEL>();
-    const originalGetSymbolAtLocation = checker.getSymbolAtLocation.bind(checker);
-    checker.getSymbolAtLocation = (node: ts.Node): ts.Symbol | undefined => {
-        const cached = symbolCache.get(node);
-        if (cached !== undefined) {
-            return cached === NO_SYMBOL_SENTINEL ? undefined : cached;
-        }
-        const symbol = originalGetSymbolAtLocation(node);
-        symbolCache.set(node, symbol === undefined ? NO_SYMBOL_SENTINEL : symbol);
-        return symbol;
-    };
+    for (const name of MEMOIZED_UNARY_CHECKER_METHODS) {
+        memoizeUnaryMethod(checker, name);
+    }
+    // typeToString(type) with no extra args is the only form worth caching
+    memoizeUnaryMethod(checker, "typeToString");
+    // (type, kind) pairs: a WeakMap per kind
+    memoizeBinaryKindMethod(checker, "getSignaturesOfType");
+    memoizeBinaryKindMethod(checker, "getIndexTypeOfType");
+    memoizeBinaryKindMethod(checker, "getIndexInfoOfType");
+    memoizePairMethod(checker, "getTypeOfSymbolAtLocation");
 }
 
-function getProgramAndTypeCheckerFromMemory (rootDir: string, text: string, options: any = {}, cache?: ITranspileProgramCache): [any,any,any]  {
-    options = options || ts.getDefaultCompilerOptions();
-    const inMemoryFilePath = path.resolve(path.join(rootDir, "__dummy-file.ts"));
-    const textAst = ts.createSourceFile(inMemoryFilePath, text, options.target || ts.ScriptTarget.Latest);
-    const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, options.target || ts.ScriptTarget.Latest);
-    const host = ts.createCompilerHost(options, true);
-
-    overrideHostForVirtualFiles(host, new Map([
-        [inMemoryFilePath, textAst],
-        [globalsShimPath, shimAst],
-    ]));
-
-    if (cache !== undefined) {
-        // the dummy file changes every call, but the es lib chain behind it does not:
-        // serve those from the shared cache so they are parsed once per cache
-        const originalGetSourceFile = host.getSourceFile.bind(host);
-        host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-            const resolved = path.resolve(fileName);
-            if (resolved === inMemoryFilePath) {
-                return textAst;
-            }
-            const cached = cache.sourceFiles.get(resolved);
-            if (cached !== undefined && !shouldCreateNewSourceFile) {
-                return cached.sourceFile;
-            }
-            const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-            if (sourceFile !== undefined) {
-                cache.sourceFiles.set(resolved, { mtimeMs: 0, sourceFile });
-            }
-            return sourceFile;
-        };
+// (object, object) pairs, e.g. getTypeOfSymbolAtLocation(symbol, node); seed2 fills it from a prefetch
+function memoizePairMethod(owner: object, name: string): void {
+    const original = owner[name];
+    if (typeof original !== "function") {
+        return;
     }
+    const cache = new WeakMap<object, WeakMap<object, unknown>>();
+    const seed2 = (a: object, b: object, value: unknown) => {
+        let inner = cache.get(a);
+        if (inner === undefined) {
+            cache.set(a, inner = new WeakMap());
+        }
+        inner.set(b, value === undefined ? UNDEFINED_SENTINEL : value);
+    };
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const [a, b] = args;
+        if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
+            return original.apply(owner, args);
+        }
+        const cached = cache.get(a as object)?.get(b as object);
+        if (cached !== undefined) {
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
+        }
+        const result = original.call(owner, a, b);
+        seed2(a as object, b as object, result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    (wrapped as any).original = original;
+    (wrapped as any).seed2 = seed2;
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
 
-    const program = ts.createProgram({
-        options,
-        rootNames: [inMemoryFilePath, globalsShimPath],
-        host,
-        oldProgram: cache?.memoryOldProgram,
+// the TS7 checker exposes its methods as prototype getters: shadow them on the instance.
+// Only single-object-argument calls are cached; anything else goes straight through.
+function memoizeUnaryMethod(owner: object, name: string): void {
+    const original = owner[name];
+    if (typeof original !== "function") {
+        return;
+    }
+    const cache = new WeakMap<object, unknown>();
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const key = args[0];
+        if (args.length !== 1 || key === null || typeof key !== "object" || Array.isArray(key)) {
+            return original.apply(owner, args);
+        }
+        const cached = cache.get(key);
+        if (cached !== undefined) {
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
+        }
+        const result = original.call(owner, key);
+        cache.set(key, result === undefined ? UNDEFINED_SENTINEL : result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    (wrapped as any).original = original;
+    // prefetch support: seed(key, value) fills the cache; has(key) tells whether it is filled
+    (wrapped as any).seed = (key: object, value: unknown) => cache.set(key, value === undefined ? UNDEFINED_SENTINEL : value);
+    (wrapped as any).has = (key: object) => cache.has(key);
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+
+function memoizeBinaryKindMethod(owner: object, name: string): void {
+    const unary = owner[name];
+    const original = (unary as any)?.original ?? unary;
+    if (typeof original !== "function") {
+        return;
+    }
+    const caches = new Map<unknown, WeakMap<object, unknown>>();
+    const wrapped = function (this: unknown, ...args: unknown[]) {
+        const key = args[0];
+        if (args.length === 1) {
+            return unary.call(owner, key);
+        }
+        if (args.length !== 2 || key === null || typeof key !== "object" || typeof args[1] !== "number") {
+            return original.apply(owner, args);
+        }
+        let cache = caches.get(args[1]);
+        if (cache === undefined) {
+            caches.set(args[1], cache = new WeakMap());
+        }
+        const cached = cache.get(key);
+        if (cached !== undefined) {
+            return cached === UNDEFINED_SENTINEL ? undefined : cached;
+        }
+        const result = original.call(owner, key, args[1]);
+        cache.set(key, result === undefined ? UNDEFINED_SENTINEL : result);
+        return result;
+    };
+    (wrapped as any).gen = (original as any).gen;
+    Object.defineProperty(owner, name, { configurable: true, value: wrapped });
+}
+
+// Batch pre-resolve: walk `root` once and resolve, in one round trip per method, the
+// types/symbols of the node kinds the printers ask about, seeding the memo caches above.
+// Results are identical to per-node calls; nodes the printers never ask about only cost payload.
+const PREFETCH_TYPE_KINDS = new Set<SyntaxKind>([
+    SyntaxKind.Identifier, SyntaxKind.PropertyAccessExpression, SyntaxKind.ElementAccessExpression,
+    SyntaxKind.CallExpression, SyntaxKind.BinaryExpression, SyntaxKind.StringLiteral, SyntaxKind.TypeReference,
+    SyntaxKind.MethodDeclaration, SyntaxKind.AnyKeyword, SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword,
+    SyntaxKind.ArrayType, SyntaxKind.NumericLiteral,
+]);
+const PREFETCH_BATCH = 4096;
+function prefetchChecker(checker: Checker, root: Node, options: { types?: boolean, symbols?: boolean, signatures?: boolean } = {}): void {
+    const wantTypes = options.types ?? true, wantSymbols = options.symbols ?? true, wantSignatures = options.signatures ?? true;
+    const getType = checker.getTypeAtLocation as any, getSymbol = checker.getSymbolAtLocation as any, getSig = checker.getResolvedSignature as any;
+    const typeNodes: Node[] = [], symbolNodes: Node[] = [], callNodes: Node[] = [];
+    const visit = (node: Node) => {
+        const kind = node.kind;
+        if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !getType.has?.(node)) typeNodes.push(node);
+        if (wantSymbols && kind === SyntaxKind.Identifier && !getSymbol.has?.(node)) symbolNodes.push(node);
+        if (wantSignatures && kind === SyntaxKind.CallExpression && !getSig.has?.(node)) callNodes.push(node);
+        node.forEachChild(visit);
+    };
+    visit(root);
+    const run = (nodes: Node[], fn: any) => {
+        if (fn?.seed === undefined || fn.original === undefined) return;
+        for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
+            const chunk = nodes.slice(i, i + PREFETCH_BATCH);
+            let results: unknown[];
+            try {
+                results = fn.original(chunk);
+            } catch {
+                continue; // leave this chunk to the lazy per-node path
+            }
+            chunk.forEach((n, j) => fn.seed(n, results[j]));
+        }
+    };
+    run(typeNodes, getType);
+    run(symbolNodes, getSymbol);
+    // no bulk getResolvedSignature: pipeline the per-call requests through api.batch
+    const api = (checker as any).__astTranspilerApi as API | undefined;
+    if (callNodes.length > 0 && getSig?.seed !== undefined && api !== undefined && getSig.original?.gen !== undefined) {
+        for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
+            const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
+            const gens = chunk.map((n) => {
+                const g = getSig.original.gen(n);
+                // a call the checker cannot resolve must not fail the whole batch
+                return (function* () { try { return yield* g; } catch { return PREFETCH_FAILED; } })();
+            });
+            const results = api.batch(...gens) as unknown[];
+            chunk.forEach((n, j) => { if (results[j] !== PREFETCH_FAILED) getSig.seed(n, results[j]); });
+        }
+    }
+    if (wantSignatures && api !== undefined) {
+        prefetchDeclarationSignatures(checker, api, root);
+    }
+}
+
+// Warm the per-declaration chains baseTranspiler walks for every method/function
+// (getFunctionType, getReturnTypeFromMethod) in one pipelined batch per level
+function prefetchDeclarationSignatures(checker: Checker, api: API, root: Node): void {
+    const getSigDecl = checker.getSignatureFromDeclaration as any;
+    const getTypeOfSymbolAtLocation = (checker as any).getTypeOfSymbolAtLocation;
+    if (getSigDecl?.seed === undefined || getSigDecl.original?.gen === undefined) return;
+    const decls: Node[] = [];
+    const visit = (node: Node) => {
+        if (node.kind === SyntaxKind.MethodDeclaration || node.kind === SyntaxKind.FunctionDeclaration) decls.push(node);
+        node.forEachChild(visit);
+    };
+    visit(root);
+    const safe = (g: Generator<any, any, any>) => (function* () { try { return yield* g; } catch { return PREFETCH_FAILED; } })();
+    for (let i = 0; i < decls.length; i += PREFETCH_BATCH) {
+        const chunk = decls.slice(i, i + PREFETCH_BATCH);
+        api.batch(...chunk.map((decl) => safe((function* () {
+            const sig = getSigDecl.has(decl) ? getSigDecl(decl) : yield* getSigDecl.original.gen(decl);
+            getSigDecl.seed(decl, sig);
+            if (sig !== undefined) yield* sig.getReturnType.gen();
+        })())));
+        // getReturnTypeFromMethod: type -> symbol -> type of symbol at its declaration -> call signatures
+        api.batch(...chunk.map((decl) => safe((function* () {
+            const type = checker.getTypeAtLocation(decl) as any;
+            const symbol = type?.getSymbol?.gen !== undefined ? yield* type.getSymbol.gen() : undefined;
+            const location = symbol?.valueDeclaration?.resolve();
+            if (location === undefined || getTypeOfSymbolAtLocation?.seed2 === undefined) return;
+            const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
+            getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
+            yield* symbolType.getCallSignatures.gen();
+        })())));
+    }
+}
+const PREFETCH_FAILED = Symbol("prefetchFailed");
+const prefetchedFiles = new WeakSet<SourceFile>();
+
+// program-wide diagnostics are identical for every file of a program: fetch them once
+type ProgramWideDiagnostics = { program: readonly { text: string }[], global: readonly { text: string }[] };
+const programDiagnosticsCache = new WeakMap<Program, ProgramWideDiagnostics>();
+function getProgramWideDiagnostics(program: Program): ProgramWideDiagnostics {
+    let diagnostics = programDiagnosticsCache.get(program);
+    if (diagnostics === undefined) {
+        diagnostics = { program: program.getProgramDiagnostics(), global: program.getGlobalDiagnostics() };
+        programDiagnosticsCache.set(program, diagnostics);
+    }
+    return diagnostics;
+}
+
+// one TS7 API server per isolate unless a cache brings its own
+let processApi: API | undefined;
+function getApi(cache: ITranspileProgramCache): API {
+    cache.api ??= (processApi ??= new API({ cwd: process.cwd() }));
+    return cache.api;
+}
+
+// a snapshot with one synthetic program over rootFiles; `files` overlays virtual file contents
+function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[], files: Record<string, string>): [Snapshot, Program, Checker] {
+    const snapshot = getApi(cache).createSnapshot({
+        fileSystem: { kind: "layer", files },
+        createPrograms: [{ rootFiles: rootFiles.map((f) => path.resolve(f)), compilerOptions: fastCompilerOptions }],
     });
-    if (cache !== undefined) {
-        cache.memoryOldProgram = program;
-    }
-
-    const typeChecker = program.getTypeChecker();
-    memoizeCheckerCalls(typeChecker);
-    const sourceFile = program.getSourceFile(inMemoryFilePath);
-
-    return [ program, typeChecker, sourceFile];
+    const program = snapshot.operation.createdPrograms[0];
+    const checker = snapshot.getProjects().find((p) => p.program === program).checker;
+    memoizeCheckerCalls(checker);
+    (checker as any).__astTranspilerApi = getApi(cache);
+    return [snapshot, program, checker];
 }
 
 export default class Transpiler {
@@ -180,6 +324,16 @@ export default class Transpiler {
     private programCache: ITranspileProgramCache;
     // typescript state of the transpilation in flight, shared with the language printers
     private context: ITranspileContext | undefined;
+    // the snapshot behind the current single-file context
+    private snapshot: Snapshot | undefined;
+    // batch pre-resolve each source file's checker queries before printing it (config.prefetch=false disables)
+    prefetch: boolean;
+
+    // batch pre-resolve for callers that query the checker themselves (build hooks):
+    // one round trip per method for every relevant node under `root`
+    static prefetchChecker(checker: Checker, root: Node, options?: { types?: boolean, symbols?: boolean, signatures?: boolean }): void {
+        prefetchChecker(checker, root, options);
+    }
 
     // A program cache holds parsed typescript SourceFiles and the last program built
     // from them. Hand the same cache to several Transpiler instances to reuse one
@@ -189,12 +343,13 @@ export default class Transpiler {
     // Same-thread only: these are live V8 objects, so a cache cannot be posted to a
     // worker_threads isolate — give each worker its own long-lived cache instead.
     static createProgramCache(): ITranspileProgramCache {
-        return { sourceFiles: new Map() };
+        return {};
     }
 
     constructor(config = {}, programCache?: ITranspileProgramCache) {
         this.config = config;
         this.programCache = programCache ?? Transpiler.createProgramCache();
+        this.prefetch = config["prefetch"] ?? true;
         const phpConfig = config["php"] || {};
         const pythonConfig = config["python"] || {};
         const csharpConfig = config["csharp"] || {};
@@ -233,84 +388,65 @@ export default class Transpiler {
         return new Transpiler(config, this.programCache);
     }
 
+    // single-file snapshots are released when the next one replaces them; batches own theirs
+    private setSnapshotContext(snapshot: Snapshot, program: Program, checker: Checker, fileName: string): ITranspileContext {
+        const src = program.getSourceFile(fileName) ?? program.getSourceFile(path.resolve(fileName));
+        const previous = this.snapshot;
+        this.snapshot = snapshot;
+        previous?.dispose();
+        return this.setContext({ src, checker, program });
+    }
+
     createProgramInMemoryAndSetContext(content): ITranspileContext {
-        const [ memProgram, memType, memSource] = getProgramAndTypeCheckerFromMemory(__dirname_mock, content, fastCompilerOptions, this.programCache);
-        return this.setContext({
-            src: memSource,
-            checker: memType as ts.TypeChecker,
-            program: memProgram,
+        const inMemoryFilePath = path.resolve(path.join(__dirname_mock, "__dummy-file.ts"));
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [inMemoryFilePath, globalsShimPath], {
+            [inMemoryFilePath]: content,
+            [globalsShimPath]: globalsShim,
         });
+        return this.setSnapshotContext(snapshot, program, checker, inMemoryFilePath);
     }
 
-    getByPathCompilerHost(options: ts.CompilerOptions): ts.CompilerHost {
-        if (this.programCache.byPathHost === undefined) {
-            const host = ts.createCompilerHost(options, true);
-            const originalGetSourceFile = host.getSourceFile.bind(host);
-            const cache = this.programCache.sourceFiles;
-            host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
-                let mtimeMs = 0;
-                try {
-                    mtimeMs = fs.statSync(fileName).mtimeMs;
-                } catch (e) {
-                    // e.g. synthetic lib paths — fall through with mtime 0
-                }
-                const cached = cache.get(fileName);
-                if (cached && cached.mtimeMs === mtimeMs && !shouldCreateNewSourceFile) {
-                    return cached.sourceFile;
-                }
-                const sourceFile = originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-                if (sourceFile !== undefined) {
-                    cache.set(fileName, { mtimeMs, sourceFile });
-                }
-                return sourceFile;
-            };
-            const shimAst = ts.createSourceFile(globalsShimPath, globalsShim, ts.ScriptTarget.Latest);
-            overrideHostForVirtualFiles(host, new Map([[globalsShimPath, shimAst]]));
-            this.programCache.byPathHost = host;
+    createProgramByPathAndSetContext(filePath): ITranspileContext {
+        const shared = this.findSharedProgramFile(filePath);
+        if (shared !== undefined) {
+            return this.setContext(shared);
         }
-        return this.programCache.byPathHost;
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
+        return this.setSnapshotContext(snapshot, program, checker, filePath);
     }
 
-    createProgramByPathAndSetContext(path): ITranspileContext {
-        const options: ts.CompilerOptions = fastCompilerOptions;
-        const host = this.getByPathCompilerHost(options);
-        // passing the previous program lets typescript reuse its internal state where
-        // possible; the cached host makes every already-seen dependency parse-free
-        const program = ts.createProgram([path, globalsShimPath], options, host, this.programCache.byPathOldProgram);
-        this.programCache.byPathOldProgram = program;
-        const sourceFile = program.getSourceFile(path);
-        const typeChecker = program.getTypeChecker();
-        memoizeCheckerCalls(typeChecker);
-
-        return this.setContext({
-            src: sourceFile,
-            checker: typeChecker,
-            program,
-        });
+    // One snapshot/program for a whole run: later ByPath transpiles of any root (or
+    // imported file) of `paths` reuse it instead of building a program per file, as
+    // long as the file's text on disk still equals the snapshot's. Replaces any
+    // previous shared program; pass [] to drop it.
+    setSharedProgram(paths: string[]): void {
+        this.programCache.shared?.snapshot.dispose();
+        this.programCache.shared = undefined;
+        if (paths.length === 0) {
+            return;
+        }
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [...paths, globalsShimPath], { [globalsShimPath]: globalsShim });
+        this.programCache.shared = { snapshot, program, checker };
     }
 
-    // One program over N root files, instead of one program per file. Every
-    // transpile*ByPath call pays for a full program: even with the SourceFile cache
-    // making the ~340-file import closure parse-free, the binder/checker work behind
-    // getPreEmitDiagnostics is redone per file. Batching N files into one program
-    // pays it once for the whole set.
-    //
-    // Files that import each other (a derived exchange and its parent) are fine in
-    // one batch — they are separate root files of the same program, exactly as
-    // typescript would compile a project.
-    //
-    // The batch deliberately does not become the cache's byPathOldProgram: an N-file
-    // program never structurally reuses a program built from a different root set, so
-    // there is nothing to gain, and keeping the previous chunk's checker alive while
-    // the next one is built would double peak memory — the opposite of why callers
-    // chunk. The cross-batch saving comes from the shared host + SourceFile cache.
+    private findSharedProgramFile(filePath: string): ITranspileContext | undefined {
+        const shared = this.programCache.shared;
+        if (shared === undefined) {
+            return undefined;
+        }
+        const src = shared.program.getSourceFile(path.resolve(filePath));
+        if (src === undefined || !fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") !== src.text) {
+            return undefined;
+        }
+        return { src, checker: shared.checker, program: shared.program };
+    }
+
+    // One program over N root files, so the bind/check work behind the diagnostics
+    // pass is paid once for the whole set; files importing each other are fine as
+    // separate roots. The batch owns its snapshot until dispose().
     createProgramBatch(paths: string[]): TranspileProgramBatch {
-        const options: ts.CompilerOptions = fastCompilerOptions;
-        const host = this.getByPathCompilerHost(options);
-        const program = ts.createProgram([...paths, globalsShimPath], options, host);
-        const checker = program.getTypeChecker();
-        memoizeCheckerCalls(checker);
-        return new TranspileProgramBatch(this, program, checker);
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [...paths, globalsShimPath], { [globalsShimPath]: globalsShim });
+        return new TranspileProgramBatch(this, snapshot, program, checker);
     }
 
     // the language printers read the typescript state (source file, checker, program)
@@ -339,11 +475,22 @@ export default class Transpiler {
     }
 
     checkFileDiagnostics(context: ITranspileContext = this.context) {
-        const diagnostics = ts.getPreEmitDiagnostics(context.program, context.src);
+        // the pass only produces a Logger warning; on TS7 getGlobalDiagnostics forces a
+        // whole-program check in tsgo, so skip it when nothing would be printed
+        if (!Logger.verbose) {
+            return;
+        }
+        const fileName = context.src.fileName;
+        const programWide = getProgramWideDiagnostics(context.program);
+        const diagnostics = [
+            ...programWide.program,
+            ...context.program.getSyntacticDiagnostics(fileName), ...programWide.global,
+            ...context.program.getSemanticDiagnostics(fileName),
+        ];
         if (diagnostics.length > 0) {
             let errorMessage = "Errors found in the typescript code. Transpilation might produce invalid results:\n";
             diagnostics.forEach( msg => {
-                errorMessage+= "  - " + msg.messageText + "\n";
+                errorMessage+= "  - " + msg.text + "\n";
             });
             Logger.warning(errorMessage);
         }
@@ -363,6 +510,10 @@ export default class Transpiler {
         }
 
         const src = this.context.src;
+        if (this.prefetch && !prefetchedFiles.has(src)) {
+            prefetchedFiles.add(src);
+            prefetchChecker(this.context.checker, src);
+        }
 
         let transpiledContent = undefined;
         switch(lang) {
@@ -596,22 +747,28 @@ export default class Transpiler {
 // cloneSharingProgramCache() for a second, independent driver.
 class TranspileProgramBatch {
     private readonly transpiler: Transpiler;
-    private readonly program: ts.Program;
-    private readonly checker: ts.TypeChecker;
+    private readonly snapshot: Snapshot;
+    private readonly program: Program;
+    private readonly checker: Checker;
 
-    constructor(transpiler: Transpiler, program: ts.Program, checker: ts.TypeChecker) {
+    constructor(transpiler: Transpiler, snapshot: Snapshot, program: Program, checker: Checker) {
         this.transpiler = transpiler;
+        this.snapshot = snapshot;
         this.program = program;
         this.checker = checker;
     }
 
-    getProgram(): ts.Program {
+    // releases the batch's snapshot on the TS7 server; the batch is unusable afterwards
+    dispose(): void {
+        this.snapshot.dispose();
+    }
+
+    getProgram(): Program {
         return this.program;
     }
 
     // point the owning Transpiler at one file of this batch, then run the same
-    // diagnostics pass the single-file path runs — the printers read checker state
-    // back from it, so it is not optional
+    // diagnostics pass the single-file path runs
     setContextForPath(filePath: string): ITranspileContext {
         const src = this.program.getSourceFile(filePath) ?? this.program.getSourceFile(path.resolve(filePath));
         if (src === undefined) {
@@ -659,6 +816,10 @@ class TranspileProgramBatch {
 export {
     Transpiler,
     TranspileProgramBatch,
+    // the TS7 flag enums of the typescript the generator runs on, for consumer hooks whose
+    // own `typescript` resolution may be an older 7.x lacking them
+    CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags,
+    SyntaxKind,
     // the trailing-comment alignment pass, so a consumer that assembles its own Go files
     // (ccxt build/goTranspiler.ts) can run it on the assembled text as well
     alignGoTrailingComments,

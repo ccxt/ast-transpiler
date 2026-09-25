@@ -1,13 +1,29 @@
-{ 
-  "transform": {"^.+\\.ts?$": "ts-jest"},
+{
+  "transform": {
+    "^.+\\.ts$": "<rootDir>/tests/esbuild-transform.cjs",
+    "node_modules/typescript/.+\\.js$": "<rootDir>/tests/esbuild-transform.cjs"
+  },
   "testEnvironment": "node",
   "testRegex": "/tests/.*\\.(test|spec)?\\.(ts|tsx)$",
-  "moduleFileExtensions": ["ts", "js","json", "node", "cjs"],
-  "transformIgnorePatterns": [],
-  "moduleDirectories": ["src", "node_modules"],
+  "moduleFileExtensions": [
+    "ts",
+    "js",
+    "json",
+    "node",
+    "cjs"
+  ],
+  "transformIgnorePatterns": [
+    "/node_modules/(?!typescript/)"
+  ],
+  "moduleDirectories": [
+    "src",
+    "node_modules"
+  ],
   "moduleNameMapper": {
     "^(\\.{1,2}/.*)\\.js$": "$1"
   },
   "rootDir": "./",
-  "coverageReporters": ["json-summary"]
+  "coverageReporters": [
+    "json-summary"
+  ]
 }

@@ -1,5 +1,5 @@
 import { Transpiler } from '../src/transpiler';
-import ts from 'typescript';
+import { isElementAccessExpression, isIdentifier } from "typescript/unstable/ast/is";
 import { RUST_DECLARED_DICT_LOCALS } from '../src/rustTranspiler';
 
 jest.mock('module',()=>({
@@ -2657,8 +2657,8 @@ describe('rust declared-Dict locals (rust-25)', () => {
         const sourceFile = rustPrinter().getSrc();
         const found: any[] = [];
         const walk = (node: any) => {
-            if (ts.isIdentifier(node) && node.text === name) found.push(node);
-            ts.forEachChild(node, walk);
+            if (isIdentifier(node) && node.text === name) found.push(node);
+            node.forEachChild(walk);
         };
         walk(sourceFile);
         return found;
@@ -2672,7 +2672,7 @@ describe('rust declared-Dict locals (rust-25)', () => {
         return { rust, answer: rust.rustDeclaredLocalTypeResolver(node), node };
     };
 
-    const isElementReceiver = (node: any) => node.parent !== undefined && ts.isElementAccessExpression(node.parent) && node.parent.expression === node;
+    const isElementReceiver = (node: any) => node.parent !== undefined && isElementAccessExpression(node.parent) && node.parent.expression === node;
 
     test('safe_dict with an object default is proven Dict', () => {
         const snippet =
