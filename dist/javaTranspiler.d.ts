@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind, type Identifier, type Node } from "typescript/unstable/ast";
+import { type Node } from "typescript/unstable/ast";
 import { type Checker } from "typescript/unstable/sync";
 export declare class JavaTranspiler extends BaseTranspiler {
     getChecker(): Checker;
@@ -7,7 +7,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     getMethodOverride(node: Node): Node;
     checkerOrUndefined(): Checker | undefined;
     javaExpressionTypeResolver?: (node: any) => string | undefined;
-    countRequiredParameters(declaration: any): number;
+    countRequiredParameters(declaration: any): any;
     printArgsForCallExpression(node: any, identation: any): any;
     javaPrintCallArguments(args: any, node: any, identation: any): any;
     javaSuperCoreCallArguments(args: any, node: any, identation: any): string | undefined;
@@ -23,7 +23,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
     binaryExpressionsWrappers: any;
     varListFromObjectLiterals: {};
-    javaBooleanOperators: SyntaxKind[];
+    javaBooleanOperators: number[];
     usageToFinalName: WeakMap<Node, string>;
     finalVarScopeStack: Array<Set<string>>;
     finalVarMutations: Array<{
@@ -91,7 +91,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
     isJavaMapType(type: any): boolean;
     isJavaStringType(type: any): any;
-    isJavaNullableMapType(type: any): boolean;
+    isJavaNullableMapType(type: any): any;
     javaRepeatableOperand(node: any): any;
     javaDeclaredTypeOf(expression: any): string | undefined;
     javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
@@ -128,6 +128,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaDeclaredStringType(expression: any): boolean;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    javaConcreteStructureType(type: any): boolean;
     isJavaMapStructureType(type: any): boolean;
     isJavaListStructureType(type: any): boolean;
     tupleRequiredElementCount(type: any): number;
@@ -142,7 +143,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredMapElementRead(node: any): string;
     javaPrimitiveCounterIndex(node: any): boolean;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
-    javaFieldMapRead(node: any): string | undefined;
     javaFieldMapReadIfAllowed(node: any): string | undefined;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
@@ -165,6 +165,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaBaseTimeLongCall(node: any): boolean;
     javaBaseIntCall(node: any): boolean;
+    javaThisCallName(node: any): any;
     javaIntForCounter(node: any): boolean;
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
@@ -216,7 +217,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     recordFinalVarMutation(node: any): void;
     restoreFinalVarMutations(): void;
     printNode(node: any, identation?: number): string;
-    createNewNodeForFinalVar(originalName: string): Identifier;
     getVarListFromObjectLiteralAndUpdateInPlace(node: any): Array<{
         orig: string;
         final: string;
@@ -236,12 +236,14 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printParameterType(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printCoreMethodParameters(node: any): any;
+    javaAsyncSignatureParameter(param: any, isAsyncMethod: any, printedParam: any): any;
     printFrontForwardedArguments(node: any): string;
     printFrontMethodDeclaration(node: any, identation: any): string;
     printMethodParameters(node: any): any;
     printArrayLiteralExpression(node: any): string;
     printFinalOutsideMethodVariableWrappersIfAny(node: any, identation: any): string;
     printInsideMethodVariableWrappersIfAny(node: any, identation: any): string;
+    javaAsyncParamWrapperLines(node: any, identation: any, printLine: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
     printArrayIsArrayCall(node: any, _identation: any, parsedArg?: any): string;
@@ -249,8 +251,9 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrimaryIsArrayOperand(node: any): boolean;
     javaOperandType(operand: any): import("typescript/unstable/sync").Type;
     javaArrayLiteralDropsNothing(node: any, depth?: number): boolean;
-    javaScalarType(type: any, depth?: number): boolean;
-    javaNonArrayType(type: any, depth?: number): boolean;
+    javaScalarType(type: any): boolean;
+    javaNonArrayType(type: any): boolean;
+    javaTypeFlagsOnly(type: any, mask: number, depth?: number): boolean;
     printObjectKeysCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeObjectKeysCall(node: any): string;
     printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
@@ -314,6 +317,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBooleanBaseField(node: any): string | undefined;
     javaBooleanBoxIdentifier(node: any, seen: Set<any>): string | undefined;
     javaBooleanWritesAreBoxed(symbol: any, decl: any, node: any, seen: Set<any>): boolean;
+    javaWritesAreBoxed(symbol: any, decl: any, next: Set<any>, accepts: (value: any) => boolean, tuples: boolean): boolean;
     javaDeclaredBooleanKind(node: any): 'boolean' | 'Boolean' | undefined;
     javaNullableBooleanDeclaration(declaration: any): boolean;
     javaPrintsBooleanBoxValue(node: any, seen: Set<any>): boolean;

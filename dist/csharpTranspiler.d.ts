@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
-import { TypeFlags, type Symbol as TsSymbol } from 'typescript/unstable/sync';
+import { type Symbol as TsSymbol } from 'typescript/unstable/sync';
 export declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     csharpBooleanReturnTypes: WeakMap<Node, string>;
@@ -26,7 +26,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     getMethodOverride(node: Node): Node;
     printIdentifier(node: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
-    printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     csharpDeclaredReceiverType(node: any): string | undefined;
     csharpPrintedParamType(receiver: any): string | undefined;
@@ -35,6 +34,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printElementAccessExpressionExceptionIfAny(node: any): void;
     printElementAccessExpression(node: any, identation: any): any;
     csharpNativeElementAccess(node: any): string | undefined;
+    csharpIsMarketRowKeyRead(expression: any, argumentExpression: any): boolean;
     csharpNativeDeclaredDictionaryRead(expression: any, argumentExpression: any): string | undefined;
     csharpDeclaredDictionaryType(node: any): string | undefined;
     csharpDeclaredLocalResolverType(node: any): string | undefined;
@@ -85,6 +85,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIndexBoundIsVoided(body: any, receiverSymbol: any, indexSymbol: any): boolean;
     csharpReceiverUseKeepsBound(node: any): boolean;
     csharpIdentifierIsWritten(node: any): boolean;
+    csharpIsSetOrAddTarget(node: any): boolean;
     csharpIsAssignmentOperator(kind: any): boolean;
     csharpDictionaryIndexWriteNeedsNoCast(node: any): boolean | undefined;
     csharpElementAccessTypedReceiver(node: any): string | undefined;
@@ -109,6 +110,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpTypeHasValueScalar(type: any): boolean;
     csharpDeclaredStringLiteralComparison(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpDeclaredReadType(node: any): string | undefined;
+    csharpResolvedReadType(node: any): string | undefined;
     csharpDeclaredLocalType(node: any): string | undefined;
     csharpOperandsAreDeclaredReads(left: any, right: any): boolean;
     csharpDeclaredReadEqualityType(node: any, printerType: string | undefined): string | undefined;
@@ -120,7 +122,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegerLiteralKind(node: any): string | undefined;
     csharpNumericKindHoldsLiteral(callKind: string, literalKind: string): boolean;
     csharpExpressionTypeOf(node: any): string | undefined;
-    csharpOperandsAreNumbers(node: any): boolean;
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
@@ -202,7 +203,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printFunctionType(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printMethodDefinition(node: any, identation: any): string;
-    printArgsForCallExpression(node: any, identation: any): any;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
@@ -224,7 +224,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeIndexOfCall(node: any, name?: any, parsedArg?: any): string | undefined;
     csharpIndexOfReceiverHoldsString(node: any, receiver: any, declared: any): boolean;
     csharpIndexOfReceiverIsCheckedString(receiver: any): boolean;
-    csharpIndexOfReceiverIsDeclaredList(declared: any): boolean;
     csharpReceiverDeclaredNonNullString(receiver: any): boolean;
     csharpDeclarationIsNonNullString(declaration: any): boolean;
     csharpInitializerIsUndefined(initializer: any): boolean;
@@ -249,14 +248,12 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printShiftCall(node: any, identation: any, name?: any): string;
     printReverseCall(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
-    printAssertCall(node: any, identation: any, parsedArgs: any): string;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     csharpNativeSliceCall(node: any, name: any): string;
     csharpSliceLiteralBound(node: any): any;
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceReceiverKind(expression: any): "list" | "string";
     csharpSliceStringType(type: any): boolean;
-    csharpSliceNullishType(flags: TypeFlags): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
@@ -274,6 +271,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIdentifierPrintsBool(node: any): boolean;
     csharpCalleeName_Native(node: any): string | undefined;
     csharpBoolCall_Native(node: any): boolean;
+    csharpGeneratedThisCallBoolType_Native(node: any, callee: string | undefined): string | undefined;
     csharpCallPrintsBool(node: any): boolean;
     csharpNullableBoolCondition(node: any): string | undefined;
     csharpCallPrintsNullableBool(node: any): boolean;
@@ -289,6 +287,5 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
-    csModifiers: {};
     printPropertyAccessModifiers(node: any): string;
 }

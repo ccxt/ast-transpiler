@@ -1,4 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
+import { SyntaxKind } from 'typescript/unstable/ast';
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
 declare function alignGoTrailingComments(content: string): string;
 export { alignGoTrailingComments, };
@@ -55,6 +56,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
+    printAsyncDeclarationPair(node: any, identation: any, def: string, funcBody: string, isMethod: boolean): string;
     printFunctionDeclaration(node: any, identation: any): string;
     /**
      * Name of the sibling *body* method/function an async core hands its work to.
@@ -115,9 +117,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     applyAsyncSuffixToCallee(nameNode: any, goName: string): string;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
+    printGoSignature(node: any, identation: any, receiver: string): string;
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
-    printParameterType(node: any): any;
+    printParameterType(node: any): string;
     printFunctionType(node: any): string;
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
@@ -161,8 +164,13 @@ export declare class GoTranspiler extends BaseTranspiler {
         container: any;
         key: any;
     };
+    goSafeAccessorLocalArgs(initializer: any, accessor: string, fallbackKind: SyntaxKind, fallbackItems: string): {
+        container: any;
+        key: any;
+    };
     goSafeDictUseReadsTheMap(node: any): boolean;
     goSafeDictLocalUnboxCache: Map<any, string>;
+    goCachedLocalUnbox(cache: Map<any, string | undefined>, declaration: any, compute: () => string | undefined): string | undefined;
     goSafeDictLocalUnbox(declaration: any): string | undefined;
     goDeclaredLocalTypeIfSafe(declaration: any, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined;
     goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
@@ -176,6 +184,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
     goDeclarationOfIdentifier(node: any): any;
     goMarketComparisonElementRead(node: any): boolean;
+    goIsComparedOperand(node: any): boolean;
     goSafeListLocalArgs(initializer: any): {
         container: any;
         key: any;
@@ -209,7 +218,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     getGoRuneLength(text: any): number;
     getGoByteLength(text: any): number;
     printConstructorDeclaration(node: any, identation: any): string;
-    printThisElementAccesssIfNeeded(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any, identation?: number): string;
@@ -217,6 +225,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     transformCallExpressionName(name: string, nameNode?: any): string;
     transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
+    goTypeOfHelpers: Map<string, string>;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     goScalarFamily(node: any): string | undefined;
@@ -250,6 +259,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
+    goEnclosingClass(fn: any): any;
     goEnclosingClassName(fn: any): string | undefined;
     goPrintedArgType(arg: any): string | undefined;
     goSameFileCallsOf(fn: any, name: string): Array<any>;
@@ -327,6 +337,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsNonNilTestOf(node: any, ident: any): boolean;
     goIsNilLiteral(node: any): boolean;
     goIsSameSymbol(a: any, b: any): boolean;
+    goNilGuardFields: {
+        [kind: number]: [string, string];
+    };
     goHasEnclosingNilGuard(ident: any): boolean;
     goConditionProvesNonNil(condition: any, ident: any): boolean;
     goUnwrapParenthesizedNode(node: any): any;
@@ -335,7 +348,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsParenthesizedExpression(printed: string): boolean;
     goSkipGoLiteral(text: string, start: number): number;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
-    printCustomDefaultValueIfNeeded(node: any): any;
     goGetArgLocalType(body: any, param: any, printedDefault: string): string | undefined;
     goGetArgBaseParamIsUnannotated(param: any): boolean;
     goGetArgNilMapUseOnlyReads(n: any): boolean;
@@ -358,7 +370,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
     printAwaitExpression(node: any, identation: any): string;
     printInstanceOfExpression(node: BinaryExpression, identation: number): string;
-    getRandomNameSuffix(): string;
     getLineBasedSuffix(node: any): string;
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): any;
@@ -372,7 +383,6 @@ export declare class GoTranspiler extends BaseTranspiler {
      */
     getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
-    printAsExpression(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
     isArraySliceTypes: string[];
@@ -398,7 +408,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeIndexOf(node: any, name: any, parsedArg: any): string | undefined;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean;
-    goNativeStringCall(nativeCall: string): string | undefined;
+    goNativeStringCallOr(node: any, texts: string[], expected: string[], nativeCall: string, helperCall: string): string;
     goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
@@ -438,7 +448,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWithExprDepth<T>(depth: number, callback: () => T): T;
     goOperatorPrecedence(operator: string): number;
     goNativeBinaryOperator(node: any): string | undefined;
-    goWalkBinary(operator: string, left: any, right: any, rightText: string): any;
+    goWalkBinary(operator: string, left: any, right: any, rightText: string): {
+        has4: boolean;
+        has5: boolean;
+        maxProblem: number;
+    };
     goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
     printBinaryExpression(node: any, identation: any): string;
     goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;

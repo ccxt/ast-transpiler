@@ -68,11 +68,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustProHandlerShadowParam: ParameterDeclaration | undefined;
     constructor(config?: {});
     initConfig(): void;
-    capitalize(str: string): string;
     quotedStringLiteral(text: string): string;
     printStringLiteral(node: any): any;
     printNumericLiteral(node: any): string;
-    printBooleanLiteral(node: any): "Value::Bool(false)" | "Value::Bool(true)";
+    printBooleanLiteral(node: any): string;
     printNullKeyword(node: any, identation: any): string;
     private static readonly BOOL_PRODUCING_OPERATORS;
     private static readonly BOOL_PRODUCING_CALLS;
@@ -97,6 +96,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  ccxt post-passes, which key on the leading helper token the operand would
      *  no longer provide. */
     isBareBoolEmissionSafe(node: any): boolean;
+    /** Outermost ancestor reached through parens, `!` and `&&`/`||`. */
+    rustClimbLogicalWrappers(node: any): any;
     rustConditionBoolSlot(node: any): boolean;
     /** Native truthiness text of the operand, or undefined to keep `is_true`. */
     printNativeTruthiness(node: any): string | undefined;
@@ -104,7 +105,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     printsValueExpression(node: any): boolean;
     callExpressionName(node: any): string;
     textCoercesToNumber(text: string): boolean;
-    stringLiteralCoercesToNumber(node: any): boolean;
     numericLiteralF64Text(node: any): string;
     rustReadPrintsValue(node: any): boolean;
     rustBooleanComparableType(type: any): boolean;
@@ -148,6 +148,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A literal initializer must carry no runtime tag key; a call initializer
      *  is the axiom the declared-Dict table itself rests on. */
     rustDeclaredInitIsTagFree(declaration: VariableDeclaration): boolean;
+    /** Skip `( … )`, `x!` and `x as T` wrappers. */
+    rustStripWrappers(node: any): any;
     /** The local's single declaration is initialised from a call that reads
      *  `x.hashmap` / `x.subscriptions` / `x.futures` — element dicts the runtime
      *  tags with a backref so writes reach the shared store, not the COW copy. */
@@ -187,6 +189,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNumericOperandKind(node: any): string | undefined;
     orderedComparisonOperand(node: any): any;
     printNativeOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    rustTypeFlagsAll(type: any, flags: Set<number>): boolean;
     isNumberLikeType(type: any): boolean;
     isStringLikeType(type: any): boolean;
     private static readonly RUST_CONCAT_SAFE_FLAGS;
@@ -196,6 +199,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printNativeArithmetic(op: any, left: any, right: any, leftText: any, rightText: any): string | undefined;
     printNativeStringConcat(leftText: string, rightText: string): string;
     printNativeNumeric(op: any, leftText: string, rightText: string): string;
+    private static readonly RUST_TYPEOF_HELPERS;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
     printDateNowCall(node: any, identation: any): string;
@@ -205,6 +209,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BOOL_RESULT_HELPERS;
     private static readonly RUST_BOOL_RESULT_CALLEES;
     rustCallPrintsBool(node: any): boolean;
+    private rustSkipStringLiteral;
     peelValueBox(printedValue: string, prefix: string): string | undefined;
     peelValueBoolBox(printedValue: string): string | undefined;
     peelValueStrBox(printedValue: string): string | undefined;
@@ -216,6 +221,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustEnclosingFunction(node: any): any;
     rustBindsName(node: any, name: string): boolean;
     rustIdentifierUseIsCondition(node: any): boolean;
+    private rustLocalUsesAll;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
     private static readonly RUST_STRING_LOCAL_HELPERS;
     private rustStringLocalDecisions;
@@ -399,6 +405,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  Any other shape keeps the helper — the printed local could be a native
      *  `i64`/`f64`, which the `Value` match would not compile against. */
     isRustValueIndexKey(node: Node): boolean;
+    /** Strips `( )`, `as T` and `!` wrappers. */
+    rustSkipWrappers(node: any): any;
     /** The parameter declaration behind a receiver when its *annotation* proves
      *  a plain dict; undefined otherwise (no proof → keep the helper). */
     rustProvenDictParameter(node: Node): ParameterDeclaration | undefined;
@@ -460,6 +468,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printShadowContainerRead(shadow: RustParamShadow, keyNode: Node): string | undefined;
     /** `'k' in x` on a shadowed dict parameter. */
     printShadowInOperator(shadow: RustParamShadow, keyNode: Node): string | undefined;
+    /** A shadow dict key: an inlinable literal, or a proven-string plain place. */
+    private rustShadowMapKey;
     /** `x.length` on a shadowed list parameter — `get_array_length` natively. */
     printShadowLength(shadow: RustParamShadow): string | undefined;
     /** `this.safe<Type>(x, 'k'[, default])` on a shadowed dict parameter: the
@@ -545,6 +555,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printForStatement(node: any, identation: any): string;
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
+    isEqualityOp(op: any): boolean;
+    isLogicalOp(op: any): boolean;
     printCondition(node: any, identation: any): any;
     /** Bool-slot text of a parenthesised native comparison/predicate, else undefined. */
     printNativeParenthesizedCondition(node: any): string | undefined;

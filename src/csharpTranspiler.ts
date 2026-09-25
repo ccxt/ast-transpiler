@@ -170,17 +170,7 @@ const CSHARP_NATIVE_NUMERIC_THIS_KINDS: { [name: string]: string } = {
 // the safe* accessor names of the table above: a local initialised by one of them gets the
 // extra sink guards of csharpLocalIsSafeToType (list-only methods, hard `(string)` casts,
 // the `+` LEFT operand overload rebinding)
-const CSHARP_SAFE_ACCESSOR_NAMES = [
-    'safeString', 'safeString2', 'safeStringN',
-    'safeStringLower', 'safeStringLower2', 'safeStringLowerN',
-    'safeStringUpper', 'safeStringUpper2', 'safeStringUpperN',
-    'safeCurrencyCode',
-    'safeInteger', 'safeInteger2', 'safeIntegerN', 'safeIntegerProduct',
-    'safeFloat', 'safeFloat2', 'safeFloatN', 'safeNumberN',
-    'safeBool', 'safeBool2', 'safeBoolN',
-    'safeDict', 'safeDict2', 'safeDictN',
-    'safeList', 'safeList2', 'safeListN',
-];
+const CSHARP_SAFE_ACCESSOR_NAMES = Object.keys(CSHARP_THIS_RETURN_TYPES).filter((name) => name.startsWith('safe'));
 
 // S62: calls whose C# signature is a hand-written `bool` (isTrue, isEqual, isGreaterThan, ...,
 // inOp in cs/ccxt/base/Exchange.TranspileHelpers.cs; emitted for the comparison operators, `in`
@@ -532,17 +522,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             'boolean': 'bool',
         };
 
-        this.ArgTypeReplacements = {
-            'string': 'string',
-            'Str': 'string',
-            'number': 'double',
-            'Int': 'Int64',
-            'Num': 'double',
-            'Dict': 'Dictionary<string, object>',
-            'Strings': 'List<string>',
-            'List': 'List<object>',
-            'boolean': 'bool',
-        };
+        this.ArgTypeReplacements = { ...this.VariableTypeReplacements };
 
         this.binaryExpressionsWrappers = {
             [SyntaxKind.EqualsEqualsToken]: [this.EQUALS_EQUALS_WRAPPER_OPEN, this.EQUALS_EQUALS_WRAPPER_CLOSE],
@@ -686,67 +666,33 @@ export class CSharpTranspiler extends BaseTranspiler {
         const constructorBody = this.printFunctionBody(node, identation);
 
         // find super call inside constructor and extract params
-        let superCallParams = '';
-        let hasSuperCall = false;
+        let superClause = '';
         node.body?.statements.forEach(statement => {
             if (isExpressionStatement(statement)) {
                 const expression = statement.expression;
                 if (isCallExpression(expression)) {
                     const expressionText = expression.expression.getText().trim();
                     if (expressionText === 'super') {
-                        hasSuperCall = true;
-                        superCallParams = expression.arguments.map((a) => {
+                        const superCallParams = expression.arguments.map((a) => {
                             return this.printNode(a, identation).trim();
                         }).join(", ");
+                        superClause = ` : ${this.SUPER_CALL_TOKEN}(${superCallParams})`;
                     }
                 }
             }
         });
 
-        if (hasSuperCall) {
-            return this.getIden(identation) + className +
-                `(${args}) : ${this.SUPER_CALL_TOKEN}(${superCallParams})` +
-                constructorBody;
-        }
-
-        return this.getIden(identation) +
-                className +
-                "(" + args + ")" +
-                constructorBody;
-    }
-
-    printThisElementAccesssIfNeeded(node, identation) {
-        // convert this[method] into this.call(method) or this.callAsync(method)
-        // const isAsync = node?.parent?.kind === SyntaxKind.AwaitExpression;
-        const isAsync = true; // setting to true for now, because there are some scenarios where we don't know
-        // if the call is async or not, so we need to assume it is async
-        // example Promise.all([this.unknownPropAsync()])
-        const elementAccess = node.expression;
-        if (elementAccess?.kind === SyntaxKind.ElementAccessExpression) {
-            if (elementAccess?.expression?.kind === SyntaxKind.ThisKeyword) {
-                let parsedArg = node.arguments?.length > 0 ? this.printNode(node.arguments[0], identation).trimStart() : "";
-                const propName = this.printNode(elementAccess.argumentExpression, 0);
-                const wrapperOpen = isAsync ? this.UKNOWN_PROP_ASYNC_WRAPPER_OPEN : this.UKNOWN_PROP_WRAPPER_OPEN;
-                const wrapperClose = isAsync ? this.UNKOWN_PROP_ASYNC_WRAPPER_CLOSE : this.UNKOWN_PROP_WRAPPER_CLOSE;
-                parsedArg = parsedArg ? ", " + parsedArg : "";
-                return wrapperOpen + propName + parsedArg + wrapperClose;
-            }
-        }
-        return;
+        return this.getIden(identation) + className + `(${args})` + superClause + constructorBody;
     }
 
     printDynamicCall(node, identation) {
-        const isAsync = true; // setting to true for now, because there are some scenarios where we don't know
         const elementAccess = node.expression;
         if (elementAccess?.kind === SyntaxKind.ElementAccessExpression) {
-            const parsedArg = node.arguments?.length > 0 ? node.arguments.map(n => this.printNode(n, identation).trimStart()).join(", ") : "";
+            const parsedArg = node.arguments.map(n => this.printNode(n, identation).trimStart()).join(", ");
             const target = this.printNode(elementAccess.expression, 0);
             const propName = this.printNode(elementAccess.argumentExpression, 0);
-            const argsArray = `new object[] { ${parsedArg} }`;
-            const open = this.DYNAMIC_CALL_OPEN;
-            let statement = `${open}${target}, ${propName}, ${argsArray})`;
-            statement = isAsync ? `((Task<object>)${statement})` : statement;
-            return statement;
+            // always typed as async: the caller cannot tell whether the dynamic target is
+            return `((Task<object>)${this.DYNAMIC_CALL_OPEN}${target}, ${propName}, new object[] { ${parsedArg} }))`;
         }
         return undefined;
     }
@@ -792,8 +738,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         const { expression, argumentExpression } = node;
-        const declared = this.csharpDeclaredReceiverType(expression);
-        if ((declared !== 'Dictionary<string, object>') && (declared !== 'IDictionary<string, object>')) {
+        if (!this.csharpReceiverIsDeclaredDictionary(expression)) {
             return undefined;
         }
         // the interface cast also carries the string-key proof; only a string key (or a union
@@ -909,11 +854,13 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `getValue (market, "lit")` / `getValue (currency, "lit")` on a row local the declared
     // table proves is a C# dictionary: the native form tests the key, so a missing key still
     // reads null exactly like the helper. An untyped receiver keeps the helper.
+    csharpIsMarketRowKeyRead(expression, argumentExpression): boolean {
+        return isIdentifier(expression) && isStringLiteralLikeNode(argumentExpression)
+            && CSHARP_NATIVE_MARKET_RECEIVERS.indexOf(expression.text as string) >= 0;
+    }
+
     csharpNativeDeclaredDictionaryRead(expression, argumentExpression): string | undefined {
-        if (!isIdentifier(expression) || !isStringLiteralLikeNode(argumentExpression)) {
-            return undefined;
-        }
-        if (CSHARP_NATIVE_MARKET_RECEIVERS.indexOf(expression.text as string) < 0) {
+        if (!this.csharpIsMarketRowKeyRead(expression, argumentExpression)) {
             return undefined;
         }
         if (this.csharpDeclaredDictionaryType(expression) === undefined) {
@@ -961,10 +908,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // parameter B-17 retyped): its box may still be null, so the read carries the helper's
     // own `value2 == null -> null` branch as a null test
     csharpDeclaredLocalResolverRowRead(expression, argumentExpression): string | undefined {
-        if (!isIdentifier(expression) || !isStringLiteralLikeNode(argumentExpression)) {
-            return undefined;
-        }
-        if (CSHARP_NATIVE_MARKET_RECEIVERS.indexOf(expression.text as string) < 0) {
+        if (!this.csharpIsMarketRowKeyRead(expression, argumentExpression)) {
             return undefined;
         }
         const recorded = this.csharpDeclaredLocalResolverType(expression);
@@ -1088,7 +1032,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // guard, the else-branch of a negated guard, or after an early-exiting `if (!(key in recv))`
     csharpKeyPresenceGuarded(node, expression, key): boolean {
         const func = this.csharpEnclosingFunction(node);
-        if (func === undefined || this.csharpEnclosingFunction(node) !== func) {
+        if (func === undefined) {
             return false;
         }
         const guards = this.csharpInGuardsOf(func).get(expression.getText() + GUARD_KEY_SEPARATOR + key);
@@ -1101,12 +1045,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (this.csharpHasKeyRemoval(func, expression, key)) {
             return false; // delete could have removed the guarded key
         }
-        for (const guard of guards) {
-            if (this.csharpGuardAdmitsRead(guard, node)) {
-                return true;
-            }
-        }
-        return false;
+        return guards.some((guard) => this.csharpGuardAdmitsRead(guard, node));
     }
 
     // `recv[i]` where `i` is the counter of an enclosing `for (...; i < recv.length; ...)`: that
@@ -1217,10 +1156,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             const parent: any = identifier.parent;
             if (isBinaryExpression(parent) && parent.left === identifier) {
                 written = CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0;
-            } else if ((isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) && parent.operand === identifier) {
-                written = true;
-            } else if (isDeleteExpression(parent)) {
-                written = true;
+            } else {
+                written = ((isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) && parent.operand === identifier)
+                    || isDeleteExpression(parent);
             }
         });
         return !written;
@@ -1419,13 +1357,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             if (isIdentifier(n) && n.text === name) {
                 const parent: any = n.parent;
-                if (isBinaryExpression(parent) && parent.left === n) {
-                    rewritten = true;
-                } else if ((isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) && parent.operand === n) {
-                    rewritten = true;
-                } else if (isDeleteExpression(parent)) {
-                    rewritten = true;
-                }
+                rewritten = (isBinaryExpression(parent) && parent.left === n)
+                    || ((isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) && parent.operand === n)
+                    || isDeleteExpression(parent);
             }
             n.forEachChild(walk);
         };
@@ -1705,11 +1639,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (expression?.kind !== SyntaxKind.Identifier || argumentExpression?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        const parent: any = node.parent;
-        const isWrite = parent?.kind === SyntaxKind.BinaryExpression
-            && (parent.operatorToken.kind === SyntaxKind.EqualsToken || parent.operatorToken.kind === SyntaxKind.PlusEqualsToken)
-            && parent.left === node;
-        if (isWrite) {
+        if (this.csharpIsSetOrAddTarget(node)) {
             return undefined; // element writes print through the cast path
         }
         const types = (typeof this.csharpListIndexReadTypes === 'function') ? this.csharpListIndexReadTypes(node) : undefined;
@@ -1865,6 +1795,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         return false;
     }
 
+    // the node is the left side of `=` or `+=`
+    csharpIsSetOrAddTarget(node): boolean {
+        const parent: any = node.parent;
+        return parent?.kind === SyntaxKind.BinaryExpression
+            && (parent.operatorToken.kind === SyntaxKind.EqualsToken || parent.operatorToken.kind === SyntaxKind.PlusEqualsToken)
+            && parent.left === node;
+    }
+
     csharpIsAssignmentOperator(kind): boolean {
         return (kind >= SyntaxKind.FirstAssignment) && (kind <= SyntaxKind.LastAssignment);
     }
@@ -1893,11 +1831,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!isStringLiteralLikeNode(argumentExpression)) {
             return undefined; // the twin's key parameter is `string`; any other key keeps the object overload
         }
-        const parent = node.parent;
-        const isLeftSideOfAssignment = parent?.kind === SyntaxKind.BinaryExpression
-            && (parent.operatorToken.kind === SyntaxKind.EqualsToken || parent.operatorToken.kind === SyntaxKind.PlusEqualsToken)
-            && parent.left === node;
-        if (isLeftSideOfAssignment) {
+        if (this.csharpIsSetOrAddTarget(node)) {
             return undefined; // a write prints the dictionary element assignment, not this read
         }
         return 'GetValue(' + this.printNode(expression, 0) + ', ' + this.printNode(argumentExpression, 0) + ')';
@@ -2075,12 +2009,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the declaration behind an identifier read that is a plain method parameter; a
     // destructured or rest parameter prints a different declaration shape
     csharpParameterDeclaration(node): ParameterDeclaration | undefined {
-        const checker: any = this.checkerOrUndefined();
-        if (checker === undefined) {
-            return undefined;
-        }
-        const symbol = checker.getSymbolAtLocation(node);
-        const declaration = symbol?.valueDeclaration?.resolve();
+        const declaration: any = (this.checkerOrUndefined() as any)?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
         if ((declaration === undefined) || !isParameterDeclaration(declaration)) {
             return undefined;
         }
@@ -2121,8 +2050,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (checker === undefined) {
             return true; // unknown: keep the helper
         }
-        const type = checker.getTypeAtLocation(declaration);
-        return this.csharpTypeHasValueScalar(type);
+        return this.csharpTypeHasValueScalar(checker.getTypeAtLocation(declaration));
     }
 
     // A numeric literal prints as an untyped C# constant that adapts to the operand on the
@@ -2139,19 +2067,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the C# type the declaration behind an identifier was printed with ('object' when the
     // printer named none), or undefined when the identifier is not a printed local
     csharpDeclaredTypeOfBinding(node): string | undefined {
-        const checker: any = this.checkerOrUndefined();
-        if (checker === undefined) {
-            return undefined;
-        }
-        const symbol = checker.getSymbolAtLocation(node);
-        const declaration = symbol?.valueDeclaration?.resolve();
-        if (declaration === undefined) {
-            return undefined;
-        }
-        if (declaration.kind === SyntaxKind.VariableDeclaration) {
+        const declaration: any = (this.checkerOrUndefined() as any)?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        if (declaration?.kind === SyntaxKind.VariableDeclaration) {
             return this.getCSharpLocalType(declaration);
         }
-        if (declaration.kind === SyntaxKind.BindingElement) {
+        if (declaration?.kind === SyntaxKind.BindingElement) {
             return 'var'; // `const [a, b] = ...` prints `var a = ((IList<object>)...)[0]`
         }
         return undefined; // parameters are retyped after printing by the build script
@@ -2279,9 +2199,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         } catch (e) {
             named = undefined;
         }
-        if (named !== undefined) {
-            return named;
-        }
+        return (named !== undefined) ? named : this.csharpResolvedReadType(node);
+    }
+
+    // the embedding build layer's string answer for a read, or undefined (no resolver, it threw)
+    csharpResolvedReadType(node): string | undefined {
         const resolver = this.csharpExpressionTypeResolver;
         if (typeof resolver !== 'function') {
             return undefined;
@@ -2325,17 +2247,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((printerType !== undefined) && (printerType !== this.VAR_TOKEN) && (printerType !== 'var')) {
             return printerType;
         }
-        const resolver = this.csharpExpressionTypeResolver;
-        if (typeof resolver !== 'function') {
-            return printerType;
-        }
-        let resolved;
-        try {
-            resolved = resolver(node);
-        } catch (e) {
-            return printerType;
-        }
-        return (typeof resolved === 'string') ? resolved : printerType;
+        return this.csharpResolvedReadType(node) ?? printerType;
     }
 
     // `==` / `!=` in place of the isEqual wrapper when both operands are C# values of one
@@ -2354,17 +2266,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         // D-21: an operand the printer could not name (or only named `object`) is not a
         // rejection by itself -- the value branch below re-reads its DECLARED scalar type
-        if (leftType === 'null') {
-            if (!this.csharpIsNullComparableType(rightType) || !this.csharpOperandIsNullComparable(right)) {
+        if ((leftType === 'null') || (rightType === 'null')) {
+            const [other, otherType, otherText] = (leftType === 'null') ? [right, rightType, rightText] : [left, leftType, leftText];
+            if (!this.csharpIsNullComparableType(otherType) || !this.csharpOperandIsNullComparable(other)) {
                 return undefined;
             }
-            return this.csharpNullComparison(rightText, isEquality);
-        }
-        if (rightType === 'null') {
-            if (!this.csharpIsNullComparableType(leftType) || !this.csharpOperandIsNullComparable(left)) {
-                return undefined;
-            }
-            return this.csharpNullComparison(leftText, isEquality);
+            return this.csharpNullComparison(otherText, isEquality);
         }
         // D-21: a read the printer's own tables could only call `object` still has the C# type
         // its emitted DECLARATION carries -- a parameter the build layer's typing pass narrowed,
@@ -2491,12 +2398,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             return (Number.isInteger(value) && (value <= 2147483647)) ? 'int' : undefined;
         }
         return this.csharpTypeOfInitializer(node);
-    }
-
-    // the TypeScript checker must see two plain numbers: `any` (could be a string box) and a
-    // nullable union (the helper orders null, C# would throw) both keep the runtime helper
-    csharpOperandsAreNumbers(node): boolean {
-        return this.csharpOperandIsPlainNumber(node.left) && this.csharpOperandIsPlainNumber(node.right);
     }
 
     csharpOperandIsPlainNumber(operand): boolean {
@@ -2913,10 +2814,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (this.csharpDictionaryParamsBag(obj)) {
             return { text };
         }
-        if (!this.csharpIsDictionaryType(type) && !nullable) {
-            return undefined;
-        }
-        if (!this.csharpIsAnyValuedDictionaryType(type)) {
+        if ((!this.csharpIsDictionaryType(type) && !nullable) || !this.csharpIsAnyValuedDictionaryType(type)) {
             return undefined;
         }
         return { text, nullTest: printed };
@@ -2993,17 +2891,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // element, which `as` + the operator reproduce exactly (any other box reads as null,
     // where isEqual also answers false)
     csharpNativeElementLiteralEquality(left, right, leftText: string, rightText: string, isEquality: boolean): string | undefined {
-        let element;
-        let literal;
-        if (this.csharpStringKeyedElementAccess(left)) {
-            element = left;
-            literal = right;
-        } else if (this.csharpStringKeyedElementAccess(right)) {
-            element = right;
-            literal = left;
-        } else {
+        const elementIsLeft = this.csharpStringKeyedElementAccess(left);
+        if (!elementIsLeft && !this.csharpStringKeyedElementAccess(right)) {
             return undefined;
         }
+        const [element, literal] = elementIsLeft ? [left, right] : [right, left];
         const isBoolLiteral = (literal.kind === SyntaxKind.TrueKeyword) || (literal.kind === SyntaxKind.FalseKeyword);
         const isStringLiteral = isStringLiteralLikeNode(literal);
         if (!isBoolLiteral && !isStringLiteral) {
@@ -3021,7 +2913,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined; // isEqual's double/decimal branches coerce a numeric string
         }
         const cast = isBoolLiteral ? 'bool?' : 'string';
-        const elementIsLeft = (element === left);
         const castElement = `(${elementIsLeft ? leftText : rightText} as ${cast})`;
         const otherText = elementIsLeft ? rightText : leftText;
         return elementIsLeft ? `(${castElement} ${token} ${otherText})` : `(${otherText} ${token} ${castElement})`;
@@ -3139,7 +3030,6 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpOperandIsNullLiteral(node): boolean {
         return (node?.kind === SyntaxKind.NullKeyword)
             || ((node?.kind === SyntaxKind.Identifier) && (node.text === 'undefined'));
-
     }
 
     printCustomBinaryExpressionIfAny(node, identation) {
@@ -3224,27 +3114,16 @@ export class CSharpTranspiler extends BaseTranspiler {
                 // csharpStringLiteralEquality) first; anything the hook cannot name falls through to the
                 // printed-form inlining below, byte-identically.
                 const nativeEquality = this.csharpStringLiteralEquality(op, left, right, leftText, rightText);
-                if (nativeEquality !== undefined) {
-                    return nativeEquality;
-                }
                 // `isEqual (x, null)` / `!isEqual (x, null)` over a typed-reference or nullable-scalar operand
                 // (U55, csharpNullLiteralEquality), the hook-gated null-literal twin of the rule above; anything
                 // it cannot name falls through to the printed-form inlining below, byte-identically.
-                const nativeNullEquality = this.csharpNullLiteralEquality(op, left, right, leftText, rightText);
-                if (nativeNullEquality !== undefined) {
-                    return nativeNullEquality;
-                }
-                const inlined = this.printInlineEquality(left, right, leftText, rightText, isEquality);
-                if (inlined !== undefined) {
-                    return inlined;
-                }
-                const nativeElement = this.csharpNativeElementLiteralEquality(left, right, leftText, rightText, isEquality);
-                if (nativeElement !== undefined) {
-                    return nativeElement;
-                }
-                const numericCall = this.csharpNativeNumericCallEquality(left, right, leftText, rightText, isEquality);
-                if (numericCall !== undefined) {
-                    return numericCall;
+                const native = nativeEquality
+                    ?? this.csharpNullLiteralEquality(op, left, right, leftText, rightText)
+                    ?? this.printInlineEquality(left, right, leftText, rightText, isEquality)
+                    ?? this.csharpNativeElementLiteralEquality(left, right, leftText, rightText, isEquality)
+                    ?? this.csharpNativeNumericCallEquality(left, right, leftText, rightText, isEquality);
+                if (native !== undefined) {
+                    return native;
                 }
             }
 
@@ -3258,9 +3137,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 }
             }
 
-            const wrapper = this.binaryExpressionsWrappers[op];
-            const open = wrapper[0];
-            const close = wrapper[1];
+            const [open, close] = this.binaryExpressionsWrappers[op];
             if (op === SyntaxKind.PercentToken) {
                 const nativeMod = this.csharpNativeModExpression(left, right, leftText);
                 if (nativeMod !== undefined) {
@@ -3327,10 +3204,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return CSHARP_THIS_RETURN_TYPES[methodName];
         }
         if (target?.kind === SyntaxKind.Identifier) {
-            const full = (target.text as string) + '.' + methodName;
-            if (CSHARP_STATIC_RETURN_TYPES[full] !== undefined) {
-                return CSHARP_STATIC_RETURN_TYPES[full];
-            }
+            return CSHARP_STATIC_RETURN_TYPES[(target.text as string) + '.' + methodName] ?? CSHARP_METHOD_RETURN_TYPES[methodName];
         }
         return CSHARP_METHOD_RETURN_TYPES[methodName];
     }
@@ -3343,8 +3217,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (checker === undefined) {
             return false;
         }
-        const signature = checker.getResolvedSignature(node);
-        return signature?.declaration !== undefined;
+        return checker.getResolvedSignature(node)?.declaration !== undefined;
     }
 
     // the concrete C# type the initializer already produces, or undefined when the
@@ -3383,11 +3256,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         }
-        const knownType = this.csharpCallReturnType(initializer);
-        if (knownType !== undefined) {
-            return knownType;
-        }
-        return this.csharpBoolCallTyped(initializer) ? 'bool' : undefined;
+        return this.csharpCallReturnType(initializer) ?? (this.csharpBoolCallTyped(initializer) ? 'bool' : undefined);
     }
 
     // A `this.<name>(...)` call to a method the enclosing class declares with a plain `bool` return
@@ -3460,7 +3329,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (scope === undefined) {
             return false;
         }
-        const safe = !this.hasNodeWhere(scope, (n: any) => {
+        return !this.hasNodeWhere(scope, (n: any) => {
             if ((n.kind === SyntaxKind.Identifier) && (n.text === varName) && (n !== declaration.name)) {
                 const parent = n.parent;
                 if (parent?.kind === SyntaxKind.VariableDeclaration && parent.name === n) {
@@ -3504,12 +3373,9 @@ export class CSharpTranspiler extends BaseTranspiler {
                         return true;
                     }
                     // `throw new ExchangeError (x)` wraps the argument in a hard `(string)`
-                    // cast, which only compiles from `object` or a string
-                    if (!this.csharpTypeIsStringType(csharpType) && this.csharpIsClassThrowArgument(n)) {
-                        return true;
-                    }
-                    // `delete obj[x]` prints `.Remove((string)x)`, the same hard cast
-                    if (!this.csharpTypeIsStringType(csharpType) && this.csharpIsDeleteKey(n)) {
+                    // cast, which only compiles from `object` or a string; `delete obj[x]` prints
+                    // `.Remove((string)x)`, the same hard cast
+                    if (!this.csharpTypeIsStringType(csharpType) && (this.csharpIsClassThrowArgument(n) || this.csharpIsDeleteKey(n))) {
                         return true;
                     }
                 }
@@ -3533,7 +3399,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             return false;
         });
-        return safe;
     }
 
     // a `((string)x)` wrapper is redundant as soon as the receiver's static C# type is
@@ -3674,11 +3539,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // (null -> false), so in a condition the wrapper adds nothing. The hook answers the emitted
     // declaration's type (getCSharpLocalType, plus classifier retypes); unnamed operands keep isTrue.
     csharpConditionOperandType(node) {
-        if (node?.kind !== SyntaxKind.Identifier) {
-            return undefined;
-        }
-        const symbol = (this.getChecker() as Checker).getSymbolAtLocation(node); // eslint-disable-line
-        const declaration = symbol?.valueDeclaration?.resolve();
+        const declaration = this.csharpReceiverBinding(node);
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
             return undefined; // a parameter / member read has no declaration this pass retypes
         }
@@ -3786,13 +3647,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
 
         const isNew = declaration?.initializer && (declaration.initializer.kind === SyntaxKind.NewExpression);
-        const varToken = isNew ? 'var ' : this.VAR_TOKEN + ' ' ;
 
-        // handle default undefined initialization
-        if (declaration?.initializer && declaration.initializer === undefined) {
-            // handle the let id: Str; case
-            return this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + this.UNDEFINED_TOKEN;
-        } else if (!declaration.initializer) {
+        // handle the let id: Str; case (default undefined initialization)
+        if (!declaration.initializer) {
             return this.getIden(identation) + 'object ' + this.printNode(declaration.name) + " = " + this.UNDEFINED_TOKEN;
         }
         const parsedValue = this.printNode(declaration.initializer, identation).trimStart();
@@ -3841,11 +3698,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printCustomDefaultValueIfNeeded(node) {
-        if (isArrayLiteralExpression(node) || isObjectLiteralExpression(node) || isStringLiteral(node) || isBooleanLiteral(node)) {
-            return this.UNDEFINED_TOKEN;
-        }
-
-        if (isNumericLiteral(node)) {
+        if (isArrayLiteralExpression(node) || isObjectLiteralExpression(node) || isStringLiteral(node) || isBooleanLiteral(node)
+            || isNumericLiteral(node)) {
             return this.UNDEFINED_TOKEN;
         }
 
@@ -3879,13 +3733,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                     if (isObjectLiteralExpression(initializer)) {
                         initParams.push(`${this.printNode(param.name, 0)} ??= new Dictionary<string, object>();`);
                     }
-                    if (isNumericLiteral(initializer)) {
-                        initParams.push(`${this.printNode(param.name, 0)} ??= ${this.printNode(initializer, 0)};`);
-                    }
-                    if (isStringLiteral(initializer)) {
-                        initParams.push(`${this.printNode(param.name, 0)} ??= ${this.printNode(initializer, 0)};`);
-                    }
-                    if (isBooleanLiteral(initializer)) {
+                    if (isNumericLiteral(initializer) || isStringLiteral(initializer) || isBooleanLiteral(initializer)) {
                         initParams.push(`${this.printNode(param.name, 0)} ??= ${this.printNode(initializer, 0)};`);
                     }
                 }
@@ -3971,12 +3819,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // index signature, never a class instance or a callable) or an array of any/dictionary cells
     csharpOverrideParamSpelling(node): string | undefined {
         const type = this.getChecker().getTypeAtLocation(node);
-        const rest = (type === undefined || !type.isUnionType())
-            ? type
-            : type.getTypes().filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null)))[0];
-        return this.csharpOverrideParamSpellingOfType(rest, type !== undefined && type.isUnionType()
-            ? type.getTypes().filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null))).length
-            : 1);
+        if (type === undefined || !type.isUnionType()) {
+            return this.csharpOverrideParamSpellingOfType(type, 1);
+        }
+        const arms = type.getTypes().filter((m) => !(m.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        return this.csharpOverrideParamSpellingOfType(arms[0], arms.length);
     }
 
     csharpOverrideParamSpellingOfType(type, unionArms = 1): string | undefined {
@@ -4058,9 +3905,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         let arrayOpen = this.ARRAY_OPENING_TOKEN;
         const elems = node.elements;
 
-        const elements = node.elements.map((e) => {
-            return this.printNode(e);
-        }).join(", ");
+        const elements = node.elements.map((e) => this.printNode(e)).join(", ");
 
         // take into consideration list of promises
         if (elems.length > 0) {
@@ -4198,15 +4043,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 // parsedArgs = this.printMethodParameters(methodOverride);
                 const currentArgs = node.parameters;
                 const parentArgs = methodOverride.parameters;
-                parsedArgs = "";
-                parentArgs.forEach((param, index) => {
-                    const originalName = this.printNode(currentArgs[index].name, 0);
-                    const parsedArg = this.printParameteCustomName(param, originalName);
-                    parsedArgs+= parsedArg;
-                    if (index < parentArgs.length - 1) {
-                        parsedArgs+= ", ";
-                    }
-                });
+                parsedArgs = parentArgs.map((param, index) => this.printParameteCustomName(param, this.printNode(currentArgs[index].name, 0))).join(", ");
             }
         }
 
@@ -4219,26 +4056,6 @@ export class CSharpTranspiler extends BaseTranspiler {
             + "(" + parsedArgs + ")";
 
         return this.printNodeCommentsIfAny(node, identation, methodDef);
-    }
-
-    printArgsForCallExpression(node, identation) {
-        const args = node.arguments;
-        let parsedArgs  = "";
-        if (false && this.requiresCallExpressionCast && !this.isBuiltInFunctionCall(node?.expression)) { //eslint-disable-line
-            const parsedTypes = this.getTypesFromCallExpressionParameters(node);
-            const tmpArgs = [];
-            args.forEach((arg, index) => {
-                const parsedType = parsedTypes[index];
-                let cast = "";
-                if (parsedType !== "object" && parsedType !== "float" && parsedType !== "int") {
-                    cast = parsedType ? `(${parsedType})` : '';
-                }
-                tmpArgs.push(cast + this.printNode(arg, identation).trim());
-            });
-            parsedArgs = tmpArgs.join(",");
-            return parsedArgs;
-        }
-        return super.printArgsForCallExpression(node, identation);
     }
 
     // check this out later
@@ -4373,7 +4190,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             const casted = name.startsWith('((string)') ? name : `((string)${name})`;
             return `${casted}.IndexOf(${needle}, StringComparison.Ordinal)`;
         }
-        if (this.csharpIndexOfReceiverIsDeclaredList(declared)) {
+        if ((declared === 'List<object>') || (declared === 'IList<object>')) {
             return `((${declared})${name}).IndexOf(${parsedArg})`;
         }
         return undefined;
@@ -4404,12 +4221,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const type = checker.getTypeAtLocation(receiver);
         return this.isStringType(type?.flags);
-    }
-
-    // `List<object>` / `IList<object>` locals (split, Object.keys, the retyped collection
-    // returns) hold exactly the box the helper's own IList<object> branch scans
-    csharpIndexOfReceiverIsDeclaredList(declared): boolean {
-        return (declared === 'List<object>') || (declared === 'IList<object>');
     }
 
     // the receiver's own declaration says non-optional `string` (params, fields, locals), or the
@@ -4456,11 +4267,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     csharpInitializerIsUndefined(initializer): boolean {
-        if (initializer === undefined) {
-            return false;
-        }
-        return (initializer.kind === SyntaxKind.NullKeyword)
-            || ((initializer.kind === SyntaxKind.Identifier) && (initializer.text === 'undefined'));
+        return (initializer?.kind === SyntaxKind.NullKeyword)
+            || ((initializer?.kind === SyntaxKind.Identifier) && (initializer.text === 'undefined'));
     }
 
     // a `x !== undefined` / `x !== null` (or `!= null`) test in a branch that admits the read:
@@ -4497,10 +4305,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                     return true;
                 }
             }
-            if (isBlock(parent) || isSourceFile(parent)) {
-                if (this.csharpEarlyExitNonNullGuarded(parent, current, symbol, scope)) {
-                    return true;
-                }
+            if ((isBlock(parent) || isSourceFile(parent)) && this.csharpEarlyExitNonNullGuarded(parent, current, symbol, scope)) {
+                return true;
             }
             if (this.csharpIsFunctionLike(parent)) {
                 return false; // a guard outside this function cannot dominate a read inside it
@@ -4608,13 +4414,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         const keyType = this.csharpExpressionTypeOf(key);
-        if (keyType === undefined) {
-            return `((string)${printed})`;
-        }
         if (keyType === 'string') {
             return printed;
         }
-        return (keyType === 'string?') ? `((string)${printed})` : undefined;
+        return ((keyType === undefined) || (keyType === 'string?')) ? `((string)${printed})` : undefined;
     }
 
     printSearchCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -4671,10 +4474,6 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     printPopCall(node, identation, name = undefined) {
         return `((IList<object>)${name}).Last()`;
-    }
-
-    printAssertCall(node, identation, parsedArgs) {
-        return `assert(${parsedArgs})`;
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -4807,11 +4606,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         const members = type.getTypes?.() ?? [];
-        return (members.length > 0) && members.every((member) => this.isStringType(member.flags) || this.csharpSliceNullishType(member.flags));
-    }
-
-    csharpSliceNullishType(flags: TypeFlags): boolean {
-        return (flags === TypeFlags.Undefined) || (flags === TypeFlags.Null);
+        return (members.length > 0) && members.every((member) => this.isStringType(member.flags)
+            || (member.flags === TypeFlags.Undefined) || (member.flags === TypeFlags.Null));
     }
 
     // True for receivers that read a value without calling anything: `x`, `x.y`, `this.x`,
@@ -4821,13 +4617,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (expression === undefined) {
             return false;
         }
-        if (isParenthesizedExpression(expression) || isAsExpression(expression) || isTypeAssertion(expression)) {
-            return this.csharpSliceReceiverIsSideEffectFree(expression.expression);
-        }
         if (isIdentifier(expression) || (expression.kind === SyntaxKind.ThisKeyword)) {
             return true;
         }
-        if (isPropertyAccessExpression(expression)) {
+        if (isParenthesizedExpression(expression) || isAsExpression(expression) || isTypeAssertion(expression)
+            || isPropertyAccessExpression(expression)) {
             return this.csharpSliceReceiverIsSideEffectFree(expression.expression);
         }
         return false;
@@ -4884,10 +4678,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (this.csharpNativePostFixIncrement(node)) {
             return `${leftSide}${op}`;
         }
-        if (op === '--') {
-            return `postFixDecrement(ref ${leftSide})`;
-        }
-        return `postFixIncrement(ref ${leftSide})`;
+        return (op === '--') ? `postFixDecrement(ref ${leftSide})` : `postFixIncrement(ref ${leftSide})`;
     }
 
     printPrefixUnaryExpression(node, identation) {
@@ -5027,24 +4818,28 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (callee !== undefined && CSHARP_BOOL_CALLEES_NATIVE[callee] === true) {
             return true;
         }
+        return this.csharpGeneratedThisCallBoolType_Native(node, callee) === 'bool';
+    }
+
+    // csharpBooleanReturnType of a generator-printed `this.<name>(...)` callee, else undefined
+    csharpGeneratedThisCallBoolType_Native(node, callee: string | undefined): string | undefined {
         if (callee === undefined || callee.indexOf('this.') !== 0) {
-            return false;
+            return undefined;
         }
         if (CSHARP_HANDWRITTEN_CALLEES_NATIVE.indexOf(callee.substring('this.'.length)) > -1) {
-            return false;
+            return undefined;
         }
         if (!this.csharpCalleeResolves(node)) {
-            return false;
+            return undefined;
         }
-        const signature = this.getChecker().getResolvedSignature(node);
-        const declaration: any = signature?.declaration?.resolve();
+        const declaration: any = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
         // a bodiless overload signature (`safeBool (…, defaultValue: boolean): boolean` next to a
         // `boolean | undefined` implementation) states only that overload's type, while C# binds
         // the single implementation: its `bool?` must not lose the wrapper
         if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined) {
-            return false;
+            return undefined;
         }
-        return this.csharpBooleanReturnType(declaration) === 'bool';
+        return this.csharpBooleanReturnType(declaration);
     }
 
     // calls the printer gives a concrete bool signature (inArray, valueIsDefined, startsWith,
@@ -5061,22 +4856,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (value?.kind === SyntaxKind.ParenthesizedExpression) {
             value = value.expression;
         }
-        if (value?.kind === SyntaxKind.Identifier) {
-            if (this.csharpDeclaredLocalType(value) === 'bool?') {
-                return `(${this.printNode(value, 0)} == true)`;
-            }
-            // a declaration the embedding build layer retyped itself — the parameter/override
-            // signatures the typed-param units print: the recorded type IS the emitted
-            // declaration's, so a `bool?` parameter is no C# condition either
-            if (this.csharpDeclaredLocalResolverType(value) === 'bool?') {
-                return `(${this.printNode(value, 0)} == true)`;
-            }
-            return undefined;
-        }
-        if ((value?.kind === SyntaxKind.CallExpression) && this.csharpCallPrintsNullableBool(value)) {
-            return `(${this.printNode(value, 0)} == true)`;
-        }
-        return undefined;
+        // the resolver arm: a declaration the embedding build layer retyped itself — the parameter/override
+        // signatures the typed-param units print: the recorded type IS the emitted
+        // declaration's, so a `bool?` parameter is no C# condition either
+        const nullable = (value?.kind === SyntaxKind.Identifier)
+            ? (this.csharpDeclaredLocalType(value) === 'bool?' || this.csharpDeclaredLocalResolverType(value) === 'bool?')
+            : ((value?.kind === SyntaxKind.CallExpression) && this.csharpCallPrintsNullableBool(value));
+        return nullable ? `(${this.printNode(value, 0)} == true)` : undefined;
     }
 
     // a call whose printed C# signature is `bool?`: the `bool? safeBool(...)` family of the
@@ -5086,21 +4872,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (this.csharpCallReturnType(node) === 'bool?') {
             return true;
         }
-        const callee = this.csharpCalleeName_Native(node);
-        if (callee === undefined || callee.indexOf('this.') !== 0) {
-            return false;
-        }
-        if (CSHARP_HANDWRITTEN_CALLEES_NATIVE.indexOf(callee.substring('this.'.length)) > -1) {
-            return false;
-        }
-        if (!this.csharpCalleeResolves(node)) {
-            return false;
-        }
-        const declaration: any = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
-        if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined) {
-            return false;
-        }
-        return this.csharpBooleanReturnType(declaration) === 'bool?';
+        return this.csharpGeneratedThisCallBoolType_Native(node, this.csharpCalleeName_Native(node)) === 'bool?';
     }
 
     // same emission as the base implementation except for the bare-bool branch: the node is
@@ -5157,15 +4929,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const op = node.operatorToken.kind;
         const parent = node.parent;
+        const underNot = parent?.kind === SyntaxKind.PrefixUnaryExpression && parent.operator === SyntaxKind.ExclamationToken;
         if (op === SyntaxKind.InstanceOfKeyword) {
-            const underNot = parent?.kind === SyntaxKind.PrefixUnaryExpression && parent.operator === SyntaxKind.ExclamationToken;
             const underCast = parent?.kind === SyntaxKind.ConditionalExpression && parent.condition === node;
             return (underNot || underCast) ? `(${printed})` : printed;
         }
         if (op !== SyntaxKind.BarBarToken && op !== SyntaxKind.AmpersandAmpersandToken) {
             return printed;
         }
-        const underNot = parent?.kind === SyntaxKind.PrefixUnaryExpression && parent.operator === SyntaxKind.ExclamationToken;
         const underAnd = op === SyntaxKind.BarBarToken && parent?.kind === SyntaxKind.BinaryExpression
             && parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken;
         return (underNot || underAnd) ? `(${printed})` : printed;
@@ -5365,10 +5136,6 @@ export class CSharpTranspiler extends BaseTranspiler {
         // return this.getIden(identation) + this.THROW_TOKEN + throwExpression + this.LINE_TERMINATOR;
     }
 
-    csModifiers = {
-
-    };
-
     printPropertyAccessModifiers(node) {
         let modifiers = this.printModifiers(node);
         if (modifiers === '') {
@@ -5378,10 +5145,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         let typeText = 'object';
         if (node.type) {
             typeText = this.getType(node);
-            if (!typeText) {
-                if (node.type.kind === SyntaxKind.AnyKeyword) {
-                    typeText = this.OBJECT_KEYWORD + ' ';
-                }
+            if (!typeText && node.type.kind === SyntaxKind.AnyKeyword) {
+                typeText = this.OBJECT_KEYWORD + ' ';
             }
         }
         return modifiers + ' ' + typeText + ' ';
