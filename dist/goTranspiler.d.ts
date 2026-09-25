@@ -160,6 +160,9 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         text: string;
     } | undefined;
+    goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
+    goPointerNumberIsNonNil(ident: any): boolean;
+    goDivisionConsumerIgnoresBox(node: any): boolean;
     goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;

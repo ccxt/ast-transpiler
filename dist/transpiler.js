@@ -8820,6 +8820,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
         return concat;
       }
     }
+    const pointerDivision = this.goNonNilPointerDivisionText(node, leftText, rightText);
+    if (pointerDivision !== void 0) {
+      return { "goType": "float64", "text": pointerDivision };
+    }
     const leftType = this.goOperandStaticType(node.left, leftText);
     const rightType = this.goOperandStaticType(node.right, rightText);
     if (leftType === void 0 || rightType === void 0) {
@@ -8840,6 +8844,57 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return { goType, "text": this.goFloatDivisionText(node, leftType, rightType, leftText, rightText) };
     }
     return { goType, "text": this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+  }
+  // `x / N` on a non-nil `*int64` with a nonzero integer literal N, passed whole to Math.floor/ceil/round
+  // or parseToInt: those read Divide's int64-when-integral box and the float64 quotient alike
+  // (`*float64` keeps the helper: -0 and ±Inf box differently)
+  goNonNilPointerDivisionText(node, leftText, rightText) {
+    if (node.operatorToken.kind !== SyntaxKind5.SlashToken || !this.isNonZeroIntegerLiteral(node.right)) {
+      return void 0;
+    }
+    const left = node.left;
+    const declared = this.goDeclaredTypeOfIdentifier(left);
+    if (declared !== "*int64") {
+      return void 0;
+    }
+    if (!this.goPointerNumberIsNonNil(left) || !this.goDivisionConsumerIgnoresBox(node)) {
+      return void 0;
+    }
+    return "float64(*" + leftText.trim() + ") / " + this.goUnwrapPrintedParens(rightText.trim());
+  }
+  // the checker narrowed the identifier to a plain number here, or an enclosing guard tests it
+  goPointerNumberIsNonNil(ident) {
+    if (this.goHasEnclosingNilGuard(ident)) {
+      return true;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return false;
+    }
+    const type = checker.getTypeAtLocation(ident);
+    return type !== void 0 && (type.flags & TypeFlags4.NumberLike) !== 0;
+  }
+  // the division (through parens) is the only argument of this.parseToInt or Math.floor/ceil/round
+  goDivisionConsumerIgnoresBox(node) {
+    let child = node;
+    let parent = node.parent;
+    while (parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+      child = parent;
+      parent = parent.parent;
+    }
+    if (parent?.kind !== SyntaxKind5.CallExpression || parent.arguments?.length !== 1 || parent.arguments[0] !== child) {
+      return false;
+    }
+    const callee = parent.expression;
+    if (callee?.kind !== SyntaxKind5.PropertyAccessExpression) {
+      return false;
+    }
+    const owner = callee.expression;
+    const name = callee.name?.text;
+    if (owner?.kind === SyntaxKind5.ThisKeyword) {
+      return name === "parseToInt";
+    }
+    return owner?.kind === SyntaxKind5.Identifier && owner.text === "Math" && ["floor", "ceil", "round"].includes(name);
   }
   // int / int is a float64 division as in JS: typed operands convert, and with two constants
   // the left one does (an untyped constant operand then converts implicitly)

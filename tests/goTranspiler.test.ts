@@ -3012,6 +3012,29 @@ describe('go native element assignment', () => {
         expect(output).toContain("var now int64 = this.Milliseconds()");
         expect(output).toContain("var since any = now - 2592000000");
     });
+    test('Divide on a non-nil *int64 local prints the float64 division only under a box-blind consumer', () => {
+        const input =
+        "class T {\n" +
+        "    parseToInt (n: any): number { return 1; }\n" +
+        "    f (since: Int = undefined, until: Int = undefined, params = {}) {\n" +
+        "        const request = {};\n" +
+        "        if (since !== undefined) {\n" +
+        "            request['a'] = Math.floor (since / 1000);\n" +
+        "            request['b'] = this.parseToInt (since / 1000);\n" +
+        "            request['c'] = since / 1000;\n" +
+        "            request['d'] = Math.floor (since / 0);\n" +
+        "        }\n" +
+        "        request['e'] = this.parseToInt (until / 1000);\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("MathFloor(float64(*since) / 1000)");
+        expect(output).toContain("this.ParseToInt(float64(*since) / 1000)");
+        expect(output).toContain("Divide(since, 1000)");
+        expect(output).toContain("Divide(since, 0)");
+        expect(output).toContain("this.ParseToInt(Divide(until, 1000))");
+    });
     test('Divide inlines a literal divisor but keeps the helper for a zero divisor', () => {
         const input =
         "class T {\n" +
