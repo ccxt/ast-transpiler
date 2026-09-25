@@ -57,7 +57,24 @@ export declare const RUST_DECLARED_DICT_LOCALS: {
      *  non-container, `set_value` / `remove` write a key). */
     KIND_PRESERVING_MUTATORS: Set<string>;
 };
+/** Preorder (forEachChild order) of a scope's descendants, decoded once: `end[i]` is the index past
+ *  node i's subtree; `byName` lists identifiers and name-binding declarations per name text. */
+interface RustScopeIndex {
+    nodes: Node[];
+    end: number[];
+    byName: Map<string, number[]> | undefined;
+}
 export declare class RustTranspiler extends BaseTranspiler {
+    private rustScopeIndexes;
+    rustScopeIndex(scope: Node): RustScopeIndex;
+    /** `scope.forEachChild(visit)` recursion over the cached preorder: `visit` answers
+     *  RUST_WALK_SKIP to skip the node's subtree, RUST_WALK_STOP to end the walk. */
+    rustWalkScope(scope: Node, visit: (n: any) => number | void): void;
+    /** Scope nodes that are an identifier or a name-binding declaration spelled `name`, in walk order. */
+    rustScopeNameNodes(scope: Node, name: string): Node[];
+    private static readonly RUST_PREFETCH_TYPE_KINDS;
+    /** One bulk getTypeAtLocation for the class's nodes of those kinds, seeding the checker memo. */
+    rustPrefetchClassTypes(node: Node): void;
     binaryExpressionsWrappers: any;
     methodSignatures: Record<string, {
         requiredCount: number;
@@ -236,6 +253,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_TIER_FILE;
     /** `'str'` when the method is emitted `-> Option<String>`, else undefined. */
     rustNativeStrReturnKind(node: Node): string | undefined;
+    private rustMethodOverrides;
+    private rustClassAncestorTables;
+    /** Per ancestor class (nearest first): method name -> its LAST declaration; undefined when a
+     *  parent class does not resolve. */
+    private rustAncestorMethodTables;
+    getMethodOverride(node: Node): Node;
     private rustNativeStrReturnDecisionUncached;
     /** Every `return` of the method's own body converts, and the body's last
      *  statement is one of them (so Rust sees no `()`-valued tail the
@@ -252,6 +275,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     unwrapParensNode(node: Node): Node | undefined;
     /** The callee declaration behind `self.<method>(..)` when it is emitted
      *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
+    private rustCallDeclarations;
     rustNativeStrCalleeKind(node: Node): string | undefined;
     /** `Option<String>` → `Value` (exact inverse of the return conversion). */
     rustNativeStrValueBox(text: string): string;
@@ -619,3 +643,4 @@ export declare class RustTranspiler extends BaseTranspiler {
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
 }
+export {};
