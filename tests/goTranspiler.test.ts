@@ -5321,6 +5321,56 @@ describe('native parameter types (B-02)', () => {
     });
 });
 
+describe('required string parameters of exchange-local methods', () => {
+    const base =
+        "class Base {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    createOrder (symbol: string, type: string) { return undefined; }\n" +
+        "}\n";
+
+    test('a string parameter every caller passes a literal or a proven param prints string and == goes native', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async createSpotOrder (symbol: string, type: string) {\n" +
+            "        if (type === 'limit') {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return this.requestType (type);\n" +
+            "    }\n" +
+            "    requestType (type: string) {\n" +
+            "        return (type === 'market');\n" +
+            "    }\n" +
+            "    async use () {\n" +
+            "        return await this.createSpotOrder ('BTC/USDT', 'limit');\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) createSpotOrderBody(ch chan any, symbol string, typeVar string) any {');
+        expect(output).toContain('func (this *Test) RequestType(typeVar string) any {');
+        expect(output).toContain('typeVar == "limit"');
+        expect(output).not.toContain('IsEqual(typeVar, "limit")');
+    });
+
+    test('an inherited method, a nullable or nil-compared parameter, or an unproven caller keeps the box', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    createOrder (symbol: string, type: string) { return type === 'limit'; }\n" +
+            "    a (x: string | undefined) { return x === 'y'; }\n" +
+            "    b (x: string) { return x === undefined; }\n" +
+            "    c (x: string) { return x === 'y'; }\n" +
+            "    use (o) {\n" +
+            "        this.a ('y'); this.b ('y');\n" +
+            "        return this.c (this.safeString (o, 'k'));\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) CreateOrder(symbol any, typeVar any) any {');
+        expect(output).toContain('func (this *Test) A(x any) any {');
+        expect(output).toContain('func (this *Test) B(x any) any {');
+        expect(output).toContain('func (this *Test) C(x any) any {');
+    });
+});
+
 describe('native parameter types across the ts/src tree (B-02)', () => {
     // a scoped run's program holds one file, so the sibling files of the same ts/src
     // tree (pro/ and the derived exchanges) are only provable textually: the fixture
@@ -5972,5 +6022,42 @@ describe('pro handler frame parameters (D-03)', () => {
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
         expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+    });
+});
+
+describe('go native numeric equality', () => {
+    const body = (src: string) => transpiler.transpileGo(`class X {\n    options: any;\n    f (arr, x) {\n${src}\n        return 0;\n    }\n}`).content;
+    test('an int local against an integer constant prints ==', () => {
+        const go = body("        const k = arr.length;\n        if (k === 0) { return 1; }\n        if (k !== 7) { return 2; }");
+        expect(go).toContain('if k == 0 {');
+        expect(go).toContain('if k != 7 {');
+        expect(go).not.toContain('IsEqual(k');
+    });
+    test('two int locals print ==', () => {
+        const go = body("        const k = arr.length;\n        const n = this.options['x'].length;\n        if (k === n) { return 1; }");
+        expect(go).toContain('if k == n {');
+    });
+    test('a fractional constant against an int local keeps IsEqual', () => {
+        const go = body("        const k = arr.length;\n        if (k === 1.5) { return 1; }");
+        expect(go).toContain('IsEqual(k, 1.5)');
+    });
+    test('an any operand keeps IsEqual', () => {
+        const go = body("        if (x === 1) { return 1; }");
+        expect(go).toContain('IsEqual(x, 1)');
+    });
+});
+
+describe('go long + chains', () => {
+    test('a 25-term chain of typed operands prints in linear time', () => {
+        const terms: string[] = [];
+        for (let i = 0; i < 25; i++) {
+            terms.push((i % 2) ? "'-'" : ('a' + i));
+        }
+        const params = terms.filter((t) => t[0] === 'a').map((t) => t + ': string').join(', ');
+        const input = 'class T {\n    f (' + params + '): string {\n        let r = \'\';\n        r = ' + terms.join(' + ') + ';\n        return r;\n    }\n}\n';
+        const start = Date.now();
+        const output = new Transpiler({ verbose: false }).transpileGo(input).content;
+        expect(Date.now() - start).toBeLessThan(5000);
+        expect(output).toContain('r = ');
     });
 });

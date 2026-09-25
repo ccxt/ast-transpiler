@@ -6464,3 +6464,75 @@ describe('java full arity for own methods of a non-exchange class', () => {
         expect(output).not.toMatch(/timeframe = /);
     });
 });
+
+describe('ordered comparison over declared numeric locals', () => {
+    const withTypes = (types: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => types[String(d?.name?.escapedText)];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const src = (expr: string) =>
+        "class T {\\n" +
+        "    f(p: any, q: any): boolean {\\n" +
+        "        const a = p;\\n" +
+        "        const b = q;\\n" +
+        "        return " + expr + ";\\n" +
+        "    }\\n" +
+        "}";
+
+    test('Long > literal keeps the helper null answer', () => {
+        withTypes({ a: 'Long' }, () => {
+            const output = transpiler.transpileJava(src("a > 5")).content;
+            expect(output).toContain("(a != null && a > 5)");
+            expect(output).not.toContain("Helpers.isGreaterThan");
+        });
+    });
+
+    test('two boxed Longs: every ordered op mirrors the helper null table', () => {
+        withTypes({ a: 'Long', b: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a > b")).content).toContain("(a != null && (b == null || a > b))");
+            expect(transpiler.transpileJava(src("a < b")).content).toContain("(b != null && (a == null || a < b))");
+            expect(transpiler.transpileJava(src("a >= b")).content).toContain("(b == null || (a != null && a >= b))");
+            expect(transpiler.transpileJava(src("a <= b")).content).toContain("(a == null || (b != null && a <= b))");
+        });
+    });
+
+    test('literal on the left with an Integer box', () => {
+        withTypes({ b: 'Integer' }, () => {
+            expect(transpiler.transpileJava(src("0 < b")).content).toContain("(b != null && 0 < b)");
+        });
+    });
+
+    test('Double box: only > goes native', () => {
+        withTypes({ a: 'Double' }, () => {
+            expect(transpiler.transpileJava(src("a > 0")).content).toContain("(a != null && a > 0)");
+            expect(transpiler.transpileJava(src("a >= 0")).content).toContain("Helpers.isGreaterThanOrEqual(a, 0)");
+        });
+    });
+
+    test('Object or String declared operands keep the helper', () => {
+        withTypes({ a: 'String', b: 'Object' }, () => {
+            expect(transpiler.transpileJava(src("a > b")).content).toContain("Helpers.isGreaterThan(a, b)");
+        });
+        expect(transpiler.transpileJava(src("a > 5")).content).toContain("Helpers.isGreaterThan(a, 5)");
+    });
+});
+
+test('declared-numeric ordered compare in an if condition carries no isTrue wrapper', () => {
+    const printer: any = (transpiler as any).javaTranspiler;
+    const previous = printer.javaDeclaredLocalTypeResolver;
+    printer.javaDeclaredLocalTypeResolver = (d: any) => (String(d?.name?.escapedText) === 'a' ? 'Long' : undefined);
+    try {
+        const input = "class T {\\n    f(p: any): void {\\n        const a = p;\\n        if (a > 5) {\\n            return;\\n        }\\n    }\\n}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("if ((a != null && a > 5))");
+        expect(output).not.toContain("Helpers.isTrue");
+    } finally {
+        printer.javaDeclaredLocalTypeResolver = previous;
+    }
+});

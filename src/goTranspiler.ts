@@ -648,6 +648,7 @@ export class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
+    goNativeArithmeticTypeCache: Map<any, string | undefined> | undefined;
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
     // appended to every async (channel returning) Go method/function name and to each
@@ -1553,7 +1554,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case ts.SyntaxKind.ParenthesizedExpression:
             return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
         case ts.SyntaxKind.BinaryExpression:
-            return this.goNativeArithmetic(node)?.goType;
+            return this.goNativeArithmeticType(node);
         case ts.SyntaxKind.Identifier:
             return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
         case ts.SyntaxKind.PropertyAccessExpression:
@@ -1767,6 +1768,24 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         return { goType, 'text': this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+    }
+
+    // goNativeArithmetic's type for an operand, once per node within one outermost query:
+    // re-deriving it re-prints the subtree at every level of a `+` chain (exponential)
+    goNativeArithmeticType(node): string | undefined {
+        const outermost = (this.goNativeArithmeticTypeCache === undefined);
+        const cache = this.goNativeArithmeticTypeCache ??= new Map();
+        try {
+            if (!cache.has(node)) {
+                cache.set(node, undefined);
+                cache.set(node, this.goNativeArithmetic(node)?.goType);
+            }
+            return cache.get(node);
+        } finally {
+            if (outermost) {
+                this.goNativeArithmeticTypeCache = undefined;
+            }
+        }
     }
 
     // the operator line gofmt prints for a natively emitted arithmetic expression: the
@@ -3550,13 +3569,21 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // D-03: a pro handler's frame parameter (`handleX (client: Client, message: Dict)`)
         // is the second family whose call-site proof can name a Go type
         const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
-        if (!parseParam && !handlerParam) {
-            return undefined; // internal parseX helpers and pro handlers only: the unified API is public surface
-        }
-        if (this.isAsyncFunction(fn) || this.goMethodKeepsBaseSignature(fn)) {
-            return undefined;
+        if (this.goMethodKeepsBaseSignature(fn)) {
+            return undefined; // inherited/base methods are pinned by the base class and IDerivedExchange
         }
         const index = fn.parameters.indexOf(param);
+        if (!parseParam && !handlerParam) {
+            // any other exchange-local method: only a non-nullable TS `string` becomes a Go `string`
+            // at least one proven caller: an uncalled method's signature is outside API only by accident
+            const goType = this.goRequiredStringParameterType(param);
+            return ((goType !== undefined) && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType)
+                && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)
+                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) ? goType : undefined;
+        }
+        if (this.isAsyncFunction(fn)) {
+            return undefined;
+        }
         for (const goType of this.goNativeParameterTypeCandidates(param, handlerParam)) {
             if (this.goParameterCallSitesPassType(fn, index, goType)
                 && this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, goType)
@@ -3565,6 +3592,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         return undefined;
+    }
+
+    // `string` for a parameter whose declared TS type is string (or a string-literal union) with no
+    // undefined/null member; a nullable one stays boxed here (callers pass *string or nil)
+    goRequiredStringParameterType(param): string | undefined {
+        const type = this.checkerOrUndefined()?.getTypeAtLocation(param);
+        if (type === undefined) {
+            return undefined;
+        }
+        const parts = ((typeof type.isUnion === 'function') && type.isUnion()) ? type.types : [type];
+        return parts.every(p => (p.flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral)) !== 0) ? 'string' : undefined;
     }
 
     // The boxed object parameter prints `x === undefined` as a native `x == nil`
@@ -3698,6 +3736,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         return false;
+    }
+
+    goHasTreeCallSite(fn): boolean {
+        const name = fn.name.escapedText;
+        if (this.goSameFileCallsOf(fn, name).length > 0) {
+            return true;
+        }
+        const tree = this.goTsSrcTree(fn.getSourceFile());
+        const myClass = this.goEnclosingClassName(fn);
+        return (tree?.callIndex.get(name) ?? []).some(site => this.goTsSrcFileDerivesFrom(tree, site.file, myClass));
     }
 
     // every call site of `fn` in the whole tree must pass exactly `goType` at `index`
@@ -3897,6 +3945,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const match = declRe.exec(fileText);
             return (match !== null) && accept(match[1].trim());
         };
+        if (goType === 'string') {
+            return /^(?:'[^'\\]*'|"[^"\\]*")$/.test(text); // a sibling file proves only a plain literal
+        }
         if (goType === '*string') {
             if (isStringProducer(text)) {
                 return true;
@@ -4885,6 +4936,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && lFam !== 'nil' && rFam !== 'nil' && lFam === rFam) {
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
+        // both operands print as a concrete Go numeric kind (a declared int/int64/float64, or a
+        // constant that fits the other side): IsEqual converts to that same kind, never sees nil
+        const numericKind = (!lPtr && !rPtr) ? this.goNativeNumericEqualityKind(left, leftText, right, rightText) : undefined;
+        if (numericKind !== undefined) {
+            return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        }
         // the declared-local table names `string` for this identifier (or the signature printer emits the
         // parameter as `string`): a `var x string` cannot hold a pointer or nil, so a string-literal
         // comparison equals the helper. A local ever written another type is reported `any` and boxed.
@@ -4970,6 +5027,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         }
         return undefined;
+    }
+
+    // the kind a native `==` compares two numeric operands in; undefined keeps IsEqual. Two
+    // constants are left to the helper (nothing to type), as is any mix Go would refuse.
+    goNativeNumericEqualityKind(left, leftText: string, right, rightText: string): string | undefined {
+        if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+            return undefined;
+        }
+        const leftKind = this.goOperandNumericKind(left, leftText);
+        const rightKind = this.goOperandNumericKind(right, rightText);
+        if ((leftKind === undefined) || (rightKind === undefined)) {
+            return undefined;
+        }
+        return this.goComparisonKind(left, leftKind, right, rightKind);
     }
 
     // the Go numeric kind an operand's static type is, or undefined when it stays
