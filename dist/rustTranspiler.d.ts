@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Block, type CallExpression, type Declaration, type Identifier, type Node, type ParameterDeclaration, type VariableDeclaration } from "typescript/unstable/ast";
-import { type Symbol, type Type } from "typescript/unstable/sync";
+import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 /** Answer of `RustTranspiler.rustDeclaredLocalTypeResolver` for a local whose
  *  value provably holds a `Value::Dict` at every use. */
 export type RustDeclaredLocalKind = 'dict';
@@ -348,7 +348,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     toSnakeCaseName(name: string): string;
     escapeRustStringLiteral(text: string): string;
     getCheckedTypeOf(node: any): Type | undefined;
-    typeSymbolOf(type: Type): Symbol | undefined;
+    typeSymbolOf(type: Type): TsSymbol | undefined;
     /** Types declared outside ts/src (Date, Response, Array, Promise, …) are never
      *  backed by a plain `Value` map in the rust port. */
     isLibDeclaredType(type: Type): boolean;

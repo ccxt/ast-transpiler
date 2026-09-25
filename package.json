@@ -75,5 +75,28 @@
     "compiler",
     "esm",
     "cjs"
-  ]
+  ],
+  "overrides": {
+    "tsup": {
+      "typescript": "$typescript"
+    },
+    "@typescript-eslint/parser": {
+      "typescript": "npm:typescript@5.9.3"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "typescript": "npm:typescript@5.9.3"
+    },
+    "@typescript-eslint/eslint-plugin": {
+      "typescript": "npm:typescript@5.9.3"
+    },
+    "@typescript-eslint/type-utils": {
+      "typescript": "npm:typescript@5.9.3"
+    },
+    "@typescript-eslint/utils": {
+      "typescript": "npm:typescript@5.9.3"
+    },
+    "tsutils": {
+      "typescript": "npm:typescript@5.9.3"
+    }
+  }
 }

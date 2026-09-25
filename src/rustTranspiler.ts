@@ -1,7 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
 import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
-import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol, type Type } from "typescript/unstable/sync";
+import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 
 const parserConfig = {
@@ -2159,7 +2159,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Binding symbol of an identifier, or undefined when the checker cannot
      *  answer (ByContent probes without a class context, for instance). */
-    private rustSymbolOf(node: Identifier): Symbol | undefined {
+    private rustSymbolOf(node: Identifier): TsSymbol | undefined {
         return this.checkerOrUndefined()?.getSymbolAtLocation(node);
     }
 
@@ -2694,7 +2694,7 @@ export class RustTranspiler extends BaseTranspiler {
         return this.checkerOrUndefined()?.getTypeAtLocation(node);
     }
 
-    typeSymbolOf(type: Type): Symbol | undefined {
+    typeSymbolOf(type: Type): TsSymbol | undefined {
         if (type === undefined || type === null) return undefined;
         return type?.getSymbol() ?? type?.getAliasSymbol();
     }
