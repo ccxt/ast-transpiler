@@ -5486,8 +5486,41 @@ export class JavaTranspiler extends BaseTranspiler {
         return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).keySet())`;
     }
 
-    printObjectValuesCall(_node, _identation, parsedArg = undefined) {
+    // Object.values twin of printObjectKeysCall: the same proofs (declared Map local, or a
+    // checker-proven dict that is not a `this.<field>` read) admit the native value copy.
+    printObjectValuesCall(node, _identation, parsedArg = undefined) {
+        const native = this.printNativeObjectValuesCall(node);
+        if (native !== undefined) {
+            return native;
+        }
         return `Helpers.objectValues(${parsedArg})`;
+    }
+
+    printNativeObjectValuesCall(node) {
+        const argument = node?.arguments?.[0];
+        if (argument === undefined || ts.isPropertyAccessExpression(argument)) {
+            return undefined;
+        }
+        // a local aliasing a field map (`const subs = client.subscriptions`) is the shared
+        // map itself: keep the helper's synchronized snapshot for it
+        if (ts.isIdentifier(argument)) {
+            const initializer = this.javaDeclarationOfIdentifier(argument)?.initializer;
+            if (initializer !== undefined && ts.isPropertyAccessExpression(initializer)) {
+                return undefined;
+            }
+        }
+        if (this.javaDeclaredMapReceiver(argument)) {
+            return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.values())`;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        const type = checker.getTypeAtLocation(argument);
+        if (!this.isJavaMapStructureType(type)) {
+            return undefined;
+        }
+        return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).values())`;
     }
 
     printJsonParseCall(_node, _identation, parsedArg = undefined) {

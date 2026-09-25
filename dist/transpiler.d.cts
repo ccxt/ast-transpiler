@@ -1469,7 +1469,8 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaNonArrayType(type: any, depth?: number): boolean;
     printObjectKeysCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeObjectKeysCall(node: any): string;
-    printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
+    printObjectValuesCall(node: any, _identation: any, parsedArg?: any): string;
+    printNativeObjectValuesCall(node: any): string;
     printJsonParseCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonStringifyCall(_node: any, _identation: any, parsedArg?: any): string;
     printNativePromiseAllCall(node: any): string;

@@ -2219,6 +2219,110 @@ describe('java transpiling tests', () => {
         expect(output).not.toMatch(/\.values\(\)/);
     });
 
+    // --- objectValues native emission: same proofs as objectKeys ---
+
+    test('Object.values(dict-typed identifier) emits the native value copy', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    f(dict: { [key: string]: any }) {\n" +
+        "        return Object.values(dict);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/new java\.util\.ArrayList<Object>\(\(\(java\.util\.Map<String, Object>\)dict\)\.values\(\)\)/);
+        expect(output).not.toMatch(/Helpers\.objectValues\(/);
+    });
+
+    test('Object.values of a dict-returning call emits the native value copy', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    g(): { [key: string]: any } {\n" +
+        "        return {};\n" +
+        "    }\n" +
+        "    f() {\n" +
+        "        return Object.values(this.g());\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/new java\.util\.ArrayList<Object>\(\(\(java\.util\.Map<String, Object>\)this\.g\(\)\)\.values\(\)\)/);
+    });
+
+    test('Object.values of a declared Map local emits the cast-free value copy', () => {
+        const fresh = new Transpiler();
+        const printer: any = (fresh as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => {
+                return declaration?.name?.escapedText === 'grouped' ? 'Map<String, Object>' : undefined;
+            };
+            const input =
+            "class T {\n" +
+            "    f(rows) {\n" +
+            "        const grouped = this.groupBy(rows, 'k');\n" +
+            "        return Object.values(grouped);\n" +
+            "    }\n" +
+            "}";
+            const output = fresh.transpileJava(input).content;
+            expect(output).toContain('new java.util.ArrayList<Object>(grouped.values())');
+            expect(output).not.toMatch(/Helpers\.objectValues\(/);
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    });
+
+    test('Object.values(this.<dict field>) keeps the helper (shared field map)', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    dict: { [key: string]: any } = {};\n" +
+        "    f() {\n" +
+        "        return Object.values(this.dict);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectValues\(\s*this\.dict\s*\)/);
+        expect(output).not.toMatch(/\.values\(\)/);
+    });
+
+    test('Object.values of a local aliasing a field map keeps the helper', () => {
+        const fresh = new Transpiler();
+        const input =
+        "class T {\n" +
+        "    dict: { [key: string]: any } = {};\n" +
+        "    f() {\n" +
+        "        const subs = this.dict;\n" +
+        "        return Object.values(subs);\n" +
+        "    }\n" +
+        "}";
+        const output = fresh.transpileJava(input).content;
+        expect(output).toMatch(/Helpers\.objectValues\(\s*subs\s*\)/);
+        expect(output).not.toMatch(/\.values\(\)/);
+    });
+
+    test('Object.values of a nullable dict / an array keeps the helper', () => {
+        const fresh = new Transpiler();
+        const nullable =
+        "class T {\n" +
+        "    f(dict: { [key: string]: any } | undefined) {\n" +
+        "        return Object.values(dict);\n" +
+        "    }\n" +
+        "}";
+        const nullableOutput = fresh.transpileJava(nullable).content;
+        expect(nullableOutput).toMatch(/Helpers\.objectValues\(/);
+        expect(nullableOutput).not.toMatch(/\.values\(\)/);
+        const array =
+        "class T {\n" +
+        "    f(list: any[]) {\n" +
+        "        return Object.values(list);\n" +
+        "    }\n" +
+        "}";
+        const arrayOutput = fresh.transpileJava(array).content;
+        expect(arrayOutput).toMatch(/Helpers\.objectValues\(/);
+        expect(arrayOutput).not.toMatch(/\.values\(\)/);
+    });
+
     test('Array.isArray(x) emits (x instanceof java.util.List) — bare identifier', () => {
         const fresh = new Transpiler();
         const input =

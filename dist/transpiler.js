@@ -27,12 +27,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/tsup/assets/esm_shims.js
+// ../../ast-transpiler/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename, getDirname, __dirname;
 var init_esm_shims = __esm({
-  "node_modules/tsup/assets/esm_shims.js"() {
+  "../../ast-transpiler/node_modules/tsup/assets/esm_shims.js"() {
     getFilename = () => fileURLToPath(import.meta.url);
     getDirname = () => path.dirname(getFilename());
     __dirname = /* @__PURE__ */ getDirname();
@@ -18148,8 +18148,38 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).keySet())`;
   }
-  printObjectValuesCall(_node, _identation, parsedArg = void 0) {
+  // Object.values twin of printObjectKeysCall: the same proofs (declared Map local, or a
+  // checker-proven dict that is not a `this.<field>` read) admit the native value copy.
+  printObjectValuesCall(node, _identation, parsedArg = void 0) {
+    const native = this.printNativeObjectValuesCall(node);
+    if (native !== void 0) {
+      return native;
+    }
     return `Helpers.objectValues(${parsedArg})`;
+  }
+  printNativeObjectValuesCall(node) {
+    const argument = node?.arguments?.[0];
+    if (argument === void 0 || ts6.isPropertyAccessExpression(argument)) {
+      return void 0;
+    }
+    if (ts6.isIdentifier(argument)) {
+      const initializer = this.javaDeclarationOfIdentifier(argument)?.initializer;
+      if (initializer !== void 0 && ts6.isPropertyAccessExpression(initializer)) {
+        return void 0;
+      }
+    }
+    if (this.javaDeclaredMapReceiver(argument)) {
+      return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.values())`;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    const type = checker.getTypeAtLocation(argument);
+    if (!this.isJavaMapStructureType(type)) {
+      return void 0;
+    }
+    return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).values())`;
   }
   printJsonParseCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.parseJson(${parsedArg})`;
