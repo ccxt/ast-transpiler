@@ -4045,6 +4045,21 @@ describe('go string concat chains -> native +', () => {
         expect(output).toContain('var auth string = "/u" + "GET" + method + "" + nonce');
         expect(output).not.toContain('Add(');
     });
+    test('a long concat chain prints in linear time', () => {
+        const leaves = Array.from({ length: 40 }, (_, i) => `'p${i}'`).join(' + ');
+        const input =
+        "class Exchange {\n" +
+        "    main (method = 'GET') {\n" +
+        `        const auth = method + ${leaves};\n` +
+        "        return auth;\n" +
+        "    }\n" +
+        "}\n";
+        const started = Date.now();
+        const output = squash(transpiler.transpileGo(input).content);
+        const expected = Array.from({ length: 40 }, (_, i) => `"p${i}"`).join(' + ');
+        expect(output).toContain(`var auth string = method + ${expected}`);
+        expect(Date.now() - started).toBeLessThan(5000);
+    });
     test('an any parameter or unproven *string leaf keeps the Add declaration any', () => {
         const input =
         "class Exchange {\n" +

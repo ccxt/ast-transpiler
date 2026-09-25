@@ -678,6 +678,9 @@ export class GoTranspiler extends BaseTranspiler {
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
     goLocalStaticTypeCache = new WeakMap<object, string | undefined>();
+    // binary-expression texts and goNativeArithmetic types, keyed by node + print context, alive only
+    // while the outermost binary print/typing runs: operand typing re-prints every nested operator
+    goBinaryMemo: Map<object, Map<string, any>> | undefined;
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     asyncMethodSuffix = '';
@@ -1589,7 +1592,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case SyntaxKind.ParenthesizedExpression:
             return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
         case SyntaxKind.BinaryExpression:
-            return this.goNativeArithmetic(node)?.goType;
+            return this.goNativeArithmeticType(node);
         case SyntaxKind.Identifier:
             return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
         case SyntaxKind.PropertyAccessExpression:
@@ -1769,6 +1772,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         // `a + b` on strings is the only shape that can never sit under a tighter
         // operator, so it is the only one left unwrapped
         return (this.goOperandStaticType(node, text) === 'string') ? text : '(' + text + ')';
+    }
+
+    // goNativeArithmetic's Go type for an operand (memoized within the enclosing binary print)
+    goNativeArithmeticType(node): string | undefined {
+        const key = `type|${this.goBinaryContextKey()}`;
+        return this.goBinaryMemoized(node, key, () => this.goNativeArithmetic(node)?.goType);
     }
 
     // `Add(a, b)` & co. become the Go operator when both printed operands already
@@ -4744,10 +4753,45 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return [...fileImports].sort().map((path) => `import "${path}"`).join("\n") + "\n\n" + body;
     }
 
+    goBinaryMemoized<T>(node, key: string, compute: () => T): T {
+        const outermost = this.goBinaryMemo === undefined;
+        const memo = this.goBinaryMemo ??= new Map();
+        try {
+            let byKey = memo.get(node);
+            if (byKey?.has(key)) {
+                const cached = byKey.get(key);
+                return cached;
+            }
+            const value = compute();
+            if (byKey === undefined) {
+                memo.set(node, byKey = new Map());
+            }
+            byKey.set(key, value);
+            return value;
+        } finally {
+            if (outermost) {
+                this.goBinaryMemo = undefined;
+            }
+        }
+    }
+
+    // the printer state a binary print reads besides the node: depth, level and the recursion guards
+    goBinaryContextKey(): string {
+        return `${this.goExprDepth}|${this.goStatementLevel}|${this.goLocalTypeResolution.size}|${this.goDeclaredTypeInProgress.size}`;
+    }
+
+    goPrintBinaryMemoized(node, identation: number): string {
+        const key = `print|${this.goBinaryContextKey()}|${identation}`;
+        return this.goBinaryMemoized(node, key, () => this.goControlClauseParens(node, super.printNode(node, identation)));
+    }
+
     printNode(node, identation = 0): string {
         if (node !== undefined && isSourceFile(node)) {
             this.className = "undefined";
             return this.printSourceFileStatements(node, identation);
+        }
+        if (node?.kind === SyntaxKind.BinaryExpression && GO_ARITHMETIC_KINDS.indexOf(node.operatorToken.kind) >= 0) {
+            return this.goPrintBinaryMemoized(node, identation);
         }
         const isStatement = node !== undefined && isStatementNode(node) && node.kind !== SyntaxKind.Block;
         const previousLevel = this.goStatementLevel;
