@@ -4951,6 +4951,87 @@ describe('go native string operations (strings.*)', () => {
     });
 });
 
+// helper-family removal (helper-loop/go-9): `Split(x, sep)` on a declared `*string` identifier
+// prints the helper's own branch inline — nil is a nil []string, otherwise strings.Split of the
+// deref'd string — while every other receiver shape keeps the helper
+describe('go Split on a *string receiver -> nil-guarded strings.Split literal', () => {
+    const squash = (output: string) => output.replace(/[\t\n ]+/g, ' ');
+    test('a *string local receiver with a literal separator prints the guarded literal and keeps []string', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const marketId = this.safeString (item, 'symbol');\n" +
+        "        const parts = marketId.split ('-');\n" +
+        "        const count = parts.length;\n" +
+        "        return [ parts, count ];\n" +
+        "    }\n" +
+        "}\n";
+        const raw = transpiler.transpileGo(input).content;
+        const output = squash(raw);
+        expect(raw).toContain("import \"strings\"");
+        expect(raw).toContain("var marketId *string = this.SafeString(item, \"symbol\")");
+        // the local initialised by the literal keeps the []string the helper declared
+        expect(output).toContain("var parts []string = func() []string { if marketId == nil { return nil } return strings.Split(*marketId, \"-\") }()");
+        expect(output).toContain("var count int = len(parts)");
+        expect(raw).not.toMatch(/(?<![.\w])Split\(/);
+        // go/printer layout: body one level below the statement, `}()` at the statement's level
+        expect(raw).toContain("\tvar parts []string = func() []string {\n\t\tif marketId == nil {\n\t\t\treturn nil\n\t\t}\n\t\treturn strings.Split(*marketId, \"-\")\n\t}()");
+    });
+    test('a *string receiver with a declared string separator prints the guarded literal in value position', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const sep: string = '_';\n" +
+        "        const id = this.safeString (item, 'id');\n" +
+        "        return id.split (sep)[0];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("GetValue(func() []string { if id == nil { return nil } return strings.Split(*id, sep) }(), 0)");
+        expect(output).not.toContain("Split(id,");
+    });
+    test('an any-boxed receiver, a *string separator and a non-identifier *string receiver keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item, symbol) {\n" +
+        "        const id = this.safeString (item, 'id');\n" +
+        "        const other = this.safeString (item, 'other');\n" +
+        "        const a = symbol.split ('-');\n" +
+        "        const b = id.split (other);\n" +
+        "        const c = this.safeString (item, 'x').split ('-');\n" +
+        "        const d = item['k'].split ('-');\n" +
+        "        return [ a, b, c, d ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("import \"strings\"");
+        expect(output).toContain("var a []string = Split(symbol, \"-\")");
+        expect(output).toContain("var b []string = Split(id, other)");
+        expect(output).toContain("var c []string = Split(this.SafeString(item, \"x\"), \"-\")");
+        expect(output).toContain("var d []string = Split(GetValue(item, \"k\"), \"-\")");
+        expect(output).not.toContain("strings.Split");
+    });
+    test('a *string local later pushed onto stays an any box with the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const id = this.safeString (item, 'id');\n" +
+        "        const parts = id.split ('-');\n" +
+        "        parts.push ('x');\n" +
+        "        return parts;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        // the declaration reject scan demotes the local; the initializer is still the guarded literal
+        expect(output).toContain("var parts any = func() []string { if id == nil { return nil } return strings.Split(*id, \"-\") }()");
+        expect(output).toContain("AppendToArray(&parts, \"x\")");
+    });
+});
+
 describe('native parameter types (B-02)', () => {
     // every snippet needs a base class: a root class is the generated tree's abstract
     // base and is public surface, so its methods are never retyped

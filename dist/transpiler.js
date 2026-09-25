@@ -8508,6 +8508,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (property?.kind === ts5.SyntaxKind.PropertyAccessExpression && property.name?.escapedText === "toString" && initializer.arguments?.length === 0 && this.goOperandStaticType(property.expression, printedValue) === "string") {
           return "string";
         }
+        if (this.goIsNativeSplitOnStringPointer(initializer, printedValue)) {
+          return "[]string";
+        }
         break;
       }
     }
@@ -12766,7 +12769,47 @@ ${this.getIden(level)}}()`;
         return native;
       }
     }
-    return `Split(${name}, ${parsedArg})`;
+    return this.goNativeSplitOnStringPointer(node, name, parsedArg) ?? `Split(${name}, ${parsedArg})`;
+  }
+  // Split derefScalar's a `*string` receiver: nil answers a nil []string, else strings.Split of
+  // the pointed-to string with ToString(sep), the identity for a Go string. A declared `*string`
+  // identifier (read twice, so no other receiver shape) prints that same branch as a func literal.
+  goNativeSplitOnStringPointer(node, name, parsedArg) {
+    if (typeof name !== "string" || typeof parsedArg !== "string" || name.includes("\n") || parsedArg.includes("\n")) {
+      return void 0;
+    }
+    let receiver = node?.expression?.expression;
+    while (receiver?.kind === ts5.SyntaxKind.AsExpression || receiver?.kind === ts5.SyntaxKind.NonNullExpression || receiver?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      receiver = receiver.expression;
+    }
+    if (receiver?.kind !== ts5.SyntaxKind.Identifier || this.goDeclaredTypeOfIdentifier(receiver) !== "*string") {
+      return void 0;
+    }
+    if (!/^[A-Za-z_]\w*$/.test(name) || !this.goNativeStringOperands([node.arguments?.[0]], [parsedArg], ["string"])) {
+      return void 0;
+    }
+    const level = this.goStatementLevel;
+    const body = this.getIden(level + 1);
+    const inner = this.getIden(level + 2);
+    const literal = `func() []string {
+${body}if ${name} == nil {
+${inner}return nil
+${body}}
+${body}return strings.Split(*${name}, ${parsedArg})
+${this.getIden(level)}}()`;
+    return this.goNativeStringCall(literal);
+  }
+  // true when this `.split(sep)` call prints the nil-guarded strings.Split literal above
+  goIsNativeSplitOnStringPointer(node, printedText) {
+    if (node?.kind !== ts5.SyntaxKind.CallExpression) {
+      return false;
+    }
+    const callee = node.expression;
+    if (callee?.kind !== ts5.SyntaxKind.PropertyAccessExpression || callee.name?.escapedText !== "split") {
+      return false;
+    }
+    const value = this.goUnwrapPrintedParens(printedText);
+    return value.startsWith("func() []string {") && value.endsWith("}()") && value.includes("return strings.Split(*");
   }
   printToFixedCall(node, identation, name = void 0, parsedArg = void 0) {
     return `toFixed(${name}, ${parsedArg})`;

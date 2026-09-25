@@ -1150,6 +1150,8 @@ declare class GoTranspiler extends BaseTranspiler {
     printTrimCall(node: any, identation: any, name?: any): string;
     printJoinCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    goNativeSplitOnStringPointer(node: any, name: any, parsedArg: any): string | undefined;
+    goIsNativeSplitOnStringPointer(node: any, printedText: string): boolean;
     printToFixedCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToStringCall(node: any, identation: any, name?: any): any;
     printConcatCall(node: any, identation: any, name?: any, parsedArg?: any): string;
