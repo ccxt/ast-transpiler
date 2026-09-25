@@ -8863,13 +8863,13 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === ts5.SyntaxKind.BinaryExpression && parent.left === n) {
           const op = parent.operatorToken.kind;
           if (op === ts5.SyntaxKind.EqualsToken) {
-            if (goType === "string" && this.goSelfConcatIsString(parent.right, varName)) {
+            if (goType === "string" && this.goSelfConcatWriteIsString(parent.right, varName)) {
               return false;
             }
             if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === ts5.SyntaxKind.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0)) {
               return true;
             }
-          } else if (op === ts5.SyntaxKind.PlusEqualsToken && goType === "string" && this.goSelfConcatIsString(parent.right, varName)) {
+          } else if (op === ts5.SyntaxKind.PlusEqualsToken && goType === "string" && this.goOperandStaticType(parent.right, this.printNode(parent.right, 0)) === "string") {
             return false;
           } else if (op >= ts5.SyntaxKind.FirstCompoundAssignment && op <= ts5.SyntaxKind.LastCompoundAssignment) {
             return true;
@@ -8879,6 +8879,18 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return false;
     });
     return safe;
+  }
+  // `x = <+ chain>` that reads x itself: only a whole chain prints native (a bare
+  // derefable leaf would be assigned as the *string it is)
+  goSelfConcatWriteIsString(node, varName) {
+    while (node?.kind === ts5.SyntaxKind.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    if (node?.kind !== ts5.SyntaxKind.BinaryExpression || node.operatorToken.kind !== ts5.SyntaxKind.PlusToken) {
+      return false;
+    }
+    const readsSelf = this.hasNodeWhere(node, (n) => n.kind === ts5.SyntaxKind.Identifier && n.escapedText === varName);
+    return readsSelf && this.goSelfConcatIsString(node, varName);
   }
   // a `+` chain written back into a `string` local (`x = x + "&" + y`, `x += y`): every leaf is
   // the local itself (a Go string by the typing being proven) or a proven non-nil Go string,

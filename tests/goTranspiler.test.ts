@@ -6204,4 +6204,9 @@ describe('go string locals rewritten by self-concatenation', () => {
         expect(output).toContain('a = Add(a, this.SafeString(o, "k"))');
         expect(output).toContain('var b any = ""');
     });
+    test('a defaulted SafeString write or += of a *string keeps the local any', () => {
+        const output = run("        let c = '';\n        c = c + 'x';\n        c = this.safeString (o, 'k', 'd');\n        let d = '';\n        d += this.safeString (o, 'k', 'd');\n        return c + d;\n");
+        expect(output).toContain('var c any = ""');
+        expect(output).toContain('var d any = ""');
+    });
 });

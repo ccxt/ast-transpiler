@@ -1944,14 +1944,15 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 if (parent?.kind === ts.SyntaxKind.BinaryExpression && parent.left === n) {
                     const op = parent.operatorToken.kind;
                     if (op === ts.SyntaxKind.EqualsToken) {
-                        if ((goType === 'string') && this.goSelfConcatIsString(parent.right, varName)) {
+                        if ((goType === 'string') && this.goSelfConcatWriteIsString(parent.right, varName)) {
                             return false;
                         }
                         if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
                             && !((declaration.kind === ts.SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)) {
                             return true;
                         }
-                    } else if ((op === ts.SyntaxKind.PlusEqualsToken) && (goType === 'string') && this.goSelfConcatIsString(parent.right, varName)) {
+                    } else if ((op === ts.SyntaxKind.PlusEqualsToken) && (goType === 'string')
+                        && (this.goOperandStaticType(parent.right, this.printNode(parent.right, 0)) === 'string')) {
                         return false;
                     } else if ((op >= ts.SyntaxKind.FirstCompoundAssignment) && (op <= ts.SyntaxKind.LastCompoundAssignment)) {
                         return true;
@@ -1961,6 +1962,19 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         });
         return safe;
+    }
+
+    // `x = <+ chain>` that reads x itself: only a whole chain prints native (a bare
+    // derefable leaf would be assigned as the *string it is)
+    goSelfConcatWriteIsString(node, varName: string): boolean {
+        while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if ((node?.kind !== ts.SyntaxKind.BinaryExpression) || (node.operatorToken.kind !== ts.SyntaxKind.PlusToken)) {
+            return false;
+        }
+        const readsSelf = this.hasNodeWhere(node, (n: any) => (n.kind === ts.SyntaxKind.Identifier) && (n.escapedText === varName));
+        return readsSelf && this.goSelfConcatIsString(node, varName);
     }
 
     // a `+` chain written back into a `string` local (`x = x + "&" + y`, `x += y`): every leaf is
