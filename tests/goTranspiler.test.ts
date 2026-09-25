@@ -3001,6 +3001,7 @@ describe('go native element assignment', () => {
         const input =
         "class T {\n" +
         "    milliseconds (): number { return 1; }\n" +
+        "    iso8601 (x: any): string { return ''; }\n" +
         "    f () {\n" +
         "        var now = this.milliseconds();\n" +
         "        var since = now - 2592000000;\n" +
@@ -3447,6 +3448,33 @@ describe('go native element assignment', () => {
         "}\n"
         const output = transpiler.transpileGo(input).content;
         expect(output).not.toContain("GetArgStringPtr(");
+    });
+    test('a pointer copied into a local later written native arithmetic keeps the typed param', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    f (since: Int = undefined, params = {}) {\n" +
+        "        const now = this.milliseconds ();\n" +
+        "        let s = since;\n" +
+        "        if (s === undefined) {\n" +
+        "            s = now - 1000 * 60;\n" +
+        "        }\n" +
+        "        return this.iso8601 (s);\n" +
+        "    }\n" +
+        "}\n"
+        const go: any = transpiler.goTranspiler;
+        const saved = go.CCXT_GO_GETARG_SAFE_CONSUMERS;
+        go.CCXT_GO_GETARG_SAFE_CONSUMERS = { 'Iso8601': 'deref' };
+        // a host classifier types the native arithmetic write int64
+        go.goTypeOfInitializer = function (n: any, printed: string) {
+            return Object.getPrototypeOf(this).goTypeOfInitializer.call(this, n, printed) ?? ((n?.kind === SyntaxKind.BinaryExpression) ? this.goNativeArithmeticType(n) : undefined);
+        };
+        const output = transpiler.transpileGo(input).content;
+        delete go.goTypeOfInitializer;
+        go.CCXT_GO_GETARG_SAFE_CONSUMERS = saved;
+        expect(output).toContain("var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)");
+        expect(output).toContain("var s any = since");
     });
     test('a pointer copied into a local handed to an unknown callee keeps the box', () => {
         const input =

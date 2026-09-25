@@ -385,6 +385,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
     goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
     goGetArgArmIsNilGuarded(n: any, cond: any): boolean;
+    goGetArgWriteIsNativeArithmetic(rhs: any): boolean;
     goGetArgCopyTarget(use: any, body: any): any;
     goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;

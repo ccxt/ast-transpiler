@@ -12444,6 +12444,20 @@ ${this.getIden(level)}}()`;
     }
     return eq && arm === cond.whenFalse || ne && arm === cond.whenTrue;
   }
+  // a native int64/float64 arithmetic result boxes the same number its Add/Subtract/... helper form
+  // boxed, so it reads like that helper write rather than a value-family write
+  goGetArgWriteIsNativeArithmetic(rhs) {
+    let e = rhs;
+    while (e?.kind === SyntaxKind5.ParenthesizedExpression) {
+      e = e.expression;
+    }
+    const ops = [SyntaxKind5.PlusToken, SyntaxKind5.MinusToken, SyntaxKind5.AsteriskToken, SyntaxKind5.SlashToken, SyntaxKind5.PercentToken];
+    if (e?.kind !== SyntaxKind5.BinaryExpression || !ops.includes(e.operatorToken?.kind)) {
+      return false;
+    }
+    const goType = this.goNativeArithmeticType(e) ?? this.goConstantProductKind(e);
+    return goType === "int64" || goType === "float64";
+  }
   // the body-local `r` a copy `let r = x` / `r = x` lands in (the value, not the box, is copied)
   goGetArgCopyTarget(use, body) {
     const parent = use.parent;
@@ -12470,7 +12484,7 @@ ${this.getIden(level)}}()`;
         return;
       }
       if (n.kind === SyntaxKind5.BinaryExpression && n.operatorToken?.kind === SyntaxKind5.EqualsToken && n.left?.kind === SyntaxKind5.Identifier && n.left.text === target.name.text) {
-        valueWrite = this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0))));
+        valueWrite = this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0)))) && !this.goGetArgWriteIsNativeArithmetic(n.right);
       }
       n.forEachChild(visit);
     };
