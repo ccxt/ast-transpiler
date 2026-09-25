@@ -5,6 +5,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     getChecker(): Checker;
     private methodOverrideCache;
     getMethodOverride(node: Node): Node;
+    private overrideChainCache;
+    private javaMethodOverrideFromIndex;
     checkerOrUndefined(): Checker | undefined;
     javaExpressionTypeResolver?: (node: any) => string | undefined;
     countRequiredParameters(declaration: any): any;

@@ -3,7 +3,7 @@ import { NodeFlags, SyntaxKind, type Expression, type Node } from "typescript/un
 import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration, isElementAccessExpression, isExpressionStatement, isForInStatement, isForOfStatement, isFunctionDeclaration, isFunctionExpression, isIdentifier, isIfStatement, isMethodDeclaration, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyAssignment, isReturnStatement, isSourceFile, isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isTypeOfExpression, isTypeReferenceNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { createIdentifier } from "typescript/unstable/ast/factory";
 import { API, ElementFlags, IndexKind, SymbolFlags, TypeFlags, type Checker } from "typescript/unstable/sync";
-import { getCombinedNodeFlags, isFunctionLike } from "./tsUtils.js";
+import { getAllSuperTypeNodes, getCombinedNodeFlags, isFunctionLike } from "./tsUtils.js";
 
 const parserConfig = {
     EXTENDS_TOKEN: "extends",
@@ -381,9 +381,9 @@ const JAVA_MEMOIZED_METHODS = ["getSignatureFromDeclaration", "isArrayType", "is
 const JAVA_TYPE_PREFETCH_KINDS = new Set<number>([SyntaxKind.Identifier, SyntaxKind.BinaryExpression, SyntaxKind.Parameter, SyntaxKind.VariableDeclaration, SyntaxKind.StringLiteral, SyntaxKind.MethodDeclaration, SyntaxKind.PropertyAccessExpression, SyntaxKind.ParenthesizedExpression, SyntaxKind.ElementAccessExpression]);
 const JAVA_SYMBOL_PREFETCH_KINDS = new Set<number>([SyntaxKind.Identifier]);
 // the first lookup in a source file answers every node of the hot kinds in that file in one
-// array request; misses (other kinds) still go one by one
+// array request, skipping nodes the core prefetch already cached; other kinds go one by one
 function prefetchByFile(checker: Checker, name: "getTypeAtLocation" | "getSymbolAtLocation", kinds: Set<number>): void {
-    const original = (checker as any)[name] as (nodes: any) => any;
+    const original = (checker as any)[name] as ((nodes: any) => any) & { has?: (node: Node) => boolean };
     const cache = new WeakMap<Node, unknown>();
     const done = new WeakSet<object>();
     Object.defineProperty(checker, name, { configurable: true, value: (node: any) => {
@@ -398,7 +398,7 @@ function prefetchByFile(checker: Checker, name: "getTypeAtLocation" | "getSymbol
             done.add(sf);
             const nodes: Node[] = [];
             const visit = (n: Node) => {
-                if (kinds.has(n.kind)) {
+                if (kinds.has(n.kind) && !original.has?.(n)) {
                     nodes.push(n);
                 }
                 n.forEachChild(visit);
@@ -439,7 +439,7 @@ function prefetchResolvedSignatures(checker: Checker): void {
             done.add(sf);
             const calls: Node[] = [];
             const visit = (n: Node) => {
-                if (n.kind === SyntaxKind.CallExpression) {
+                if (n.kind === SyntaxKind.CallExpression && !(original as any).has?.(n)) {
                     calls.push(n);
                 }
                 n.forEachChild(visit);
@@ -513,9 +513,49 @@ export class JavaTranspiler extends BaseTranspiler {
         if (cached !== undefined) {
             return cached === JAVA_MEMO_UNDEFINED ? undefined : cached;
         }
-        const result = super.getMethodOverride(node);
+        const result = this.javaMethodOverrideFromIndex(node);
         this.methodOverrideCache.set(node, result === undefined ? JAVA_MEMO_UNDEFINED : result);
         return result;
+    }
+
+    // BaseTranspiler.getMethodOverride answered from a per-class ancestor chain of
+    // name -> last method maps (the furthest ancestor declaring the name wins, as there)
+    private overrideChainCache = new WeakMap<Node, Map<string, Node>[] | null>();
+    private javaMethodOverrideFromIndex(node: Node): Node {
+        const classDeclaration = node.parent;
+        if (!isClassDeclaration(classDeclaration) || !(classDeclaration as any).heritageClauses) {
+            return undefined;
+        }
+        let chain = this.overrideChainCache.get(classDeclaration);
+        if (chain === undefined) {
+            chain = [];
+            let parentClass = getAllSuperTypeNodes(classDeclaration)[0];
+            while (parentClass !== undefined) {
+                const parentClassDecl = this.getChecker().getTypeAtLocation(parentClass)?.getSymbol()?.valueDeclaration?.resolve();
+                if (parentClassDecl === undefined) {
+                    chain = null; // the base path warns and answers undefined
+                    break;
+                }
+                const byName = new Map<string, Node>();
+                for (const elem of (parentClassDecl as any).members ?? []) {
+                    if (isMethodDeclaration(elem)) {
+                        byName.set(elem.name.getText().trim(), elem);
+                    }
+                }
+                chain.push(byName);
+                parentClass = getAllSuperTypeNodes(parentClassDecl)[0] ?? undefined;
+            }
+            this.overrideChainCache.set(classDeclaration, chain);
+        }
+        if (chain === null) {
+            return super.getMethodOverride(node);
+        }
+        const name = (node as any).name.text;
+        let method = undefined;
+        for (const byName of chain) {
+            method = byName.get(name) ?? method;
+        }
+        return method;
     }
 
     checkerOrUndefined(): Checker | undefined {
