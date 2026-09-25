@@ -13154,8 +13154,8 @@ ${this.getIden(identation)}`;
     if (!this.goFileKeepsFileLevelImports()) {
       return void 0;
     }
-    const receiver = _optionalChain([node, 'optionalAccess', _1260 => _1260.expression, 'optionalAccess', _1261 => _1261.expression]);
-    const target = _optionalChain([node, 'optionalAccess', _1262 => _1262.arguments, 'optionalAccess', _1263 => _1263[0]]);
+    const receiver = this.goUnwrapPrintedAssertions(_optionalChain([node, 'optionalAccess', _1260 => _1260.expression, 'optionalAccess', _1261 => _1261.expression]));
+    const target = this.goUnwrapPrintedAssertions(_optionalChain([node, 'optionalAccess', _1262 => _1262.arguments, 'optionalAccess', _1263 => _1263[0]]));
     if (this.goIndexOfOperandType(target, parsedArg) !== "string") {
       return void 0;
     }

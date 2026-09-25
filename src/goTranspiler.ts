@@ -6975,8 +6975,8 @@ ${this.getIden(identation)}${returnStatement}`;
         if (!this.goFileKeepsFileLevelImports()) {
             return undefined;
         }
-        const receiver = node?.expression?.expression;
-        const target = node?.arguments?.[0];
+        const receiver = this.goUnwrapPrintedAssertions(node?.expression?.expression);
+        const target = this.goUnwrapPrintedAssertions(node?.arguments?.[0]);
         if (this.goIndexOfOperandType(target, parsedArg) !== 'string') {
             return undefined; // a nilable/number needle answers -1 in the helper
         }

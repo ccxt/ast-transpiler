@@ -13155,8 +13155,8 @@ ${this.getIden(identation)}`;
     if (!this.goFileKeepsFileLevelImports()) {
       return void 0;
     }
-    const receiver = node?.expression?.expression;
-    const target = node?.arguments?.[0];
+    const receiver = this.goUnwrapPrintedAssertions(node?.expression?.expression);
+    const target = this.goUnwrapPrintedAssertions(node?.arguments?.[0]);
     if (this.goIndexOfOperandType(target, parsedArg) !== "string") {
       return void 0;
     }

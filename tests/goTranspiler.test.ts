@@ -4117,6 +4117,21 @@ describe('go gofmt-clean native shapes', () => {
         expect(output).toContain("func() int { if amount == nil { return -1 } return strings.Index(*amount, \"-\") }()");
         expect(output).not.toContain("GetIndexOf(amount");
     });
+    test('indexOf on an asserted receiver and needle reads the operands\' own Go types', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const address = this.safeString (item, 'address');\n" +
+        "        const sep = '?dt=';\n" +
+        "        if ((address as string).indexOf ((sep as string)) >= 0) { return 'tag'; }\n" +
+        "        return '';\n" +
+        "    }\n" +
+        "}\n";
+        const output = squashWs(transpiler.transpileGo(input).content);
+        expect(output).toContain("return strings.Index(*address, sep) }()");
+        expect(output).not.toContain("GetIndexOf(");
+    });
     test('indexOf on a receiver Go boxes as any keeps the helper', () => {
         const input =
         "class Exchange {\n" +
