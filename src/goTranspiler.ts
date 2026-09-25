@@ -7025,11 +7025,20 @@ ${this.getIden(identation)}${returnStatement}`;
         return result;
     }
 
+    // `(x as T)` and `(x)` print as `x`, so the operand's own Go type governs the printed receiver
+    goUnwrapPrintedAssertions(node) {
+        while ((node?.kind === SyntaxKind.AsExpression) || (node?.kind === SyntaxKind.ParenthesizedExpression)) {
+            node = node.expression;
+        }
+        return node;
+    }
+
     // the native string call (built from the proven operand texts, `*`-dereferenced where needed) when
     // every operand matches `expected` and the file's stdlib import can be placed (see
     // goStdlibImportIsPlaceable), else the helper call; an unprinted argument keeps the helper
-    goNativeStringCallOr(node, texts: string[], expected: string[], nativeCall: (ops: string[]) => string, helperCall: string): string {
-        const operands = [node.expression?.expression, ...expected.slice(1).map((_, i) => node.arguments?.[i])];
+    goNativeStringCallOr(node, texts: string[], expected: string[], nativeCall: (ops: string[]) => string, helperCall: string, unwrapReceiver = false): string {
+        const receiver = unwrapReceiver ? this.goUnwrapPrintedAssertions(node.expression?.expression) : node.expression?.expression;
+        const operands = [receiver, ...expected.slice(1).map((_, i) => node.arguments?.[i])];
         const ops = texts.slice(1).includes(undefined) ? undefined : this.goNativeStringOperandTexts(operands, texts, expected);
         if ((ops !== undefined) && this.goStdlibImportIsPlaceable()) {
             this.goFileStdlibImports.add('strings');
@@ -7109,7 +7118,7 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printToUpperCaseCall(node, identation, name = undefined) {
         // `s.toUpperCase ()` -> strings.ToUpper
-        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.ToUpper(${o[0]})`, `ToUpper(${name})`);
+        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.ToUpper(${o[0]})`, `ToUpper(${name})`, true);
     }
 
     printToLowerCaseCall(node, identation, name = undefined) {

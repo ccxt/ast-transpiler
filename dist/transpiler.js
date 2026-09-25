@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-VDRBN3Z3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -13206,11 +13206,19 @@ ${this.getIden(level)}}()`;
     }
     return result;
   }
+  // `(x as T)` and `(x)` print as `x`, so the operand's own Go type governs the printed receiver
+  goUnwrapPrintedAssertions(node) {
+    while (node?.kind === SyntaxKind5.AsExpression || node?.kind === SyntaxKind5.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    return node;
+  }
   // the native string call (built from the proven operand texts, `*`-dereferenced where needed) when
   // every operand matches `expected` and the file's stdlib import can be placed (see
   // goStdlibImportIsPlaceable), else the helper call; an unprinted argument keeps the helper
-  goNativeStringCallOr(node, texts, expected, nativeCall, helperCall) {
-    const operands = [node.expression?.expression, ...expected.slice(1).map((_, i) => node.arguments?.[i])];
+  goNativeStringCallOr(node, texts, expected, nativeCall, helperCall, unwrapReceiver = false) {
+    const receiver = unwrapReceiver ? this.goUnwrapPrintedAssertions(node.expression?.expression) : node.expression?.expression;
+    const operands = [receiver, ...expected.slice(1).map((_, i) => node.arguments?.[i])];
     const ops = texts.slice(1).includes(void 0) ? void 0 : this.goNativeStringOperandTexts(operands, texts, expected);
     if (ops !== void 0 && this.goStdlibImportIsPlaceable()) {
       this.goFileStdlibImports.add("strings");
@@ -13289,7 +13297,7 @@ ${this.getIden(level)}}()`;
     return `Concat(${name}, ${parsedArg})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
-    return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.ToUpper(${o[0]})`, `ToUpper(${name})`);
+    return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.ToUpper(${o[0]})`, `ToUpper(${name})`, true);
   }
   printToLowerCaseCall(node, identation, name = void 0) {
     return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.ToLower(${o[0]})`, `ToLower(${name})`);

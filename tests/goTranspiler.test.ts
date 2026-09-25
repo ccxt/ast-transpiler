@@ -5285,6 +5285,27 @@ describe('go native string operations (strings.*)', () => {
         expect(output).toContain('strings.HasSuffix(s, "b")');
         expect(output).not.toMatch(/(?<![.\w])(Join|ToUpper|ToLower|StartsWith|EndsWith)\(/);
     });
+
+    test('toUpperCase on an asserted string receiver goes native only when the operand is a Go string', () => {
+        const input =
+            "class Base {\n" +
+            "    createOrder (symbol: string, side: string) { return undefined; }\n" +
+            "}\n" +
+            "class Test extends Base {\n" +
+            "    requestBody (side: string, other) {\n" +
+            "        const request = { 'side': (side as string).toUpperCase (), 'o': (other as string).toUpperCase () };\n" +
+            "        return request;\n" +
+            "    }\n" +
+            "    use () {\n" +
+            "        return this.requestBody ('buy', {});\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('RequestBody(side string, other any)');
+        expect(output).toContain('"side": strings.ToUpper(side)');
+        expect(output).toContain('ToUpper(other)');
+        expect(output).not.toContain('strings.ToUpper(other)');
+    });
     test('replace keeps JS first-occurrence semantics, replaceAll every occurrence', () => {
         const input =
         "function f () {\n" +
