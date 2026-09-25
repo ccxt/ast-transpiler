@@ -2533,6 +2533,28 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (kind === 'int') ? `((Int64)${text})` : undefined;
     }
 
+    // `multiply(N, M)` over two unsigned numeric literals: two integers box the Int64 product
+    // (`NL * ML`, the same value while it is a safe integer); otherwise the helper multiplies the
+    // doubles and re-boxes an integral product as Int64, so only a fractional product goes native.
+    csharpNativeLiteralProduct(left, right): string | undefined {
+        if (!isNumericLiteral(left) || !isNumericLiteral(right)) {
+            return undefined;
+        }
+        const leftText = left.text;
+        const rightText = right.text;
+        if (/^\d+$/.test(leftText) && /^\d+$/.test(rightText)) {
+            const product = Number(leftText) * Number(rightText);
+            return Number.isSafeInteger(product) ? `(${leftText}L * ${rightText}L)` : undefined;
+        }
+        const decimal = /^\d+(\.\d+)?$/;
+        // IsInteger reads the product through Convert.ToDecimal, i.e. rounded to 15 significant digits
+        const rounded = Number((Number(leftText) * Number(rightText)).toPrecision(15));
+        if (!decimal.test(leftText) || !decimal.test(rightText) || Number.isInteger(rounded)) {
+            return undefined;
+        }
+        return `(${leftText} * ${rightText})`;
+    }
+
     // `a % b` prints `mod(a, b)`: the helper takes the double remainder and converts back to Int64. An
     // Int32 dividend with a nonzero integer literal divisor is exact as double, so the native Int64
     // remainder matches. Int64 dividends (rounded above 2^53) and possibly-zero divisors keep helper.
@@ -3056,7 +3078,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             const tempType = this.csharpDestructuringTempType(right);
             const tempExpression = this.printNode(right, 0);
 
-            let arrayBindingStatement = tempType ? `${tempType} ${syntheticName} = (${tempType})${tempExpression};\n` : `var ${syntheticName} = ${tempExpression};\n`;
+            const tempCast = (tempType && this.csharpDestructuringTempNeedsCast(right, tempExpression)) ? `(${tempType})` : '';
+            let arrayBindingStatement = tempType ? `${tempType} ${syntheticName} = ${tempCast}${tempExpression};\n` : `var ${syntheticName} = ${tempExpression};\n`;
 
             parsedArrayBindingElements.forEach((e, index) => {
                 // const type = this.getType(node);
@@ -3134,6 +3157,13 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
                 if (nativeConcat !== undefined) {
                     return nativeConcat;
+                }
+            }
+
+            if (op === SyntaxKind.AsteriskToken) {
+                const nativeProduct = this.csharpNativeLiteralProduct(left, right);
+                if (nativeProduct !== undefined) {
+                    return nativeProduct;
                 }
             }
 
@@ -3535,6 +3565,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    // whether the typed holder needs the `(T)` cast on its printed initializer; a consumer that
+    // proves the printed call already returns T (or a subtype) answers false
+    csharpDestructuringTempNeedsCast(initializer, printedExpression: string): boolean {
+        return true;
+    }
+
     // `isTrue (x)` is the identity on a C# `bool`, and `x == true` is what it computes for a `bool?`
     // (null -> false), so in a condition the wrapper adds nothing. The hook answers the emitted
     // declaration's type (getCSharpLocalType, plus classifier retypes); unnamed operands keep isTrue.
@@ -3627,7 +3663,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             // typed holder (see csharpDestructuringTempType): same value, read without the re-cast
             const tempType = this.csharpDestructuringTempType(declaration.initializer);
             const tempExpression = this.printNode(declaration.initializer, 0);
-            const tempDeclaration = tempType ? `${tempType} ${syntheticName} = (${tempType})${tempExpression}` : `var ${syntheticName} = ${tempExpression}`;
+            const tempCast = (tempType && this.csharpDestructuringTempNeedsCast(declaration.initializer, tempExpression)) ? `(${tempType})` : '';
+            const tempDeclaration = tempType ? `${tempType} ${syntheticName} = ${tempCast}${tempExpression}` : `var ${syntheticName} = ${tempExpression}`;
 
             let arrayBindingStatement =  `${this.getIden(identation)}${tempDeclaration};\n`;
 
@@ -4192,6 +4229,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if ((declared === 'List<object>') || (declared === 'IList<object>')) {
             return `((${declared})${name}).IndexOf(${parsedArg})`;
+        }
+        // a `string?` local holds a string or null: `?.` answers the helper's -1 for null; the
+        // needle is a literal or a local, so skipping its evaluation on null changes nothing
+        const key = node.arguments?.[0];
+        const plainNeedle = (key !== undefined) && (isStringLiteralLikeNode(key) || isIdentifier(key));
+        if ((declared === 'string?') && isIdentifier(receiver) && plainNeedle) {
+            const needle = this.csharpNativeIndexOfNeedle(node.arguments?.[0], parsedArg);
+            if (needle !== undefined) {
+                return `(${name}?.IndexOf(${needle}, StringComparison.Ordinal) ?? -1)`;
+            }
         }
         return undefined;
     }

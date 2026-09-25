@@ -130,6 +130,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeParseCall(node: any): string;
     csharpCalleeIsGlobalFunction(node: any): boolean;
     csharpNativeParseCallOnDeclaredLocal(callee: any, arg: any): string;
+    csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
     csharpNativeReceiver(node: any): {
@@ -183,6 +184,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpStringReceiverType(receiver: any): string | undefined;
     csharpStringMethodReceiver(node: any, name: any): any;
     csharpDestructuringTempType(initializer: any): string | undefined;
+    csharpDestructuringTempNeedsCast(initializer: any, printedExpression: string): boolean;
     csharpConditionOperandType(node: any): string;
     csharpNativeCondition(node: any, identation: any): string;
     csharpNegatedConditionOperand(operand: any): string;

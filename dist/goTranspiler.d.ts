@@ -10,10 +10,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
     wrapCallMethods: string[];
+    unifiedStringParams: {
+        [method: string]: number[];
+    };
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
+    goGetArgTypeComputing: Set<any>;
     goLocalTypeResolution: Set<any>;
+    goSelfConcatLeafCache: WeakMap<any, boolean>;
     goLocalStaticTypeCache: WeakMap<object, string>;
     goBinaryMemo: Map<object, Map<string, any>> | undefined;
     asyncMethodSuffix: string;
@@ -147,12 +152,29 @@ export declare class GoTranspiler extends BaseTranspiler {
     goConstantIntValue(node: any): number | undefined;
     goInsideTypedDeclarationInitializer(node: any): boolean;
     goNativeNumericResultType(op: any, leftType: string, rightType: string, node: any): string | undefined;
+    goConstantProductKind(node: any): string | undefined;
+    goNativeConstantProductType(node: any, leftType: string, rightType: string): string | undefined;
     goNativeOperandText(node: any, printedText: string): string;
     goNativeArithmeticType(node: any): string | undefined;
     goNativeArithmetic(node: any, leftText?: any, rightText?: any): {
         goType: string;
         text: string;
     } | undefined;
+    goNonNilPointerSubtractionText(node: any, leftText: string, rightText: string): string | undefined;
+    goInt64Operand(node: any, printedText: string): {
+        pointer: boolean;
+        text: string;
+    } | undefined;
+    goNonNilPointerProductText(node: any, leftText: string, rightText: string): string | undefined;
+    goInt64ProductOperand(node: any, printedText: string): {
+        pointer: boolean;
+        text: string;
+    } | undefined;
+    goDefaultedSafeIntegerCall(node: any): boolean;
+    goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
+    goPointerNumberIsNonNil(ident: any): boolean;
+    goDivisionConsumerIgnoresBox(node: any): boolean;
+    goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
     goEnclosingFunction(node: any): any;
@@ -160,6 +182,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
     goNativeAppendReceiver(pushNode: any): string | undefined;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string): boolean;
+    goSelfConcatWriteIsString(node: any, varName: string): boolean;
+    goSelfConcatIsString(node: any, varName: string): boolean;
     goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
     goPointerWriteText(node: any, identation: any): string | undefined;
     goSafeDictLocalArgs(initializer: any): {
@@ -255,11 +279,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTsSrcTreeCache: Map<string, any>;
     goNativeParameterType(param: any): string | undefined;
     goNativeParameterTypeOf(param: any): string | undefined;
+    goIsUnifiedStringParameter(methodName: string, index: number): boolean;
+    goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
+    goRequiredStringParameterType(param: any): string | undefined;
     goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
     goIsProHandlerMethod(fn: any): boolean;
     goParameterTypeIsDict(type: any): boolean;
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
+    goHasTreeCallSite(fn: any): boolean;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
     goEnclosingClass(fn: any): any;
     goEnclosingClassName(fn: any): string | undefined;
@@ -285,7 +313,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
     goRebindingTargetOf(identifier: any): any;
-    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean): string | undefined;
+    printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean, valueNode?: any): string | undefined;
+    printNativeGuardedPointerKeyAssignment(containerNode: any, containerStr: string, containerType: any, fieldType: any, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
+    goIsNilGuardedStringPointerKey(keyNode: any): boolean;
+    goIsFreshUnsharedMapLocal(node: any, writeSite: any): boolean;
+    goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
+    goIsNonPointerValue(valueNode: any): boolean;
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
     sliceLengthTypes: string[];
     GO_NATIVE_LENGTH_FIELDS: string[];
@@ -328,6 +361,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsReadOnlyCallArgument(node: any): boolean;
     goIsBareStringOperand(node: any): boolean;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goNativeNumericEqualityKind(left: any, leftText: string, right: any, rightText: string): string | undefined;
     goOperandNumericKind(node: any, printedText: string): string | undefined;
     goLiteralTypedLocalKind(node: any): string | undefined;
     goNumericLiteralKind(node: any): string | undefined;
@@ -356,6 +390,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgLocalType(body: any, param: any, printedDefault: string): string | undefined;
     goGetArgBaseParamIsUnannotated(param: any): boolean;
     goGetArgNilMapUseOnlyReads(n: any): boolean;
+    goGetArgNilStringSliceUseOnlyReads(n: any): boolean;
     goGetArgTypeOfShape(shape: string): string | undefined;
     goGetArgDeclaredTypeCandidates(param: any): string[];
     goGetArgPrimitiveType(declared: string): string | undefined;
@@ -363,6 +398,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgIsValueType(goType: string): boolean;
     goGetArgLocalIsSafe(body: any, param: any, goType: string, nilable?: boolean): boolean;
     goGetArgConsumersAreSafe(body: any, param: any, goType: string, nilable: boolean): boolean;
+    goGetArgArmIsNilGuarded(n: any, cond: any): boolean;
+    goGetArgWriteIsNativeArithmetic(rhs: any): boolean;
+    goGetArgCopyTarget(use: any, body: any): any;
+    goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
@@ -412,8 +451,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goFileKeepsFileLevelImports(): boolean;
     goNativeIndexOf(node: any, name: any, parsedArg: any): string | undefined;
     printIndexOfCall(node: any, identation: any, name?: any, parsedArg?: any): string;
-    goNativeStringOperands(operands: any[], texts: string[], expected: string[]): boolean;
-    goNativeStringCallOr(node: any, texts: string[], expected: string[], nativeCall: string, helperCall: string): string;
+    goNativeStringOperandTexts(operands: any[], texts: string[], expected: string[]): string[] | undefined;
+    goUnwrapPrintedAssertions(node: any): any;
+    goNativeStringCallOr(node: any, texts: string[], expected: string[], nativeCall: (ops: string[]) => string, helperCall: string, unwrapReceiver?: boolean): string;
     goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
