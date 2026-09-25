@@ -2461,6 +2461,53 @@ describe('go native element assignment', () => {
         expect(output).toContain("request[key] = 1");
         expect(output).not.toContain("AddElementToObject");
     });
+    test('a fresh map local takes a nil-guarded *string key natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(params) {\n" +
+        "        const result = {};\n" +
+        "        const code = this.safeString (params, 'code');\n" +
+        "        if (code !== undefined) {\n" +
+        "            result[code] = 'x';\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("result[*code] = \"x\"");
+        expect(output).not.toContain("AddElementToObject");
+    });
+    test('an unguarded, pointer-valued or captured map write keeps the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString(a, b) { return a; }\n" +
+        "    main(params) {\n" +
+        "        const result = {};\n" +
+        "        const code = this.safeString (params, 'code');\n" +
+        "        result[code] = 'x';\n" +
+        "        if (code !== undefined) {\n" +
+        "            result[code] = code;\n" +
+        "        }\n" +
+        "        const other = {};\n" +
+        "        if (code !== undefined) {\n" +
+        "            other[code] = 'y';\n" +
+        "        }\n" +
+        "        const f = () => other;\n" +
+        "        const shared = {};\n" +
+        "        this.keep (shared);\n" +
+        "        if (code !== undefined) {\n" +
+        "            shared[code] = 'z';\n" +
+        "        }\n" +
+        "        return [ result, f ];\n" +
+        "    }\n" +
+        "}";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("AddElementToObject(result, code, \"x\")");
+        expect(output).toContain("AddElementToObject(result, code, code)");
+        expect(output).toContain("AddElementToObject(other, code, \"y\")");
+        expect(output).toContain("AddElementToObject(shared, code, \"z\")");
+    });
     test('a map local with a non-string key stays on the helper', () => {
         const input =
         "class Exchange {\n" +
