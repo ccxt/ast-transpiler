@@ -15,6 +15,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgTypeCache: WeakMap<any, string | undefined>;
     goLocalTypeResolution: Set<any>;
     goLocalStaticTypeCache: WeakMap<object, string>;
+    goBinaryMemo: Map<object, Map<string, any>> | undefined;
     asyncMethodSuffix: string;
     classNameMap: {
         [key: string]: string;
@@ -147,6 +148,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInsideTypedDeclarationInitializer(node: any): boolean;
     goNativeNumericResultType(op: any, leftType: string, rightType: string, node: any): string | undefined;
     goNativeOperandText(node: any, printedText: string): string;
+    goNativeArithmeticType(node: any): string | undefined;
     goNativeArithmetic(node: any, leftText?: any, rightText?: any): {
         goType: string;
         text: string;
@@ -314,6 +316,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStatementLevel: number;
     goFileStdlibImports: Set<string>;
     printSourceFileStatements(node: any, identation: any): string;
+    goBinaryMemoized<T>(node: any, key: string, compute: () => T): T;
+    goBinaryContextKey(): string;
+    goPrintBinaryMemoized(node: any, identation: number): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;

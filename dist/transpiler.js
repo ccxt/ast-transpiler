@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-WSDQRN6Z.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -8551,7 +8551,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case SyntaxKind5.ParenthesizedExpression:
         return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
       case SyntaxKind5.BinaryExpression:
-        return this.goNativeArithmetic(node)?.goType;
+        return this.goNativeArithmeticType(node);
       case SyntaxKind5.Identifier:
         return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
       case SyntaxKind5.PropertyAccessExpression:
@@ -8706,6 +8706,11 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return text;
     }
     return this.goOperandStaticType(node, text) === "string" ? text : "(" + text + ")";
+  }
+  // goNativeArithmetic's Go type for an operand (memoized within the enclosing binary print)
+  goNativeArithmeticType(node) {
+    const key = `type|${this.goBinaryContextKey()}`;
+    return this.goBinaryMemoized(node, key, () => this.goNativeArithmetic(node)?.goType);
   }
   // `Add(a, b)` & co. become the Go operator when both printed operands already
   // hold a concrete Go type the helper would return unchanged; undefined keeps the
@@ -11213,10 +11218,42 @@ ${this.getIden(level)}}()`;
     }
     return [...fileImports].sort().map((path3) => `import "${path3}"`).join("\n") + "\n\n" + body;
   }
+  goBinaryMemoized(node, key, compute) {
+    const outermost = this.goBinaryMemo === void 0;
+    const memo = this.goBinaryMemo ??= /* @__PURE__ */ new Map();
+    try {
+      let byKey = memo.get(node);
+      if (byKey?.has(key)) {
+        const cached = byKey.get(key);
+        return cached;
+      }
+      const value = compute();
+      if (byKey === void 0) {
+        memo.set(node, byKey = /* @__PURE__ */ new Map());
+      }
+      byKey.set(key, value);
+      return value;
+    } finally {
+      if (outermost) {
+        this.goBinaryMemo = void 0;
+      }
+    }
+  }
+  // the printer state a binary print reads besides the node: depth, level and the recursion guards
+  goBinaryContextKey() {
+    return `${this.goExprDepth}|${this.goStatementLevel}|${this.goLocalTypeResolution.size}|${this.goDeclaredTypeInProgress.size}`;
+  }
+  goPrintBinaryMemoized(node, identation) {
+    const key = `print|${this.goBinaryContextKey()}|${identation}`;
+    return this.goBinaryMemoized(node, key, () => this.goControlClauseParens(node, super.printNode(node, identation)));
+  }
   printNode(node, identation = 0) {
     if (node !== void 0 && isSourceFile3(node)) {
       this.className = "undefined";
       return this.printSourceFileStatements(node, identation);
+    }
+    if (node?.kind === SyntaxKind5.BinaryExpression && GO_ARITHMETIC_KINDS.indexOf(node.operatorToken.kind) >= 0) {
+      return this.goPrintBinaryMemoized(node, identation);
     }
     const isStatement2 = node !== void 0 && isStatementNode(node) && node.kind !== SyntaxKind5.Block;
     const previousLevel = this.goStatementLevel;
