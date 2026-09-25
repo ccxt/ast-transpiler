@@ -2828,6 +2828,10 @@ export class JavaTranspiler extends BaseTranspiler {
             if (leftKind !== undefined && rightKind !== undefined && orderingSafe) {
                 return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
             }
+            const declaredCompare = this.printDeclaredNumericComparison(left, right, op);
+            if (declaredCompare !== undefined) {
+                return declaredCompare;
+            }
         }
 
         // only print the operands when this op is actually handled here; otherwise
@@ -3577,6 +3581,67 @@ export class JavaTranspiler extends BaseTranspiler {
             return (leftKind === rightKind) ? leftKind : undefined;
         }
         return hasDouble ? 'double' : 'long';
+    }
+
+    // ---- ordered comparison over declared numeric locals ----
+    // Helpers.isGreaterThan answers its own predicate when an operand is null (GT: a != null && b == null;
+    // LT = !GT && !EQ; GE = GT || EQ; LE = LT || EQ), so a Long/Integer/Double box compares natively
+    // inside that exact null table. `>` is a toDouble compare for every numeric pair; `>= < <=` also go
+    // through isEqual, so they stay native only for integral pairs (no NaN / BigDecimal rounding arm).
+
+    // 'long' | 'double' for an operand the printer proves: a primitive-printing expression, or an
+    // identifier whose printed declaration is a numeric type (boxed = may be null)
+    javaComparisonOperand(node): { kind: string, boxed: boolean } | undefined {
+        let inner = node;
+        while (inner !== undefined && inner.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            inner = inner.expression;
+        }
+        if (inner === undefined) {
+            return undefined;
+        }
+        const primitive = this.javaPrimitiveOperandKind(inner);
+        if (primitive !== undefined) {
+            return { kind: primitive === 'double' ? 'double' : 'long', boxed: false };
+        }
+        if (!ts.isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
+            return undefined;
+        }
+        const declared = this.javaDeclaredNumericFamily(inner);
+        if (declared === undefined) {
+            return undefined;
+        }
+        const kind = (declared === 'Double' || declared === 'double') ? 'double' : 'long';
+        return { kind, boxed: JAVA_BOXED_NUMERIC_TYPES.has(declared) };
+    }
+
+    printDeclaredNumericComparison(left, right, op): string | undefined {
+        const l = this.javaComparisonOperand(left);
+        const r = this.javaComparisonOperand(right);
+        if (l === undefined || r === undefined || (!l.boxed && !r.boxed)) {
+            return undefined;
+        }
+        if (op !== ts.SyntaxKind.GreaterThanToken && (l.kind !== 'long' || r.kind !== 'long')) {
+            return undefined;
+        }
+        const a = this.printNode(left, 0);
+        const b = this.printNode(right, 0);
+        const cmp = `${a} ${this.SupportedKindNames[op]} ${b}`;
+        const aNull = `${a} == null`;
+        const aSet = `${a} != null`;
+        const bNull = `${b} == null`;
+        const bSet = `${b} != null`;
+        // each arm below is the helper's null table, with the unreachable nulls folded away
+        switch (op) {
+        case ts.SyntaxKind.GreaterThanToken:
+            return `(${[l.boxed ? aSet : undefined, r.boxed ? `(${bNull} || ${cmp})` : cmp].filter((x) => x !== undefined).join(' && ')})`;
+        case ts.SyntaxKind.LessThanToken:
+            return `(${[r.boxed ? bSet : undefined, l.boxed ? `(${aNull} || ${cmp})` : cmp].filter((x) => x !== undefined).join(' && ')})`;
+        case ts.SyntaxKind.GreaterThanEqualsToken:
+            return `(${[r.boxed ? bNull : undefined, l.boxed ? `(${aSet} && ${cmp})` : cmp].filter((x) => x !== undefined).join(' || ')})`;
+        case ts.SyntaxKind.LessThanEqualsToken:
+            return `(${[l.boxed ? aNull : undefined, r.boxed ? `(${bSet} && ${cmp})` : cmp].filter((x) => x !== undefined).join(' || ')})`;
+        }
+        return undefined;
     }
 
     // ---- widened native add (`+` only) ----

@@ -6024,3 +6024,40 @@ describe('pro handler frame parameters (D-03)', () => {
         expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
     });
 });
+
+describe('go native numeric equality', () => {
+    const body = (src: string) => transpiler.transpileGo(`class X {\n    options: any;\n    f (arr, x) {\n${src}\n        return 0;\n    }\n}`).content;
+    test('an int local against an integer constant prints ==', () => {
+        const go = body("        const k = arr.length;\n        if (k === 0) { return 1; }\n        if (k !== 7) { return 2; }");
+        expect(go).toContain('if k == 0 {');
+        expect(go).toContain('if k != 7 {');
+        expect(go).not.toContain('IsEqual(k');
+    });
+    test('two int locals print ==', () => {
+        const go = body("        const k = arr.length;\n        const n = this.options['x'].length;\n        if (k === n) { return 1; }");
+        expect(go).toContain('if k == n {');
+    });
+    test('a fractional constant against an int local keeps IsEqual', () => {
+        const go = body("        const k = arr.length;\n        if (k === 1.5) { return 1; }");
+        expect(go).toContain('IsEqual(k, 1.5)');
+    });
+    test('an any operand keeps IsEqual', () => {
+        const go = body("        if (x === 1) { return 1; }");
+        expect(go).toContain('IsEqual(x, 1)');
+    });
+});
+
+describe('go long + chains', () => {
+    test('a 25-term chain of typed operands prints in linear time', () => {
+        const terms: string[] = [];
+        for (let i = 0; i < 25; i++) {
+            terms.push((i % 2) ? "'-'" : ('a' + i));
+        }
+        const params = terms.filter((t) => t[0] === 'a').map((t) => t + ': string').join(', ');
+        const input = 'class T {\n    f (' + params + '): string {\n        let r = \'\';\n        r = ' + terms.join(' + ') + ';\n        return r;\n    }\n}\n';
+        const start = Date.now();
+        const output = new Transpiler({ verbose: false }).transpileGo(input).content;
+        expect(Date.now() - start).toBeLessThan(5000);
+        expect(output).toContain('r = ');
+    });
+});

@@ -2485,6 +2485,28 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (kind === 'int') ? `((Int64)${text})` : undefined;
     }
 
+    // `multiply(N, M)` over two unsigned numeric literals: two integers box the Int64 product
+    // (`NL * ML`, the same value while it is a safe integer); otherwise the helper multiplies the
+    // doubles and re-boxes an integral product as Int64, so only a fractional product goes native.
+    csharpNativeLiteralProduct(left, right): string | undefined {
+        if (!ts.isNumericLiteral(left) || !ts.isNumericLiteral(right)) {
+            return undefined;
+        }
+        const leftText = left.text;
+        const rightText = right.text;
+        if (/^\d+$/.test(leftText) && /^\d+$/.test(rightText)) {
+            const product = Number(leftText) * Number(rightText);
+            return Number.isSafeInteger(product) ? `(${leftText}L * ${rightText}L)` : undefined;
+        }
+        const decimal = /^\d+(\.\d+)?$/;
+        // IsInteger reads the product through Convert.ToDecimal, i.e. rounded to 15 significant digits
+        const rounded = Number((Number(leftText) * Number(rightText)).toPrecision(15));
+        if (!decimal.test(leftText) || !decimal.test(rightText) || Number.isInteger(rounded)) {
+            return undefined;
+        }
+        return `(${leftText} * ${rightText})`;
+    }
+
     // `a % b` prints `mod(a, b)`: the helper takes the double remainder and converts back to Int64. An
     // Int32 dividend with a nonzero integer literal divisor is exact as double, so the native Int64
     // remainder matches. Int64 dividends (rounded above 2^53) and possibly-zero divisors keep helper.
@@ -3087,6 +3109,13 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
                 if (nativeConcat !== undefined) {
                     return nativeConcat;
+                }
+            }
+
+            if (op === ts.SyntaxKind.AsteriskToken) {
+                const nativeProduct = this.csharpNativeLiteralProduct(left, right);
+                if (nativeProduct !== undefined) {
+                    return nativeProduct;
                 }
             }
 

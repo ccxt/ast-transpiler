@@ -4772,6 +4772,26 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return kind === "int" ? `((Int64)${text})` : void 0;
   }
+  // `multiply(N, M)` over two unsigned numeric literals: two integers box the Int64 product
+  // (`NL * ML`, the same value while it is a safe integer); otherwise the helper multiplies the
+  // doubles and re-boxes an integral product as Int64, so only a fractional product goes native.
+  csharpNativeLiteralProduct(left, right) {
+    if (!_typescript2.default.isNumericLiteral(left) || !_typescript2.default.isNumericLiteral(right)) {
+      return void 0;
+    }
+    const leftText = left.text;
+    const rightText = right.text;
+    if (/^\d+$/.test(leftText) && /^\d+$/.test(rightText)) {
+      const product = Number(leftText) * Number(rightText);
+      return Number.isSafeInteger(product) ? `(${leftText}L * ${rightText}L)` : void 0;
+    }
+    const decimal = /^\d+(\.\d+)?$/;
+    const rounded = Number((Number(leftText) * Number(rightText)).toPrecision(15));
+    if (!decimal.test(leftText) || !decimal.test(rightText) || Number.isInteger(rounded)) {
+      return void 0;
+    }
+    return `(${leftText} * ${rightText})`;
+  }
   // `a % b` prints `mod(a, b)`: the helper takes the double remainder and converts back to Int64. An
   // Int32 dividend with a nonzero integer literal divisor is exact as double, so the native Int64
   // remainder matches. Int64 dividends (rounded above 2^53) and possibly-zero divisors keep helper.
@@ -5277,6 +5297,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const nativeConcat = this.csharpNativeStringConcat(left, right, leftText, rightText);
         if (nativeConcat !== void 0) {
           return nativeConcat;
+        }
+      }
+      if (op === _typescript2.default.SyntaxKind.AsteriskToken) {
+        const nativeProduct = this.csharpNativeLiteralProduct(left, right);
+        if (nativeProduct !== void 0) {
+          return nativeProduct;
         }
       }
       const [open, close] = this.binaryExpressionsWrappers[op];
@@ -8483,7 +8509,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case _typescript2.default.SyntaxKind.ParenthesizedExpression:
         return this.goOperandStaticType(node.expression, this.goUnwrapPrintedParens(printedText));
       case _typescript2.default.SyntaxKind.BinaryExpression:
-        return _optionalChain([this, 'access', _522 => _522.goNativeArithmetic, 'call', _523 => _523(node), 'optionalAccess', _524 => _524.goType]);
+        return this.goNativeArithmeticType(node);
       case _typescript2.default.SyntaxKind.Identifier:
         return _nullishCoalesce(_nullishCoalesce(this.goLocalStaticType(node), () => ( this.goInferredLocalStaticType(node))), () => ( this.goDeclaredParamStaticType(node)));
       case _typescript2.default.SyntaxKind.PropertyAccessExpression:
@@ -8503,20 +8529,20 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // an untyped Go floating-point constant: the helper boxes it as float64 and the
   // compiler converts the operand to float64 the same way
   goConstFloatStaticType(node) {
-    const text = _optionalChain([node, 'optionalAccess', _525 => _525.text]);
+    const text = _optionalChain([node, 'optionalAccess', _522 => _522.text]);
     if (typeof text !== "string" || !/^[0-9][.eE]/.test(text)) {
       return void 0;
     }
     return Number.isFinite(Number(text.replaceAll("_", ""))) ? "const-float" : void 0;
   }
   isNonZeroIntegerLiteral(node) {
-    if (_optionalChain([node, 'optionalAccess', _526 => _526.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+    if (_optionalChain([node, 'optionalAccess', _523 => _523.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
       return this.isNonZeroIntegerLiteral(node.expression);
     }
-    return _optionalChain([node, 'optionalAccess', _527 => _527.kind]) === _typescript2.default.SyntaxKind.NumericLiteral && /^[1-9][0-9]*$/.test(node.text);
+    return _optionalChain([node, 'optionalAccess', _524 => _524.kind]) === _typescript2.default.SyntaxKind.NumericLiteral && /^[1-9][0-9]*$/.test(node.text);
   }
   isNonZeroFloatLiteral(node) {
-    if (_optionalChain([node, 'optionalAccess', _528 => _528.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+    if (_optionalChain([node, 'optionalAccess', _525 => _525.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
       return this.isNonZeroFloatLiteral(node.expression);
     }
     return this.goConstFloatStaticType(node) !== void 0 && Number(node.text.replaceAll("_", "")) !== 0;
@@ -8525,13 +8551,13 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // over literals in arbitrary precision, so it must fit `int` and stay exact for the helper's
   // float64 path — the bound the caller checks.
   goConstantIntValue(node) {
-    if (_optionalChain([node, 'optionalAccess', _529 => _529.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+    if (_optionalChain([node, 'optionalAccess', _526 => _526.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
       return this.goConstantIntValue(node.expression);
     }
-    if (_optionalChain([node, 'optionalAccess', _530 => _530.kind]) === _typescript2.default.SyntaxKind.NumericLiteral) {
+    if (_optionalChain([node, 'optionalAccess', _527 => _527.kind]) === _typescript2.default.SyntaxKind.NumericLiteral) {
       return /^[0-9]+$/.test(node.text) ? Number(node.text) : void 0;
     }
-    if (_optionalChain([node, 'optionalAccess', _531 => _531.kind]) !== _typescript2.default.SyntaxKind.BinaryExpression) {
+    if (_optionalChain([node, 'optionalAccess', _528 => _528.kind]) !== _typescript2.default.SyntaxKind.BinaryExpression) {
       return void 0;
     }
     const left = this.goConstantIntValue(node.left);
@@ -8560,21 +8586,21 @@ func New${this.capitalize(this.className)}() *${this.className} {
     let current = node;
     while (current !== void 0) {
       const parent = current.parent;
-      if (_optionalChain([parent, 'optionalAccess', _532 => _532.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression && parent.expression === current) {
+      if (_optionalChain([parent, 'optionalAccess', _529 => _529.kind]) === _typescript2.default.SyntaxKind.ParenthesizedExpression && parent.expression === current) {
         current = parent;
         continue;
       }
-      if (_optionalChain([parent, 'optionalAccess', _533 => _533.kind]) === _typescript2.default.SyntaxKind.BinaryExpression && (parent.left === current || parent.right === current) && GO_ARITHMETIC_KINDS.indexOf(parent.operatorToken.kind) >= 0) {
+      if (_optionalChain([parent, 'optionalAccess', _530 => _530.kind]) === _typescript2.default.SyntaxKind.BinaryExpression && (parent.left === current || parent.right === current) && GO_ARITHMETIC_KINDS.indexOf(parent.operatorToken.kind) >= 0) {
         current = parent;
         continue;
       }
       break;
     }
-    const declaration = _optionalChain([current, 'optionalAccess', _534 => _534.parent]);
-    if (_optionalChain([declaration, 'optionalAccess', _535 => _535.kind]) !== _typescript2.default.SyntaxKind.VariableDeclaration || declaration.initializer !== current) {
+    const declaration = _optionalChain([current, 'optionalAccess', _531 => _531.parent]);
+    if (_optionalChain([declaration, 'optionalAccess', _532 => _532.kind]) !== _typescript2.default.SyntaxKind.VariableDeclaration || declaration.initializer !== current) {
       return false;
     }
-    return _optionalChain([declaration, 'access', _536 => _536.parent, 'optionalAccess', _537 => _537.parent, 'optionalAccess', _538 => _538.kind]) === _typescript2.default.SyntaxKind.FirstStatement;
+    return _optionalChain([declaration, 'access', _533 => _533.parent, 'optionalAccess', _534 => _534.parent, 'optionalAccess', _535 => _535.kind]) === _typescript2.default.SyntaxKind.FirstStatement;
   }
   // The bare Go operator must yield what the runtime helper returns (go/v4/exchange_helpers.go):
   // Add keeps int/int64, while Subtract/Multiply/Divide/Mod take an exact int64 path or a float64
@@ -8630,7 +8656,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // tighter parent operator; a whole helper call is already delimited
   goNativeOperandText(node, printedText) {
     const text = printedText.trim();
-    if (_optionalChain([node, 'optionalAccess', _539 => _539.kind]) !== _typescript2.default.SyntaxKind.BinaryExpression || text.startsWith("(")) {
+    if (_optionalChain([node, 'optionalAccess', _536 => _536.kind]) !== _typescript2.default.SyntaxKind.BinaryExpression || text.startsWith("(")) {
       return text;
     }
     const open = text.indexOf("(");
@@ -8671,6 +8697,23 @@ func New${this.capitalize(this.className)}() *${this.className} {
       return void 0;
     }
     return { goType, "text": this.goNativeBinaryText(node, this.SupportedKindNames[op], leftText, rightText) };
+  }
+  // goNativeArithmetic's type for an operand, once per node within one outermost query:
+  // re-deriving it re-prints the subtree at every level of a `+` chain (exponential)
+  goNativeArithmeticType(node) {
+    const outermost = this.goNativeArithmeticTypeCache === void 0;
+    const cache = this.goNativeArithmeticTypeCache ??= /* @__PURE__ */ new Map();
+    try {
+      if (!cache.has(node)) {
+        cache.set(node, void 0);
+        cache.set(node, _optionalChain([this, 'access', _537 => _537.goNativeArithmetic, 'call', _538 => _538(node), 'optionalAccess', _539 => _539.goType]));
+      }
+      return cache.get(node);
+    } finally {
+      if (outermost) {
+        this.goNativeArithmeticTypeCache = void 0;
+      }
+    }
   }
   // the operator line gofmt prints for a natively emitted arithmetic expression: the
   // blanks follow go/printer's cutoff at the current depth, and a binary operand is
@@ -11322,6 +11365,10 @@ ${this.getIden(level)}}()`;
     if (!lPtr && !rPtr && lFam !== void 0 && rFam !== void 0 && lFam !== "nil" && rFam !== "nil" && lFam === rFam) {
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
+    const numericKind = !lPtr && !rPtr ? this.goNativeNumericEqualityKind(left, leftText, right, rightText) : void 0;
+    if (numericKind !== void 0) {
+      return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+    }
     if (!lPtr && !rPtr) {
       if (this.goIsBareStringOperand(left) && this.goIsStringLiteralNode(right) || this.goIsBareStringOperand(right) && this.goIsStringLiteralNode(left)) {
         return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
@@ -11379,6 +11426,19 @@ ${this.getIden(level)}}()`;
       return isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
     }
     return void 0;
+  }
+  // the kind a native `==` compares two numeric operands in; undefined keeps IsEqual. Two
+  // constants are left to the helper (nothing to type), as is any mix Go would refuse.
+  goNativeNumericEqualityKind(left, leftText, right, rightText) {
+    if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+      return void 0;
+    }
+    const leftKind = this.goOperandNumericKind(left, leftText);
+    const rightKind = this.goOperandNumericKind(right, rightText);
+    if (leftKind === void 0 || rightKind === void 0) {
+      return void 0;
+    }
+    return this.goComparisonKind(left, leftKind, right, rightKind);
   }
   // the Go numeric kind an operand's static type is, or undefined when it stays
   // `any` (unknown helper result, union, pointer box): only a concrete kind can
@@ -15953,6 +16013,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (leftKind !== void 0 && rightKind !== void 0 && orderingSafe) {
         return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
       }
+      const declaredCompare = this.printDeclaredNumericComparison(left, right, op);
+      if (declaredCompare !== void 0) {
+        return declaredCompare;
+      }
     }
     if (op === _typescript2.default.SyntaxKind.PlusEqualsToken || op === _typescript2.default.SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
       const leftText = this.printNode(left, 0);
@@ -16620,6 +16684,63 @@ var JavaTranspiler = class extends BaseTranspiler {
       return leftKind === rightKind ? leftKind : void 0;
     }
     return hasDouble ? "double" : "long";
+  }
+  // ---- ordered comparison over declared numeric locals ----
+  // Helpers.isGreaterThan answers its own predicate when an operand is null (GT: a != null && b == null;
+  // LT = !GT && !EQ; GE = GT || EQ; LE = LT || EQ), so a Long/Integer/Double box compares natively
+  // inside that exact null table. `>` is a toDouble compare for every numeric pair; `>= < <=` also go
+  // through isEqual, so they stay native only for integral pairs (no NaN / BigDecimal rounding arm).
+  // 'long' | 'double' for an operand the printer proves: a primitive-printing expression, or an
+  // identifier whose printed declaration is a numeric type (boxed = may be null)
+  javaComparisonOperand(node) {
+    let inner = node;
+    while (inner !== void 0 && inner.kind === _typescript2.default.SyntaxKind.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner === void 0) {
+      return void 0;
+    }
+    const primitive = this.javaPrimitiveOperandKind(inner);
+    if (primitive !== void 0) {
+      return { kind: primitive === "double" ? "double" : "long", boxed: false };
+    }
+    if (!_typescript2.default.isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
+      return void 0;
+    }
+    const declared = this.javaDeclaredNumericFamily(inner);
+    if (declared === void 0) {
+      return void 0;
+    }
+    const kind = declared === "Double" || declared === "double" ? "double" : "long";
+    return { kind, boxed: JAVA_BOXED_NUMERIC_TYPES.has(declared) };
+  }
+  printDeclaredNumericComparison(left, right, op) {
+    const l = this.javaComparisonOperand(left);
+    const r = this.javaComparisonOperand(right);
+    if (l === void 0 || r === void 0 || !l.boxed && !r.boxed) {
+      return void 0;
+    }
+    if (op !== _typescript2.default.SyntaxKind.GreaterThanToken && (l.kind !== "long" || r.kind !== "long")) {
+      return void 0;
+    }
+    const a = this.printNode(left, 0);
+    const b = this.printNode(right, 0);
+    const cmp = `${a} ${this.SupportedKindNames[op]} ${b}`;
+    const aNull = `${a} == null`;
+    const aSet = `${a} != null`;
+    const bNull = `${b} == null`;
+    const bSet = `${b} != null`;
+    switch (op) {
+      case _typescript2.default.SyntaxKind.GreaterThanToken:
+        return `(${[l.boxed ? aSet : void 0, r.boxed ? `(${bNull} || ${cmp})` : cmp].filter((x) => x !== void 0).join(" && ")})`;
+      case _typescript2.default.SyntaxKind.LessThanToken:
+        return `(${[r.boxed ? bSet : void 0, l.boxed ? `(${aNull} || ${cmp})` : cmp].filter((x) => x !== void 0).join(" && ")})`;
+      case _typescript2.default.SyntaxKind.GreaterThanEqualsToken:
+        return `(${[r.boxed ? bNull : void 0, l.boxed ? `(${aSet} && ${cmp})` : cmp].filter((x) => x !== void 0).join(" || ")})`;
+      case _typescript2.default.SyntaxKind.LessThanEqualsToken:
+        return `(${[l.boxed ? aNull : void 0, r.boxed ? `(${bSet} && ${cmp})` : cmp].filter((x) => x !== void 0).join(" || ")})`;
+    }
+    return void 0;
   }
   // ---- widened native add (`+` only) ----
   // Helpers.add normalizes Integer to Long, boxes Long for integral operands and Double otherwise
