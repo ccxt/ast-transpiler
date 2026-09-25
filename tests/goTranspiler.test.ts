@@ -3860,6 +3860,67 @@ describe('go gofmt-clean native shapes', () => {
     });
 });
 
+// helper-family removal (helper-loop/go-5): `StartsWith(x, "lit")` / `EndsWith(x, "lit")` on a
+// declared `*string` identifier print the helper's own predicate inline — nil is false,
+// otherwise the deref'd string is tested — keeping every other receiver on the helper
+describe('go StartsWith/EndsWith on a *string receiver -> nil-guarded strings.HasPrefix/HasSuffix', () => {
+    test('a *string local receiver with a literal affix prints the guarded predicate', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const marketId = this.safeString (item, 'symbol');\n" +
+        "        if (marketId.startsWith ('.')) { return 'index'; }\n" +
+        "        const isOption = marketId.endsWith ('-C') || marketId.endsWith ('-P');\n" +
+        "        return isOption;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("import \"strings\"");
+        expect(output).toContain("var marketId *string = this.SafeString(item, \"symbol\")");
+        expect(output).toContain("if marketId != nil && strings.HasPrefix(*marketId, \".\") {");
+        // the local initialised by the native predicate keeps the bool the helper declared
+        expect(output).toContain("var isOption bool = (marketId != nil && strings.HasSuffix(*marketId, \"-C\")) || (marketId != nil && strings.HasSuffix(*marketId, \"-P\"))");
+        expect(output).not.toMatch(/(?<![.\w])(StartsWith|EndsWith)\(/);
+    });
+    test('a *string receiver with a declared string affix prints the guarded predicate', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item) {\n" +
+        "        const prefix: string = 'C-';\n" +
+        "        const id = this.safeString (item, 'id');\n" +
+        "        return id.startsWith (prefix);\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("return (id != nil && strings.HasPrefix(*id, prefix))");
+        expect(output).not.toContain("StartsWith(");
+    });
+    test('an any-boxed receiver, a *string affix and a non-identifier *string receiver keep the helper', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    main (item, symbol) {\n" +
+        "        const id = this.safeString (item, 'id');\n" +
+        "        const other = this.safeString (item, 'other');\n" +
+        "        const a = symbol.startsWith ('X');\n" +
+        "        const b = id.startsWith (other);\n" +
+        "        const c = this.safeString (item, 'x').endsWith ('Y');\n" +
+        "        const d = item['k'].endsWith ('Z');\n" +
+        "        return [ a, b, c, d ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("import \"strings\"");
+        expect(output).toContain("StartsWith(symbol, \"X\")");
+        expect(output).toContain("StartsWith(id, other)");
+        expect(output).toContain("EndsWith(this.SafeString(item, \"x\"), \"Y\")");
+        expect(output).toContain("EndsWith(GetValue(item, \"k\"), \"Z\")");
+        expect(output).not.toContain("strings.Has");
+    });
+});
+
 
 // helper-family removal: `Add(Add(a, "lit"), b)` string chains print as the Go
 // operator when every leaf is a non-nil string — a declared `string`, a literal, or a

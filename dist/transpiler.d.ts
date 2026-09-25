@@ -1147,6 +1147,8 @@ declare class GoTranspiler extends BaseTranspiler {
     goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    goNativeAffixOnStringPointer(node: any, name: any, parsedArg: any, stringsFunc: string): string | undefined;
+    goIsNativeAffixOnStringPointer(printedText: string): boolean;
     printTrimCall(node: any, identation: any, name?: any): string;
     printJoinCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;

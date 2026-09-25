@@ -1432,6 +1432,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (value.startsWith('func() int {') && value.endsWith('}()')) {
             return 'int';
         }
+        // the nil-guarded affix predicate `x != nil && strings.HasPrefix(*x, p)` is a Go bool
+        if (this.goIsNativeAffixOnStringPointer(value)) {
+            return 'bool';
+        }
         if (open <= 0 || !this.isWholePrintedCall(value, open)) {
             return undefined;
         }
@@ -6454,7 +6458,7 @@ ${this.getIden(identation)}${returnStatement}`;
                 return native;
             }
         }
-        return `StartsWith(${name}, ${parsedArg})`;
+        return this.goNativeAffixOnStringPointer(node, name, parsedArg, 'HasPrefix') ?? `StartsWith(${name}, ${parsedArg})`;
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -6465,7 +6469,32 @@ ${this.getIden(identation)}${returnStatement}`;
                 return native;
             }
         }
-        return `EndsWith(${name}, ${parsedArg})`;
+        return this.goNativeAffixOnStringPointer(node, name, parsedArg, 'HasSuffix') ?? `EndsWith(${name}, ${parsedArg})`;
+    }
+
+    // StartsWith/EndsWith derefScalar a `*string` receiver: nil answers false, else the pointed-to
+    // string is tested against ToString(affix), the identity for a Go string affix. A declared
+    // `*string` identifier (read twice, so no other receiver shape) prints the same predicate inline.
+    goNativeAffixOnStringPointer(node, name, parsedArg, stringsFunc: string): string | undefined {
+        if ((typeof name !== 'string') || (typeof parsedArg !== 'string') || name.includes('\n') || parsedArg.includes('\n')) {
+            return undefined;
+        }
+        const receiver = node?.expression?.expression;
+        if ((receiver?.kind !== ts.SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(receiver) !== '*string')) {
+            return undefined;
+        }
+        if (!this.goNativeStringOperands([node.arguments?.[0]], [parsedArg], ['string'])) {
+            return undefined;
+        }
+        const native = this.goNativeStringCall(`(${name} != nil && strings.${stringsFunc}(*${name}, ${parsedArg}))`);
+        return native;
+    }
+
+    // the text goNativeAffixOnStringPointer emits, with or without its wrapping parens: a Go bool
+    goIsNativeAffixOnStringPointer(printedText: string): boolean {
+        const value = this.goUnwrapPrintedParens(printedText);
+        const match = /^[A-Za-z_]\w* != nil && strings\.Has(?:Prefix|Suffix)(\()\*[A-Za-z_]\w*, /.exec(value);
+        return (match !== null) && this.isWholePrintedCall(value, match.index + match[0].indexOf('('));
     }
 
     printTrimCall(node, identation, name = undefined) {
