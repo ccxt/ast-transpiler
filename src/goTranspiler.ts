@@ -644,6 +644,9 @@ export class GoTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers;
     wrapThisCalls: boolean;
     wrapCallMethods: string[] = [];
+    // inherited method name -> indexes of required params that print `string` on the base and every
+    // override (the caller audits all declarations); other callers convert through StringArg
+    unifiedStringParams: { [method: string]: number[] } = {};
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
@@ -687,6 +690,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.wrapThisCalls = config['wrapThisCalls'] ?? false;
         this.wrapCallMethods = config['wrapCallMethods'] ?? [];
         this.asyncMethodSuffix = config['asyncMethodSuffix'] ?? '';
+        this.unifiedStringParams = config['unifiedStringParams'] ?? {};
     }
 
     initConfig() {
@@ -2826,7 +2830,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) {
                 const methodName = this.printNode(node.expression.name, 0);
                 if (this.wrapThisCalls || (this.wrapCallMethods.includes(methodName))) {
-                    const argsParsed = args.map((a) => this.printNode(a, 0)).join(", ");
+                    const argsParsed = this.goUnifiedStringCallArgs(node, 0, true) ?? args.map((a) => this.printNode(a, 0)).join(", ");
                     return `<-this.callInternal("${methodName}"${(args.length > 0) ? ", " + argsParsed : ""})`;
                 }
             }
@@ -3569,6 +3573,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // D-03: a pro handler's frame parameter (`handleX (client: Client, message: Dict)`)
         // is the second family whose call-site proof can name a Go type
         const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
+        if (this.goIsUnifiedStringParameter(fn.name.escapedText, fn.parameters.indexOf(param))) {
+            // the table types the base and every override together: a body that breaks it fails the build
+            if ((this.goRequiredStringParameterType(param) !== 'string')
+                || !this.goLocalIsSafeToType(fn.body, param, param.name.escapedText, 'string')
+                || !this.goParameterKeepsNilCompareNative(fn.body, param, 'string')) {
+                throw new Error(`unifiedStringParams: ${fn.name.escapedText} parameter ${param.name.escapedText} is not a required string written only as string`);
+            }
+            return 'string';
+        }
         if (this.goMethodKeepsBaseSignature(fn)) {
             return undefined; // inherited/base methods are pinned by the base class and IDerivedExchange
         }
@@ -3592,6 +3605,33 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         return undefined;
+    }
+
+    goIsUnifiedStringParameter(methodName: string, index: number): boolean {
+        const indexes = Object.prototype.hasOwnProperty.call(this.unifiedStringParams, methodName) ? this.unifiedStringParams[methodName] : undefined;
+        return Array.isArray(indexes) && indexes.includes(index);
+    }
+
+    // the call arguments of a unified method whose parameter prints `string`: an argument the
+    // printer cannot prove a Go string goes through StringArg, which panics on any other value
+    goUnifiedStringCallArgs(node, identation, flat = false): string | undefined {
+        const callee: any = node.expression;
+        const name = (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) ? callee.name?.escapedText : undefined;
+        if ((typeof name !== 'string') || !Object.prototype.hasOwnProperty.call(this.unifiedStringParams, name)) {
+            return undefined;
+        }
+        const args = node.arguments ?? [];
+        if (args.some((a) => a.kind === ts.SyntaxKind.SpreadElement)) {
+            return undefined;
+        }
+        const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
+        return args.map((a, i) => {
+            const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+            if (!this.goIsUnifiedStringParameter(name, i) || (this.goPrintedArgType(a) === 'string')) {
+                return printed;
+            }
+            return `StringArg(${printed})`;
+        }).join(', ');
     }
 
     // `string` for a parameter whose declared TS type is string (or a string-literal union) with no
@@ -6276,6 +6316,10 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printArgsForCallExpression(node, identation) {
+        const unified = this.goUnifiedStringCallArgs(node, identation);
+        if (unified !== undefined) {
+            return unified;
+        }
         // go/printer prints the arguments of a call with more than one argument
         // one level deeper than the call itself (nodes.go, CallExpr)
         if (node.arguments && node.arguments.length > 1) {

@@ -6061,3 +6061,48 @@ describe('go long + chains', () => {
         expect(output).toContain('r = ');
     });
 });
+
+describe('unified string parameters (unifiedStringParams)', () => {
+    const unified = new Transpiler({ verbose: false, go: { unifiedStringParams: { 'createOrder': [ 1, 2 ], 'createMarketOrder': [ 1 ] } } });
+    const base =
+        "class Base {\n" +
+        "    capitalize (s: string): string { return s; }\n" +
+        "    async createOrder (symbol: string, type: string, side: string, amount: number) { return undefined; }\n" +
+        "}\n";
+
+    test('the base and overrides print string, literal/proven callers pass through and any callers go through StringArg', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async createOrder (symbol: string, type: string, side: string, amount: number) {\n" +
+            "        type = type.toUpperCase ();\n" +
+            "        side = (side === 'buy') ? 'sell' : 'buy';\n" +
+            "        if (type === 'LIMIT') {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return this.capitalize (type);\n" +
+            "    }\n" +
+            "    async closePosition (symbol: string, side = undefined) {\n" +
+            "        return await this.createOrder (symbol, 'market', side, 0);\n" +
+            "    }\n" +
+            "    async createMarketOrder (symbol: string, side: string, amount: number) {\n" +
+            "        return await this.createOrder (symbol, 'market', side, amount);\n" +
+            "    }\n" +
+            "}\n";
+        const output = unified.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) createOrderBody(ch chan any, symbol any, typeVar string, side string, amount any) any {');
+        expect(output).toContain('typeVar == "LIMIT"');
+        expect(output).toContain('this.CreateOrder(symbol, "market", StringArg(side), 0)');
+        expect(output).toContain('this.CreateOrder(symbol, "market", side, amount)');
+        expect(output).toContain('createMarketOrderBody(ch chan any, symbol any, side string, amount any) any {');
+    });
+
+    test('a nil-compared table parameter fails the transpile', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async createOrder (symbol: string, type: string, side: string, amount: number) {\n" +
+            "        return (side === undefined);\n" +
+            "    }\n" +
+            "}\n";
+        expect(() => unified.transpileGo(input)).toThrow(/unifiedStringParams/);
+    });
+});
