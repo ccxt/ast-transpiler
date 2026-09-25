@@ -1,6 +1,11 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind, type Identifier, type Node } from "typescript/unstable/ast";
+import { type Checker } from "typescript/unstable/sync";
 export declare class JavaTranspiler extends BaseTranspiler {
+    getChecker(): Checker;
+    private methodOverrideCache;
+    getMethodOverride(node: Node): Node;
+    checkerOrUndefined(): Checker | undefined;
     javaExpressionTypeResolver?: (node: any) => string | undefined;
     countRequiredParameters(declaration: any): number;
     printArgsForCallExpression(node: any, identation: any): any;
