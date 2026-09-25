@@ -1435,6 +1435,9 @@ declare class JavaTranspiler extends BaseTranspiler {
     javaParameterAssignmentCast(left: any, right: any, identation: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
     javaNativeReturnTypeUncached(node: any): string | undefined;
+    javaMethodReturnsNonNullBoolean(method: any, depth: number): boolean;
+    javaPrintsNonNullBoolean(node: any, depth: number): boolean;
+    javaCallPrintsNonNullBoolean(node: any, depth: number): boolean;
     javaNativeReturnTypeTarget(node: any): string | undefined;
     javaReturnSitesPrintType(method: any, target: string): boolean;
     javaExpressionPrintsType(expression: any, target: string): boolean;

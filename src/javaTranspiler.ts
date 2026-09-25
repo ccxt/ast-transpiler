@@ -2795,26 +2795,103 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     javaNativeReturnTypeUncached(node): string | undefined {
-        // only the generated tiers carry the annotation; a ts/src/base/** declaration has a
-        // hand-written java counterpart that keeps `Object`
-        if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName)) {
-            return undefined;
-        }
-        if (this.isAsyncFunction(node)) {
-            return undefined;
-        }
-        // D8: an override prints the base declaration's boxed signature
-        if (this.getMethodOverride(node) !== undefined) {
+        const fileName = node.getSourceFile().fileName;
+        const generated = JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName);
+        // the printed base tier (below the transpile delimiter) may carry a Boolean return
+        // when no venue in the program redeclares the name
+        const baseTier = !generated && JAVA_NATIVE_PARAMETER_BASE_FILES.test(fileName) && this.javaIsPrintedMethod(node);
+        if ((!generated && !baseTier) || this.isAsyncFunction(node)) {
             return undefined;
         }
         const target = this.javaNativeReturnTypeTarget(node);
-        if (target === undefined) {
+        if (target === undefined || (baseTier && target !== 'Boolean')) {
+            return undefined;
+        }
+        // D8: an override prints the base declaration's boxed signature; a Boolean base
+        // signature binds every override to Boolean (Java return types are covariant only)
+        const ancestor = this.getMethodOverride(node);
+        const ancestorBoolean = ancestor !== undefined && this.javaNativeReturnType(ancestor) === 'Boolean';
+        if (ancestorBoolean && (target !== 'Boolean' || !this.javaReturnSitesPrintType(node, target)
+            || (this.javaMethodReturnsNonNullBoolean(ancestor, 0) && !this.javaMethodReturnsNonNullBoolean(node, 0)))) {
+            throw new Error(`java: ${String((node.name as any).escapedText)} overrides a Boolean base method but its returns do not all print Boolean`);
+        }
+        if (ancestor !== undefined && !ancestorBoolean) {
             return undefined;
         }
         if (!this.javaReturnSitesPrintType(node, target)) {
             return undefined;
         }
         return target;
+    }
+
+    // a native-Boolean method whose every return prints a primitive Java boolean (never null):
+    // a call to it can be a condition as is (unboxing cannot throw)
+    javaMethodReturnsNonNullBoolean(method, depth: number): boolean {
+        if (method === undefined || depth > 3 || method.body === undefined) {
+            return false;
+        }
+        const name = String((method.name as any)?.escapedText);
+        if (this.javaNativeReturnType(method) !== 'Boolean' && !JAVA_THIS_BOOLEAN_METHODS.has(name)) {
+            return false;
+        }
+        let returns = 0;
+        let ok = true;
+        const scan = (n: ts.Node) => {
+            if (!ok || (n !== method && ts.isFunctionLike(n))) {
+                return;
+            }
+            if (ts.isReturnStatement(n)) {
+                returns++;
+                ok = n.expression !== undefined && this.javaPrintsNonNullBoolean(n.expression, depth);
+                return;
+            }
+            ts.forEachChild(n, scan);
+        };
+        scan(method.body);
+        return ok && returns > 0;
+    }
+
+    javaPrintsNonNullBoolean(node, depth: number): boolean {
+        switch (node?.kind) {
+        case ts.SyntaxKind.TrueKeyword:
+        case ts.SyntaxKind.FalseKeyword:
+            return true;
+        case ts.SyntaxKind.ParenthesizedExpression:
+            return this.javaPrintsNonNullBoolean(node.expression, depth);
+        case ts.SyntaxKind.PrefixUnaryExpression:
+            return node.operator === ts.SyntaxKind.ExclamationToken; // prints `!` + a condition
+        case ts.SyntaxKind.BinaryExpression:
+            return JAVA_BOOLEAN_OPERATOR_KINDS.has(node.operatorToken.kind);
+        case ts.SyntaxKind.ConditionalExpression:
+            return this.javaPrintsNonNullBoolean(node.whenTrue, depth) && this.javaPrintsNonNullBoolean(node.whenFalse, depth);
+        case ts.SyntaxKind.CallExpression:
+            return this.javaCallPrintsNonNullBoolean(node, depth + 1);
+        }
+        return false;
+    }
+
+    // `this.<name>(...)` resolving to a method proven by javaMethodReturnsNonNullBoolean
+    javaCallPrintsNonNullBoolean(node, depth: number): boolean {
+        if (this.isArrayIsArrayCall(node) || this.javaPreciseBooleanCall(node) || this.javaStringAffixCall(node)) {
+            return true;
+        }
+        const callee = node.expression;
+        if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        let declaration;
+        try {
+            declaration = this.getChecker().getResolvedSignature(node)?.declaration;
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined || declaration.kind !== ts.SyntaxKind.MethodDeclaration) {
+            return false;
+        }
+        if (JAVA_THIS_BOOLEAN_METHODS.has(String(callee.name.escapedText))) {
+            return this.javaCallBooleanKind(node) === 'boolean';
+        }
+        return this.javaMethodReturnsNonNullBoolean(declaration, depth);
     }
 
     javaNativeReturnTypeTarget(node): string | undefined {
@@ -2840,7 +2917,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type.flags === ts.TypeFlags.String) {
             return 'String';
         }
-        if (type.flags === ts.TypeFlags.Boolean) {
+        // plain `boolean` is the true|false union: the Boolean bit, with no alias (`Bool` is handled above)
+        if (aliasSymbol === undefined && (type.flags & ts.TypeFlags.Boolean) !== 0) {
             return 'Boolean';
         }
         return this.isJavaMapStructureType(type) ? JAVA_NATIVE_RETURN_MAP_TYPE : undefined;
@@ -7041,11 +7119,18 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaConditionPrintsBoolean(node)) {
             return this.getIden(identation) + this.printNode(node, 0);
         }
+        let bareCall = node;
+        while (bareCall.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            bareCall = bareCall.expression;
+        }
+        if (bareCall.kind === ts.SyntaxKind.CallExpression && this.javaCallPrintsNonNullBoolean(bareCall, 0)) {
+            return this.getIden(identation) + this.printNode(node, 0); // a never-null Boolean unboxes safely
+        }
         const wrapperFree = this.javaBooleanWrapperFreeCondition(node);
         if (wrapperFree !== undefined) {
             return this.getIden(identation) + wrapperFree;
         }
-        const callKind = this.javaCallBooleanKind(node);
+        const callKind = this.javaCallBooleanKind(bareCall);
         if (callKind === 'boolean') {
             return this.getIden(identation) + this.printNode(node, 0);
         }
