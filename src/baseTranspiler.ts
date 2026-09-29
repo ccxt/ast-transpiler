@@ -515,11 +515,11 @@ class BaseTranspiler {
         return this.getIden(identation) + `${left} instanceof ${right}`;
     }
 
-    getCustomOperatorIfAny(left, right, operator) {
+    getCustomOperatorIfAny(left, right, operator): any {
         return undefined;
     }
 
-    printCustomBinaryExpressionIfAny(node, identation) {
+    printCustomBinaryExpressionIfAny(node, identation): any {
         return undefined; // stub to override
     }
 
@@ -573,11 +573,11 @@ class BaseTranspiler {
         return prefixes + leftVar +" "+ operator + " " + rightVar.trim();
     }
 
-    getBinaryExpressionPrefixes(node, identation) {
+    getBinaryExpressionPrefixes(node, identation): any {
         return undefined;
     }
 
-    transformPropertyAcessExpressionIfNeeded (node) {
+    transformPropertyAcessExpressionIfNeeded (node): any {
         return undefined;
     }
 
@@ -585,11 +585,11 @@ class BaseTranspiler {
         return this.unCamelCaseIfNeeded(name);
     }
 
-    getExceptionalAccessTokenIfAny(node) {
+    getExceptionalAccessTokenIfAny(node): any {
         return undefined; // stub to override
     }
 
-    printLengthProperty(node, identation, name = undefined) {
+    printLengthProperty(node, identation, name = undefined): any {
         return undefined; // stub to override
     }
 
@@ -631,7 +631,7 @@ class BaseTranspiler {
         return rawExpression;
     }
 
-    printCustomDefaultValueIfNeeded(node) {
+    printCustomDefaultValueIfNeeded(node): any {
         return undefined;
     }
 
@@ -1071,7 +1071,7 @@ class BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, varStatement);
     }
 
-    printOutOfOrderCallExpressionIfAny(node, identation) {
+    printOutOfOrderCallExpressionIfAny(node, identation): any {
         return undefined; // stub to override
     }
 
@@ -1117,132 +1117,132 @@ class BaseTranspiler {
     }
 
     // builtin functions override
-    printArrayIsArrayCall(node, identation, parsedArg = undefined) {
+    printArrayIsArrayCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printObjectKeysCall(node, identation, parsedArg = undefined) {
+    printObjectKeysCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printObjectValuesCall(node, identation, parsedArg = undefined) {
+    printObjectValuesCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printJsonParseCall(node, identation, parsedArg = undefined) {
+    printJsonParseCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printJsonStringifyCall(node, identation, parsedArg = undefined) {
+    printJsonStringifyCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
 
-    printPromiseAllCall(node, identation, parsedArg = undefined) {
+    printPromiseAllCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printMathFloorCall(node, identation, parsedArg = undefined) {
+    printMathFloorCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printMathRoundCall(node, identation, parsedArg = undefined) {
+    printMathRoundCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printMathCeilCall(node, identation, parsedArg = undefined) {
+    printMathCeilCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printNumberIsIntegerCall(node, identation, parsedArg = undefined) {
+    printNumberIsIntegerCall(node, identation, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
+    printArrayPushCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
+    printIncludesCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
+    printIndexOfCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+    printStartsWithCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+    printEndsWithCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
+    printPadEndCall(node, identation, name, parsedArg, parsedArg2): any {
         return undefined; // stub
     }
 
-    printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
+    printPadStartCall(node, identation, name, parsedArg, parsedArg2): any {
         return undefined; // stub
     }
 
-    printTrimCall(node, identation, name = undefined) {
+    printTrimCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
-    printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
+    printJoinCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
+    printSplitCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printConcatCall(node, identation, name = undefined, parsedArg = undefined) {
+    printConcatCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printToFixedCall(node, identation, name = undefined, parsedArg = undefined) {
+    printToFixedCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printSearchCall(node, identation, name = undefined, parsedArg = undefined) {
+    printSearchCall(node, identation, name = undefined, parsedArg = undefined): any {
         return undefined; // stub
     }
 
-    printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+    printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined): any {
         return undefined; // stub
     }
 
-    printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+    printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined): any {
         return undefined; // stub
     }
 
-    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+    printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined): any {
         return undefined; // stub
     }
 
-    printToStringCall(node, identation, name = undefined) {
+    printToStringCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
-    printToUpperCaseCall(node, identation, name = undefined) {
+    printToUpperCaseCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
-    printToLowerCaseCall(node, identation, name = undefined) {
+    printToLowerCaseCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
-    printShiftCall(node, identation, name = undefined) {
+    printShiftCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
-    printReverseCall(node, identation, name = undefined) {
+    printReverseCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
-    printPopCall(node, identation, name = undefined) {
+    printPopCall(node, identation, name = undefined): any {
         return undefined; // stub
     }
 
@@ -1250,7 +1250,7 @@ class BaseTranspiler {
         return `assert(${parsedArgs})`;
     }
 
-    printDateNowCall(node, identation) {
+    printDateNowCall(node, identation): any {
         return undefined; // stub
     }
 
@@ -1507,7 +1507,7 @@ class BaseTranspiler {
         return this.getIden(identation) + this.printNode(operand, 0) + this.PostFixOperators[operator];
     }
 
-    printPrefixUnaryExpression(node, identation) {
+    printPrefixUnaryExpression(node, identation): string {
         const {operand, operator} = node;
         if (operator === SyntaxKind.ExclamationToken) {
             // not branch check falsy/turthy values if needed;
@@ -1528,7 +1528,7 @@ class BaseTranspiler {
         return  this.OBJECT_OPENING + formattedObjectBody + this.OBJECT_CLOSING;
     }
 
-    printCustomRightSidePropertyAssignment(node, identation): string {
+    printCustomRightSidePropertyAssignment(node, identation): string | undefined {
         return undefined; // stub to override
     }
 
@@ -1555,7 +1555,7 @@ class BaseTranspiler {
                 trailingComment;
     }
 
-    printElementAccessExpressionExceptionIfAny(node) {
+    printElementAccessExpressionExceptionIfAny(node): any {
         return undefined; // stub to override
     }
 
@@ -1865,7 +1865,7 @@ class BaseTranspiler {
         return this.printNodeCommentsIfAny(node, identation, expStatement);
     }
 
-    getExpressionStatementPrefixesIfAny(node, identation) {
+    getExpressionStatementPrefixesIfAny(node, identation): any {
         return undefined;
     }
 
@@ -1898,7 +1898,7 @@ class BaseTranspiler {
         return this.getIden(identation) + this.CONTINUE_TOKEN + this.LINE_TERMINATOR;
     }
 
-    printDeleteExpression (node, identation) {
+    printDeleteExpression (node, identation): any {
         return undefined;
     }
 
