@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VDRBN3Z3.js";
+} from "./chunk-QY3VG5GX.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -9779,7 +9779,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (count === 0 || previousSize <= smallSize && size <= smallSize) {
           sectionBreak = false;
         } else {
-          const geomean = Math.exp(lnSum / count);
+          const geomean = this.goExp2ish(lnSum / count);
           const sizeRatio = size / geomean;
           sectionBreak = ratio * sizeRatio <= 1 || ratio <= sizeRatio;
         }
@@ -9796,12 +9796,31 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         block.push(index);
       }
       if (size > 0) {
-        lnSum += Math.log(size);
+        lnSum += this.goLog2ish(size);
         count += 1;
       }
     }
     flushBlock();
     return paddings;
+  }
+  // go/printer's crude log2/exp2 (math.go log2ish/exp2ish): the geomean must match it bit for
+  // bit, a ratio landing on exactly 2.5 decides the section break
+  goLog2ish(x) {
+    let exponent = x === 0 ? 0 : Math.floor(Math.log2(x)) + 1;
+    let fraction = x / Math.pow(2, exponent);
+    if (fraction >= 1) {
+      fraction /= 2;
+      exponent += 1;
+    }
+    if (fraction < 0.5 && fraction !== 0) {
+      fraction *= 2;
+      exponent -= 1;
+    }
+    return exponent + 2 * (fraction - 1);
+  }
+  goExp2ish(x) {
+    const n = Math.floor(x);
+    return (1 + x - n) * Math.pow(2, n);
   }
   renderGoCompositeEntry(entry, parsed, padding) {
     if (parsed === void 0 || !parsed.singleLine || padding === void 0) {

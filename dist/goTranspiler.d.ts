@@ -239,6 +239,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     findGoTrailingCommentStart(line: any): number;
     getGoCompositePaddings(parsedEntries: any): any;
+    goLog2ish(x: number): number;
+    goExp2ish(x: number): number;
     renderGoCompositeEntry(entry: any, parsed: any, padding: any): string;
     appendGoTrailingComma(entry: any): string;
     getGoRuneLength(text: any): number;

@@ -3844,6 +3844,21 @@ describe('go composite literal column alignment', () => {
         expect(output).toContain('"c": 4,');
         expect(output).not.toContain('"b":   3,');
     });
+    test('the section-break ratio uses go/printer log2ish/exp2ish, so exactly 2.5 breaks', () => {
+        const input =
+        "class T {\n" +
+        "    f () {\n" +
+        "        const x = {\n" +
+        "            'Invalid InstrumentId': 1,\n" +
+        "            'This endpoint requires 2FACode along with the payload': 2\n" +
+        "        }\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        // 55 / exp2ish(log2ish(22)) is exactly 2.5 -> formfeed section break, no padding
+        expect(output).toContain('"Invalid InstrumentId": 1,');
+    });
     test('a trailing comment keeps its comma in front and aligns on the comment column', () => {
         const input =
         "class T {\n" +
