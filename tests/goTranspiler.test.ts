@@ -3844,7 +3844,7 @@ describe('go composite literal column alignment', () => {
         expect(output).toContain('"c": 4,');
         expect(output).not.toContain('"b":   3,');
     });
-    test('the section-break ratio uses go/printer log2ish/exp2ish, so exactly 2.5 breaks', () => {
+    test('the section-break ratio uses the go<=1.26 math.Exp geomean (55/22 stays below 2.5)', () => {
         const input =
         "class T {\n" +
         "    f () {\n" +
@@ -3856,8 +3856,8 @@ describe('go composite literal column alignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        // 55 / exp2ish(log2ish(22)) is exactly 2.5 -> formfeed section break, no padding
-        expect(output).toContain('"Invalid InstrumentId": 1,');
+        // 55 / math.Exp(math.Log(22)) = 2.4999999999999996 -> same section, aligned
+        expect(output).toContain('"Invalid InstrumentId":                                  1,');
     });
     test('a trailing comment keeps its comma in front and aligns on the comment column', () => {
         const input =
