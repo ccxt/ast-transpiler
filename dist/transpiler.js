@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-QY3VG5GX.js";
+} from "./chunk-VNDHHGGT.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21297,9 +21297,35 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   printArrayLength(node, identation, leftExpr = void 0) {
     const receiver = leftExpr ?? this.printNode(node.expression, 0);
-    if (this.isValueLengthType(this.typeOfNodeIfAny(node.expression)))
+    if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression)))
       return `Value::Int(${receiver}.len() as i64)`;
     return `get_array_length(&${receiver})`;
+  }
+  /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
+   *  local initialised from one. The WS runtime keeps those sides as marker dicts
+   *  whose levels live in the side store, so only `get_array_length` / `get_value`
+   *  reach them — the checker's array type is not the runtime shape. */
+  rustIsOrderBookSide(node, depth = 0) {
+    const stripped = this.rustStripWrappers(node);
+    if (stripped === void 0 || depth > 4)
+      return false;
+    if (isIdentifier3(stripped)) {
+      const declaration = this.rustSingleLocalDeclaration(stripped);
+      return declaration !== void 0 && isVariableDeclaration3(declaration) && this.rustIsOrderBookSide(declaration.initializer, depth + 1);
+    }
+    let receiver;
+    let key;
+    if (isElementAccessExpression4(stripped) && isStringLiteralLikeNode4(stripped.argumentExpression)) {
+      receiver = stripped.expression;
+      key = stripped.argumentExpression.text;
+    } else if (isPropertyAccessExpression3(stripped)) {
+      receiver = stripped.expression;
+      key = String(stripped.name.text);
+    }
+    if (receiver === void 0 || key !== "bids" && key !== "asks")
+      return false;
+    const symbol = this.typeOfNodeIfAny(receiver)?.getSymbol?.();
+    return symbol !== void 0 && /^(Indexed|Counted)?OrderBook$/.test(symbol.name);
   }
   // Native string search / slicing: `x.indexOf(y)` and `x.slice(a, b)` on a checker-proven
   // string receiver print native `str` code. The receiver is a `Value`, so the payload is reached
@@ -23087,6 +23113,8 @@ ${classMethods}
     return this.isProvenMapType(this.getCheckedTypeOf(node));
   }
   isProvenListExpression(node) {
+    if (this.rustIsOrderBookSide(node))
+      return false;
     const type = this.getCheckedTypeOf(node);
     return type !== void 0 && this.isProvenListType(type);
   }
