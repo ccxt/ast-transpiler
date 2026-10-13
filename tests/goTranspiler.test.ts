@@ -1392,6 +1392,24 @@ describe('go Promise.all concurrent start (trampoline)', () => {
         expect(output).toContain("var v any = SyncHelper(x)");
         expect(output).not.toContain("Spawn");
     });
+    test('asyncSuffixExemptPaths keeps plain call-site names for exempt declaring files', () => {
+        const input =
+        "class Api {\n" +
+        "    async publicGetTime(params = {}): Promise<any> {\n" +
+        "        return params;\n" +
+        "    }\n" +
+        "}\n" +
+        "class Ex extends Api {\n" +
+        "    async fetchTime(params = {}): Promise<any> {\n" +
+        "        return await this.publicGetTime(params);\n" +
+        "    }\n" +
+        "}";
+        const exempt = new Transpiler({ 'verbose': false, 'go': { 'asyncMethodSuffix': 'Async', 'asyncSuffixExemptPaths': ['.*'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const plain = new Transpiler({ 'verbose': false, 'go': { 'asyncMethodSuffix': 'Async', 'asyncSuffixExemptPaths': ['/no/such/dir/'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        expect(exempt.transpileGo(input).content).toContain("this.PublicGetTime(params)");
+        expect(plain.transpileGo(input).content).toContain("this.PublicGetTimeAsync(params)");
+    });
+
     test('asyncMethodSuffix renames async declarations and their checker-resolved call sites', () => {
         const suffixed = new Transpiler({ 'verbose': false, 'go': { 'asyncMethodSuffix': 'Async', 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         const input =

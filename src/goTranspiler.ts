@@ -694,6 +694,9 @@ export class GoTranspiler extends BaseTranspiler {
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     asyncMethodSuffix = '';
+    // declaring-file patterns whose async methods keep the plain name at call sites (generated
+    // endpoint bodies the target language implements itself, e.g. ccxt's ts/src/abstract/)
+    asyncSuffixExemptPaths: RegExp[] = [];
     classNameMap: { [key: string]: string };
     DEFAULT_RETURN_TYPE = 'any';
     // suffix of the sibling body method an async trampoline hands its work to
@@ -727,6 +730,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.wrapThisCalls = config['wrapThisCalls'] ?? false;
         this.wrapCallMethods = config['wrapCallMethods'] ?? [];
         this.asyncMethodSuffix = config['asyncMethodSuffix'] ?? '';
+        this.asyncSuffixExemptPaths = (config['asyncSuffixExemptPaths'] ?? []).map((p) => new RegExp(p));
         this.unifiedStringParams = config['unifiedStringParams'] ?? {};
     }
 
@@ -1177,8 +1181,16 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         // only declarations with a body count: interface/abstract signatures (e.g. implicit API
         // endpoints declared as `foo(params?: {}): Promise<T>;`) are emitted elsewhere, unsuffixed
         const isAsyncDecl = decls.some((d) => (isMethodDeclaration(d) || isFunctionDeclaration(d))
-            && d.body !== undefined && this.isAsyncFunction(d));
+            && d.body !== undefined && this.isAsyncFunction(d) && !this.isAsyncSuffixExempt(d));
         return isAsyncDecl ? goName + this.asyncMethodSuffix : goName;
+    }
+
+    isAsyncSuffixExempt(decl): boolean {
+        if (this.asyncSuffixExemptPaths.length === 0) {
+            return false;
+        }
+        const fileName = String(decl.getSourceFile()?.fileName ?? '').replace(/\\/g, '/');
+        return this.asyncSuffixExemptPaths.some((re) => re.test(fileName));
     }
 
     printMethodDefinition(node, identation) {

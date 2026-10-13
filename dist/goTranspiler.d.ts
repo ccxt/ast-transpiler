@@ -22,6 +22,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goLocalStaticTypeCache: WeakMap<object, string>;
     goBinaryMemo: Map<object, Map<string, any>> | undefined;
     asyncMethodSuffix: string;
+    asyncSuffixExemptPaths: RegExp[];
     classNameMap: {
         [key: string]: string;
     };
@@ -121,6 +122,7 @@ export declare class GoTranspiler extends BaseTranspiler {
      * (properties, `any` receivers, JS builtins) keep the plain name.
      */
     applyAsyncSuffixToCallee(nameNode: any, goName: string): string;
+    isAsyncSuffixExempt(decl: any): boolean;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printGoSignature(node: any, identation: any, receiver: string): string;

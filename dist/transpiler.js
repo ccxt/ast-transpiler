@@ -7674,6 +7674,9 @@ var GoTranspiler = class extends BaseTranspiler {
     // appended to every async (channel returning) Go method/function name and to each
     // checker-resolved call site of one; '' disables the rename
     this.asyncMethodSuffix = "";
+    // declaring-file patterns whose async methods keep the plain name at call sites (generated
+    // endpoint bodies the target language implements itself, e.g. ccxt's ts/src/abstract/)
+    this.asyncSuffixExemptPaths = [];
     this.DEFAULT_RETURN_TYPE = "any";
     // suffix of the sibling body method an async trampoline hands its work to
     this.ASYNC_BODY_SUFFIX = "Body";
@@ -7825,6 +7828,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.wrapThisCalls = config["wrapThisCalls"] ?? false;
     this.wrapCallMethods = config["wrapCallMethods"] ?? [];
     this.asyncMethodSuffix = config["asyncMethodSuffix"] ?? "";
+    this.asyncSuffixExemptPaths = (config["asyncSuffixExemptPaths"] ?? []).map((p) => new RegExp(p));
     this.unifiedStringParams = config["unifiedStringParams"] ?? {};
   }
   goDescendantsOf(scope) {
@@ -8225,8 +8229,15 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (!decls || decls.length === 0) {
       return goName;
     }
-    const isAsyncDecl = decls.some((d) => (isMethodDeclaration3(d) || isFunctionDeclaration3(d)) && d.body !== void 0 && this.isAsyncFunction(d));
+    const isAsyncDecl = decls.some((d) => (isMethodDeclaration3(d) || isFunctionDeclaration3(d)) && d.body !== void 0 && this.isAsyncFunction(d) && !this.isAsyncSuffixExempt(d));
     return isAsyncDecl ? goName + this.asyncMethodSuffix : goName;
+  }
+  isAsyncSuffixExempt(decl) {
+    if (this.asyncSuffixExemptPaths.length === 0) {
+      return false;
+    }
+    const fileName = String(decl.getSourceFile()?.fileName ?? "").replace(/\\/g, "/");
+    return this.asyncSuffixExemptPaths.some((re) => re.test(fileName));
   }
   printMethodDefinition(node, identation) {
     return this.printGoSignature(node, identation, `(${this.THIS_TOKEN} *${this.className}) `);
