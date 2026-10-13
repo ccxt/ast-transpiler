@@ -768,8 +768,34 @@ export class RustTranspiler extends BaseTranspiler {
 
     printArrayLength(node, identation, leftExpr = undefined) {
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
-        if (this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return `Value::Int(${receiver}.len() as i64)`;
+        if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return `Value::Int(${receiver}.len() as i64)`;
         return `get_array_length(&${receiver})`;
+    }
+
+    /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
+     *  local initialised from one. The WS runtime keeps those sides as marker dicts
+     *  whose levels live in the side store, so only `get_array_length` / `get_value`
+     *  reach them — the checker's array type is not the runtime shape. */
+    rustIsOrderBookSide(node: Node, depth = 0): boolean {
+        const stripped = this.rustStripWrappers(node);
+        if (stripped === undefined || depth > 4) return false;
+        if (isIdentifier(stripped)) {
+            const declaration = this.rustSingleLocalDeclaration(stripped);
+            return declaration !== undefined && isVariableDeclaration(declaration)
+                && this.rustIsOrderBookSide(declaration.initializer, depth + 1);
+        }
+        let receiver: Node | undefined;
+        let key: string | undefined;
+        if (isElementAccessExpression(stripped) && isStringLiteralLikeNode(stripped.argumentExpression)) {
+            receiver = stripped.expression;
+            key = stripped.argumentExpression.text;
+        } else if (isPropertyAccessExpression(stripped)) {
+            receiver = stripped.expression;
+            key = String(stripped.name.text);
+        }
+        if (receiver === undefined || (key !== 'bids' && key !== 'asks')) return false;
+        const symbol = (this.typeOfNodeIfAny(receiver) as any)?.getSymbol?.();
+        return symbol !== undefined && /^(Indexed|Counted)?OrderBook$/.test(symbol.name);
     }
 
     // Native string search / slicing: `x.indexOf(y)` and `x.slice(a, b)` on a checker-proven
@@ -2922,6 +2948,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     isProvenListExpression(node: Node): boolean {
+        if (this.rustIsOrderBookSide(node)) return false;
         const type = this.getCheckedTypeOf(node);
         return type !== undefined && this.isProvenListType(type);
     }

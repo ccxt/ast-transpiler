@@ -3902,3 +3902,30 @@ describe('rust pro-tier handler message shadow (D-27)', () => {
         expect(output).not.toContain('__pro_message');
     });
 });
+
+describe('rust order book sides keep the runtime helpers', () => {
+    // A live WS book keeps bids/asks as side markers whose levels sit in the
+    // side store; the checker's array type must not switch them to native
+    // `.len()` / `.as_array()` reads, which only see the marker dict.
+    test('bids of an OrderBook read through get_array_length and get_value', () => {
+        const ts =
+            'interface OrderBook { bids: [number, number][]; asks: [number, number][]; }\n' +
+            'class T {\n' +
+            '    m(orderbook: OrderBook) {\n' +
+            '        const bids = orderbook[\'bids\'];\n' +
+            '        const bidsLength = bids.length;\n' +
+            '        const first = bids[0];\n' +
+            '        for (let i = 0; i < bidsLength; i++) {\n' +
+            '            const row = bids[i];\n' +
+            '        }\n' +
+            '        return first;\n' +
+            '    }\n' +
+            '}';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_array_length(&bids)');
+        expect(output).toContain('get_value(&bids, &Value::Int(0))');
+        expect(output).toContain('get_value(&bids, &i)');
+        expect(output).not.toContain('bids.len()');
+        expect(output).not.toContain('bids.as_array()');
+    });
+});

@@ -129,6 +129,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     typeOfNodeIfAny(node: Node): Type | undefined;
     isValueLengthType(type: Type | undefined): boolean;
     printArrayLength(node: any, identation: any, leftExpr?: any): string;
+    /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
+     *  local initialised from one. The WS runtime keeps those sides as marker dicts
+     *  whose levels live in the side store, so only `get_array_length` / `get_value`
+     *  reach them — the checker's array type is not the runtime shape. */
+    rustIsOrderBookSide(node: Node, depth?: number): boolean;
     /** Literal integer bound of a `slice` call (`3`, `-64`), else undefined. */
     rustSliceLiteralBound(node: any): number | undefined;
     rustSliceClampedIndex(value: number): string;
