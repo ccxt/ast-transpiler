@@ -24706,6 +24706,16 @@ ${iden}}`;
     if (isCallExpression6(stripped) && isPropertyAccessExpression3(stripped.expression) && stripped.expression.expression.kind === SyntaxKind7.ThisKeyword && _RustTranspiler.RUST_R01_PLAIN_DICT_BUILDERS.has(String(stripped.expression.name.text))) {
       return this.rustR01CalleeIsBase(stripped);
     }
+    if (isCallExpression6(stripped) && isPropertyAccessExpression3(stripped.expression) && stripped.expression.expression.kind === SyntaxKind7.ThisKeyword && stripped.arguments.length > 0 && this.rustR01CalleeIsBase(stripped)) {
+      const callee = String(stripped.expression.name.text);
+      const first = this.rustStripWrappers(stripped.arguments[0]);
+      if (callee === "omit" || callee === "keysort") {
+        return first !== void 0 && isIdentifier3(first) && String(first.text) === name;
+      }
+      if (callee === "extend") {
+        return stripped.arguments.every((a) => this.rustR01PlainSource(a, name));
+      }
+    }
     return false;
   }
   /** The checker resolves the call to the base-tier implementation (a venue
@@ -24717,7 +24727,7 @@ ${iden}}`;
     } catch (e) {
       return false;
     }
-    return declaration !== void 0 && declaration.kind === SyntaxKind7.MethodDeclaration && declaration.body !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName).replace(/\\/g, "/"));
+    return declaration !== void 0 && declaration.body !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName).replace(/\\/g, "/"));
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

@@ -4636,6 +4636,20 @@ export class RustTranspiler extends BaseTranspiler {
             && RustTranspiler.RUST_R01_PLAIN_DICT_BUILDERS.has(String(stripped.expression.name.text))) {
             return this.rustR01CalleeIsBase(stripped);
         }
+        // `x = this.omit|keysort (x, …)` copies x's own map; `this.extend (…)` builds a
+        // fresh map from its dict arguments — plain when each of them is.
+        if (isCallExpression(stripped) && isPropertyAccessExpression(stripped.expression)
+            && stripped.expression.expression.kind === SyntaxKind.ThisKeyword && stripped.arguments.length > 0
+            && this.rustR01CalleeIsBase(stripped)) {
+            const callee = String(stripped.expression.name.text);
+            const first: any = this.rustStripWrappers(stripped.arguments[0]);
+            if (callee === 'omit' || callee === 'keysort') {
+                return first !== undefined && isIdentifier(first) && String(first.text) === name;
+            }
+            if (callee === 'extend') {
+                return stripped.arguments.every((a) => this.rustR01PlainSource(a, name));
+            }
+        }
         return false;
     }
 
@@ -4648,7 +4662,8 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return false;
         }
-        return declaration !== undefined && declaration.kind === SyntaxKind.MethodDeclaration && declaration.body !== undefined
+        // a method body, or the base function behind an `omit = omit;` property
+        return declaration !== undefined && declaration.body !== undefined
             && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName).replace(/\\/g, '/'));
     }
 }

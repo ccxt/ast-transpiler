@@ -3957,4 +3957,14 @@ describe('hx4 R01 native element writes on plain-dict locals', () => {
         expect(output).toContain('add_element_to_object(&mut mixed, &Value::Str("k".into())');
         expect(output).toContain('add_element_to_object(&mut captured, &Value::Str("free".into())');
     });
+
+    test('omit of itself / extend of plain dicts keep the local plain', () => {
+        expect(output).toContain(insert('request', 'b', 'Value::Int(2)'));
+        expect(output).toContain(insert('merged', 'd', 'Value::Int(4)'));
+    });
+
+    test('omit / extend of a foreign dict keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut foreign, &Value::Str("e".into())');
+        expect(output).toContain('add_element_to_object(&mut extended, &Value::Str("f".into())');
+    });
 });

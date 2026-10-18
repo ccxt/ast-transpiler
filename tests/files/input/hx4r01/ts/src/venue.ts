@@ -35,4 +35,19 @@ export default class venue extends Exchange {
         const f = () => { captured['free'] = '2'; };
         return [ order, mixed, f ];
     }
+    createOrder (params: Dict = {}) {
+        let request: Dict = { 'a': 1 };
+        request = this.omit (request, 'a');
+        request['b'] = 2;
+        let merged: Dict = {};
+        merged = this.extend (merged, { 'c': 3 });
+        merged['d'] = 4;
+        let foreign: Dict = {};
+        foreign = this.omit (params, 'x');
+        foreign['e'] = 5;
+        let extended: Dict = {};
+        extended = this.extend (params, {});
+        extended['f'] = 6;
+        return [ request, merged, foreign, extended ];
+    }
 }
