@@ -3266,7 +3266,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const isStringKey = _is.isStringLiteralLikeNode.call(void 0, argumentExpression);
     const isNumberKey = _is.isNumericLiteral.call(void 0, argumentExpression);
     if (!isStringKey && !isNumberKey) {
-      return _nullishCoalesce(this.csharpLoopIndexListRead(expression, argumentExpression), () => ( this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression)));
+      return this.csharpLoopIndexListRead(expression, argumentExpression);
     }
     const key = argumentExpression.text;
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -7078,32 +7078,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
   csharpHx4DeclaredReceiverReadable(node, expression) {
     return this.csharpEnclosingFunction(node) !== void 0 && _is.isIdentifier.call(void 0, expression);
-  }
-  // hx4 C01: `getValue(x, k)` with an identifier key on a declared collection: a printed string key
-  // carries the helper's own key/receiver null tests, a printed `int` index its range test
-  csharpHx4DeclaredKeyRead(node, expression, key) {
-    const parent = node.parent;
-    if (!_is.isIdentifier.call(void 0, expression) || !_is.isIdentifier.call(void 0, key) || key.text === "undefined" || _is.isDeleteExpression.call(void 0, parent) || _is.isPrefixUnaryExpression.call(void 0, parent) || _is.isPostfixUnaryExpression.call(void 0, parent) || _is.isBinaryExpression.call(void 0, parent) && parent.left === node && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
-      return void 0;
-    }
-    const csharpType = this.csharpDeclaredCollectionType(expression);
-    if (csharpType === void 0 || !this.csharpHx4DeclaredReceiverReadable(node, expression)) {
-      return void 0;
-    }
-    const printedLocal = this.csharpPrintedLocalType;
-    const keyType = _nullishCoalesce(this.csharpTypedLocalType(key), () => ( (typeof printedLocal === "function" ? printedLocal.call(this, key) : void 0)));
-    const receiver = this.printNode(expression, 0);
-    const printedKey = this.printNode(key, 0);
-    if (csharpType.indexOf("Dictionary<") >= 0) {
-      if (keyType !== "string" && keyType !== "string?" || !this.isStringType(this.getChecker().getTypeAtLocation(key).flags)) {
-        return void 0;
-      }
-      return `(${printedKey} != null && ${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
-    }
-    if (keyType !== "int") {
-      return void 0;
-    }
-    return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : null)`;
   }
 };
 

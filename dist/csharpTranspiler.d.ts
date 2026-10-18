@@ -291,5 +291,4 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printThrowStatement(node: any, identation: any): string;
     printPropertyAccessModifiers(node: any): string;
     csharpHx4DeclaredReceiverReadable(node: any, expression: any): boolean;
-    csharpHx4DeclaredKeyRead(node: any, expression: any, key: any): string | undefined;
 }
