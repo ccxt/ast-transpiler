@@ -3660,6 +3660,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (expr === undefined) {
             return true; // `var x any` never written holds nil
         }
+        if (this.goG02NonPointerAccessorSource(expr)) {
+            return true;
+        }
         switch (expr.kind) {
         case SyntaxKind.NullKeyword:
             return true;
@@ -8290,6 +8293,60 @@ ${tryBodyBlock}
         return (isIfStatement(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
     }
 
+    // hx4 G02
+    // base safeValue/safeValue2/safeValueN (SafeValueN derefScalars every hit and its default) and
+    // ws cache constructors (non-nil, outside the derefScalar set): never a nil pointer IsEqual folds
+    goG02NonPointerAccessorSource(expr): boolean {
+        if (expr?.kind === SyntaxKind.ConditionalExpression) {
+            return this.goIsNonPointerValueSource(expr.whenTrue) && this.goIsNonPointerValueSource(expr.whenFalse);
+        }
+        if (expr?.kind === SyntaxKind.NewExpression) {
+            const name = (expr.expression?.kind === SyntaxKind.Identifier) ? expr.expression.text : undefined;
+            return GO_G02_CACHE_CLASSES.indexOf(name) >= 0;
+        }
+        if (expr?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = expr.expression;
+        if (callee?.kind !== SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind.ThisKeyword
+            || callee.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const keys = GO_G02_SAFE_VALUE_KEYS[callee.name.text];
+        if (keys === undefined || expr.arguments.length > keys + 1) {
+            return false;
+        }
+        // a default is returned as given (after derefScalar): only a literal is provably not a nil *sync.Map
+        if (expr.arguments.length === keys + 1 && !this.goG02LiteralDefault(expr.arguments[keys])) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const declarations = checker?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve());
+        if (!declarations || declarations.length === 0) {
+            return false;
+        }
+        // an exchange override would print its own Go body: only the base property qualifies
+        return declarations.every((d) => /(^|\/)ts\/src\/base\/Exchange\.ts$/.test(String(d.getSourceFile()?.fileName ?? '').replace(/\\/g, '/')));
+    }
+
+    goG02LiteralDefault(node): boolean {
+        node = this.goUnwrapParenthesizedNode(node);
+        switch (node?.kind) {
+        case SyntaxKind.NullKeyword:
+        case SyntaxKind.StringLiteral:
+        case SyntaxKind.NoSubstitutionTemplateLiteral:
+        case SyntaxKind.NumericLiteral:
+        case SyntaxKind.TrueKeyword:
+        case SyntaxKind.FalseKeyword:
+        case SyntaxKind.ObjectLiteralExpression:
+        case SyntaxKind.ArrayLiteralExpression:
+            return true;
+        case SyntaxKind.Identifier:
+            return node.text === 'undefined';
+        }
+        return false;
+    }
+
 
 }
 
@@ -8309,3 +8366,6 @@ ${tryBodyBlock}
 
 // console.log(baseClassDeclaration);
 
+// hx4 G02: key-argument count of the base safeValue family; ws cache classes (Go constructors return a non-nil *T)
+const GO_G02_SAFE_VALUE_KEYS: { [name: string]: number } = { 'safeValue': 2, 'safeValue2': 3, 'safeValueN': 2 };
+const GO_G02_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide' ];

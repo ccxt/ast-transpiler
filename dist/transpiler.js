@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CTKEJPGZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -10324,6 +10324,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     if (expr === void 0) {
       return true;
     }
+    if (this.goG02NonPointerAccessorSource(expr)) {
+      return true;
+    }
     switch (expr.kind) {
       case SyntaxKind5.NullKeyword:
         return true;
@@ -14291,7 +14294,58 @@ ${this.getIden(level)}}()`;
     const lastStatement = statements[statements.length - 1];
     return (isIfStatement2(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
   }
+  // hx4 G02
+  // base safeValue/safeValue2/safeValueN (SafeValueN derefScalars every hit and its default) and
+  // ws cache constructors (non-nil, outside the derefScalar set): never a nil pointer IsEqual folds
+  goG02NonPointerAccessorSource(expr) {
+    if (expr?.kind === SyntaxKind5.ConditionalExpression) {
+      return this.goIsNonPointerValueSource(expr.whenTrue) && this.goIsNonPointerValueSource(expr.whenFalse);
+    }
+    if (expr?.kind === SyntaxKind5.NewExpression) {
+      const name = expr.expression?.kind === SyntaxKind5.Identifier ? expr.expression.text : void 0;
+      return GO_G02_CACHE_CLASSES.indexOf(name) >= 0;
+    }
+    if (expr?.kind !== SyntaxKind5.CallExpression) {
+      return false;
+    }
+    const callee = expr.expression;
+    if (callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.kind !== SyntaxKind5.Identifier) {
+      return false;
+    }
+    const keys = GO_G02_SAFE_VALUE_KEYS[callee.name.text];
+    if (keys === void 0 || expr.arguments.length > keys + 1) {
+      return false;
+    }
+    if (expr.arguments.length === keys + 1 && !this.goG02LiteralDefault(expr.arguments[keys])) {
+      return false;
+    }
+    const checker = this.checkerOrUndefined();
+    const declarations = checker?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve());
+    if (!declarations || declarations.length === 0) {
+      return false;
+    }
+    return declarations.every((d) => /(^|\/)ts\/src\/base\/Exchange\.ts$/.test(String(d.getSourceFile()?.fileName ?? "").replace(/\\/g, "/")));
+  }
+  goG02LiteralDefault(node) {
+    node = this.goUnwrapParenthesizedNode(node);
+    switch (node?.kind) {
+      case SyntaxKind5.NullKeyword:
+      case SyntaxKind5.StringLiteral:
+      case SyntaxKind5.NoSubstitutionTemplateLiteral:
+      case SyntaxKind5.NumericLiteral:
+      case SyntaxKind5.TrueKeyword:
+      case SyntaxKind5.FalseKeyword:
+      case SyntaxKind5.ObjectLiteralExpression:
+      case SyntaxKind5.ArrayLiteralExpression:
+        return true;
+      case SyntaxKind5.Identifier:
+        return node.text === "undefined";
+    }
+    return false;
+  }
 };
+var GO_G02_SAFE_VALUE_KEYS = { "safeValue": 2, "safeValue2": 3, "safeValueN": 2 };
+var GO_G02_CACHE_CLASSES = ["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide"];
 
 // src/javaTranspiler.ts
 init_esm_shims();
