@@ -1768,6 +1768,29 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object code = (currency != null && currency.ContainsKey("code") ? currency["code"] : null);');
         expect(output).not.toContain('getValue(currency, "code")');
     });
+    test('hx4 C01: a null-tested declared collection still reads natively', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'row') ? 'Dictionary<string, object>' : ((declaration?.name?.text === 'items') ? 'List<object>' : undefined);
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    main(row: any, items: any, other: any) {\n" +
+        "        if (row === undefined || items === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        const code = row['code'];\n" +
+        "        const first = items[0];\n" +
+        "        const last = items[-1];\n" +
+        "        const id = other['id'];\n" +
+        "        return [ code, first, last, id ];\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        expect(output).toContain('object code = (row != null && row.ContainsKey("code") ? row["code"] : null);');
+        expect(output).toContain('object first = (items != null && 0 < items.Count ? items[0] : null);');
+        expect(output).toContain('object last = getValue(items, -1);');
+        expect(output).toContain('object id = getValue(other, "id");');
+    });
     test('a non-dictionary declared-local resolver answer keeps getValue', () => {
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpDeclaredLocalTypeResolver;

@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CTKEJPGZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -3384,8 +3384,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (csharpType === void 0) {
       return void 0;
     }
-    const func = this.csharpEnclosingFunction(node);
-    if (func === void 0 || this.csharpReceiverIsRewritten(func, expression)) {
+    if (!this.csharpHx4DeclaredReceiverReadable(node, expression)) {
       return void 0;
     }
     const receiver = this.printNode(expression, 0);
@@ -7076,6 +7075,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
   //     }
   //     return res;
   // }
+  // hx4 C01: a declared C# collection keeps its static type across every write, and the
+  // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
+  csharpHx4DeclaredReceiverReadable(node, expression) {
+    return this.csharpEnclosingFunction(node) !== void 0 && isIdentifier(expression);
+  }
 };
 
 // src/transpiler.ts
