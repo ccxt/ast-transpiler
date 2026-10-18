@@ -24628,12 +24628,7 @@ ${iden}}`;
     if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || declaration === void 0 || !isVariableDeclaration3(declaration) || pattern.elements.indexOf(element) !== 0 || element.name?.kind !== SyntaxKind7.Identifier || element.initializer !== void 0 || element.dotDotDotToken !== void 0) {
       return false;
     }
-    const call = this.rustStripWrappers(declaration.initializer);
-    if (call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || !_RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text)) || !this.rustR01CalleeIsBase(call)) {
-      return false;
-    }
-    const request = this.rustStripWrappers(call.arguments[1]);
-    if (request === void 0 || !(this.rustPlainDictLiteral(request) || isIdentifier3(request) && (this.rustR01LocalStaysPlain(request, depth + 1) || this.rustR01ShippedPlain(request)))) {
+    if (!this.rustR01TupleHeadIsPlain(declaration.initializer, void 0, depth)) {
       return false;
     }
     const scope = this.rustEnclosingFunction(declaration);
@@ -24685,12 +24680,62 @@ ${iden}}`;
   /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
    *  argument handed back (base-tier implementation, no override). */
   rustR01RequestTupleWrite(rhs, index, name) {
+    return index === 0 && this.rustR01TupleHeadIsPlain(rhs, name, 0);
+  }
+  /** Element 0 of `this.m (…)` is a plain dict: `m` is the base-tier
+   *  `handleUntilOption` (returns its `request` argument), or a method of the
+   *  calling file (Rust calls it statically) whose every `return [ X, … ]`
+   *  has X a plain literal / plain local, or a parameter whose argument here is. */
+  rustR01TupleHeadIsPlain(rhs, selfName, depth) {
     const call = this.rustStripWrappers(rhs);
-    if (index !== 0 || call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || !_RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))) {
+    if (depth > 4 || call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword) {
       return false;
     }
-    const request = this.rustStripWrappers(call.arguments[1]);
-    return request !== void 0 && isIdentifier3(request) && String(request.text) === name && this.rustR01CalleeIsBase(call);
+    const argPlain = (index) => {
+      const arg = this.rustStripWrappers(call.arguments[index]);
+      return arg !== void 0 && (this.rustPlainDictLiteral(arg) || isIdentifier3(arg) && (String(arg.text) === selfName || this.rustR01LocalStaysPlain(arg, depth + 1) || this.rustR01ShippedPlain(arg)));
+    };
+    if (_RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))) {
+      return this.rustR01CalleeIsBase(call) && argPlain(1);
+    }
+    let declaration;
+    try {
+      declaration = signatureDeclaration(this.getChecker().getResolvedSignature(call));
+    } catch (e) {
+      return false;
+    }
+    if (declaration?.kind !== SyntaxKind7.MethodDeclaration || declaration.body === void 0 || declaration.getSourceFile() !== call.getSourceFile()) {
+      return false;
+    }
+    let plain = true;
+    let returns = 0;
+    this.rustWalkScope(declaration.body, (n) => {
+      if (isArrowFunction5(n) || n.kind === SyntaxKind7.FunctionExpression)
+        return RUST_WALK_SKIP;
+      if (!isReturnStatement4(n))
+        return;
+      returns++;
+      const tuple = this.rustStripWrappers(n.expression);
+      const head = tuple?.kind === SyntaxKind7.ArrayLiteralExpression ? this.rustStripWrappers(tuple.elements[0]) : void 0;
+      const param = head !== void 0 && isIdentifier3(head) ? declaration.parameters.findIndex((p) => p.name?.kind === SyntaxKind7.Identifier && String(p.name.text) === String(head.text)) : -1;
+      const ok = head !== void 0 && (this.rustPlainDictLiteral(head) || (param >= 0 ? this.rustSymbolOf(head) === this.rustSymbolOf(declaration.parameters[param].name) && argPlain(param) && this.rustR01ParamUnassigned(declaration, String(head.text)) : isIdentifier3(head) && this.rustR01LocalStaysPlain(head, depth + 1)));
+      if (!ok) {
+        plain = false;
+        return RUST_WALK_STOP;
+      }
+    });
+    return plain && returns > 0;
+  }
+  /** A pass-through parameter: never assigned in the method body. */
+  rustR01ParamUnassigned(method, name) {
+    let kept = true;
+    this.rustWalkScope(method.body, (n) => {
+      if (isBinaryExpression5(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier3(n.left) && String(n.left.text) === name) {
+        kept = false;
+        return RUST_WALK_STOP;
+      }
+    });
+    return kept;
   }
   /** A value that is a fresh plain dict, nullish, or the local itself. */
   rustR01PlainSource(node, name) {
@@ -25020,7 +25065,7 @@ _RustTranspiler.BOOL_VALUE_PREFIXES = [
 /** Base-tier methods whose every return is a fresh tag-free object
  *  literal (no venue override, no hand-written stub replaces them). */
 _RustTranspiler.RUST_R01_PLAIN_DICT_BUILDERS = /* @__PURE__ */ new Set(["account", "safeLedgerEntry", "depositWithdrawFee"]);
-/** Base-tier `[Dict, Dict]` tuple helpers that hand back their own `request` argument. */
+/** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
 _RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS = /* @__PURE__ */ new Set(["handleUntilOption"]);
 var RustTranspiler = _RustTranspiler;
 

@@ -35,6 +35,24 @@ export default class venue extends Exchange {
         const f = () => { captured['free'] = '2'; };
         return [ order, mixed, f ];
     }
+    prepareRequest (market: Dict = undefined, params: Dict = {}): [Dict, Dict] {
+        const request: Dict = {};
+        if (market !== undefined) {
+            request['contract'] = market['id'];
+            return [ request, this.omit (params, 'settle') ];
+        }
+        return [ request, params ];
+    }
+    passThrough (params: Dict = {}): [Dict, Dict] {
+        return [ params, params ];
+    }
+    fetchPositions (params: Dict = {}) {
+        const [ request, query ] = this.prepareRequest (undefined, params);
+        request['settle'] = 'usdt';
+        const [ echoed, rest ] = this.passThrough (params);
+        echoed['x'] = 1;
+        return [ request, query, echoed, rest ];
+    }
     createOrder (params: Dict = {}) {
         let request: Dict = { 'a': 1 };
         request = this.omit (request, 'a');

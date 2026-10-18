@@ -3963,6 +3963,11 @@ describe('hx4 R01 native element writes on plain-dict locals', () => {
         expect(output).toContain(insert('merged', 'd', 'Value::Int(4)'));
     });
 
+    test('element 0 of a same-file tuple method returning a fresh literal inserts natively', () => {
+        expect(output).toContain(insert('request', 'settle', 'Value::Str("usdt".into())'));
+        expect(output).toContain('add_element_to_object(&mut echoed, &Value::Str("x".into())');
+    });
+
     test('omit / extend of a foreign dict keep the helper', () => {
         expect(output).toContain('add_element_to_object(&mut foreign, &Value::Str("e".into())');
         expect(output).toContain('add_element_to_object(&mut extended, &Value::Str("f".into())');

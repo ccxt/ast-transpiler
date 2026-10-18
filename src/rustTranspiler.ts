@@ -4463,7 +4463,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  literal (no venue override, no hand-written stub replaces them). */
     private static readonly RUST_R01_PLAIN_DICT_BUILDERS = new Set([ 'account', 'safeLedgerEntry', 'depositWithdrawFee' ]);
 
-    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their own `request` argument. */
+    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
     private static readonly RUST_R01_REQUEST_TUPLE_HELPERS = new Set([ 'handleUntilOption' ]);
 
     rustR01NativeDictInsert(baseExpr, keyNode, keyText: string, valueText: string): string | undefined {
@@ -4545,16 +4545,7 @@ export class RustTranspiler extends BaseTranspiler {
             || element.initializer !== undefined || element.dotDotDotToken !== undefined) {
             return false;
         }
-        const call: any = this.rustStripWrappers(declaration.initializer);
-        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)
-            || call.expression.expression.kind !== SyntaxKind.ThisKeyword
-            || !RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))
-            || !this.rustR01CalleeIsBase(call)) {
-            return false;
-        }
-        const request: any = this.rustStripWrappers(call.arguments[1]);
-        if (request === undefined || !(this.rustPlainDictLiteral(request)
-            || (isIdentifier(request) && (this.rustR01LocalStaysPlain(request, depth + 1) || this.rustR01ShippedPlain(request))))) {
+        if (!this.rustR01TupleHeadIsPlain(declaration.initializer, undefined, depth)) {
             return false;
         }
         const scope = this.rustEnclosingFunction(declaration);
@@ -4610,14 +4601,65 @@ export class RustTranspiler extends BaseTranspiler {
     /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
      *  argument handed back (base-tier implementation, no override). */
     private rustR01RequestTupleWrite(rhs: Node, index: number, name: string): boolean {
+        return index === 0 && this.rustR01TupleHeadIsPlain(rhs, name, 0);
+    }
+
+    /** Element 0 of `this.m (…)` is a plain dict: `m` is the base-tier
+     *  `handleUntilOption` (returns its `request` argument), or a method of the
+     *  calling file (Rust calls it statically) whose every `return [ X, … ]`
+     *  has X a plain literal / plain local, or a parameter whose argument here is. */
+    private rustR01TupleHeadIsPlain(rhs: Node, selfName: string | undefined, depth: number): boolean {
         const call: any = this.rustStripWrappers(rhs);
-        if (index !== 0 || call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)
-            || call.expression.expression.kind !== SyntaxKind.ThisKeyword
-            || !RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))) {
+        if (depth > 4 || call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword) {
             return false;
         }
-        const request = this.rustStripWrappers(call.arguments[1]);
-        return request !== undefined && isIdentifier(request) && String(request.text) === name && this.rustR01CalleeIsBase(call);
+        const argPlain = (index: number): boolean => {
+            const arg: any = this.rustStripWrappers(call.arguments[index]);
+            return arg !== undefined && (this.rustPlainDictLiteral(arg) || (isIdentifier(arg)
+                && (String(arg.text) === selfName || this.rustR01LocalStaysPlain(arg, depth + 1) || this.rustR01ShippedPlain(arg))));
+        };
+        if (RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))) {
+            return this.rustR01CalleeIsBase(call) && argPlain(1);
+        }
+        let declaration: any;
+        try {
+            declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call));
+        } catch (e) {
+            return false;
+        }
+        if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined
+            || declaration.getSourceFile() !== call.getSourceFile()) {
+            return false;
+        }
+        let plain = true;
+        let returns = 0;
+        this.rustWalkScope(declaration.body, (n) => {
+            if (isArrowFunction(n) || n.kind === SyntaxKind.FunctionExpression) return RUST_WALK_SKIP;
+            if (!isReturnStatement(n)) return;
+            returns++;
+            const tuple: any = this.rustStripWrappers(n.expression);
+            const head: any = tuple?.kind === SyntaxKind.ArrayLiteralExpression ? this.rustStripWrappers(tuple.elements[0]) : undefined;
+            const param = head !== undefined && isIdentifier(head) ? declaration.parameters.findIndex((p) => p.name?.kind === SyntaxKind.Identifier && String(p.name.text) === String(head.text)) : -1;
+            const ok = head !== undefined && (this.rustPlainDictLiteral(head)
+                || (param >= 0 ? (this.rustSymbolOf(head) === this.rustSymbolOf(declaration.parameters[param].name) && argPlain(param)
+                    && this.rustR01ParamUnassigned(declaration, String(head.text)))
+                    : (isIdentifier(head) && this.rustR01LocalStaysPlain(head, depth + 1))));
+            if (!ok) { plain = false; return RUST_WALK_STOP; }
+        });
+        return plain && returns > 0;
+    }
+
+    /** A pass-through parameter: never assigned in the method body. */
+    private rustR01ParamUnassigned(method: any, name: string): boolean {
+        let kept = true;
+        this.rustWalkScope(method.body, (n) => {
+            if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier(n.left) && String(n.left.text) === name) {
+                kept = false;
+                return RUST_WALK_STOP;
+            }
+        });
+        return kept;
     }
 
     /** A value that is a fresh plain dict, nullish, or the local itself. */

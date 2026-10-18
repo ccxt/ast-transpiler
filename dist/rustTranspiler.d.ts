@@ -650,7 +650,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Base-tier methods whose every return is a fresh tag-free object
      *  literal (no venue override, no hand-written stub replaces them). */
     private static readonly RUST_R01_PLAIN_DICT_BUILDERS;
-    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their own `request` argument. */
+    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
     private static readonly RUST_R01_REQUEST_TUPLE_HELPERS;
     rustR01NativeDictInsert(baseExpr: any, keyNode: any, keyText: string, valueText: string): string | undefined;
     /** A local (single binding in its function, no closure capture of a write)
@@ -669,6 +669,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
      *  argument handed back (base-tier implementation, no override). */
     private rustR01RequestTupleWrite;
+    /** Element 0 of `this.m (…)` is a plain dict: `m` is the base-tier
+     *  `handleUntilOption` (returns its `request` argument), or a method of the
+     *  calling file (Rust calls it statically) whose every `return [ X, … ]`
+     *  has X a plain literal / plain local, or a parameter whose argument here is. */
+    private rustR01TupleHeadIsPlain;
+    /** A pass-through parameter: never assigned in the method body. */
+    private rustR01ParamUnassigned;
     /** A value that is a fresh plain dict, nullish, or the local itself. */
     rustR01PlainSource(node: Node, name: string): boolean;
     /** The checker resolves the call to the base-tier implementation (a venue
