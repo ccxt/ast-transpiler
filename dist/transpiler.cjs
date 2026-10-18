@@ -14370,8 +14370,8 @@ ${this.getIden(level)}}()`;
     scope.forEachChild(visit);
     return ok;
   }
-  // the read is the container of an enclosing element read, an operand of `in`, or an argument of
-  // a `this.safe*` accessor: each derefScalars it, so GetValue's own deref is redundant
+  // the read is the container of an enclosing element read, an operand of `in`, or an argument of a
+  // SafeValueN-backed accessor (or safeCurrencyCode): each derefScalars it, so GetValue's deref is redundant
   g01DerefConsumer(access) {
     let operand = access;
     while (_optionalChain([operand, 'access', _1395 => _1395.parent, 'optionalAccess', _1396 => _1396.kind]) === _ast.SyntaxKind.ParenthesizedExpression) {
@@ -14385,7 +14385,7 @@ ${this.getIden(level)}}()`;
       return true;
     }
     const callee = _optionalChain([parent, 'optionalAccess', _1401 => _1401.expression]);
-    return _optionalChain([parent, 'optionalAccess', _1402 => _1402.kind]) === _ast.SyntaxKind.CallExpression && parent.arguments.indexOf(operand) >= 0 && _optionalChain([callee, 'optionalAccess', _1403 => _1403.kind]) === _ast.SyntaxKind.PropertyAccessExpression && _optionalChain([callee, 'access', _1404 => _1404.expression, 'optionalAccess', _1405 => _1405.kind]) === _ast.SyntaxKind.ThisKeyword && /^safe[A-Z]/.test(`${_nullishCoalesce(_optionalChain([callee, 'access', _1406 => _1406.name, 'optionalAccess', _1407 => _1407.text]), () => ( ""))}`);
+    return _optionalChain([parent, 'optionalAccess', _1402 => _1402.kind]) === _ast.SyntaxKind.CallExpression && parent.arguments.indexOf(operand) >= 0 && _optionalChain([callee, 'optionalAccess', _1403 => _1403.kind]) === _ast.SyntaxKind.PropertyAccessExpression && _optionalChain([callee, 'access', _1404 => _1404.expression, 'optionalAccess', _1405 => _1405.kind]) === _ast.SyntaxKind.ThisKeyword && /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|IntegerProduct|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|safeCurrencyCode)$/.test(`${_nullishCoalesce(_optionalChain([callee, 'access', _1406 => _1406.name, 'optionalAccess', _1407 => _1407.text]), () => ( ""))}`);
   }
 };
 

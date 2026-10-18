@@ -8382,8 +8382,8 @@ ${tryBodyBlock}
         return ok;
     }
 
-    // the read is the container of an enclosing element read, an operand of `in`, or an argument of
-    // a `this.safe*` accessor: each derefScalars it, so GetValue's own deref is redundant
+    // the read is the container of an enclosing element read, an operand of `in`, or an argument of a
+    // SafeValueN-backed accessor (or safeCurrencyCode): each derefScalars it, so GetValue's deref is redundant
     g01DerefConsumer(access): boolean {
         let operand: any = access;
         while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
@@ -8399,7 +8399,7 @@ ${tryBodyBlock}
         const callee: any = parent?.expression;
         return (parent?.kind === SyntaxKind.CallExpression) && (parent.arguments.indexOf(operand) >= 0)
             && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
-            && /^safe[A-Z]/.test(`${callee.name?.text ?? ''}`);
+            && /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|IntegerProduct|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|safeCurrencyCode)$/.test(`${callee.name?.text ?? ''}`);
     }
 
 }

@@ -14371,8 +14371,8 @@ ${this.getIden(level)}}()`;
     scope.forEachChild(visit);
     return ok;
   }
-  // the read is the container of an enclosing element read, an operand of `in`, or an argument of
-  // a `this.safe*` accessor: each derefScalars it, so GetValue's own deref is redundant
+  // the read is the container of an enclosing element read, an operand of `in`, or an argument of a
+  // SafeValueN-backed accessor (or safeCurrencyCode): each derefScalars it, so GetValue's deref is redundant
   g01DerefConsumer(access) {
     let operand = access;
     while (operand.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
@@ -14386,7 +14386,7 @@ ${this.getIden(level)}}()`;
       return true;
     }
     const callee = parent?.expression;
-    return parent?.kind === SyntaxKind5.CallExpression && parent.arguments.indexOf(operand) >= 0 && callee?.kind === SyntaxKind5.PropertyAccessExpression && callee.expression?.kind === SyntaxKind5.ThisKeyword && /^safe[A-Z]/.test(`${callee.name?.text ?? ""}`);
+    return parent?.kind === SyntaxKind5.CallExpression && parent.arguments.indexOf(operand) >= 0 && callee?.kind === SyntaxKind5.PropertyAccessExpression && callee.expression?.kind === SyntaxKind5.ThisKeyword && /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|IntegerProduct|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|safeCurrencyCode)$/.test(`${callee.name?.text ?? ""}`);
   }
 };
 
