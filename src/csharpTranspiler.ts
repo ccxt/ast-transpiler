@@ -804,7 +804,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (listRead !== undefined) {
             return listRead;
         }
-        return super.printElementAccessExpression(node, identation);
+        return this.csharpHx4LastResortKeyRead(node) ?? super.printElementAccessExpression(node, identation);
     }
 
     csharpNativeElementAccess(node): string | undefined {
@@ -826,7 +826,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const isStringKey = isStringLiteralLikeNode(argumentExpression);
         const isNumberKey = isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
-            return this.csharpLoopIndexListRead(expression, argumentExpression) ?? this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression); // counter proven in range by its loop
+            return this.csharpLoopIndexListRead(expression, argumentExpression); // counter proven in range by its loop
         }
         const key = (argumentExpression as any).text;
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -5222,6 +5222,15 @@ export class CSharpTranspiler extends BaseTranspiler {
     // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
     csharpHx4DeclaredReceiverReadable(node, expression): boolean {
         return this.csharpEnclosingFunction(node) !== undefined && isIdentifier(expression);
+    }
+
+    // hx4 C01: the identifier-key arm runs after every other arm, so a shipped native form wins
+    csharpHx4LastResortKeyRead(node): string | undefined {
+        const { expression, argumentExpression } = node;
+        if (isStringLiteralLikeNode(argumentExpression) || isNumericLiteral(argumentExpression) || this.printElementAccessExpressionExceptionIfAny(node)) {
+            return undefined;
+        }
+        return this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression);
     }
 
     // hx4 C01: `getValue(x, k)` with an identifier key on a declared collection: a printed string key
