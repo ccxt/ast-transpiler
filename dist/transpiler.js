@@ -14310,10 +14310,19 @@ ${this.getIden(level)}}()`;
       return void 0;
     }
     const access = node.parent;
-    if (access?.kind === SyntaxKind5.ElementAccessExpression && access.expression === node && this.goIsComparedOperand(access)) {
+    if (access?.kind === SyntaxKind5.ElementAccessExpression && access.expression === node && (this.goIsComparedOperand(access) || this.goG01IsElementWriteValue(access))) {
       return void 0;
     }
     return "map[string]any";
+  }
+  // `y[k] = x["lit"]`: the ccxt write pass proves that store from the GetValue spelling of the value
+  goG01IsElementWriteValue(access) {
+    let operand = access;
+    while (operand.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+      operand = operand.parent;
+    }
+    const parent = operand.parent;
+    return parent?.kind === SyntaxKind5.BinaryExpression && parent.right === operand && parent.operatorToken?.kind === SyntaxKind5.EqualsToken && parent.left?.kind === SyntaxKind5.ElementAccessExpression;
   }
 };
 

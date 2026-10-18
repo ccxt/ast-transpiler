@@ -8309,10 +8309,22 @@ ${tryBodyBlock}
             return undefined;
         }
         const access: any = node.parent;
-        if ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === node) && this.goIsComparedOperand(access)) {
+        if ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === node)
+            && (this.goIsComparedOperand(access) || this.goG01IsElementWriteValue(access))) {
             return undefined;
         }
         return 'map[string]any';
+    }
+
+    // `y[k] = x["lit"]`: the ccxt write pass proves that store from the GetValue spelling of the value
+    goG01IsElementWriteValue(access): boolean {
+        let operand: any = access;
+        while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            operand = operand.parent;
+        }
+        const parent: any = operand.parent;
+        return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === operand)
+            && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left?.kind === SyntaxKind.ElementAccessExpression);
     }
 
 

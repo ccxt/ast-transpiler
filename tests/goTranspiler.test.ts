@@ -6536,3 +6536,12 @@ describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
         expect(output).toContain('GetValue(params, "x")');
     });
 });
+
+describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G01)', () => {
+    test('the value of an element write keeps GetValue for the write pass', () => {
+        const inst = new Transpiler({ verbose: false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
+        const output = inst.transpileGo('type Dict = { [key: string]: any };\nclass T {\n    f (d: any, params: Dict = {}) {\n        const r = {};\n        r[d] = params[\'x\'];\n        return r;\n    }\n}\n').content;
+        expect(output).toContain('GetValue(params, "x")');
+    });
+});

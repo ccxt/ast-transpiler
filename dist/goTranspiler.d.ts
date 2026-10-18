@@ -557,4 +557,5 @@ export declare class GoTranspiler extends BaseTranspiler {
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
     goHx4G01ParameterMapType(node: any): string | undefined;
+    goG01IsElementWriteValue(access: any): boolean;
 }
