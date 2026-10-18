@@ -6733,3 +6733,58 @@ describe('java element write after a hand-back destructuring', () => {
         expect(output).toContain('Helpers.addElementToObject(request, "b", null)');
     });
 });
+
+describe('hx4 J02: more hand-written base map fields read natively', () => {
+    // tickers / bidsasks / trades / fees / urls / markets_by_id are BaseExchange.java map fields that
+    // can be null; a non-literal key can be null too (ConcurrentHashMap.get(null) throws): both guarded
+    const fields =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    tickers: D = {};\n" +
+        "    bidsasks: D = {};\n" +
+        "    trades: D = {};\n" +
+        "    fees: any = {};\n" +
+        "    urls: any = {};\n" +
+        "    markets_by_id: D | undefined = undefined;\n" +
+        "    tradez: any = {};\n";
+
+    test('string-keyed reads print the guarded accessor', () => {
+        const input = fields +
+        "    test(symbol: string, k: any): void {\n" +
+        "        const a = this.tickers[symbol];\n" +
+        "        const b = this.trades[symbol];\n" +
+        "        const c = this.fees['trading'];\n" +
+        "        const d = this.markets_by_id[k];\n" +
+        "        const e = this.bidsasks[symbol];\n" +
+        "        this.something(a, b, c, d, e);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(symbol == null || this.tickers == null ? null : ((java.util.Map<?, ?>)this.tickers).get(symbol))");
+        expect(output).toContain("(symbol == null || this.trades == null ? null : ((java.util.Map<?, ?>)this.trades).get(symbol))");
+        expect(output).toContain("(symbol == null || this.bidsasks == null ? null : ((java.util.Map<?, ?>)this.bidsasks).get(symbol))");
+        expect(output).toContain("(this.fees == null ? null : ((java.util.Map<?, ?>)this.fees).get(\"trading\"))");
+        expect(output).toContain("(k == null || this.markets_by_id == null ? null : ((java.util.Map<?, ?>)this.markets_by_id).get(k))");
+        expect(output).not.toContain("Helpers.GetValue(this.");
+    });
+
+    test('nested read: only the field step goes native; a write target and other fields keep the helper', () => {
+        const input = fields +
+        "    test(api: string, symbol: string, v: any): void {\n" +
+        "        const a = this.urls['api'][api];\n" +
+        "        const b = this.tradez[symbol];\n" +
+        "        this.tickers[symbol] = v;\n" +
+        "        const c = this.fees[this.key()];\n" +
+        "        this.something(a, b, c);\n" +
+        "    }\n" +
+        "    key(): any { return 'k'; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue((this.urls == null ? null : ((java.util.Map<?, ?>)this.urls).get(\"api\")), api)");
+        expect(output).toContain("Helpers.GetValue(this.tradez, symbol)");
+        expect(output).toContain("Helpers.addElementToObject(this.tickers, symbol, v)");
+        expect(output).toContain("Helpers.GetValue(this.fees, this.key())");
+    });
+});

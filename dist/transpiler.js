@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CTKEJPGZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -17578,7 +17578,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     const name = receiver.name?.text;
     const field = typeof name === "string" ? JAVA_FIELD_TYPES[name] : void 0;
     if (field === void 0 || field.map !== true) {
-      return void 0;
+      return this.javaJ02FieldMapReadText(receiver, key);
     }
     const keyText = this.printNode(key, 0);
     let keyGuarded = false;
@@ -20698,6 +20698,31 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return false;
   }
+  // hx4 J02: `this.<field>[k]` on the J02 base map fields. ConcurrentHashMap.get(null) throws
+  // where the helper answers null, so a non-literal key is always null-tested; the receiver can
+  // be null too. Key and receiver print twice, so both must be side-effect free.
+  javaJ02FieldMapReadText(receiver, key) {
+    const name = receiver?.name?.text;
+    if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
+      return void 0;
+    }
+    const literal = isStringLiteralLikeNode3(key);
+    if (!literal && !this.javaRepeatableOperand(key)) {
+      return void 0;
+    }
+    const target = this.printNode(receiver, 0);
+    const keyText = this.printNode(key, 0);
+    const keyGuard = literal ? "" : `${keyText} == null || `;
+    return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+  }
+};
+var JAVA_J02_MAP_FIELDS = {
+  "tickers": true,
+  "bidsasks": true,
+  "trades": true,
+  "fees": true,
+  "urls": true,
+  "markets_by_id": true
 };
 
 // src/rustTranspiler.ts
