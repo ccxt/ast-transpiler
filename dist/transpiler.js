@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -20871,6 +20871,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
      *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
     // call node -> resolved signature's declaration (null: none); a handle resolve per call is JS-heavy
     this.rustCallDeclarations = /* @__PURE__ */ new WeakMap();
+    // hx4 R04 — `const x = []` locals declared `Vec<Value>` when every use is a statement
+    // `x.push(v)` (native push), `x.length`, `return x` or an argument inside a `return`
+    // (boxed once as `Value::from(x)`). Anything else keeps the `Value` box and `append_to_array`.
+    this.rustVecLocalDecisions = /* @__PURE__ */ new WeakMap();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -22074,6 +22078,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (declaration.initializer.kind === SyntaxKind7.NewExpression) {
       return `${indent}let mut ${varName} = ${parsedValue}`;
     }
+    if (node.declarations.length === 1 && this.rustVecLocalIsTyped(declaration))
+      return `${indent}let mut ${varName}: Vec<Value> = Vec::new()`;
     const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
     if (boolValue !== void 0) {
       return `${indent}let mut ${varName}: bool = ${boolValue}`;
@@ -24449,7 +24455,7 @@ ${this.getIden(identation)}})`;
     return `is_integer(&${parsedArg})`;
   }
   printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
-    return `append_to_array(&mut ${name}, ${parsedArg})`;
+    return this.printRustVecPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Value::Bool(contains(&${name}, &${parsedArg}))`;
@@ -24546,6 +24552,128 @@ ${iden}}`;
   }
   printSpreadElement(node, identation) {
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+  }
+  rustVecLocalIsTyped(declaration) {
+    if (declaration?.kind !== SyntaxKind7.VariableDeclaration)
+      return false;
+    let decision = this.rustVecLocalDecisions.get(declaration);
+    if (decision === void 0) {
+      this.rustVecLocalDecisions.set(declaration, false);
+      decision = this.rustVecLocalIsTypedUncached(declaration);
+      this.rustVecLocalDecisions.set(declaration, decision);
+    }
+    return decision;
+  }
+  rustVecLocalIsTypedUncached(declaration) {
+    const init = declaration.initializer;
+    if (declaration.name?.kind !== SyntaxKind7.Identifier || init === void 0 || !isArrayLiteralExpression4(init) || init.elements.length !== 0)
+      return false;
+    const checker = this.checkerOrUndefined();
+    const type = checker?.getTypeAtLocation(declaration.name);
+    if (type === void 0 || !checker.isArrayType(type))
+      return false;
+    const name = String(declaration.name.text);
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0 || isSourceFile5(fn))
+      return false;
+    const source = declaration.getSourceFile?.()?.fileName;
+    if (typeof source === "string" && /\/test\//.test(source))
+      return false;
+    let pushes = 0;
+    const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+      const parent = n.parent;
+      if (isPropertyAccessExpression3(parent) && parent.name === n || parent?.kind === SyntaxKind7.PropertyAssignment && parent.name === n)
+        return true;
+      if (this.rustEnclosingFunction(n) !== fn)
+        return false;
+      if (isPropertyAccessExpression3(parent) && parent.expression === n) {
+        const member = String(parent.name.text);
+        if (member === "length") {
+          const up = parent.parent;
+          return !(isBinaryExpression5(up) && up.left === parent && rustIsAssignmentOperator(up.operatorToken.kind)) && up?.kind !== SyntaxKind7.PrefixUnaryExpression && up?.kind !== SyntaxKind7.PostfixUnaryExpression;
+        }
+        if (member === "push" && this.rustVecPushShape(parent.parent, name)) {
+          pushes++;
+          return true;
+        }
+        return false;
+      }
+      return this.rustVecValueUse(n, name);
+    });
+    return safe && pushes > 0;
+  }
+  // `x.push(v);` as a whole statement, one non-spread argument not naming `x`.
+  rustVecPushShape(call, name) {
+    if (!isCallExpression6(call) || call.arguments.length !== 1 || call.parent?.kind !== SyntaxKind7.ExpressionStatement)
+      return false;
+    const arg = call.arguments[0];
+    if (arg.kind === SyntaxKind7.SpreadElement)
+      return false;
+    let mentions = false;
+    const visit = (m) => {
+      if (mentions)
+        return;
+      if (m.kind === SyntaxKind7.Identifier && m.text === name) {
+        mentions = true;
+        return;
+      }
+      m.forEachChild?.(visit);
+    };
+    visit(arg);
+    return !mentions;
+  }
+  // `return x` / `return f(.., x, ..)` with `x` named once in the statement: a boxing move.
+  rustVecValueUse(n, name) {
+    const parent = n.parent;
+    if (isReturnStatement4(parent))
+      return true;
+    if (!isCallExpression6(parent) || !parent.arguments.some((a) => a === n) || !this.rustVecBoxingCallee(parent.expression))
+      return false;
+    let statement = parent;
+    while (statement !== void 0 && !isStatement(statement))
+      statement = statement.parent;
+    if (!isReturnStatement4(statement))
+      return false;
+    let count = 0;
+    const visit = (m) => {
+      if (m.kind === SyntaxKind7.Identifier && m.text === name)
+        count++;
+      m.forEachChild?.(visit);
+    };
+    visit(statement);
+    return count === 1;
+  }
+  // `this.m(..)` / `super.m(..)` / `Promise.all(..)`: every argument prints through printNode as a `Value`.
+  rustVecBoxingCallee(callee) {
+    if (!isPropertyAccessExpression3(callee))
+      return false;
+    const receiver = callee.expression;
+    if (receiver.kind === SyntaxKind7.ThisKeyword || receiver.kind === SyntaxKind7.SuperKeyword)
+      return true;
+    return receiver.kind === SyntaxKind7.Identifier && receiver.text === "Promise" && String(callee.name.text) === "all";
+  }
+  rustVecLocalDeclarationOf(node) {
+    if (node?.kind !== SyntaxKind7.Identifier)
+      return void 0;
+    const checker = this.checkerOrUndefined();
+    const symbol = checker?.getSymbolAtLocation(node);
+    const declaration = symbolValueDeclaration(symbol) ?? symbolDeclarations(symbol)[0];
+    return declaration !== void 0 && declaration.name !== node && this.rustVecLocalIsTyped(declaration) ? declaration : void 0;
+  }
+  printRustVecPush(node, name, parsedArg) {
+    const receiver = node?.expression?.expression;
+    if (name === void 0 || parsedArg === void 0 || this.rustVecLocalDeclarationOf(receiver) === void 0)
+      return void 0;
+    const arg = parsedArg.trim();
+    const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== "self" && arg !== "true" && arg !== "false" ? `${arg}.clone()` : arg;
+    return `${name}.push(${value})`;
+  }
+  transformIdentifier(node, identifier) {
+    const text = super.transformIdentifier(node, identifier);
+    const parent = node?.parent;
+    if (parent === void 0 || !(isReturnStatement4(parent) || isCallExpression6(parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression)))
+      return text;
+    return this.rustVecLocalDeclarationOf(node) !== void 0 ? `Value::from(${text})` : text;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

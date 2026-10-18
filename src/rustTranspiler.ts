@@ -1698,6 +1698,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration.initializer.kind === SyntaxKind.NewExpression) {
             return `${indent}let mut ${varName} = ${parsedValue}`;
         }
+        if (node.declarations.length === 1 && this.rustVecLocalIsTyped(declaration)) return `${indent}let mut ${varName}: Vec<Value> = Vec::new()`;
         const boolValue = this.getRustBoolLocalInitializer(declaration, parsedValue);
         if (boolValue !== undefined) {
             return `${indent}let mut ${varName}: bool = ${boolValue}`;
@@ -4334,7 +4335,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `append_to_array(&mut ${name}, ${parsedArg})`;
+        return this.printRustVecPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -4453,5 +4454,123 @@ export class RustTranspiler extends BaseTranspiler {
 
     printSpreadElement(node, identation) {
         return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+    }
+
+    // hx4 R04 — `const x = []` locals declared `Vec<Value>` when every use is a statement
+    // `x.push(v)` (native push), `x.length`, `return x` or an argument inside a `return`
+    // (boxed once as `Value::from(x)`). Anything else keeps the `Value` box and `append_to_array`.
+    private rustVecLocalDecisions = new WeakMap<Node, boolean>();
+
+    rustVecLocalIsTyped(declaration): boolean {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) return false;
+        let decision = this.rustVecLocalDecisions.get(declaration);
+        if (decision === undefined) {
+            this.rustVecLocalDecisions.set(declaration, false); // re-entrancy guard
+            decision = this.rustVecLocalIsTypedUncached(declaration);
+            this.rustVecLocalDecisions.set(declaration, decision);
+        }
+        return decision;
+    }
+
+    rustVecLocalIsTypedUncached(declaration): boolean {
+        const init = declaration.initializer;
+        if (declaration.name?.kind !== SyntaxKind.Identifier || init === undefined
+            || !isArrayLiteralExpression(init) || init.elements.length !== 0) return false;
+        const checker: any = this.checkerOrUndefined();
+        const type = checker?.getTypeAtLocation(declaration.name);
+        if (type === undefined || !checker.isArrayType(type)) return false;
+        const name = String(declaration.name.text);
+        const fn = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        // The tests pipeline's text post-passes key on the boxed `Value` local shape.
+        const source = declaration.getSourceFile?.()?.fileName;
+        if (typeof source === 'string' && /\/test\//.test(source)) return false;
+        let pushes = 0;
+        const safe = this.rustLocalUsesAll(declaration, name, false, (n) => {
+            const parent = n.parent;
+            if ((isPropertyAccessExpression(parent) && parent.name === n)
+                || (parent?.kind === SyntaxKind.PropertyAssignment && parent.name === n)) return true;
+            if (this.rustEnclosingFunction(n) !== fn) return false;
+            if (isPropertyAccessExpression(parent) && parent.expression === n) {
+                const member = String(parent.name.text);
+                if (member === 'length') {
+                    const up = parent.parent;
+                    return !(isBinaryExpression(up) && up.left === parent && rustIsAssignmentOperator(up.operatorToken.kind))
+                        && up?.kind !== SyntaxKind.PrefixUnaryExpression && up?.kind !== SyntaxKind.PostfixUnaryExpression;
+                }
+                if (member === 'push' && this.rustVecPushShape(parent.parent, name)) {
+                    pushes++;
+                    return true;
+                }
+                return false;
+            }
+            return this.rustVecValueUse(n, name);
+        });
+        return safe && pushes > 0;
+    }
+
+    // `x.push(v);` as a whole statement, one non-spread argument not naming `x`.
+    rustVecPushShape(call, name: string): boolean {
+        if (!isCallExpression(call) || call.arguments.length !== 1 || call.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const arg = call.arguments[0];
+        if (arg.kind === SyntaxKind.SpreadElement) return false;
+        let mentions = false;
+        const visit = (m) => {
+            if (mentions) return;
+            if (m.kind === SyntaxKind.Identifier && m.text === name) { mentions = true; return; }
+            m.forEachChild?.(visit);
+        };
+        visit(arg);
+        return !mentions;
+    }
+
+    // `return x` / `return f(.., x, ..)` with `x` named once in the statement: a boxing move.
+    rustVecValueUse(n, name: string): boolean {
+        const parent = n.parent;
+        if (isReturnStatement(parent)) return true;
+        if (!isCallExpression(parent) || !parent.arguments.some((a) => a === n) || !this.rustVecBoxingCallee(parent.expression)) return false;
+        let statement: any = parent;
+        while (statement !== undefined && !isStatement(statement)) statement = statement.parent;
+        if (!isReturnStatement(statement)) return false;
+        let count = 0;
+        const visit = (m) => {
+            if (m.kind === SyntaxKind.Identifier && m.text === name) count++;
+            m.forEachChild?.(visit);
+        };
+        visit(statement);
+        return count === 1;
+    }
+
+    // `this.m(..)` / `super.m(..)` / `Promise.all(..)`: every argument prints through printNode as a `Value`.
+    rustVecBoxingCallee(callee): boolean {
+        if (!isPropertyAccessExpression(callee)) return false;
+        const receiver: any = callee.expression;
+        if (receiver.kind === SyntaxKind.ThisKeyword || receiver.kind === SyntaxKind.SuperKeyword) return true;
+        return receiver.kind === SyntaxKind.Identifier && receiver.text === 'Promise' && String(callee.name.text) === 'all';
+    }
+
+    rustVecLocalDeclarationOf(node): any {
+        if (node?.kind !== SyntaxKind.Identifier) return undefined;
+        const checker: any = this.checkerOrUndefined();
+        const symbol = checker?.getSymbolAtLocation(node);
+        const declaration = symbolValueDeclaration(symbol) ?? symbolDeclarations(symbol)[0];
+        return declaration !== undefined && declaration.name !== node && this.rustVecLocalIsTyped(declaration) ? declaration : undefined;
+    }
+
+    printRustVecPush(node, name: string | undefined, parsedArg: string | undefined): string | undefined {
+        const receiver = node?.expression?.expression;
+        if (name === undefined || parsedArg === undefined || this.rustVecLocalDeclarationOf(receiver) === undefined) return undefined;
+        const arg = parsedArg.trim();
+        // `append_to_array` takes the value by move; ccxt's post-pass cloned a bare local there.
+        const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== 'self' && arg !== 'true' && arg !== 'false' ? `${arg}.clone()` : arg;
+        return `${name}.push(${value})`;
+    }
+
+    transformIdentifier(node, identifier) {
+        const text = super.transformIdentifier(node, identifier);
+        const parent = node?.parent;
+        if (parent === undefined || !(isReturnStatement(parent) || (isCallExpression(parent) && parent.arguments.some((a) => a === node)
+            && this.rustVecBoxingCallee(parent.expression)))) return text;
+        return this.rustVecLocalDeclarationOf(node) !== undefined ? `Value::from(${text})` : text;
     }
 }

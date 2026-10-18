@@ -647,5 +647,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    private rustVecLocalDecisions;
+    rustVecLocalIsTyped(declaration: any): boolean;
+    rustVecLocalIsTypedUncached(declaration: any): boolean;
+    rustVecPushShape(call: any, name: string): boolean;
+    rustVecValueUse(n: any, name: string): boolean;
+    rustVecBoxingCallee(callee: any): boolean;
+    rustVecLocalDeclarationOf(node: any): any;
+    printRustVecPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
+    transformIdentifier(node: any, identifier: any): string;
 }
 export {};
