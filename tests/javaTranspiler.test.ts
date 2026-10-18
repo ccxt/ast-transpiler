@@ -6760,7 +6760,7 @@ describe('hx4 J01: declared-map element write prints native put', () => {
     "    p3(response: any): void {\n" +
     "        const rows = this.safeList(response, 'data', []);\n" +
     "        const first = this.safeDict(rows, 0, {});\n" +
-    "        first['ts'] = 1;\n" +
+    "        first['ts'] = this.safeString(response, 'ts');\n" +
     "    }\n" +
     "    n1(): void {\n" +
     "        const o = this.safeDict(this.options, 'ws', {});\n" +
@@ -6808,7 +6808,7 @@ describe('hx4 J01: declared-map element write prints native put', () => {
     });
 
     test('safeDict of a safeList local: native put', () => {
-        expect(withMaps).toContain('first.put("ts", 1)');
+        expect(withMaps).toContain('first.put("ts", this.safeString(response, "ts"))');
     });
 
     test('extend/omit local with a string key: native put', () => {
