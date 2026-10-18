@@ -647,5 +647,32 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    /** Base-tier methods whose every return is a fresh tag-free object
+     *  literal (no venue override, no hand-written stub replaces them). */
+    private static readonly RUST_R01_PLAIN_DICT_BUILDERS;
+    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their own `request` argument. */
+    private static readonly RUST_R01_REQUEST_TUPLE_HELPERS;
+    rustR01NativeDictInsert(baseExpr: any, keyNode: any, keyText: string, valueText: string): string | undefined;
+    /** A local (single binding in its function, no closure capture of a write)
+     *  whose declaration and every write is a plain-dict source or nullish. A
+     *  nullish value leaves a non-Dict, which `if let Value::Dict` no-ops on
+     *  exactly like the helper's `_ => {}` arm. */
+    rustR01LocalStaysPlain(ident: Identifier, depth?: number): boolean;
+    /** `const [ x, p ] = this.handleUntilOption (k, r, …)` with `r` itself a
+     *  plain local: element 0 is `r` handed back, and `x` is never re-written. */
+    private rustR01TupleBindingStaysPlain;
+    /** The shipped construction proof (literal-built local / handler tuple), read-only. */
+    private rustR01ShippedPlain;
+    /** A use of the local: reads and element writes keep the box; a direct
+     *  assignment must store a plain source; any other write shape rejects. */
+    private rustR01UseKeepsPlain;
+    /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
+     *  argument handed back (base-tier implementation, no override). */
+    private rustR01RequestTupleWrite;
+    /** A value that is a fresh plain dict, nullish, or the local itself. */
+    rustR01PlainSource(node: Node, name: string): boolean;
+    /** The checker resolves the call to the base-tier implementation (a venue
+     *  override could return anything). */
+    private rustR01CalleeIsBase;
 }
 export {};

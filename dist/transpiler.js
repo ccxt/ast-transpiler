@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21995,7 +21995,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       for (const key of keyStrs.slice(0, -1))
         acc = `get_value_mut(${acc}, &${key})`;
       const rhs = this.printNode(right, 0);
-      const nativeInsert = keyStrs.length === 1 ? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) : void 0;
+      const nativeInsert = keyStrs.length === 1 ? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustR01NativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) : void 0;
       return nativeInsert ?? `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
     }
     if (left.kind === SyntaxKind7.TypeOfExpression) {
@@ -24547,6 +24547,178 @@ ${iden}}`;
   printSpreadElement(node, identation) {
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
   }
+  rustR01NativeDictInsert(baseExpr, keyNode, keyText, valueText) {
+    if (!isIdentifier3(baseExpr) || !this.rustR01LocalStaysPlain(baseExpr)) {
+      return void 0;
+    }
+    const receiver = { text: String(baseExpr.text), isField: false, plain: true, nameNode: baseExpr };
+    const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
+    if (keyArg === void 0) {
+      return void 0;
+    }
+    const name = receiver.text;
+    const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText.trim();
+    const insert = (val) => `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyArg}, ${val}); }`;
+    if (new RegExp(`\\b${name}\\b`).test(value)) {
+      return `{ let __be_tmp = ${value}; ${insert("__be_tmp")} }`;
+    }
+    if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value) && value !== "self" && value !== "true" && value !== "false") {
+      return insert(`${value}.clone()`);
+    }
+    return insert(value);
+  }
+  /** A local (single binding in its function, no closure capture of a write)
+   *  whose declaration and every write is a plain-dict source or nullish. A
+   *  nullish value leaves a non-Dict, which `if let Value::Dict` no-ops on
+   *  exactly like the helper's `_ => {}` arm. */
+  rustR01LocalStaysPlain(ident, depth = 0) {
+    const checker = this.checkerOrUndefined();
+    const declarations = checker === void 0 ? [] : symbolDeclarations(checker.getSymbolAtLocation(ident));
+    const declaration = declarations.length === 1 ? declarations[0] : void 0;
+    if (declaration === void 0 || depth > 4) {
+      return false;
+    }
+    if (declaration.kind === SyntaxKind7.BindingElement) {
+      return this.rustR01TupleBindingStaysPlain(ident, declaration, depth);
+    }
+    if (!isVariableDeclaration3(declaration) || declaration.name?.kind !== SyntaxKind7.Identifier) {
+      return false;
+    }
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0 || isSourceFile5(scope) || this.rustEnclosingFunction(ident) !== scope) {
+      return false;
+    }
+    const name = String(ident.text);
+    const symbol = this.rustSymbolOf(declaration.name);
+    if (symbol === void 0) {
+      return false;
+    }
+    if (declaration.initializer !== void 0 && !this.rustR01PlainSource(declaration.initializer, name)) {
+      return false;
+    }
+    let plain = true;
+    for (const node of this.rustScopeNameNodes(scope, name)) {
+      if (node === declaration)
+        continue;
+      if (this.rustBindsName(node, name)) {
+        if (this.rustSymbolOf(node.name) === void 0) {
+          plain = false;
+          break;
+        }
+        continue;
+      }
+      if (node.kind !== SyntaxKind7.Identifier || node === declaration.name || this.rustSymbolOf(node) !== symbol)
+        continue;
+      if (this.rustEnclosingFunction(node) !== scope) {
+        plain = false;
+        break;
+      }
+      if (!this.rustR01UseKeepsPlain(node, name)) {
+        plain = false;
+        break;
+      }
+    }
+    return plain;
+  }
+  /** `const [ x, p ] = this.handleUntilOption (k, r, …)` with `r` itself a
+   *  plain local: element 0 is `r` handed back, and `x` is never re-written. */
+  rustR01TupleBindingStaysPlain(ident, element, depth) {
+    const pattern = element.parent;
+    const declaration = pattern?.parent;
+    if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || declaration === void 0 || !isVariableDeclaration3(declaration) || pattern.elements.indexOf(element) !== 0 || element.name?.kind !== SyntaxKind7.Identifier || element.initializer !== void 0 || element.dotDotDotToken !== void 0) {
+      return false;
+    }
+    const call = this.rustStripWrappers(declaration.initializer);
+    if (call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || !_RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text)) || !this.rustR01CalleeIsBase(call)) {
+      return false;
+    }
+    const request = this.rustStripWrappers(call.arguments[1]);
+    if (request === void 0 || !(this.rustPlainDictLiteral(request) || isIdentifier3(request) && (this.rustR01LocalStaysPlain(request, depth + 1) || this.rustR01ShippedPlain(request)))) {
+      return false;
+    }
+    const scope = this.rustEnclosingFunction(declaration);
+    const name = String(ident.text);
+    const symbol = this.rustSymbolOf(element.name);
+    if (scope === void 0 || symbol === void 0 || this.rustEnclosingFunction(ident) !== scope) {
+      return false;
+    }
+    for (const node of this.rustScopeNameNodes(scope, name)) {
+      if (node.kind !== SyntaxKind7.Identifier || node === element.name || this.rustSymbolOf(node) !== symbol)
+        continue;
+      if (this.rustEnclosingFunction(node) !== scope || !this.rustR01UseKeepsPlain(node, name))
+        return false;
+    }
+    return true;
+  }
+  /** The shipped construction proof (literal-built local / handler tuple), read-only. */
+  rustR01ShippedPlain(ident) {
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    return declaration !== void 0 && isVariableDeclaration3(declaration) && this.rustInsertReceiverBuildsPlainDict(declaration);
+  }
+  /** A use of the local: reads and element writes keep the box; a direct
+   *  assignment must store a plain source; any other write shape rejects. */
+  rustR01UseKeepsPlain(node, name) {
+    let target = node;
+    while (target.parent !== void 0 && (isParenthesizedExpression3(target.parent) || isNonNullExpression2(target.parent) || isAsExpression3(target.parent))) {
+      target = target.parent;
+    }
+    const parent = target.parent;
+    if (parent === void 0)
+      return true;
+    if (isBinaryExpression5(parent) && parent.left === target && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+      return parent.operatorToken.kind === SyntaxKind7.EqualsToken && this.rustR01PlainSource(parent.right, name);
+    }
+    if (parent.kind === SyntaxKind7.ArrayLiteralExpression) {
+      const assign = parent.parent;
+      if (assign !== void 0 && isBinaryExpression5(assign) && assign.left === parent) {
+        return this.rustR01RequestTupleWrite(assign.right, parent.elements.indexOf(target), name);
+      }
+    }
+    if (parent.kind === SyntaxKind7.PropertyAssignment || parent.kind === SyntaxKind7.ShorthandPropertyAssignment) {
+      return false;
+    }
+    if (parent.kind === SyntaxKind7.PrefixUnaryExpression || parent.kind === SyntaxKind7.PostfixUnaryExpression || parent.kind === SyntaxKind7.DeleteExpression || (isForOfStatement2(parent) || isForInStatement2(parent)) && parent.initializer === target) {
+      return false;
+    }
+    return true;
+  }
+  /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
+   *  argument handed back (base-tier implementation, no override). */
+  rustR01RequestTupleWrite(rhs, index, name) {
+    const call = this.rustStripWrappers(rhs);
+    if (index !== 0 || call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || !_RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))) {
+      return false;
+    }
+    const request = this.rustStripWrappers(call.arguments[1]);
+    return request !== void 0 && isIdentifier3(request) && String(request.text) === name && this.rustR01CalleeIsBase(call);
+  }
+  /** A value that is a fresh plain dict, nullish, or the local itself. */
+  rustR01PlainSource(node, name) {
+    const stripped = this.rustStripWrappers(node);
+    if (stripped === void 0)
+      return false;
+    if (this.rustPlainDictLiteral(stripped) || this.rustTypeIsUndefinedish(stripped) || isIdentifier3(stripped) && String(stripped.text) === name) {
+      return true;
+    }
+    if (isConditionalExpression3(stripped)) {
+      return this.rustR01PlainSource(stripped.whenTrue, name) && this.rustR01PlainSource(stripped.whenFalse, name);
+    }
+    if (isCallExpression6(stripped) && isPropertyAccessExpression3(stripped.expression) && stripped.expression.expression.kind === SyntaxKind7.ThisKeyword && _RustTranspiler.RUST_R01_PLAIN_DICT_BUILDERS.has(String(stripped.expression.name.text))) {
+      return this.rustR01CalleeIsBase(stripped);
+    }
+    return false;
+  }
+  /** The checker resolves the call to the base-tier implementation (a venue
+   *  override could return anything). */
+  rustR01CalleeIsBase(call) {
+    let declaration;
+    try {
+      declaration = signatureDeclaration(this.getChecker().getResolvedSignature(call));
+    } catch (e) {
+      return false;
+    }
+    return declaration !== void 0 && declaration.kind === SyntaxKind7.MethodDeclaration && declaration.body !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName).replace(/\\/g, "/"));
+  }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips
 _RustTranspiler.RUST_PREFETCH_TYPE_KINDS = /* @__PURE__ */ new Set([
@@ -24832,6 +25004,14 @@ _RustTranspiler.BOOL_VALUE_PREFIXES = [
   "is_number",
   "is_string"
 ];
+// hx4 R01 — native element write on a local the plain-dict proof admits
+// through its write history: `const x = this.account ()`, a `let x = {}` /
+// `let x: Dict = undefined` later reassigned, `[ x, p ] = this.handleUntilOption (…)`.
+/** Base-tier methods whose every return is a fresh tag-free object
+ *  literal (no venue override, no hand-written stub replaces them). */
+_RustTranspiler.RUST_R01_PLAIN_DICT_BUILDERS = /* @__PURE__ */ new Set(["account", "safeLedgerEntry", "depositWithdrawFee"]);
+/** Base-tier `[Dict, Dict]` tuple helpers that hand back their own `request` argument. */
+_RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS = /* @__PURE__ */ new Set(["handleUntilOption"]);
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts

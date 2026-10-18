@@ -1602,7 +1602,7 @@ export class RustTranspiler extends BaseTranspiler {
             const keyStrs = keys.map(k => this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
-            const nativeInsert = keyStrs.length === 1 ? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) : undefined;
+            const nativeInsert = keyStrs.length === 1 ? (this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustR01NativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs)) : undefined;
             return nativeInsert ?? `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
         }
         // typeof comparisons
@@ -4453,5 +4453,202 @@ export class RustTranspiler extends BaseTranspiler {
 
     printSpreadElement(node, identation) {
         return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+    }
+
+    // hx4 R01 — native element write on a local the plain-dict proof admits
+    // through its write history: `const x = this.account ()`, a `let x = {}` /
+    // `let x: Dict = undefined` later reassigned, `[ x, p ] = this.handleUntilOption (…)`.
+
+    /** Base-tier methods whose every return is a fresh tag-free object
+     *  literal (no venue override, no hand-written stub replaces them). */
+    private static readonly RUST_R01_PLAIN_DICT_BUILDERS = new Set([ 'account', 'safeLedgerEntry', 'depositWithdrawFee' ]);
+
+    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their own `request` argument. */
+    private static readonly RUST_R01_REQUEST_TUPLE_HELPERS = new Set([ 'handleUntilOption' ]);
+
+    rustR01NativeDictInsert(baseExpr, keyNode, keyText: string, valueText: string): string | undefined {
+        if (!isIdentifier(baseExpr) || !this.rustR01LocalStaysPlain(baseExpr)) {
+            return undefined;
+        }
+        // Every write is a fresh literal / builder: the receiver is untagged and
+        // a book-meta key needs no `__book_id` guard (`plain: true`).
+        const receiver = { text: String(baseExpr.text), isField: false, plain: true, nameNode: baseExpr };
+        const keyArg = this.rustNativeInsertKeyArg(receiver, keyNode, keyText);
+        if (keyArg === undefined) {
+            return undefined;
+        }
+        const name = receiver.text;
+        const value = this.rustPrintedBoolArg(valueText) ? `Value::Bool(${valueText})` : valueText.trim();
+        const insert = (val: string) =>
+            `if let Value::Dict(__d) = &mut ${name} { std::sync::Arc::make_mut(__d).insert(${keyArg}, ${val}); }`;
+        // same operand handling as printNativeDictInsert: hoist a read of the receiver, clone a bare place
+        if (new RegExp(`\\b${name}\\b`).test(value)) {
+            return `{ let __be_tmp = ${value}; ${insert('__be_tmp')} }`;
+        }
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value) && value !== 'self' && value !== 'true' && value !== 'false') {
+            return insert(`${value}.clone()`);
+        }
+        return insert(value);
+    }
+
+    /** A local (single binding in its function, no closure capture of a write)
+     *  whose declaration and every write is a plain-dict source or nullish. A
+     *  nullish value leaves a non-Dict, which `if let Value::Dict` no-ops on
+     *  exactly like the helper's `_ => {}` arm. */
+    rustR01LocalStaysPlain(ident: Identifier, depth = 0): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const declarations: any[] = checker === undefined ? [] : symbolDeclarations(checker.getSymbolAtLocation(ident));
+        const declaration: any = declarations.length === 1 ? declarations[0] : undefined;
+        if (declaration === undefined || depth > 4) {
+            return false;
+        }
+        if (declaration.kind === SyntaxKind.BindingElement) {
+            return this.rustR01TupleBindingStaysPlain(ident, declaration, depth);
+        }
+        if (!isVariableDeclaration(declaration) || declaration.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || isSourceFile(scope) || this.rustEnclosingFunction(ident) !== scope) {
+            return false;
+        }
+        const name = String(ident.text);
+        const symbol = this.rustSymbolOf(declaration.name as Identifier);
+        if (symbol === undefined) {
+            return false;
+        }
+        if (declaration.initializer !== undefined && !this.rustR01PlainSource(declaration.initializer, name)) {
+            return false;
+        }
+        let plain = true;
+        for (const node of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (node === declaration) continue;
+            if (this.rustBindsName(node, name)) {
+                // a sibling block's own `const x` is another binding; only an unresolved one rejects
+                if (this.rustSymbolOf(node.name) === undefined) { plain = false; break; }
+                continue;
+            }
+            if (node.kind !== SyntaxKind.Identifier || node === declaration.name || this.rustSymbolOf(node) !== symbol) continue;
+            if (this.rustEnclosingFunction(node) !== scope) { plain = false; break; } // captured by a callback
+            if (!this.rustR01UseKeepsPlain(node, name)) { plain = false; break; }
+        }
+        return plain;
+    }
+
+    /** `const [ x, p ] = this.handleUntilOption (k, r, …)` with `r` itself a
+     *  plain local: element 0 is `r` handed back, and `x` is never re-written. */
+    private rustR01TupleBindingStaysPlain(ident: Identifier, element: any, depth: number): boolean {
+        const pattern: any = element.parent;
+        const declaration: any = pattern?.parent;
+        if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || declaration === undefined || !isVariableDeclaration(declaration)
+            || pattern.elements.indexOf(element) !== 0 || element.name?.kind !== SyntaxKind.Identifier
+            || element.initializer !== undefined || element.dotDotDotToken !== undefined) {
+            return false;
+        }
+        const call: any = this.rustStripWrappers(declaration.initializer);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))
+            || !this.rustR01CalleeIsBase(call)) {
+            return false;
+        }
+        const request: any = this.rustStripWrappers(call.arguments[1]);
+        if (request === undefined || !(this.rustPlainDictLiteral(request)
+            || (isIdentifier(request) && (this.rustR01LocalStaysPlain(request, depth + 1) || this.rustR01ShippedPlain(request))))) {
+            return false;
+        }
+        const scope = this.rustEnclosingFunction(declaration);
+        const name = String(ident.text);
+        const symbol = this.rustSymbolOf(element.name);
+        if (scope === undefined || symbol === undefined || this.rustEnclosingFunction(ident) !== scope) {
+            return false;
+        }
+        for (const node of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (node.kind !== SyntaxKind.Identifier || node === element.name || this.rustSymbolOf(node) !== symbol) continue;
+            if (this.rustEnclosingFunction(node) !== scope || !this.rustR01UseKeepsPlain(node, name)) return false;
+        }
+        return true;
+    }
+
+    /** The shipped construction proof (literal-built local / handler tuple), read-only. */
+    private rustR01ShippedPlain(ident: Identifier): boolean {
+        const declaration = this.rustSingleLocalDeclaration(ident);
+        return declaration !== undefined && isVariableDeclaration(declaration as any)
+            && this.rustInsertReceiverBuildsPlainDict(declaration as VariableDeclaration);
+    }
+
+    /** A use of the local: reads and element writes keep the box; a direct
+     *  assignment must store a plain source; any other write shape rejects. */
+    private rustR01UseKeepsPlain(node: Node, name: string): boolean {
+        let target: any = node;
+        while (target.parent !== undefined && (isParenthesizedExpression(target.parent) || isNonNullExpression(target.parent) || isAsExpression(target.parent))) {
+            target = target.parent;
+        }
+        const parent: any = target.parent;
+        if (parent === undefined) return true;
+        if (isBinaryExpression(parent) && parent.left === target && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+            return parent.operatorToken.kind === SyntaxKind.EqualsToken && this.rustR01PlainSource(parent.right, name);
+        }
+        if (parent.kind === SyntaxKind.ArrayLiteralExpression) {
+            const assign: any = parent.parent;
+            if (assign !== undefined && isBinaryExpression(assign) && assign.left === parent) {
+                return this.rustR01RequestTupleWrite(assign.right, parent.elements.indexOf(target), name);
+            }
+        }
+        // a literal field aliasing the local feeds ccxt's writeBackAliasedArrayMutations, which keys on the helper text
+        if (parent.kind === SyntaxKind.PropertyAssignment || parent.kind === SyntaxKind.ShorthandPropertyAssignment) {
+            return false;
+        }
+        if (parent.kind === SyntaxKind.PrefixUnaryExpression || parent.kind === SyntaxKind.PostfixUnaryExpression
+            || parent.kind === SyntaxKind.DeleteExpression
+            || ((isForOfStatement(parent) || isForInStatement(parent)) && parent.initializer === target)) {
+            return false;
+        }
+        return true;
+    }
+
+    /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
+     *  argument handed back (base-tier implementation, no override). */
+    private rustR01RequestTupleWrite(rhs: Node, index: number, name: string): boolean {
+        const call: any = this.rustStripWrappers(rhs);
+        if (index !== 0 || call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS.has(String(call.expression.name.text))) {
+            return false;
+        }
+        const request = this.rustStripWrappers(call.arguments[1]);
+        return request !== undefined && isIdentifier(request) && String(request.text) === name && this.rustR01CalleeIsBase(call);
+    }
+
+    /** A value that is a fresh plain dict, nullish, or the local itself. */
+    rustR01PlainSource(node: Node, name: string): boolean {
+        const stripped: any = this.rustStripWrappers(node);
+        if (stripped === undefined) return false;
+        if (this.rustPlainDictLiteral(stripped) || this.rustTypeIsUndefinedish(stripped)
+            || (isIdentifier(stripped) && String(stripped.text) === name)) {
+            return true;
+        }
+        if (isConditionalExpression(stripped)) {
+            return this.rustR01PlainSource(stripped.whenTrue, name) && this.rustR01PlainSource(stripped.whenFalse, name);
+        }
+        if (isCallExpression(stripped) && isPropertyAccessExpression(stripped.expression)
+            && stripped.expression.expression.kind === SyntaxKind.ThisKeyword
+            && RustTranspiler.RUST_R01_PLAIN_DICT_BUILDERS.has(String(stripped.expression.name.text))) {
+            return this.rustR01CalleeIsBase(stripped);
+        }
+        return false;
+    }
+
+    /** The checker resolves the call to the base-tier implementation (a venue
+     *  override could return anything). */
+    private rustR01CalleeIsBase(call: Node): boolean {
+        let declaration: any;
+        try {
+            declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call));
+        } catch (e) {
+            return false;
+        }
+        return declaration !== undefined && declaration.kind === SyntaxKind.MethodDeclaration && declaration.body !== undefined
+            && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName).replace(/\\/g, '/'));
     }
 }
