@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -8590,7 +8590,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // text for a proven string, or the deref goNativeBinaryText adds for a derefable
   // `*string` leaf. undefined keeps the helper call.
   goStringConcatOperandType(node, printedText) {
-    if (this.goDerefableStringOperand(node)) {
+    if (this.goConcatDerefableStringOperand(node)) {
       return "string";
     }
     return this.goOperandStaticType(node, printedText) === "string" ? "string" : void 0;
@@ -8854,6 +8854,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
       }
       return { "goType": "string", "text": this.goNativeBinaryText(node, "+", leftText, rightText) };
     }
+    const widened = this.goNativeIntWideningArithmetic(node, leftType, rightType, leftText, rightText);
+    if (widened !== void 0) {
+      return widened;
+    }
     const goType = this.goNativeNumericResultType(op, leftType, rightType, node);
     if (goType === void 0) {
       return void 0;
@@ -9001,7 +9005,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const operandText = (operand, printed) => {
       const isBinary = operand?.kind === SyntaxKind5.BinaryExpression;
       const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
-      const leaf = this.goDerefableStringOperand(operand) ? "*" + text.trim() : text;
+      const leaf = this.goConcatDerefableStringOperand(operand) ? "*" + text.trim() : text;
       return this.goNativeOperandText(operand, leaf);
     };
     const left = operandText(node.left, leftText);
@@ -14291,6 +14295,42 @@ ${this.getIden(level)}}()`;
     const lastStatement = statements[statements.length - 1];
     return (isIfStatement2(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
   }
+};
+GoTranspiler.prototype.goNativeIntWideningArithmetic = function(node, leftType, rightType, leftText, rightText) {
+  const op = node.operatorToken.kind;
+  const isMod = op === SyntaxKind5.PercentToken && this.isNonZeroIntegerLiteral(node.right);
+  if (op !== SyntaxKind5.MinusToken && op !== SyntaxKind5.AsteriskToken && op !== SyntaxKind5.PlusToken && !isMod) {
+    return void 0;
+  }
+  const mixed = leftType === "int64" && rightType === "int" || leftType === "int" && rightType === "int64";
+  const intKinds = ["int", "const-int"];
+  const declaredInt64 = op !== SyntaxKind5.PlusToken && intKinds.includes(leftType) && intKinds.includes(rightType) && (leftType === "int" || rightType === "int") && this.goInsideTypedDeclarationInitializer(node);
+  if ((!mixed || isMod) && !declaredInt64) {
+    return void 0;
+  }
+  const operand = (operandNode, operandType, printed) => operandType === "int" ? "int64(" + this.goUnwrapPrintedParens(printed.trim()) + ")" : this.goNativeOperandText(operandNode, printed);
+  const left = operand(node.left, leftType, leftText);
+  const right = operand(node.right, rightType, rightText);
+  const symbol = this.SupportedKindNames[op];
+  const separator = this.goBinarySeparator(symbol, right, node.left, node.right);
+  return { "goType": "int64", "text": left + separator + symbol + separator + right };
+};
+GoTranspiler.prototype.goStringLiteralUnionType = function(type) {
+  if (type === void 0 || (type.flags & TypeFlags4.Union) === 0) {
+    return false;
+  }
+  const members = type.getTypes();
+  return members.length > 0 && members.every((member) => (member.flags & TypeFlags4.StringLike) !== 0);
+};
+GoTranspiler.prototype.goConcatDerefableStringOperand = function(node) {
+  if (this.goDerefableStringOperand(node)) {
+    return true;
+  }
+  if (node?.kind !== SyntaxKind5.Identifier || this.goDeclaredTypeOfIdentifier(node) !== "*string") {
+    return false;
+  }
+  const checker = this.checkerOrUndefined();
+  return checker !== void 0 && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
 };
 
 // src/javaTranspiler.ts

@@ -557,3 +557,15 @@ export declare class GoTranspiler extends BaseTranspiler {
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
 }
+export interface GoTranspiler {
+    goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {
+        goType: string;
+        text: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    goStringLiteralUnionType(type: any): boolean;
+}
+export interface GoTranspiler {
+    goConcatDerefableStringOperand(node: any): boolean;
+}
