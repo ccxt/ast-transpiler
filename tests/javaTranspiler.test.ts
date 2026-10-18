@@ -6733,3 +6733,64 @@ describe('java element write after a hand-back destructuring', () => {
         expect(output).toContain('Helpers.addElementToObject(request, "b", null)');
     });
 });
+
+describe('hx4 J05: integral mod compared with an int literal', () => {
+    const java = (src: string) => transpiler.transpileJava(src).content;
+    test('`(s.length % 2) !== 0` goes native', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        return (s.length % 2) !== 0;
+    }
+}`);
+        expect(out).toContain("((((double) ((String)s).length()) % ((double) 2))) != 0)");
+        expect(out).not.toContain("Helpers.isEqual");
+    });
+    test('negative: a box-declared dividend keeps the helper', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        const n = s.length;
+        return (n % 2) !== 0;
+    }
+}`);
+        expect(out).toContain("!Helpers.isEqual(");
+    });
+    test('for-counter `(i % 2) < 1` goes native', () => {
+        const out = java(`class T {
+    f(xs: string[]): void {
+        for (let i = 0; i < xs.length; i++) {
+            if ((i % 2) < 1) {
+                return;
+            }
+        }
+    }
+}`);
+        expect(out).toContain("(((double) i) % ((double) 2))) < 1)");
+        expect(out).not.toContain("Helpers.isLessThan");
+    });
+    test('negative: mod by a fractional literal keeps the helper', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        const n = s.length;
+        return (n % 1.5) === 0;
+    }
+}`);
+        expect(out).toContain("Helpers.isEqual(");
+    });
+    test('negative: compared with a fractional literal keeps the helper', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        const n = s.length;
+        return (n % 2) < 0.5;
+    }
+}`);
+        expect(out).toContain("Helpers.isLessThan(");
+    });
+    test('negative: an `any` dividend keeps the helper', () => {
+        const out = java(`class T {
+    f(i: any): boolean {
+        return (i % 2) === 0;
+    }
+}`);
+        expect(out).toContain("Helpers.isEqual(");
+    });
+});

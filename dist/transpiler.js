@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CTKEJPGZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -17323,6 +17323,10 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       return `Helpers.inOp(${objText}, ${keyText})`;
     }
+    const hx4J05 = this.printHx4J05ModComparison(left, right, op);
+    if (hx4J05 !== void 0) {
+      return hx4J05;
+    }
     if (op === SyntaxKind6.LessThanToken || op === SyntaxKind6.GreaterThanToken || op === SyntaxKind6.LessThanEqualsToken || op === SyntaxKind6.GreaterThanEqualsToken) {
       const leftKind = this.javaPrimitiveOperandKind(left);
       const rightKind = this.javaPrimitiveOperandKind(right);
@@ -20697,6 +20701,60 @@ var JavaTranspiler = class extends BaseTranspiler {
       return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
     }
     return false;
+  }
+  // hx4 J05
+  // `(a % N) <op> M` (N a non-zero integer literal, a an int/long operand, M an int literal): the
+  // native mod prints a finite integral double |v| < |N|, where isEqual (IsInteger -> toLong) and
+  // isGreaterThan (toDouble) both reduce to the plain double comparison against M.
+  javaHx4J05IntegralModOperand(node) {
+    while (node !== void 0 && node.kind === SyntaxKind6.ParenthesizedExpression) {
+      node = node.expression;
+    }
+    if (node === void 0 || !isBinaryExpression4(node) || node.operatorToken.kind !== SyntaxKind6.PercentToken) {
+      return false;
+    }
+    if (this.javaScalarFamily(node.left) !== "number" || this.javaScalarFamily(node.right) !== "number") {
+      return false;
+    }
+    const leftKind = this.javaProvableNumericKind(node.left);
+    if (leftKind !== "int" && leftKind !== "long" && !this.javaProvableCounterInt(node.left)) {
+      return false;
+    }
+    const divisor = node.right;
+    if (this.javaIntegerLiteralKind(divisor) !== "int" || Number(divisor.text) === 0) {
+      return false;
+    }
+    return true;
+  }
+  printHx4J05ModComparison(left, right, op) {
+    const javaOps = {
+      [SyntaxKind6.EqualsEqualsToken]: "==",
+      [SyntaxKind6.EqualsEqualsEqualsToken]: "==",
+      [SyntaxKind6.ExclamationEqualsToken]: "!=",
+      [SyntaxKind6.ExclamationEqualsEqualsToken]: "!=",
+      [SyntaxKind6.LessThanToken]: "<",
+      [SyntaxKind6.LessThanEqualsToken]: "<=",
+      [SyntaxKind6.GreaterThanToken]: ">",
+      [SyntaxKind6.GreaterThanEqualsToken]: ">="
+    };
+    const javaOp = javaOps[op];
+    if (javaOp === void 0) {
+      return void 0;
+    }
+    const modLeft = this.javaHx4J05IntegralModOperand(left);
+    const modRight = !modLeft && this.javaHx4J05IntegralModOperand(right);
+    if (!modLeft && !modRight) {
+      return void 0;
+    }
+    if (this.javaEqualityLiteralKind(modLeft ? right : left) !== "int") {
+      return void 0;
+    }
+    const leftText = this.printNode(left, 0);
+    const rightText = this.printNode(right, 0);
+    if (!/^\(+double\) /.test(modLeft ? leftText : rightText)) {
+      return void 0;
+    }
+    return `(${leftText} ${javaOp} ${rightText})`;
   }
 };
 
