@@ -4586,9 +4586,13 @@ export class RustTranspiler extends BaseTranspiler {
                 return this.rustR01RequestTupleWrite(assign.right, parent.elements.indexOf(target), name);
             }
         }
-        // a literal field aliasing the local feeds ccxt's writeBackAliasedArrayMutations, which keys on the helper text
-        if (parent.kind === SyntaxKind.PropertyAssignment || parent.kind === SyntaxKind.ShorthandPropertyAssignment) {
-            return false;
+        // a field of a `let`-bound literal aliasing the local feeds ccxt's
+        // writeBackAliasedArrayMutations, which keys on the helper text
+        if ((parent.kind === SyntaxKind.PropertyAssignment || parent.kind === SyntaxKind.ShorthandPropertyAssignment)
+            && !(parent.kind === SyntaxKind.PropertyAssignment && parent.initializer !== target)) {
+            let literal: any = parent.parent;
+            while (literal?.parent !== undefined && (isParenthesizedExpression(literal.parent) || isAsExpression(literal.parent))) literal = literal.parent;
+            if (literal?.parent === undefined || isVariableDeclaration(literal.parent)) return false;
         }
         if (parent.kind === SyntaxKind.PrefixUnaryExpression || parent.kind === SyntaxKind.PostfixUnaryExpression
             || parent.kind === SyntaxKind.DeleteExpression

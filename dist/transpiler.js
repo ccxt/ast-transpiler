@@ -24669,8 +24669,12 @@ ${iden}}`;
         return this.rustR01RequestTupleWrite(assign.right, parent.elements.indexOf(target), name);
       }
     }
-    if (parent.kind === SyntaxKind7.PropertyAssignment || parent.kind === SyntaxKind7.ShorthandPropertyAssignment) {
-      return false;
+    if ((parent.kind === SyntaxKind7.PropertyAssignment || parent.kind === SyntaxKind7.ShorthandPropertyAssignment) && !(parent.kind === SyntaxKind7.PropertyAssignment && parent.initializer !== target)) {
+      let literal = parent.parent;
+      while (literal?.parent !== void 0 && (isParenthesizedExpression3(literal.parent) || isAsExpression3(literal.parent)))
+        literal = literal.parent;
+      if (literal?.parent === void 0 || isVariableDeclaration3(literal.parent))
+        return false;
     }
     if (parent.kind === SyntaxKind7.PrefixUnaryExpression || parent.kind === SyntaxKind7.PostfixUnaryExpression || parent.kind === SyntaxKind7.DeleteExpression || (isForOfStatement2(parent) || isForInStatement2(parent)) && parent.initializer === target) {
       return false;

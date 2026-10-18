@@ -17,7 +17,16 @@ export default class venue extends Exchange {
             headers = { 'A': 'b' };
             headers['Content-Type'] = 'application/json';
         }
-        return headers;
+        return { 'url': '', 'headers': headers };
+    }
+    signAliased (params: Dict = {}) {
+        let aliased: Dict = undefined;
+        if (params['x'] !== undefined) {
+            aliased = { 'A': 'b' };
+            aliased['Content-Type'] = 'application/json';
+        }
+        const req = { 'headers': aliased };
+        return req;
     }
     fetchOHLCV (params: Dict = {}) {
         const request: Dict = {};
