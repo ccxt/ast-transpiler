@@ -6520,23 +6520,34 @@ describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
         return inst.transpileGo(
             'type Dict = { [key: string]: any };\nclass T {\n    safeString (a, b) { return a; }\n    f (d: any, params: Dict = {}) {\n' + body + '    }\n}\n').content;
     };
-    test('a literal-key read of a GetArgMap parameter indexes the map', () => {
-        const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
+    test('a literal-key read handed to a safe* accessor indexes the map', () => {
+        const output = run("        return this.safeString (params['x'], 'z');\n");
         expect(output).toContain('var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})');
-        expect(output).toContain('params["x"]');
-        expect(output).not.toContain('GetValue(params, "x")');
+        expect(output).toContain('this.SafeString(params["x"], "z")');
+    });
+    test('a nested element read indexes the first step', () => {
+        const output = run("        return params['x']['y'];\n");
+        expect(output).toContain('GetValue(params["x"], "y")');
+    });
+    test('a bare read keeps GetValue (a *T value would lose its deref)', () => {
+        const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
+        expect(output).toContain('GetValue(params, "x")');
     });
     test('a compared element keeps the helper deref', () => {
-        const output = run("        if (params['y'] === undefined) { return 1; }\n        return this.safeString (params, 'z');\n");
-        expect(output).toContain('GetValue(params, "y")');
+        const output = run("        if (this.safeString (params['y'], 'k') === undefined) { return 1; }\n        if (params['y'] === undefined) { return 1; }\n        return 0;\n");
+        expect(output).toContain('IsEqual(GetValue(params, "y"), nil)');
+        expect(output).toContain('this.SafeString(params["y"], "k")');
+    });
+    test('a non-literal key keeps GetValue', () => {
+        const output = run("        return this.safeString (params[d], 'z');\n");
+        expect(output).toContain('GetValue(params, d)');
     });
     test('a parameter without a map binding keeps GetValue', () => {
         const output = new Transpiler({ verbose: false }).transpileGo(
-            'class T {\n    f (d: any, params = undefined) {\n        return params[\'x\'];\n    }\n}\n').content;
+            'class T {\n    safeString (a, b) { return a; }\n    f (d: any, params = undefined) {\n        return this.safeString (params[\'x\'], \'z\');\n    }\n}\n').content;
         expect(output).toContain('GetValue(params, "x")');
     });
 });
-
 describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G01)', () => {
     test('the value of an element write keeps GetValue for the write pass', () => {
         const inst = new Transpiler({ verbose: false });
