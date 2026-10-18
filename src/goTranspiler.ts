@@ -7993,7 +7993,7 @@ ${tryBodyBlock}
         case SyntaxKind.CallExpression:
             return this.goTypeOfInitializer(node, printed);
         case SyntaxKind.Identifier:
-            return this.goDeclaredTypeOfIdentifier(node);
+            return this.goDeclaredTypeOfIdentifier(node) ?? this.goHx4G01ParameterMapType(node);
         }
         return undefined;
     }
@@ -8288,6 +8288,31 @@ ${tryBodyBlock}
         // an if (with an else) or a try returning on every path: hasReturnInBlock's own rules for both
         const lastStatement = statements[statements.length - 1];
         return (isIfStatement(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
+    }
+
+    // hx4 G01
+    // a defaulted parameter bound through GetArgMap is a Go map[string]any: an element read of it
+    // indexes natively (nil map / missing key read nil like GetValue). A compared element keeps the
+    // helper's deref, as the market-local rule does (goMarketComparisonElementRead).
+    goHx4G01ParameterMapType(node): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        let decl: any;
+        try {
+            decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return undefined;
+        }
+        if ((decl?.kind !== SyntaxKind.Parameter) || (this.goGetArgParameterType(decl) !== 'map[string]any')) {
+            return undefined;
+        }
+        const access: any = node.parent;
+        if ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === node) && this.goIsComparedOperand(access)) {
+            return undefined;
+        }
+        return 'map[string]any';
     }
 
 

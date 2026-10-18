@@ -6512,3 +6512,27 @@ describe('go string locals rewritten by self-concatenation', () => {
         expect(output).toContain('var d any = ""');
     });
 });
+
+describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
+    const run = (body: string) => {
+        const inst = new Transpiler({ verbose: false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
+        return inst.transpileGo(
+            'type Dict = { [key: string]: any };\nclass T {\n    safeString (a, b) { return a; }\n    f (d: any, params: Dict = {}) {\n' + body + '    }\n}\n').content;
+    };
+    test('a literal-key read of a GetArgMap parameter indexes the map', () => {
+        const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
+        expect(output).toContain('var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})');
+        expect(output).toContain('params["x"]');
+        expect(output).not.toContain('GetValue(params, "x")');
+    });
+    test('a compared element keeps the helper deref', () => {
+        const output = run("        if (params['y'] === undefined) { return 1; }\n        return this.safeString (params, 'z');\n");
+        expect(output).toContain('GetValue(params, "y")');
+    });
+    test('a parameter without a map binding keeps GetValue', () => {
+        const output = new Transpiler({ verbose: false }).transpileGo(
+            'class T {\n    f (d: any, params = undefined) {\n        return params[\'x\'];\n    }\n}\n').content;
+        expect(output).toContain('GetValue(params, "x")');
+    });
+});

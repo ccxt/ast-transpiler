@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CTKEJPGZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -14041,7 +14041,7 @@ ${tryBodyBlock}
       case SyntaxKind5.CallExpression:
         return this.goTypeOfInitializer(node, printed);
       case SyntaxKind5.Identifier:
-        return this.goDeclaredTypeOfIdentifier(node);
+        return this.goDeclaredTypeOfIdentifier(node) ?? this.goHx4G01ParameterMapType(node);
     }
     return void 0;
   }
@@ -14290,6 +14290,30 @@ ${this.getIden(level)}}()`;
     }
     const lastStatement = statements[statements.length - 1];
     return (isIfStatement2(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
+  }
+  // hx4 G01
+  // a defaulted parameter bound through GetArgMap is a Go map[string]any: an element read of it
+  // indexes natively (nil map / missing key read nil like GetValue). A compared element keeps the
+  // helper's deref, as the market-local rule does (goMarketComparisonElementRead).
+  goHx4G01ParameterMapType(node) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    let decl;
+    try {
+      decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    } catch (e) {
+      return void 0;
+    }
+    if (decl?.kind !== SyntaxKind5.Parameter || this.goGetArgParameterType(decl) !== "map[string]any") {
+      return void 0;
+    }
+    const access = node.parent;
+    if (access?.kind === SyntaxKind5.ElementAccessExpression && access.expression === node && this.goIsComparedOperand(access)) {
+      return void 0;
+    }
+    return "map[string]any";
   }
 };
 
