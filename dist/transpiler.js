@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -17296,6 +17296,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr) && (isStringLiteralLikeNode3(keys[0]) || this.javaDeclaredStringType(keys[0])) && this.javaPrintsNonNullValue(right)) {
         return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
+      if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
+        return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
+      }
       return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (op === SyntaxKind6.InKeyword) {
@@ -20697,6 +20700,113 @@ var JavaTranspiler = class extends BaseTranspiler {
       return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
     }
     return false;
+  }
+  // hx4 J01: `m[k] = v` on a local the printer declared `Map<String, Object>` whose every write is a
+  // provably non-concurrent map (fresh literal/extend/omit, or a base safeDict* of non-field data):
+  // the helper's map branch is then `m.put(k, v)` (null value included; its CHM removal never applies)
+  javaHx4MapPutIsNative(baseExpr, keys) {
+    if (keys.length !== 1 || baseExpr === void 0 || !isIdentifier2(baseExpr) || !this.javaDeclaredMapReceiver(baseExpr)) {
+      return false;
+    }
+    const key = keys[0];
+    if (!isStringLiteralLikeNode3(key) && !this.javaDeclaredStringType(key) && !this.isJavaStringType(this.getChecker().getTypeAtLocation(key))) {
+      return false;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(baseExpr);
+    if (declaration === void 0 || declaration.kind !== SyntaxKind6.VariableDeclaration || !declaration.initializer) {
+      return false;
+    }
+    const admits = (rhs) => this.javaHx4PlainMapSource(baseExpr, rhs);
+    return admits(declaration.initializer) && !this.javaLocalIsReassigned(baseExpr, admits);
+  }
+  javaHx4PlainMapSource(container, value) {
+    const node = this.unwrapPrintTransparentExpression(value);
+    if (node === void 0) {
+      return false;
+    }
+    if (this.javaFreshHashMapValue(container, node)) {
+      return true;
+    }
+    if (!isCallExpression5(node) || !isPropertyAccessExpression2(node.expression) || node.expression.expression.kind !== SyntaxKind6.ThisKeyword) {
+      return false;
+    }
+    const name = node.expression.name.text;
+    const fileName = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+    if (typeof fileName !== "string" || !JAVA_FRESH_EXTEND_FILE.test(fileName)) {
+      return false;
+    }
+    if (name === "extend" || name === "deepExtend" || name === "omit") {
+      return true;
+    }
+    if (name === "safeDict" || name === "safeDict2" || name === "safeDictN") {
+      return node.arguments.length > 0 && this.javaHx4NonSharedSource(node.arguments[0], 0) && (node.arguments.length < (name === "safeDict2" ? 4 : 3) || this.javaHx4DefaultIsPlain(node.arguments[node.arguments.length - 1]));
+    }
+    return false;
+  }
+  javaHx4DefaultIsPlain(value) {
+    const node = this.unwrapPrintTransparentExpression(value);
+    return node !== void 0 && (isObjectLiteralExpression3(node) || node.kind === SyntaxKind6.UndefinedKeyword || isIdentifier2(node) && node.text === "undefined" || node.kind === SyntaxKind6.NullKeyword);
+  }
+  // data that can not hold one of the runtime's ConcurrentHashMaps (this.<field> top level, ws client
+  // futures/subscriptions/rejections and their entries): a local/param/element chain not rooted at them
+  javaHx4NonSharedSource(value, depth) {
+    const node = this.unwrapPrintTransparentExpression(value);
+    if (node === void 0 || depth > 4) {
+      return false;
+    }
+    if (isElementAccessExpression3(node)) {
+      return this.javaHx4NonSharedSource(node.expression, depth + 1);
+    }
+    if (!isIdentifier2(node)) {
+      return false;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(node);
+    if (declaration === void 0) {
+      return false;
+    }
+    if (declaration.kind === SyntaxKind6.Parameter) {
+      const type = this.getChecker().getTypeAtLocation(node);
+      const text = (type?.getSymbol?.()?.escapedName ?? "") + "";
+      return !/Client/.test(text) && !/^(client|subscriptions|futures|rejections)$/.test(node.text);
+    }
+    const writes = declaration.initializer ? [declaration.initializer] : [];
+    if (this.javaLocalIsReassigned(node, (rhs) => {
+      writes.push(rhs);
+      return true;
+    })) {
+      return false;
+    }
+    return writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+  }
+  // a value expression that never reads a field map or a ws client's maps
+  javaHx4NonSharedValue(value, depth) {
+    let shared = false;
+    const walk = (n) => {
+      if (shared || n === void 0) {
+        return;
+      }
+      if (isPropertyAccessExpression2(n)) {
+        const called = n.parent !== void 0 && isCallExpression5(n.parent) && n.parent.expression === n;
+        if (!called && (n.expression.kind === SyntaxKind6.ThisKeyword || /^(subscriptions|futures|rejections)$/.test(n.name.text))) {
+          shared = true;
+          return;
+        }
+      }
+      if (n.kind === SyntaxKind6.ThisKeyword && !(n.parent !== void 0 && isPropertyAccessExpression2(n.parent))) {
+        shared = true;
+        return;
+      }
+      if (isIdentifier2(n) && n !== value && !(n.parent !== void 0 && isPropertyAccessExpression2(n.parent) && n.parent.name === n)) {
+        const declaration = this.javaDeclarationOfIdentifier(n);
+        if (declaration !== void 0 && !this.javaHx4NonSharedSource(n, depth + 1)) {
+          shared = true;
+          return;
+        }
+      }
+      n.forEachChild(walk);
+    };
+    walk(value);
+    return !shared;
   }
 };
 

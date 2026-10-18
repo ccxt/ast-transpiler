@@ -3532,6 +3532,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 && this.javaPrintsNonNullValue(right)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
+            if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
+                return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
+            }
 
             return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -7634,5 +7637,120 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
         }
         return false;
+    }
+    // hx4 J01: `m[k] = v` on a local the printer declared `Map<String, Object>` whose every write is a
+    // provably non-concurrent map (fresh literal/extend/omit, or a base safeDict* of non-field data):
+    // the helper's map branch is then `m.put(k, v)` (null value included; its CHM removal never applies)
+    javaHx4MapPutIsNative(baseExpr, keys: any[]): boolean {
+        if (keys.length !== 1 || baseExpr === undefined || !isIdentifier(baseExpr) || !this.javaDeclaredMapReceiver(baseExpr)) {
+            return false;
+        }
+        const key = keys[0];
+        if (!isStringLiteralLikeNode(key) && !this.javaDeclaredStringType(key)
+            && !this.isJavaStringType(this.getChecker().getTypeAtLocation(key))) {
+            return false; // Map<String, Object>.put needs a String key (the helper takes any box)
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(baseExpr);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration || !declaration.initializer) {
+            return false; // parameters may carry a caller's ConcurrentHashMap
+        }
+        const admits = (rhs) => this.javaHx4PlainMapSource(baseExpr, rhs);
+        return admits(declaration.initializer) && !this.javaLocalIsReassigned(baseExpr, admits);
+    }
+
+    javaHx4PlainMapSource(container, value): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        if (node === undefined) {
+            return false;
+        }
+        if (this.javaFreshHashMapValue(container, node)) {
+            return true;
+        }
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = node.expression.name.text;
+        const fileName = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+        if (typeof fileName !== 'string' || !JAVA_FRESH_EXTEND_FILE.test(fileName)) {
+            return false; // a venue override may return anything
+        }
+        if (name === 'extend' || name === 'deepExtend' || name === 'omit') {
+            return true; // Generic.Extend / deepExtend / Functions.omitMap build a fresh LinkedHashMap (or null)
+        }
+        if (name === 'safeDict' || name === 'safeDict2' || name === 'safeDictN') {
+            // hands back an element of the source or the default: never a field map or a ws client map
+            return node.arguments.length > 0 && this.javaHx4NonSharedSource(node.arguments[0], 0)
+                && (node.arguments.length < (name === 'safeDict2' ? 4 : 3)
+                    || this.javaHx4DefaultIsPlain(node.arguments[node.arguments.length - 1]));
+        }
+        return false;
+    }
+
+    javaHx4DefaultIsPlain(value): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        return node !== undefined && (isObjectLiteralExpression(node) || node.kind === SyntaxKind.UndefinedKeyword
+            || (isIdentifier(node) && node.text === 'undefined') || node.kind === SyntaxKind.NullKeyword);
+    }
+
+    // data that can not hold one of the runtime's ConcurrentHashMaps (this.<field> top level, ws client
+    // futures/subscriptions/rejections and their entries): a local/param/element chain not rooted at them
+    javaHx4NonSharedSource(value, depth: number): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        if (node === undefined || depth > 4) {
+            return false;
+        }
+        if (isElementAccessExpression(node)) {
+            return this.javaHx4NonSharedSource(node.expression, depth + 1);
+        }
+        if (!isIdentifier(node)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined) {
+            return false;
+        }
+        if (declaration.kind === SyntaxKind.Parameter) {
+            const type = this.getChecker().getTypeAtLocation(node);
+            const text = (type?.getSymbol?.()?.escapedName ?? '') + '';
+            return !/Client/.test(text) && !/^(client|subscriptions|futures|rejections)$/.test(node.text);
+        }
+        const writes: any[] = declaration.initializer ? [declaration.initializer] : [];
+        if (this.javaLocalIsReassigned(node, (rhs) => { writes.push(rhs); return true; })) {
+            return false; // destructuring / compound writes are not followed
+        }
+        return writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+    }
+
+    // a value expression that never reads a field map or a ws client's maps
+    javaHx4NonSharedValue(value, depth: number): boolean {
+        let shared = false;
+        const walk = (n) => {
+            if (shared || n === undefined) {
+                return;
+            }
+            if (isPropertyAccessExpression(n)) {
+                const called = n.parent !== undefined && isCallExpression(n.parent) && n.parent.expression === n;
+                if (!called && (n.expression.kind === SyntaxKind.ThisKeyword
+                    || /^(subscriptions|futures|rejections)$/.test(n.name.text))) {
+                    shared = true;
+                    return;
+                }
+            }
+            if (n.kind === SyntaxKind.ThisKeyword && !(n.parent !== undefined && isPropertyAccessExpression(n.parent))) {
+                shared = true; // `this` handed to a call
+                return;
+            }
+            if (isIdentifier(n) && n !== value && !(n.parent !== undefined && isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
+                const declaration: any = this.javaDeclarationOfIdentifier(n);
+                if (declaration !== undefined && !this.javaHx4NonSharedSource(n, depth + 1)) {
+                    shared = true;
+                    return;
+                }
+            }
+            n.forEachChild(walk);
+        };
+        walk(value);
+        return !shared;
     }
 }

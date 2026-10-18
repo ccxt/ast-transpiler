@@ -6733,3 +6733,91 @@ describe('java element write after a hand-back destructuring', () => {
         expect(output).toContain('Helpers.addElementToObject(request, "b", null)');
     });
 });
+
+// hx4 J01: `m[k] = v` on a declared Map<String, Object> local whose every write is a
+// provably non-concurrent map prints `m.put(k, v)`, null value included
+describe('hx4 J01: declared-map element write prints native put', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j01');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const MAP_TYPE = 'Map<String, Object>';
+    const source =
+    "class T {\n" +
+    "    options: any = {};\n" +
+    "    safeDict(d: any, k: any, def: any = undefined): any { return def; }\n" +
+    "    extend(...args: any[]): any { return {}; }\n" +
+    "    omit(x: any, ...args: any[]): any { return x; }\n" +
+    "    safeString(d: any, k: any): string | undefined { return undefined; }\n" +
+    "    p1(response: any): void {\n" +
+    "        const data = this.safeDict(response, 'data', {});\n" +
+    "        data['ts'] = this.safeString(response, 'ts');\n" +
+    "    }\n" +
+    "    p2(params: any, code: string): void {\n" +
+    "        let request = this.extend({ 'a': 1 }, params);\n" +
+    "        request = this.omit(request, 'a');\n" +
+    "        request[code] = this.safeString(params, 'x');\n" +
+    "    }\n" +
+    "    n1(): void {\n" +
+    "        const o = this.safeDict(this.options, 'ws', {});\n" +
+    "        o['x'] = this.safeString(o, 'y');\n" +
+    "    }\n" +
+    "    n2(params: any): void {\n" +
+    "        params['x'] = this.safeString(params, 'y');\n" +
+    "    }\n" +
+    "    n3(response: any, other: any): void {\n" +
+    "        let data = this.safeDict(response, 'data', {});\n" +
+    "        data = other;\n" +
+    "        data['x'] = this.safeString(response, 'y');\n" +
+    "    }\n" +
+    "    n4(response: any, key: any): void {\n" +
+    "        const data = this.safeDict(response, 'data', {});\n" +
+    "        data[key] = 1;\n" +
+    "    }\n" +
+    "}";
+
+    let withMaps: string;
+    let noResolver: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, source);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        noResolver = byPath.transpileJavaByPath(BASE_FIXTURE).content;
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
+            (declaration?.kind !== undefined && ['data', 'request', 'o', 'params'].includes(declaration.name?.text)) ? MAP_TYPE : undefined;
+        withMaps = byPath.transpileJavaByPath(BASE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('safeDict of a parameter with a literal default: native put of a nullable value', () => {
+        expect(withMaps).toContain('data.put("ts", this.safeString(response, "ts"))');
+    });
+
+    test('extend/omit local with a string key: native put', () => {
+        expect(withMaps).toMatch(/request\.put\(\(String\)code, this\.safeString\(parameters, "x"\)\)/);
+    });
+
+    test('safeDict of a field map keeps the helper (ConcurrentHashMap null removal)', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(o, "x"/);
+    });
+
+    test('a parameter receiver keeps the helper', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(parameters, "x"/);
+    });
+
+    test('a local reassigned from an unproven value keeps the helper', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(data, "x"/);
+    });
+
+    test('a non-string key keeps the helper', () => {
+        expect(withMaps).toContain('Helpers.addElementToObject(data, key, 1)');
+    });
+
+    test('no declared-type consumer: every write keeps the helper', () => {
+        expect(noResolver).not.toMatch(/data\.put\(/);
+        expect(noResolver).not.toMatch(/request\.put\(/);
+    });
+});
