@@ -3929,3 +3929,35 @@ describe('rust order book sides keep the runtime helpers', () => {
         expect(output).not.toContain('bids.as_array()');
     });
 });
+
+describe('rust this-field dynamic dict reads (hx4 R02)', () => {
+    const DECL = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\nclass C { x: number; }\n';
+
+    test('a dynamic string key on a Dict-declared field reads natively', () => {
+        const ts = DECL + 'class A {\n    balance: Dict = {};\n    f (code: string) {\n        const a = this.balance[code];\n        return a;\n    }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut a: Value = self.balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+        expect(output).not.toContain('get_value(&self.balance');
+    });
+
+    test('a nested read on a Dictionary<Dictionary<T>> field reads natively at both levels', () => {
+        const ts = DECL + 'class A {\n    ohlcvs: Dictionary<Dictionary<C>>;\n    f (symbol: string, tf: string) {\n        const a = this.ohlcvs[symbol][tf];\n        return a;\n    }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.ohlcvs.as_map().and_then(|__m| symbol.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null).as_map().and_then(|__m| tf.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(');
+    });
+
+    test('an any-declared field keeps the helper', () => {
+        const ts = DECL + 'class A {\n    positions: any;\n    f (code: string) {\n        return this.positions[code];\n    }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.positions, &code)');
+    });
+
+    test('a numeric key and write targets keep the helper', () => {
+        const ts = DECL + 'class A {\n    balance: Dict = {};\n    f (code: string, n: number) {\n        this.balance[code] = this.g (this.balance[code]);\n        delete this.balance[code];\n        return this.balance[n];\n    }\n    g (x) { return x; }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.balance, &n)');
+        expect(output).toContain('self.g(get_value(&self.balance, &code))');
+        expect(output).not.toContain('self.balance.as_map()');
+    });
+});

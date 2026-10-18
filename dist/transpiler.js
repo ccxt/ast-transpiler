@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -23225,7 +23225,7 @@ ${classMethods}
         return void 0;
       return this.printNativeListIndex(receiverText, index);
     }
-    const dictRead = this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode);
+    const dictRead = this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode);
     if (dictRead !== void 0)
       return dictRead;
     return this.printNativeDynamicListIndex(receiverText, receiverNode, keyNode);
@@ -24546,6 +24546,48 @@ ${iden}}`;
   }
   printSpreadElement(node, identation) {
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+  }
+  // hx4 R02
+  // `this.<field>[k]`: a class property whose declared type proves a plain dict is a
+  // container struct field (never a book/cache/side/client/live marker dict), so
+  // `get_value`'s marker routes cannot fire and the read is `m.get(k)`.
+  /** The class property declaration behind `this.<name>` when its annotation proves a plain dict. */
+  rustProvenDictThisField(node) {
+    if (!isPropertyAccessExpression3(node) || node.expression.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    let declaration;
+    try {
+      declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(node.name));
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration === void 0 || declaration.kind !== SyntaxKind7.PropertyDeclaration || declaration.type === void 0)
+      return void 0;
+    const type = this.getCheckedTypeOf(declaration.type);
+    return type !== void 0 && this.isProvenMapType(type) ? declaration : void 0;
+  }
+  /** `this.<field>[a]` whose declared field type's element type is itself a plain dict
+   *  (`Dictionary<Dictionary<T>>`). */
+  rustProvenDictThisFieldElement(node) {
+    if (!isElementAccessExpression4(node))
+      return false;
+    const field = this.rustProvenDictThisField(node.expression);
+    if (field === void 0)
+      return false;
+    const fieldType = this.getCheckedTypeOf(field.type);
+    const parts = fieldType.flags & TypeFlags6.Union ? (typeParts(fieldType) ?? []).filter((p) => !this.rustTypeIsNullish(p)) : [fieldType];
+    return parts.length === 1 && this.isProvenMapType(this.getChecker().getIndexTypeOfType(parts[0], IndexKind4.String));
+  }
+  /** `this.<field>[k]` with a proven-dict field and a proven string key place. */
+  printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode) {
+    if (this.rustProvenDictThisField(receiverNode) === void 0 && !this.rustProvenDictThisFieldElement(receiverNode))
+      return void 0;
+    if (!this.rustKeyIsProvenString(keyNode))
+      return void 0;
+    const keyText = this.printNode(keyNode, 0).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
+      return void 0;
+    return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

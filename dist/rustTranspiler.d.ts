@@ -647,5 +647,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    /** The class property declaration behind `this.<name>` when its annotation proves a plain dict. */
+    rustProvenDictThisField(node: Node): Declaration | undefined;
+    /** `this.<field>[a]` whose declared field type's element type is itself a plain dict
+     *  (`Dictionary<Dictionary<T>>`). */
+    rustProvenDictThisFieldElement(node: Node): boolean;
+    /** `this.<field>[k]` with a proven-dict field and a proven string key place. */
+    printNativeThisFieldDynamicMapAccess(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
 }
 export {};

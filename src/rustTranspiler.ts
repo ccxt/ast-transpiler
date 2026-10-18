@@ -3048,7 +3048,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!this.isProvenListExpression(receiverNode)) return undefined;
             return this.printNativeListIndex(receiverText, index);
         }
-        const dictRead = this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode);
+        const dictRead = this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode);
         if (dictRead !== undefined) return dictRead;
         // A non-literal index (the `for (let i = 0; …)` counter) into a
         // checker-proven list reads natively too.
@@ -4453,5 +4453,44 @@ export class RustTranspiler extends BaseTranspiler {
 
     printSpreadElement(node, identation) {
         return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+    }
+
+    // hx4 R02
+    // `this.<field>[k]`: a class property whose declared type proves a plain dict is a
+    // container struct field (never a book/cache/side/client/live marker dict), so
+    // `get_value`'s marker routes cannot fire and the read is `m.get(k)`.
+
+    /** The class property declaration behind `this.<name>` when its annotation proves a plain dict. */
+    rustProvenDictThisField(node: Node): Declaration | undefined {
+        if (!isPropertyAccessExpression(node) || node.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        let declaration: any;
+        try {
+            declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(node.name));
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration === undefined || declaration.kind !== SyntaxKind.PropertyDeclaration || declaration.type === undefined) return undefined;
+        const type = this.getCheckedTypeOf(declaration.type);
+        return type !== undefined && this.isProvenMapType(type) ? declaration : undefined;
+    }
+
+    /** `this.<field>[a]` whose declared field type's element type is itself a plain dict
+     *  (`Dictionary<Dictionary<T>>`). */
+    rustProvenDictThisFieldElement(node: Node): boolean {
+        if (!isElementAccessExpression(node)) return false;
+        const field: any = this.rustProvenDictThisField(node.expression);
+        if (field === undefined) return false;
+        const fieldType = this.getCheckedTypeOf(field.type);
+        const parts: Type[] = (fieldType.flags & TypeFlags.Union) ? (typeParts(fieldType) ?? []).filter((p) => !this.rustTypeIsNullish(p)) : [fieldType];
+        return parts.length === 1 && this.isProvenMapType(this.getChecker().getIndexTypeOfType(parts[0], IndexKind.String));
+    }
+
+    /** `this.<field>[k]` with a proven-dict field and a proven string key place. */
+    printNativeThisFieldDynamicMapAccess(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined {
+        if (this.rustProvenDictThisField(receiverNode) === undefined && !this.rustProvenDictThisFieldElement(receiverNode)) return undefined;
+        if (!this.rustKeyIsProvenString(keyNode)) return undefined;
+        const keyText = this.printNode(keyNode, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
+        return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
     }
 }
