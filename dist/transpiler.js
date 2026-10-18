@@ -24623,16 +24623,21 @@ ${iden}}`;
     return !mentions;
   }
   // `return x` / `return f(.., x, ..)` with `x` named once in the statement: a boxing move.
+  // Elsewhere a boxing argument / object-literal value must be the local's last use outside any loop.
   rustVecValueUse(n, name) {
     const parent = n.parent;
     if (isReturnStatement4(parent))
       return true;
-    if (!isCallExpression6(parent) || !parent.arguments.some((a) => a === n) || !this.rustVecBoxingCallee(parent.expression))
+    const isArg = isCallExpression6(parent) && parent.arguments.some((a) => a === n) && this.rustVecBoxingCallee(parent.expression);
+    const isProp = parent?.kind === SyntaxKind7.PropertyAssignment && parent.initializer === n;
+    if (!isArg && !isProp)
       return false;
     let statement = parent;
     while (statement !== void 0 && !isStatement(statement))
       statement = statement.parent;
-    if (!isReturnStatement4(statement))
+    if (statement === void 0)
+      return false;
+    if (!isReturnStatement4(statement) && !this.rustVecIsFinalUse(n, name))
       return false;
     let count = 0;
     const visit = (m) => {
@@ -24642,6 +24647,21 @@ ${iden}}`;
     };
     visit(statement);
     return count === 1;
+  }
+  rustVecIsFinalUse(n, name) {
+    const fn = this.rustEnclosingFunction(n);
+    for (let current = n.parent; current !== void 0 && current !== fn; current = current.parent) {
+      switch (current.kind) {
+        case SyntaxKind7.ForStatement:
+        case SyntaxKind7.ForInStatement:
+        case SyntaxKind7.ForOfStatement:
+        case SyntaxKind7.WhileStatement:
+        case SyntaxKind7.DoStatement:
+          return false;
+      }
+    }
+    const end = n.getEnd?.() ?? n.end;
+    return !this.rustScopeNameNodes(fn, name).some((m) => m.kind === SyntaxKind7.Identifier && m !== n && (m.getStart?.() ?? m.pos) >= end && !this.rustIdentifierIsPropertyName(m));
   }
   // `this.m(..)` / `super.m(..)` / `Promise.all(..)`: every argument prints through printNode as a `Value`.
   rustVecBoxingCallee(callee) {
@@ -24671,7 +24691,7 @@ ${iden}}`;
   transformIdentifier(node, identifier) {
     const text = super.transformIdentifier(node, identifier);
     const parent = node?.parent;
-    if (parent === void 0 || !(isReturnStatement4(parent) || isCallExpression6(parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression)))
+    if (parent === void 0 || !(isReturnStatement4(parent) || isCallExpression6(parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression) || parent.kind === SyntaxKind7.PropertyAssignment && parent.initializer === node))
       return text;
     return this.rustVecLocalDeclarationOf(node) !== void 0 ? `Value::from(${text})` : text;
   }

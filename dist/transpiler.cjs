@@ -24622,25 +24622,45 @@ ${iden}}`;
     return !mentions;
   }
   // `return x` / `return f(.., x, ..)` with `x` named once in the statement: a boxing move.
+  // Elsewhere a boxing argument / object-literal value must be the local's last use outside any loop.
   rustVecValueUse(n, name) {
     const parent = n.parent;
     if (_is.isReturnStatement.call(void 0, parent))
       return true;
-    if (!_is.isCallExpression.call(void 0, parent) || !parent.arguments.some((a) => a === n) || !this.rustVecBoxingCallee(parent.expression))
+    const isArg = _is.isCallExpression.call(void 0, parent) && parent.arguments.some((a) => a === n) && this.rustVecBoxingCallee(parent.expression);
+    const isProp = _optionalChain([parent, 'optionalAccess', _2250 => _2250.kind]) === _ast.SyntaxKind.PropertyAssignment && parent.initializer === n;
+    if (!isArg && !isProp)
       return false;
     let statement = parent;
     while (statement !== void 0 && !_is.isStatement.call(void 0, statement))
       statement = statement.parent;
-    if (!_is.isReturnStatement.call(void 0, statement))
+    if (statement === void 0)
+      return false;
+    if (!_is.isReturnStatement.call(void 0, statement) && !this.rustVecIsFinalUse(n, name))
       return false;
     let count = 0;
     const visit = (m) => {
       if (m.kind === _ast.SyntaxKind.Identifier && m.text === name)
         count++;
-      _optionalChain([m, 'access', _2250 => _2250.forEachChild, 'optionalCall', _2251 => _2251(visit)]);
+      _optionalChain([m, 'access', _2251 => _2251.forEachChild, 'optionalCall', _2252 => _2252(visit)]);
     };
     visit(statement);
     return count === 1;
+  }
+  rustVecIsFinalUse(n, name) {
+    const fn = this.rustEnclosingFunction(n);
+    for (let current = n.parent; current !== void 0 && current !== fn; current = current.parent) {
+      switch (current.kind) {
+        case _ast.SyntaxKind.ForStatement:
+        case _ast.SyntaxKind.ForInStatement:
+        case _ast.SyntaxKind.ForOfStatement:
+        case _ast.SyntaxKind.WhileStatement:
+        case _ast.SyntaxKind.DoStatement:
+          return false;
+      }
+    }
+    const end = _nullishCoalesce(_optionalChain([n, 'access', _2253 => _2253.getEnd, 'optionalCall', _2254 => _2254()]), () => ( n.end));
+    return !this.rustScopeNameNodes(fn, name).some((m) => m.kind === _ast.SyntaxKind.Identifier && m !== n && (_nullishCoalesce(_optionalChain([m, 'access', _2255 => _2255.getStart, 'optionalCall', _2256 => _2256()]), () => ( m.pos))) >= end && !this.rustIdentifierIsPropertyName(m));
   }
   // `this.m(..)` / `super.m(..)` / `Promise.all(..)`: every argument prints through printNode as a `Value`.
   rustVecBoxingCallee(callee) {
@@ -24652,15 +24672,15 @@ ${iden}}`;
     return receiver.kind === _ast.SyntaxKind.Identifier && receiver.text === "Promise" && String(callee.name.text) === "all";
   }
   rustVecLocalDeclarationOf(node) {
-    if (_optionalChain([node, 'optionalAccess', _2252 => _2252.kind]) !== _ast.SyntaxKind.Identifier)
+    if (_optionalChain([node, 'optionalAccess', _2257 => _2257.kind]) !== _ast.SyntaxKind.Identifier)
       return void 0;
     const checker = this.checkerOrUndefined();
-    const symbol = _optionalChain([checker, 'optionalAccess', _2253 => _2253.getSymbolAtLocation, 'call', _2254 => _2254(node)]);
+    const symbol = _optionalChain([checker, 'optionalAccess', _2258 => _2258.getSymbolAtLocation, 'call', _2259 => _2259(node)]);
     const declaration = _nullishCoalesce(_chunkCE5I57GBcjs.symbolValueDeclaration.call(void 0, symbol), () => ( _chunkCE5I57GBcjs.symbolDeclarations.call(void 0, symbol)[0]));
     return declaration !== void 0 && declaration.name !== node && this.rustVecLocalIsTyped(declaration) ? declaration : void 0;
   }
   printRustVecPush(node, name, parsedArg) {
-    const receiver = _optionalChain([node, 'optionalAccess', _2255 => _2255.expression, 'optionalAccess', _2256 => _2256.expression]);
+    const receiver = _optionalChain([node, 'optionalAccess', _2260 => _2260.expression, 'optionalAccess', _2261 => _2261.expression]);
     if (name === void 0 || parsedArg === void 0 || this.rustVecLocalDeclarationOf(receiver) === void 0)
       return void 0;
     const arg = parsedArg.trim();
@@ -24669,8 +24689,8 @@ ${iden}}`;
   }
   transformIdentifier(node, identifier) {
     const text = super.transformIdentifier(node, identifier);
-    const parent = _optionalChain([node, 'optionalAccess', _2257 => _2257.parent]);
-    if (parent === void 0 || !(_is.isReturnStatement.call(void 0, parent) || _is.isCallExpression.call(void 0, parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression)))
+    const parent = _optionalChain([node, 'optionalAccess', _2262 => _2262.parent]);
+    if (parent === void 0 || !(_is.isReturnStatement.call(void 0, parent) || _is.isCallExpression.call(void 0, parent) && parent.arguments.some((a) => a === node) && this.rustVecBoxingCallee(parent.expression) || parent.kind === _ast.SyntaxKind.PropertyAssignment && parent.initializer === node))
       return text;
     return this.rustVecLocalDeclarationOf(node) !== void 0 ? `Value::from(${text})` : text;
   }
@@ -25117,7 +25137,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _2258 => _2258.body, 'optionalAccess', _2259 => _2259.statements, 'access', _2260 => _2260.forEach, 'call', _2261 => _2261((statement) => {
+    _optionalChain([node, 'access', _2263 => _2263.body, 'optionalAccess', _2264 => _2264.statements, 'access', _2265 => _2265.forEach, 'call', _2266 => _2266((statement) => {
       if (_is.isExpressionStatement.call(void 0, statement)) {
         const expression = statement.expression;
         if (_is.isCallExpression.call(void 0, expression)) {
@@ -25278,7 +25298,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _2262 => _2262.name, 'access', _2263 => _2263.kind]) === _ast.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _2267 => _2267.name, 'access', _2268 => _2268.kind]) === _ast.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -25531,14 +25551,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _ast.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _2264 => _2264.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _2269 => _2269.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _ast.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _2265 => _2265.getChecker, 'call', _2266 => _2266(), 'access', _2267 => _2267.getDeclaredTypeOfSymbol, 'call', _2268 => _2268(symbol), 'access', _2269 => _2269.getSymbol, 'call', _2270 => _2270(), 'optionalAccess', _2271 => _2271.declarations]), () => ( []))).map((d) => d.resolve());
+          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _2270 => _2270.getChecker, 'call', _2271 => _2271(), 'access', _2272 => _2272.getDeclaredTypeOfSymbol, 'call', _2273 => _2273(symbol), 'access', _2274 => _2274.getSymbol, 'call', _2275 => _2275(), 'optionalAccess', _2276 => _2276.declarations]), () => ( []))).map((d) => d.resolve());
           const isClassDeclaration5 = declarations.find((l) => l.kind === _ast.SyntaxKind.InterfaceDeclaration || l.kind === _ast.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration5) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -25653,7 +25673,7 @@ function memoizePairMethod(owner, name) {
     if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
       return original.apply(owner, args);
     }
-    const cached = _optionalChain([cache, 'access', _2272 => _2272.get, 'call', _2273 => _2273(a), 'optionalAccess', _2274 => _2274.get, 'call', _2275 => _2275(b)]);
+    const cached = _optionalChain([cache, 'access', _2277 => _2277.get, 'call', _2278 => _2278(a), 'optionalAccess', _2279 => _2279.get, 'call', _2280 => _2280(b)]);
     if (cached !== void 0) {
       return cached === UNDEFINED_SENTINEL ? void 0 : cached;
     }
@@ -25693,7 +25713,7 @@ function memoizeUnaryMethod(owner, name) {
 }
 function memoizeBinaryKindMethod(owner, name) {
   const unary = owner[name];
-  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2276 => _2276.original]), () => ( unary));
+  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2281 => _2281.original]), () => ( unary));
   if (typeof original !== "function") {
     return;
   }
@@ -25743,17 +25763,17 @@ function prefetchChecker(checker, root, options = {}) {
   const typeNodes = [], symbolNodes = [], callNodes = [];
   const visit = (node) => {
     const kind = node.kind;
-    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _2277 => _2277.has, 'optionalCall', _2278 => _2278(node)]))
+    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _2282 => _2282.has, 'optionalCall', _2283 => _2283(node)]))
       typeNodes.push(node);
-    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _2279 => _2279.has, 'optionalCall', _2280 => _2280(node)]))
+    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _2284 => _2284.has, 'optionalCall', _2285 => _2285(node)]))
       symbolNodes.push(node);
-    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _2281 => _2281.has, 'optionalCall', _2282 => _2282(node)]))
+    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _2286 => _2286.has, 'optionalCall', _2287 => _2287(node)]))
       callNodes.push(node);
     node.forEachChild(visit);
   };
   visit(root);
   const run = (nodes, fn) => {
-    if (_optionalChain([fn, 'optionalAccess', _2283 => _2283.seed]) === void 0 || fn.original === void 0)
+    if (_optionalChain([fn, 'optionalAccess', _2288 => _2288.seed]) === void 0 || fn.original === void 0)
       return;
     for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
       const chunk = nodes.slice(i, i + PREFETCH_BATCH);
@@ -25769,7 +25789,7 @@ function prefetchChecker(checker, root, options = {}) {
   run(typeNodes, getType);
   run(symbolNodes, getSymbol);
   const api = checker.__astTranspilerApi;
-  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _2284 => _2284.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _2285 => _2285.original, 'optionalAccess', _2286 => _2286.gen]) !== void 0) {
+  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _2289 => _2289.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _2290 => _2290.original, 'optionalAccess', _2291 => _2291.gen]) !== void 0) {
     for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
       const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
       const gens = chunk.map((n) => {
@@ -25796,7 +25816,7 @@ function prefetchChecker(checker, root, options = {}) {
 function prefetchDeclarationSignatures(checker, api, root) {
   const getSigDecl = checker.getSignatureFromDeclaration;
   const getTypeOfSymbolAtLocation = checker.getTypeOfSymbolAtLocation;
-  if (_optionalChain([getSigDecl, 'optionalAccess', _2287 => _2287.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _2288 => _2288.original, 'optionalAccess', _2289 => _2289.gen]) === void 0)
+  if (_optionalChain([getSigDecl, 'optionalAccess', _2292 => _2292.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _2293 => _2293.original, 'optionalAccess', _2294 => _2294.gen]) === void 0)
     return;
   const decls = [];
   const visit = (node) => {
@@ -25822,9 +25842,9 @@ function prefetchDeclarationSignatures(checker, api, root) {
     }())));
     api.batch(...chunk.map((decl) => safe(function* () {
       const type = checker.getTypeAtLocation(decl);
-      const symbol = _optionalChain([type, 'optionalAccess', _2290 => _2290.getSymbol, 'optionalAccess', _2291 => _2291.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
-      const location = _optionalChain([symbol, 'optionalAccess', _2292 => _2292.valueDeclaration, 'optionalAccess', _2293 => _2293.resolve, 'call', _2294 => _2294()]);
-      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _2295 => _2295.seed2]) === void 0)
+      const symbol = _optionalChain([type, 'optionalAccess', _2295 => _2295.getSymbol, 'optionalAccess', _2296 => _2296.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
+      const location = _optionalChain([symbol, 'optionalAccess', _2297 => _2297.valueDeclaration, 'optionalAccess', _2298 => _2298.resolve, 'call', _2299 => _2299()]);
+      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _2300 => _2300.seed2]) === void 0)
         return;
       const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
       getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
@@ -25916,7 +25936,7 @@ var Transpiler = class _Transpiler {
     const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path2.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _2296 => _2296.dispose, 'call', _2297 => _2297()]);
+    _optionalChain([previous, 'optionalAccess', _2301 => _2301.dispose, 'call', _2302 => _2302()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -25940,7 +25960,7 @@ var Transpiler = class _Transpiler {
   // long as the file's text on disk still equals the snapshot's. Replaces any
   // previous shared program; pass [] to drop it.
   setSharedProgram(paths) {
-    _optionalChain([this, 'access', _2298 => _2298.programCache, 'access', _2299 => _2299.shared, 'optionalAccess', _2300 => _2300.snapshot, 'access', _2301 => _2301.dispose, 'call', _2302 => _2302()]);
+    _optionalChain([this, 'access', _2303 => _2303.programCache, 'access', _2304 => _2304.shared, 'optionalAccess', _2305 => _2305.snapshot, 'access', _2306 => _2306.dispose, 'call', _2307 => _2307()]);
     this.programCache.shared = void 0;
     if (paths.length === 0) {
       return;

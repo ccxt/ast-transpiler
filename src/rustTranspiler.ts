@@ -4525,13 +4525,17 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // `return x` / `return f(.., x, ..)` with `x` named once in the statement: a boxing move.
+    // Elsewhere a boxing argument / object-literal value must be the local's last use outside any loop.
     rustVecValueUse(n, name: string): boolean {
         const parent = n.parent;
         if (isReturnStatement(parent)) return true;
-        if (!isCallExpression(parent) || !parent.arguments.some((a) => a === n) || !this.rustVecBoxingCallee(parent.expression)) return false;
+        const isArg = isCallExpression(parent) && parent.arguments.some((a) => a === n) && this.rustVecBoxingCallee(parent.expression);
+        const isProp = parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n;
+        if (!isArg && !isProp) return false;
         let statement: any = parent;
         while (statement !== undefined && !isStatement(statement)) statement = statement.parent;
-        if (!isReturnStatement(statement)) return false;
+        if (statement === undefined) return false;
+        if (!isReturnStatement(statement) && !this.rustVecIsFinalUse(n, name)) return false;
         let count = 0;
         const visit = (m) => {
             if (m.kind === SyntaxKind.Identifier && m.text === name) count++;
@@ -4539,6 +4543,20 @@ export class RustTranspiler extends BaseTranspiler {
         };
         visit(statement);
         return count === 1;
+    }
+
+    rustVecIsFinalUse(n, name: string): boolean {
+        const fn = this.rustEnclosingFunction(n);
+        for (let current: any = n.parent; current !== undefined && current !== fn; current = current.parent) {
+            switch (current.kind) {
+            case SyntaxKind.ForStatement: case SyntaxKind.ForInStatement: case SyntaxKind.ForOfStatement:
+            case SyntaxKind.WhileStatement: case SyntaxKind.DoStatement:
+                return false;
+            }
+        }
+        const end = n.getEnd?.() ?? n.end;
+        return !(this.rustScopeNameNodes(fn, name) as any[]).some((m) => m.kind === SyntaxKind.Identifier && m !== n
+            && (m.getStart?.() ?? m.pos) >= end && !this.rustIdentifierIsPropertyName(m));
     }
 
     // `this.m(..)` / `super.m(..)` / `Promise.all(..)`: every argument prints through printNode as a `Value`.
@@ -4570,7 +4588,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = super.transformIdentifier(node, identifier);
         const parent = node?.parent;
         if (parent === undefined || !(isReturnStatement(parent) || (isCallExpression(parent) && parent.arguments.some((a) => a === node)
-            && this.rustVecBoxingCallee(parent.expression)))) return text;
+            && this.rustVecBoxingCallee(parent.expression)) || (parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === node))) return text;
         return this.rustVecLocalDeclarationOf(node) !== undefined ? `Value::from(${text})` : text;
     }
 }

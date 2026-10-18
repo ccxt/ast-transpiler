@@ -652,6 +652,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVecLocalIsTypedUncached(declaration: any): boolean;
     rustVecPushShape(call: any, name: string): boolean;
     rustVecValueUse(n: any, name: string): boolean;
+    rustVecIsFinalUse(n: any, name: string): boolean;
     rustVecBoxingCallee(callee: any): boolean;
     rustVecLocalDeclarationOf(node: any): any;
     printRustVecPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
