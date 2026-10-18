@@ -826,7 +826,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const isStringKey = isStringLiteralLikeNode(argumentExpression);
         const isNumberKey = isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
-            return this.csharpLoopIndexListRead(expression, argumentExpression); // counter proven in range by its loop
+            return this.csharpLoopIndexListRead(expression, argumentExpression) ?? this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression); // counter proven in range by its loop
         }
         const key = (argumentExpression as any).text;
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -5222,6 +5222,35 @@ export class CSharpTranspiler extends BaseTranspiler {
     // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
     csharpHx4DeclaredReceiverReadable(node, expression): boolean {
         return this.csharpEnclosingFunction(node) !== undefined && isIdentifier(expression);
+    }
+
+    // hx4 C01: `getValue(x, k)` with an identifier key on a declared collection: a printed string key
+    // carries the helper's own key/receiver null tests, a printed `int` index its range test
+    csharpHx4DeclaredKeyRead(node, expression, key): string | undefined {
+        const parent: any = node.parent;
+        if (!isIdentifier(expression) || !isIdentifier(key) || key.text === 'undefined' || isDeleteExpression(parent)
+            || isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)
+            || (isBinaryExpression(parent) && parent.left === node && this.csharpIsAssignmentOperator(parent.operatorToken.kind))) {
+            return undefined;
+        }
+        const csharpType = this.csharpDeclaredCollectionType(expression);
+        if (csharpType === undefined || !this.csharpHx4DeclaredReceiverReadable(node, expression)) {
+            return undefined;
+        }
+        const printedLocal = (this as any).csharpPrintedLocalType;
+        const keyType = this.csharpTypedLocalType(key) ?? ((typeof printedLocal === 'function') ? printedLocal.call(this, key) : undefined);
+        const receiver = this.printNode(expression, 0);
+        const printedKey = this.printNode(key, 0);
+        if (csharpType.indexOf('Dictionary<') >= 0) {
+            if ((keyType !== 'string' && keyType !== 'string?') || !this.isStringType(this.getChecker().getTypeAtLocation(key).flags)) {
+                return undefined;
+            }
+            return `(${printedKey} != null && ${receiver} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        }
+        if (keyType !== 'int') {
+            return undefined; // only an int local binds the list indexer without a conversion
+        }
+        return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : null)`;
     }
 }
 

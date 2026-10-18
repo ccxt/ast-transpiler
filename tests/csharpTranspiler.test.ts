@@ -1791,6 +1791,32 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object last = getValue(items, -1);');
         expect(output).toContain('object id = getValue(other, "id");');
     });
+    test('hx4 C01: identifier keys on declared collections carry the helper tests', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'row') ? 'Dictionary<string, object>' : ((declaration?.name?.text === 'items') ? 'List<object>' : undefined);
+        // the build layer's printed-declaration hook names the key locals (string / int)
+        printer.csharpPrintedLocalType = (node: any) => ({ key: 'string', i: 'int' } as any)[node?.text];
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    main(row: any, items: any, k: string, n: any) {\n" +
+        "        const key: string = 'a' + k;\n" +
+        "        const a = row[key];\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            const b = items[i];\n" +
+        "        }\n" +
+        "        const c = items[n];\n" +
+        "        const d = row[n];\n" +
+        "        return a;\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        delete printer.csharpPrintedLocalType;
+        expect(output).toContain('object a = (key != null && row != null && row.ContainsKey(key) ? row[key] : null);');
+        expect(output).toContain('object b = (items != null && i < items.Count ? items[i] : null);');
+        expect(output).toContain('object c = getValue(items, n);');
+        expect(output).toContain('object d = getValue(row, n);');
+    });
     test('a non-dictionary declared-local resolver answer keeps getValue', () => {
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpDeclaredLocalTypeResolver;
