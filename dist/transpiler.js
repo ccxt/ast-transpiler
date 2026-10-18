@@ -3248,7 +3248,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (listRead !== void 0) {
       return listRead;
     }
-    return this.csharpHx4LastResortKeyRead(node) ?? super.printElementAccessExpression(node, identation);
+    return super.printElementAccessExpression(node, identation);
   }
   csharpNativeElementAccess(node) {
     if (!this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
@@ -3267,7 +3267,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const isStringKey = isStringLiteralLikeNode2(argumentExpression);
     const isNumberKey = isNumericLiteral2(argumentExpression);
     if (!isStringKey && !isNumberKey) {
-      return this.csharpLoopIndexListRead(expression, argumentExpression);
+      return this.csharpLoopIndexListRead(expression, argumentExpression) ?? this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression);
     }
     const key = argumentExpression.text;
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -7079,14 +7079,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
   csharpHx4DeclaredReceiverReadable(node, expression) {
     return this.csharpEnclosingFunction(node) !== void 0 && isIdentifier(expression);
-  }
-  // hx4 C01: the identifier-key arm runs after every other arm, so a shipped native form wins
-  csharpHx4LastResortKeyRead(node) {
-    const { expression, argumentExpression } = node;
-    if (isStringLiteralLikeNode2(argumentExpression) || isNumericLiteral2(argumentExpression) || this.printElementAccessExpressionExceptionIfAny(node)) {
-      return void 0;
-    }
-    return this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression);
   }
   // hx4 C01: `getValue(x, k)` with an identifier key on a declared collection: a printed string key
   // carries the helper's own key/receiver null tests, a printed `int` index its range test

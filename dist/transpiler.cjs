@@ -3247,7 +3247,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (listRead !== void 0) {
       return listRead;
     }
-    return _nullishCoalesce(this.csharpHx4LastResortKeyRead(node), () => ( super.printElementAccessExpression(node, identation)));
+    return super.printElementAccessExpression(node, identation);
   }
   csharpNativeElementAccess(node) {
     if (!this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
@@ -3266,7 +3266,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const isStringKey = _is.isStringLiteralLikeNode.call(void 0, argumentExpression);
     const isNumberKey = _is.isNumericLiteral.call(void 0, argumentExpression);
     if (!isStringKey && !isNumberKey) {
-      return this.csharpLoopIndexListRead(expression, argumentExpression);
+      return _nullishCoalesce(this.csharpLoopIndexListRead(expression, argumentExpression), () => ( this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression)));
     }
     const key = argumentExpression.text;
     const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -7078,14 +7078,6 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
   csharpHx4DeclaredReceiverReadable(node, expression) {
     return this.csharpEnclosingFunction(node) !== void 0 && _is.isIdentifier.call(void 0, expression);
-  }
-  // hx4 C01: the identifier-key arm runs after every other arm, so a shipped native form wins
-  csharpHx4LastResortKeyRead(node) {
-    const { expression, argumentExpression } = node;
-    if (_is.isStringLiteralLikeNode.call(void 0, argumentExpression) || _is.isNumericLiteral.call(void 0, argumentExpression) || this.printElementAccessExpressionExceptionIfAny(node)) {
-      return void 0;
-    }
-    return this.csharpHx4DeclaredKeyRead(node, expression, argumentExpression);
   }
   // hx4 C01: `getValue(x, k)` with an identifier key on a declared collection: a printed string key
   // carries the helper's own key/receiver null tests, a printed `int` index its range test
