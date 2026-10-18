@@ -14738,6 +14738,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.csModifiers = {};
     // literals printed as `Helpers.newMap(k, v, ...)` (no anonymous class, so no capture rule)
     this.builderObjectLiterals = /* @__PURE__ */ new WeakSet();
+    this.javaHx4SourceVerdicts = /* @__PURE__ */ new WeakMap();
+    this.javaHx4InProgress = /* @__PURE__ */ new Set();
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = true;
@@ -20750,7 +20752,7 @@ var JavaTranspiler = class extends BaseTranspiler {
   // futures/subscriptions/rejections and their entries): a local/param/element chain not rooted at them
   javaHx4NonSharedSource(value, depth) {
     const node = this.unwrapPrintTransparentExpression(value);
-    if (node === void 0 || depth > 4) {
+    if (node === void 0 || depth > 40) {
       return false;
     }
     if (_is.isElementAccessExpression.call(void 0, node)) {
@@ -20768,14 +20770,24 @@ var JavaTranspiler = class extends BaseTranspiler {
       const text = (_nullishCoalesce(_optionalChain([type, 'optionalAccess', _2118 => _2118.getSymbol, 'optionalCall', _2119 => _2119(), 'optionalAccess', _2120 => _2120.escapedName]), () => ( ""))) + "";
       return !/Client/.test(text) && !/^(client|subscriptions|futures|rejections)$/.test(node.text);
     }
+    const known = this.javaHx4SourceVerdicts.get(declaration);
+    if (known !== void 0) {
+      return known;
+    }
+    this.javaHx4SourceVerdicts.set(declaration, true);
+    this.javaHx4InProgress.add(declaration);
     const writes = declaration.initializer ? [declaration.initializer] : [];
-    if (this.javaLocalIsReassigned(node, (rhs) => {
+    const verdict = !this.javaLocalIsReassigned(node, (rhs) => {
       writes.push(rhs);
       return true;
-    })) {
-      return false;
+    }) && writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+    this.javaHx4InProgress.delete(declaration);
+    if (verdict && this.javaHx4InProgress.size > 0) {
+      this.javaHx4SourceVerdicts.delete(declaration);
+    } else {
+      this.javaHx4SourceVerdicts.set(declaration, verdict);
     }
-    return writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+    return verdict;
   }
   // a value expression that never reads a field map or a ws client's maps
   javaHx4NonSharedValue(value, depth) {
@@ -20786,7 +20798,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       }
       if (_is.isPropertyAccessExpression.call(void 0, n)) {
         const called = n.parent !== void 0 && _is.isCallExpression.call(void 0, n.parent) && n.parent.expression === n;
-        if (!called && (n.expression.kind === _ast.SyntaxKind.ThisKeyword || /^(subscriptions|futures|rejections)$/.test(n.name.text))) {
+        if (!called && (n.expression.kind === _ast.SyntaxKind.ThisKeyword || /^(subscriptions|futures|rejections|hashmap)$/.test(n.name.text)) || called && n.name.text === "createSafeDictionary") {
           shared = true;
           return;
         }

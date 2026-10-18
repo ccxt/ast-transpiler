@@ -377,5 +377,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHx4PlainMapSource(container: any, value: any): boolean;
     javaHx4DefaultIsPlain(value: any): boolean;
     javaHx4NonSharedSource(value: any, depth: number): boolean;
+    javaHx4SourceVerdicts: WeakMap<any, boolean>;
+    javaHx4InProgress: Set<any>;
     javaHx4NonSharedValue(value: any, depth: number): boolean;
 }

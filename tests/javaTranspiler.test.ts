@@ -6756,9 +6756,20 @@ describe('hx4 J01: declared-map element write prints native put', () => {
     "        request = this.omit(request, 'a');\n" +
     "        request[code] = this.safeString(params, 'x');\n" +
     "    }\n" +
+    "    safeList(d: any, k: any, def: any = undefined): any { return def; }\n" +
+    "    p3(response: any): void {\n" +
+    "        const rows = this.safeList(response, 'data', []);\n" +
+    "        const first = this.safeDict(rows, 0, {});\n" +
+    "        first['ts'] = 1;\n" +
+    "    }\n" +
     "    n1(): void {\n" +
     "        const o = this.safeDict(this.options, 'ws', {});\n" +
     "        o['x'] = this.safeString(o, 'y');\n" +
+    "    }\n" +
+    "    n5(client: any, h: string): void {\n" +
+    "        const subs = client.subscriptions;\n" +
+    "        const s = this.safeDict(subs, h, {});\n" +
+    "        s['x'] = this.safeString(s, 'y');\n" +
     "    }\n" +
     "    n2(params: any): void {\n" +
     "        params['x'] = this.safeString(params, 'y');\n" +
@@ -6784,7 +6795,7 @@ describe('hx4 J01: declared-map element write prints native put', () => {
         noResolver = byPath.transpileJavaByPath(BASE_FIXTURE).content;
         const printer: any = (byPath as any).javaTranspiler;
         printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
-            (declaration?.kind !== undefined && ['data', 'request', 'o', 'params'].includes(declaration.name?.text)) ? MAP_TYPE : undefined;
+            (declaration?.kind !== undefined && ['data', 'request', 'o', 'params', 'first', 's'].includes(declaration.name?.text)) ? MAP_TYPE : undefined;
         withMaps = byPath.transpileJavaByPath(BASE_FIXTURE).content;
     });
 
@@ -6796,12 +6807,20 @@ describe('hx4 J01: declared-map element write prints native put', () => {
         expect(withMaps).toContain('data.put("ts", this.safeString(response, "ts"))');
     });
 
+    test('safeDict of a safeList local: native put', () => {
+        expect(withMaps).toContain('first.put("ts", 1)');
+    });
+
     test('extend/omit local with a string key: native put', () => {
         expect(withMaps).toMatch(/request\.put\(\(String\)code, this\.safeString\(parameters, "x"\)\)/);
     });
 
     test('safeDict of a field map keeps the helper (ConcurrentHashMap null removal)', () => {
         expect(withMaps).toMatch(/Helpers\.addElementToObject\(o, "x"/);
+    });
+
+    test('safeDict of ws client subscriptions keeps the helper', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(s, "x"/);
     });
 
     test('a parameter receiver keeps the helper', () => {

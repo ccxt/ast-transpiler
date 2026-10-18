@@ -7697,7 +7697,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // futures/subscriptions/rejections and their entries): a local/param/element chain not rooted at them
     javaHx4NonSharedSource(value, depth: number): boolean {
         const node = this.unwrapPrintTransparentExpression(value);
-        if (node === undefined || depth > 4) {
+        if (node === undefined || depth > 40) {
             return false;
         }
         if (isElementAccessExpression(node)) {
@@ -7715,12 +7715,26 @@ export class JavaTranspiler extends BaseTranspiler {
             const text = (type?.getSymbol?.()?.escapedName ?? '') + '';
             return !/Client/.test(text) && !/^(client|subscriptions|futures|rejections)$/.test(node.text);
         }
-        const writes: any[] = declaration.initializer ? [declaration.initializer] : [];
-        if (this.javaLocalIsReassigned(node, (rhs) => { writes.push(rhs); return true; })) {
-            return false; // destructuring / compound writes are not followed
+        const known = this.javaHx4SourceVerdicts.get(declaration);
+        if (known !== undefined) {
+            return known; // `true` while in progress: a self-referencing write adds no new source
         }
-        return writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+        this.javaHx4SourceVerdicts.set(declaration, true);
+        this.javaHx4InProgress.add(declaration);
+        const writes: any[] = declaration.initializer ? [declaration.initializer] : [];
+        const verdict = !this.javaLocalIsReassigned(node, (rhs) => { writes.push(rhs); return true; })
+            && writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+        this.javaHx4InProgress.delete(declaration);
+        if (verdict && this.javaHx4InProgress.size > 0) {
+            this.javaHx4SourceVerdicts.delete(declaration); // leaned on an unfinished verdict: recompute later
+        } else {
+            this.javaHx4SourceVerdicts.set(declaration, verdict);
+        }
+        return verdict;
     }
+
+    javaHx4SourceVerdicts = new WeakMap<any, boolean>();
+    javaHx4InProgress = new Set<any>();
 
     // a value expression that never reads a field map or a ws client's maps
     javaHx4NonSharedValue(value, depth: number): boolean {
@@ -7731,8 +7745,9 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             if (isPropertyAccessExpression(n)) {
                 const called = n.parent !== undefined && isCallExpression(n.parent) && n.parent.expression === n;
-                if (!called && (n.expression.kind === SyntaxKind.ThisKeyword
-                    || /^(subscriptions|futures|rejections)$/.test(n.name.text))) {
+                if ((!called && (n.expression.kind === SyntaxKind.ThisKeyword
+                    || /^(subscriptions|futures|rejections|hashmap)$/.test(n.name.text)))
+                    || (called && n.name.text === 'createSafeDictionary')) {
                     shared = true;
                     return;
                 }
