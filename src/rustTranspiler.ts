@@ -1671,7 +1671,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers `(&Value, &Value, &Value)`.
     printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
-        return `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
+        return this.printNativeStringPadStart(node, name) ?? `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
     }
 
     printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
@@ -4343,14 +4343,18 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printNativeStringIndexOf(node, name) ?? `get_index_of(&${name}, &${parsedArg})`;
+        return this.printNativeStringIndexOf(node, name) ?? this.printNativeStringIndexOfString(node, name) ?? `get_index_of(&${name}, &${parsedArg})`;
     }
 
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+        const native = this.printNativeStringAffixTest(node, name, 'starts_with');
+        if (native !== undefined) return `Value::Bool(${native})`;
         return `Value::Bool(starts_with(&${name}, &${parsedArg}))`;
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+        const native = this.printNativeStringAffixTest(node, name, 'ends_with');
+        if (native !== undefined) return `Value::Bool(${native})`;
         return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
     }
 
@@ -4359,11 +4363,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `join(&${name}, &${parsedArg})`;
+        return this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
     }
 
     printSplitCall(node, identation, name = undefined, parsedArg = undefined) {
-        return `split(&${name}, &${parsedArg})`;
+        return this.printNativeStringSplit(node, name) ?? `split(&${name}, &${parsedArg})`;
     }
 
     printConcatCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -4379,11 +4383,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printToUpperCaseCall(node, identation, name = undefined) {
-        return `to_upper(&${name})`;
+        return this.printNativeStringCase(node, name, 'to_uppercase') ?? `to_upper(&${name})`;
     }
 
     printToLowerCaseCall(node, identation, name = undefined) {
-        return `to_lower(&${name})`;
+        return this.printNativeStringCase(node, name, 'to_lowercase') ?? `to_lower(&${name})`;
     }
 
     printShiftCall(node, identation, name = undefined) {
@@ -4403,7 +4407,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+        return this.printNativeStringReplace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -4994,5 +4998,101 @@ export class RustTranspiler extends BaseTranspiler {
         const recv = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(text) ? text : `(${text})`;
         const body = kind === 'keys' ? '__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()' : '__m.values().cloned().collect()';
         return `Value::Array(${recv}.as_map().map(|__m| ${body}).unwrap_or_default())`;
+    }
+
+    // hx4 R06: string methods on a checker-proven string receiver print native `str` code. The
+    // receiver is a `Value`; `as_str()` reaches the payload and its `None` arm is the helper's
+    // non-`Str` branch (Null / false / empty array / -1). Literal operands only, unless noted.
+
+    /** Printed receiver usable as a method receiver, else undefined. */
+    rustNativeStringReceiver(node, receiverText: string, kind = 'string'): string | undefined {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)) return undefined;
+        if (typeof receiverText !== 'string' || receiverText.includes('\n') || receiverText.trim().startsWith('&')) return undefined;
+        const receiver = node.expression.expression;
+        if (receiver.kind === SyntaxKind.ThisKeyword || receiver.kind === SyntaxKind.SuperKeyword) return undefined;
+        if (kind === 'string' && this.primitiveKindOfType(this.typeOfNodeIfAny(receiver)) !== 'string') return undefined;
+        if (isIdentifier(receiver) && this.rustStringLocalIdentifierIsTyped(receiver)) return undefined;
+        const text = receiverText.trim();
+        return /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(text) ? text : `(${text})`;
+    }
+
+    /** Escaped text of a string-literal argument, else undefined. */
+    rustNativeStringLiteralArg(node): string | undefined {
+        if (node === undefined || (!isStringLiteral(node) && !isNoSubstitutionTemplateLiteral(node))) return undefined;
+        if (node.text in this.StringLiteralReplacements) return undefined;
+        return this.escapeRustStringLiteral(node.text);
+    }
+
+    // `x.toUpperCase()` / `x.toLowerCase()`: the helper's `Value::Str` arm, Null otherwise.
+    printNativeStringCase(node, receiverText: string, method: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText);
+        if (receiver === undefined || (node.arguments?.length ?? 0) !== 0) return undefined;
+        return `${receiver}.as_str().map(|__s| Value::Str(__s.${method}().into())).unwrap_or(Value::Null)`;
+    }
+
+    // `x.startsWith("lit")` / `x.endsWith("lit")` → a bool (false for a non-`Str` receiver).
+    printNativeStringAffixTest(node, receiverText: string, method: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText);
+        if (receiver === undefined || node.arguments?.length !== 1) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+        if (literal === undefined) return undefined;
+        return `${receiver}.as_str().is_some_and(|__s| __s.${method}("${literal}"))`;
+    }
+
+    // `x.split("lit")`: an array of the parts, the empty array for a non-`Str` receiver.
+    printNativeStringSplit(node, receiverText: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText);
+        if (receiver === undefined || node.arguments?.length !== 1) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+        if (literal === undefined) return undefined;
+        return `Value::Array(${receiver}.as_str().map(|__s| __s.split("${literal}").map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default())`;
+    }
+
+    // `x.replace("a", "b")`: the helper replaces every occurrence (`str::replace`), else the receiver.
+    printNativeStringReplace(node, receiverText: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText);
+        if (receiver === undefined || node.arguments?.length !== 2) return undefined;
+        const from = this.rustNativeStringLiteralArg(node.arguments[0]);
+        const to = this.rustNativeStringLiteralArg(node.arguments[1]);
+        if (from === undefined || to === undefined) return undefined;
+        return `${receiver}.as_str().map(|__s| Value::Str(__s.replace("${from}", "${to}").into())).unwrap_or_else(|| ${receiver}.clone())`;
+    }
+
+    // `x.padStart(N, "c")` with a one-char alphanumeric pad: `format!` width counts chars and never
+    // truncates, which is the helper's arm for a one-char pad.
+    printNativeStringPadStart(node, receiverText: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText);
+        if (receiver === undefined || node.arguments?.length !== 2) return undefined;
+        const width = this.rustSliceLiteralBound(node.arguments[0]);
+        const pad = node.arguments[1];
+        if (width === undefined || width < 0 || width > 4096) return undefined;
+        if ((!isStringLiteral(pad) && !isNoSubstitutionTemplateLiteral(pad)) || !/^[A-Za-z0-9 ]$/.test(pad.text)) return undefined;
+        return `${receiver}.as_str().map(|__s| Value::Str(format!("{:${pad.text}>${width}}", __s).into())).unwrap_or(Value::Null)`;
+    }
+
+    // `x.indexOf(y)` with a proven-string needle: `-1` when either side is not a `Str` (byte index).
+    printNativeStringIndexOfString(node, receiverText: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText);
+        if (receiver === undefined || node.arguments?.length !== 1) return undefined;
+        const needle = node.arguments[0];
+        if (!isIdentifier(needle) || this.primitiveKindOfType(this.typeOfNodeIfAny(needle)) !== 'string') return undefined;
+        if (!this.isDeclaredValueIdentifier(needle) || this.rustStringLocalIdentifierIsTyped(needle)) return undefined;
+        const needleText = this.printNode(needle, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(needleText)) return undefined;
+        return `Value::Int(${receiver}.as_str().zip(${needleText}.as_str()).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))`;
+    }
+
+    // `xs.join("lit")` on a `string[]`: `Display` renders `Str`/`Null` like the helper does.
+    printNativeStringJoin(node, receiverText: string): string | undefined {
+        const receiver = this.rustNativeStringReceiver(node, receiverText, 'array');
+        if (receiver === undefined || node.arguments?.length !== 1) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+        if (literal === undefined) return undefined;
+        const checker: any = this.checkerOrUndefined();
+        const type: any = this.typeOfNodeIfAny(node.expression.expression);
+        if (checker === undefined || type === undefined || !checker.isArrayType(type)) return undefined;
+        const element = checker.getTypeArguments?.(type)?.[0];
+        if (this.primitiveKindOfType(element) !== 'string') return undefined;
+        return `Value::Str(${receiver}.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join("${literal}")).unwrap_or_default().into())`;
     }
 }

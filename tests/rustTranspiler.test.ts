@@ -1089,7 +1089,7 @@ describe('rust transpiling tests', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut ok: bool = starts_with(&s, &Value::Str("x".into()));');
+        expect(output).toContain('let mut ok: bool = s.as_str().is_some_and(|__s| __s.starts_with("x"));');
     });
 
     // Rejected shapes: any sink that takes `&Value` keeps the local boxed.
@@ -2478,7 +2478,7 @@ describe('rust native string search and slicing', () => {
     });
 
     test('a non-literal needle keeps the helper', () => {
-        const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: string')).content;
+        const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: any')).content;
         expect(output).toContain('get_index_of(&a, &b)');
     });
 
@@ -4083,5 +4083,53 @@ describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
         expect(ws).toContain('remove(&mut client.subscriptions, &messageHash)');
         expect(ws).toContain('remove(&mut subs, &messageHash)');
         expect(ws).toContain('remove(&mut subscription, &symbol)');
+    });
+});
+
+describe('hx4 R06 native string methods on proven strings', () => {
+    const m = (body: string, params = 'a: string') => `class A {\n    run(${params}) {\n${body}\n    }\n}`;
+    const out = (body: string, params?: string) => transpiler.transpileRust(m(body, params)).content;
+
+    test('toUpperCase / toLowerCase', () => {
+        const o = out("        const u = a.toUpperCase();\n        const l = a.toLowerCase();\n        return [u, l];");
+        expect(o).toContain('let mut u: Value = a.as_str().map(|__s| Value::Str(__s.to_uppercase().into())).unwrap_or(Value::Null);');
+        expect(o).toContain('let mut l: Value = a.as_str().map(|__s| Value::Str(__s.to_lowercase().into())).unwrap_or(Value::Null);');
+        expect(o).not.toContain('to_upper(&');
+    });
+    test('split with a literal separator', () => {
+        expect(out("        return a.split('-');")).toContain('return Value::Array(a.as_str().map(|__s| __s.split("-").map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
+    });
+    test('replace keeps the receiver for a non-string box', () => {
+        expect(out("        return a.replace('x', 'y');")).toContain('return a.as_str().map(|__s| Value::Str(__s.replace("x", "y").into())).unwrap_or_else(|| a.clone());');
+    });
+    test('padStart with a one-char pad', () => {
+        expect(out("        return a.padStart(64, '0');")).toContain('return a.as_str().map(|__s| Value::Str(format!("{:0>64}", __s).into())).unwrap_or(Value::Null);');
+        expect(out("        return a.padStart(8, '00');")).toContain('pad_start(&a,');
+    });
+    test('startsWith / endsWith in a condition', () => {
+        const o = out("        if (a.startsWith('0x') || a.endsWith('%')) {\n            return 1;\n        }\n        return 0;");
+        expect(o).toContain('a.as_str().is_some_and(|__s| __s.starts_with("0x"))');
+        expect(o).toContain('a.as_str().is_some_and(|__s| __s.ends_with("%"))');
+        expect(o).not.toContain('starts_with(&a');
+    });
+    test('indexOf with a proven-string identifier needle', () => {
+        expect(out('        return a.indexOf(b);', 'a: string, b: string')).toContain('Value::Int(a.as_str().zip(b.as_str()).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))');
+    });
+    test('join on a string[]', () => {
+        expect(out("        return xs.join(',');", 'xs: string[]')).toContain('Value::Str(xs.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join(",")).unwrap_or_default().into())');
+    });
+    test('unproven receivers keep the helpers', () => {
+        const o = out("        const u = a.toUpperCase();\n        const p = a.split(',');\n        const j = xs.join(',');\n        const r = a.replace('x', 'y');\n        return [u, p, j, r, a.startsWith('x')];", 'a: any, xs: any[]');
+        expect(o).toContain('to_upper(&a)');
+        expect(o).toContain('split(&a, &Value::Str(",".into()))');
+        expect(o).toContain('join(&xs, &Value::Str(",".into()))');
+        expect(o).toContain('replace_str(&a,');
+        expect(o).toContain('starts_with(&a,');
+    });
+    test('non-literal operands keep the helpers', () => {
+        const o = out("        return [a.split(s), a.startsWith(s), a.replace(s, 'y')];", 'a: string, s: string');
+        expect(o).toContain('split(&a, &s)');
+        expect(o).toContain('starts_with(&a, &s)');
+        expect(o).toContain('replace_str(&a, &s,');
     });
 });
