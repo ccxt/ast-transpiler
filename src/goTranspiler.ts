@@ -7191,7 +7191,7 @@ ${this.getIden(identation)}${returnStatement}`;
             }
             if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
                 result.push(texts[i]);
-            } else if ((expected[i] === 'string') && !texts[i].includes('\n') && this.goDerefableStringOperand(operand)) {
+            } else if ((expected[i] === 'string') && !texts[i].includes('\n') && (this.goDerefableStringOperand(operand) || this.goLiteralUnionNarrowedStringDeref(operand))) {
                 result.push('*' + texts[i].trim());
             } else {
                 return undefined;
@@ -7275,7 +7275,7 @@ ${this.getIden(identation)}${returnStatement}`;
                 return name;
             }
             // a non-nil `*string`: derefScalar hands ToString the pointee, returned unchanged
-            if ((receiver !== undefined) && this.goDerefableStringOperand(receiver)) {
+            if ((receiver !== undefined) && (this.goDerefableStringOperand(receiver) || this.goLiteralUnionNarrowedStringDeref(receiver))) {
                 return '*' + name.trim();
             }
             // an int64 prints its decimal digits in both: the helper's Sprintf("%d") and FormatInt
@@ -8504,6 +8504,23 @@ ${tryBodyBlock}
         }
         this.goFileStdlibImports.add('strings');
         return `strings.Index(${out[0]}, ${out[1]})`;
+    }
+
+
+    // hx4 G08
+    // a `*string` local the checker narrowed to a union of string literals (`x === 'A' || x === 'B'`):
+    // every member is a string, so the Go pointer is non-nil at this read and may be dereferenced
+    goLiteralUnionNarrowedStringDeref(node): boolean {
+        if ((node?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(node) !== '*string')) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const type = checker?.getTypeAtLocation(node);
+        if ((type === undefined) || ((type.flags & TypeFlags.Union) === 0)) {
+            return false;
+        }
+        const members = type.getTypes?.() ?? [];
+        return (members.length > 0) && members.every((member) => (member.flags & TypeFlags.StringLiteral) !== 0);
     }
 
 }
