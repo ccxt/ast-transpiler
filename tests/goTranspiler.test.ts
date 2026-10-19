@@ -6556,3 +6556,48 @@ describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G
         expect(output).toContain('GetValue(params, "x")');
     });
 });
+
+describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws caches', () => {
+    const root = nodepath.join(__dirname, 'files', 'tmp-hx4-g02', 'ts', 'src');
+    const BASE = "export class Exchange {\n" +
+        "    options: any = {};\n" +
+        "    safeValue (o: any, k: any, d: any = undefined): any { return d; }\n" +
+        "    safeValue2 (o: any, k1: any, k2: any, d: any = undefined): any { return d; }\n" +
+        "    safeString (o: any, k: any, d: any = undefined): string { return d; }\n" +
+        "}\n";
+    const write = (body: string, extra = ''): string => {
+        nodefs.mkdirSync(nodepath.join(root, 'base'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(root, 'base', 'Exchange.ts'), BASE);
+        const file = nodepath.join(root, 'ex.ts');
+        nodefs.writeFileSync(file, "import { Exchange } from './base/Exchange';\n" +
+            "class ArrayCache { constructor (n: any) {} }\n" +
+            "export class ex extends Exchange {\n" + extra +
+            "    f (p: any) {\n" + body + "        return 0;\n    }\n}\n");
+        return new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+    };
+    afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-hx4-g02'), { recursive: true, force: true }));
+
+    test('a base safeValue local compares natively', () => {
+        const out = write("        const v = this.safeValue (p, 'a');\n        if (v === undefined) { return 1; }\n        if (v !== undefined) { return 2; }\n");
+        expect(out).toContain('if v == nil {');
+        expect(out).toContain('if v != nil {');
+        expect(out).not.toContain('IsEqual(v, nil)');
+    });
+    test('safeValue2 with a literal default and a ws cache write compare natively', () => {
+        const out = write("        let v = this.safeValue2 (p, 'a', 'b', {});\n        if (v === undefined) { v = new ArrayCache (5); }\n        if (v === undefined) { return 1; }\n");
+        expect(out).not.toContain('IsEqual(v, nil)');
+    });
+    test('a non-literal default keeps the helper', () => {
+        const out = write("        const v = this.safeValue (p, 'a', this.options);\n        if (v === undefined) { return 1; }\n");
+        expect(out).toContain('IsEqual(v, nil)');
+    });
+    test('an exchange override of safeValue keeps the helper', () => {
+        const out = write("        const v = this.safeValue (p, 'a');\n        if (v === undefined) { return 1; }\n",
+            "    safeValue (o: any, k: any, d: any = undefined): any { return this.safeString (o, k); }\n");
+        expect(out).toContain('IsEqual(v, nil)');
+    });
+    test('a later pointer write keeps the helper', () => {
+        const out = write("        let v = this.safeValue (p, 'a');\n        if (p) { v = this.safeString (p, 'b'); }\n        if (v === undefined) { return 1; }\n");
+        expect(out).toContain('IsEqual(v, nil)');
+    });
+});
