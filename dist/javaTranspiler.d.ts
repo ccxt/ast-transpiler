@@ -373,4 +373,5 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
     private allBranchesTerminate;
+    javaHx4J06NarrowedIndexOf(node: any, name: any, parsedArg: any): string;
 }

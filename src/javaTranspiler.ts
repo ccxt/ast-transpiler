@@ -6466,7 +6466,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printIndexOfCall(node, _identation, name = undefined, parsedArg = undefined) {
-        return this.javaNativeIndexOfCall(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
+        return this.javaNativeIndexOfCall(node, name, parsedArg) ?? this.javaHx4J06NarrowedIndexOf(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
     printSearchCall(_node, _identation, name = undefined, parsedArg = undefined) {
@@ -7634,5 +7634,44 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.allBranchesTerminate(node.thenStatement) && this.allBranchesTerminate(node.elseStatement);
         }
         return false;
+    }
+
+    // hx4 J06
+    // `x.indexOf(t)` where a string/Str-declared x is narrowed to a union of string literals
+    // (`===` tests): x is a non-null String, so String.indexOf is the helper's String arm
+    javaHx4J06NarrowedIndexOf(node, name, parsedArg) {
+        const receiver = node?.expression?.expression;
+        const arg = node?.arguments?.[0];
+        if (receiver === undefined || arg === undefined || name === undefined || parsedArg === undefined
+            || !isIdentifier(receiver) || this.isVarargsArrayReference(receiver)) {
+            return undefined;
+        }
+        let receiverType: any;
+        try {
+            receiverType = this.getChecker().getTypeAtLocation(receiver);
+        } catch (e) {
+            return undefined;
+        }
+        if (receiverType === undefined || (receiverType.flags & TypeFlags.Union) === 0
+            || !receiverType.getTypes().every((member) => this.isStringType(member.flags))) {
+            return undefined;
+        }
+        // a DECLARED literal union is no runtime proof: the declaration must carry plain `string`
+        const symbol = this.getChecker().getSymbolAtLocation(receiver);
+        const declaration: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.valueDeclaration;
+        let declared: any;
+        try {
+            declared = declaration?.name === undefined ? undefined : this.getChecker().getTypeAtLocation(declaration.name);
+        } catch (e) {
+            declared = undefined;
+        }
+        const declaredMembers: any[] = declared === undefined ? [] : ((declared.flags & TypeFlags.Union) !== 0 ? declared.getTypes() : [declared]);
+        if (!declaredMembers.some((member) => member.flags === TypeFlags.String)) {
+            return undefined;
+        }
+        if (this.javaProvableString(arg)) {
+            return `((String)${name}).indexOf(${parsedArg})`;
+        }
+        return undefined;
     }
 }
