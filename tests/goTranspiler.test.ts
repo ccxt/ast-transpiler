@@ -5720,7 +5720,7 @@ describe('native parameter types (B-02)', () => {
         expect(output).toContain('func (this *Test) ParseStatus(status any) <-chan any {');
     });
 
-    test('a method outside the parse* family keeps the box', () => {
+    test('a method outside the parse* family with a proven caller prints *string (hx4 G11)', () => {
         const input = baseWithAccessors +
             "class Test extends Base {\n" +
             "    statusOf (status: string | undefined) {\n" +
@@ -5731,7 +5731,7 @@ describe('native parameter types (B-02)', () => {
             "    }\n" +
             "}\n";
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain('func (this *Test) StatusOf(status any) any {');
+        expect(output).toContain('func (this *Test) StatusOf(status *string) any {');
     });
 });
 
@@ -5779,9 +5779,65 @@ describe('required string parameters of exchange-local methods', () => {
             "}\n";
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain('func (this *Test) CreateOrder(symbol any, typeVar any) any {');
-        expect(output).toContain('func (this *Test) A(x any) any {');
+        // hx4 G11: a Str parameter every caller passes a literal is a Go string
+        expect(output).toContain('func (this *Test) A(x string) any {');
+        expect(output).toContain('func (this *Test) B(x any) any {');
+        // hx4 G11: a SafeString caller proves the nil-guarded *string, never a bare string
+        expect(output).toContain('func (this *Test) C(x *string) any {');
+    });
+});
+
+describe('hx4 G11: required params of exchange-local methods typed from every caller', () => {
+    const base =
+        "type Dict = { [key: string]: any };\n" +
+        "type List = any[];\n" +
+        "type Str = string | undefined;\n" +
+        "class Base {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    safeDict (a, b, c?): Dict { return {}; }\n" +
+        "}\n";
+
+    test('Str / Dict / List parameters proven by every caller go native, and so do their reads', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    orderRequest (type: Str, side: string, market: Dict, items: List) {\n" +
+            "        const isLimit = type === 'limit';\n" +
+            "        const id = market['id'];\n" +
+            "        return [ isLimit, side + '-x', id, items.length ];\n" +
+            "    }\n" +
+            "    use (o) {\n" +
+            "        return this.orderRequest ('limit', 'buy', { 'id': o }, [ 1 ]);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) OrderRequest(typeVar string, side string, market map[string]any, items []any) any {');
+        expect(output).not.toContain('IsEqual(typeVar, \"limit\")');
+        expect(output).not.toContain('GetValue(market, \"id\")');
+        expect(output).not.toContain('GetArrayLength(items)');
+    });
+
+    test('an async method, a ?? default, a nil test, a mixed caller or a GetArg-bound optional keeps the box', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async a (x: Str) { return x === 'y'; }\n" +
+            "    b (x: Str) { const v = x ?? 'd'; return v; }\n" +
+            "    c (x: Str) { return x === undefined; }\n" +
+            "    d (x: Str) { return x === 'y'; }\n" +
+            "    e (x: Str = undefined) { return x === 'y'; }\n" +
+            "    async use (o) {\n" +
+            "        await this.a ('y');\n" +
+            "        this.b ('y'); this.c ('y'); this.e ('y');\n" +
+            "        this.d ('y'); this.d (this.safeValue (o, 'k'));\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) aBody(ch chan any, x any) any {');
         expect(output).toContain('func (this *Test) B(x any) any {');
         expect(output).toContain('func (this *Test) C(x any) any {');
+        expect(output).toContain('func (this *Test) D(x any) any {');
+        expect(output).toContain('func (this *Test) E(optionalArgs ...any) any {');
     });
 });
 

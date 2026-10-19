@@ -587,5 +587,6 @@ export interface GoTranspiler {
     goConcatDerefableStringOperand(node: any): boolean;
 }
 export interface GoTranspiler {
-    x02CurrencyRow(node: any): boolean;
+    g11NativeParameterType(fn: any, param: any, index: number): string | undefined;
+    g11ParameterHasNullishDefault(body: any, param: any): boolean;
 }
