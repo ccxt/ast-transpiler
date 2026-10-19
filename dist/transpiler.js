@@ -7145,8 +7145,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (typed !== void 0) {
       return typed;
     }
-    const printer = this;
-    const printed = typeof printer.csharpPrintedLocalType === "function" ? printer.csharpPrintedLocalType(key) : void 0;
+    const printed = typeof this.csharpPrintedLocalType === "function" ? this.csharpPrintedLocalType(key) : void 0;
     if (printed !== void 0) {
       return printed;
     }
@@ -26993,7 +26992,7 @@ _RustTranspiler.RUST_R01_REQUEST_TUPLE_HELPERS = /* @__PURE__ */ new Set(["handl
 _RustTranspiler.RUST_R12_BOOL_READERS = { safeBool: 2, safeBool2: 3, safeBoolN: 2, checkOptionBool: -1 };
 _RustTranspiler.RUST_R12_DICT_READERS = { safeDict: 2, safeDict2: 3, safeDictN: 2 };
 /** A REST venue file (`ts/src/<id>.ts`): no base / pro / prediction tier. */
-_RustTranspiler.RUST_R12_REST_FILE = /ts\/src\/[^\/]+\.ts$/;
+_RustTranspiler.RUST_R12_REST_FILE = /ts\/src\/[^/]+\.ts$/;
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts

@@ -5340,7 +5340,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_R12_BOOL_READERS: { [name: string]: number } = { safeBool: 2, safeBool2: 3, safeBoolN: 2, checkOptionBool: -1 };
     private static readonly RUST_R12_DICT_READERS: { [name: string]: number } = { safeDict: 2, safeDict2: 3, safeDictN: 2 };
     /** A REST venue file (`ts/src/<id>.ts`): no base / pro / prediction tier. */
-    private static readonly RUST_R12_REST_FILE = /ts\/src\/[^\/]+\.ts$/;
+    private static readonly RUST_R12_REST_FILE = /ts\/src\/[^/]+\.ts$/;
 
     /** Extra plain-dict write sources (R01 write-history proof), REST venue files only: no
      *  runtime tagged handle (book, ws subscription, cache bucket) is reachable there. */

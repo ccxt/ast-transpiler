@@ -5293,8 +5293,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (typed !== undefined) {
             return typed;
         }
-        const printer: any = this;
-        const printed = (typeof printer.csharpPrintedLocalType === 'function') ? printer.csharpPrintedLocalType(key) : undefined;
+        const printed = (typeof (this as any).csharpPrintedLocalType === 'function') ? (this as any).csharpPrintedLocalType(key) : undefined;
         if (printed !== undefined) {
             return printed;
         }
