@@ -8329,7 +8329,7 @@ ${tryBodyBlock}
         if (this.goIsComparedOperand(access) || this.g01IsWriteValue(access) || !this.g01LiteralKey(access.argumentExpression)) {
             return undefined;
         }
-        return (this.g01MarketRow(receiver) || this.g01DerefConsumer(access)) ? 'map[string]any' : undefined;
+        return (this.g01MarketRow(receiver) || this.x02CurrencyRow(receiver) || this.g01DerefConsumer(access)) ? 'map[string]any' : undefined;
     }
 
     // a string literal or a non-negative integer literal key
@@ -8707,4 +8707,49 @@ GoTranspiler.prototype.goConcatDerefableStringOperand = function (node) {
     }
     const checker: any = this.checkerOrUndefined();
     return (checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};
+
+// hx4 X02
+export interface GoTranspiler {
+    x02CurrencyRow(node): boolean;
+}
+// a Currency-typed local written only by `this.currency (…)` / `this.safeCurrency (…)` (or undefined):
+// the ccxt Go runtime returns those through CurrencyTyped, whose values derefScalar leaves unchanged
+GoTranspiler.prototype.x02CurrencyRow = function (node) {
+    let type: any;
+    try {
+        type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+        return false;
+    }
+    const named = (t: any) => [ t?.getAliasSymbol?.()?.name, t?.getSymbol?.()?.name ].some((n) => [ 'Currency', 'CurrencyInterface' ].includes(n));
+    const members = ((typeof type?.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [ type ];
+    if (!named(type) && !members.some((t: any) => named(t))) {
+        return false;
+    }
+    const declaration = this.goDeclarationOfIdentifier(node);
+    const scope: any = (declaration === undefined) ? undefined : this.goEnclosingFunction(declaration);
+    if (scope === undefined) {
+        return false;
+    }
+    const isRow = (v: any) => (v === undefined) || ((v.kind === SyntaxKind.Identifier) && (v.text === 'undefined'))
+        || ((v.kind === SyntaxKind.CallExpression) && (v.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (v.expression.expression?.kind === SyntaxKind.ThisKeyword) && [ 'currency', 'safeCurrency' ].includes(v.expression.name?.text));
+    let ok = isRow(declaration.initializer);
+    const name = declaration.name?.text;
+    const visit = (n: any) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)
+            && (n.operatorToken?.kind === SyntaxKind.EqualsToken) && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
+            ok = isRow(n.right);
+        } else if ((n.kind === SyntaxKind.ArrayLiteralExpression) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+            && n.elements.some((e: any) => (e.kind === SyntaxKind.Identifier) && (e.text === name))) {
+            ok = false;
+        }
+        n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    return ok;
 };

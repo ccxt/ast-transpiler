@@ -6827,3 +6827,40 @@ describe('go string helpers on a *string narrowed to string literals', () => {
         expect(output).not.toContain('strings.ToLower(*z)');
     });
 });
+
+// hx4 X02: currency rows (Currency()/SafeCurrency() return CurrencyTyped rows) read bare
+describe('go GetValue on currency rows (hx4 X02)', () => {
+    const run = (body: string) => {
+        const inst: any = new Transpiler({ verbose: false });
+        const g = inst.goTranspiler;
+        const upstream = g.goIndexableTypeOf;
+        // stands in for the ccxt printed-declaration table: `c` is declared map[string]any
+        g.goIndexableTypeOf = function (node, printed) {
+            const known = upstream.call(this, node, printed);
+            if ((known !== undefined) || (node?.text !== 'c')) {
+                return known;
+            }
+            const access = node.parent;
+            return ((access?.expression === node) && (this['g01' + 'ReadOk'](node, access) !== 'map[string]any')) ? undefined : 'map[string]any';
+        };
+        return inst.transpileGo("interface CurrencyInterface { id: string; code: string; }\ntype Currency = CurrencyInterface | undefined;\n" +
+            "class T {\n    currency (code: string): CurrencyInterface { return undefined; }\n    safeCurrency (id: string): CurrencyInterface { return undefined; }\n" +
+            "    safeDict (a, b) { return a; }\n    f (code: string) {\n        let c: Currency = undefined;\n" + body + "    }\n}\n").content;
+    };
+    test('a local written only by this.currency reads bare', () => {
+        const out = run("        if (code) { c = this.currency (code); }\n        const b = c['id'];\n        return b;\n");
+        expect(out).toContain('var b any = c["id"]');
+    });
+    test('a local written by this.safeCurrency reads bare', () => {
+        const out = run("        c = this.safeCurrency (code);\n        return c['code'];\n");
+        expect(out).toContain('return c["code"]');
+    });
+    test('another write keeps GetValue', () => {
+        const out = run("        c = this.currency (code);\n        c = this.safeDict (code, 'x');\n        return c['id'];\n");
+        expect(out).toContain('GetValue(c, "id")');
+    });
+    test('a compared read keeps GetValue', () => {
+        const out = run("        c = this.currency (code);\n        if (c['id'] === 'x') { return 1; }\n        return 0;\n");
+        expect(out).not.toContain('c["id"] ==');
+    });
+});
