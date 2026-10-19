@@ -556,4 +556,6 @@ export declare class GoTranspiler extends BaseTranspiler {
      * Check if the last statement in a block is a conditional with returns in all branches
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
+    goHx4G06DerefLength(expression: any, printedText: string, lengthNode: any): string | undefined;
+    goHx4G06DerefIndexOf(node: any, name: any, parsedArg: any): string | undefined;
 }
