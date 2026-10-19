@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-WD722H3U.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -14339,7 +14339,7 @@ ${this.getIden(level)}}()`;
     if (this.goIsComparedOperand(access) || this.g01IsWriteValue(access) || !this.g01LiteralKey(access.argumentExpression)) {
       return void 0;
     }
-    return this.g01MarketRow(receiver) || this.g01DerefConsumer(access) ? "map[string]any" : void 0;
+    return this.g01MarketRow(receiver) || this.x02CurrencyRow(receiver) || this.g01DerefConsumer(access) ? "map[string]any" : void 0;
   }
   // a string literal or a non-negative integer literal key
   g01LiteralKey(key) {
@@ -14641,6 +14641,40 @@ GoTranspiler.prototype.goConcatDerefableStringOperand = function(node) {
   }
   const checker = this.checkerOrUndefined();
   return checker !== void 0 && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};
+GoTranspiler.prototype.x02CurrencyRow = function(node) {
+  let type;
+  try {
+    type = this.getChecker().getTypeAtLocation(node);
+  } catch (e) {
+    return false;
+  }
+  const named = (t) => [t?.getAliasSymbol?.()?.name, t?.getSymbol?.()?.name].some((n) => ["Currency", "CurrencyInterface"].includes(n));
+  const members = typeof type?.isUnionType === "function" && type.isUnionType() ? type.getTypes() : [type];
+  if (!named(type) && !members.some((t) => named(t))) {
+    return false;
+  }
+  const declaration = this.goDeclarationOfIdentifier(node);
+  const scope = declaration === void 0 ? void 0 : this.goEnclosingFunction(declaration);
+  if (scope === void 0) {
+    return false;
+  }
+  const isRow = (v) => v === void 0 || v.kind === SyntaxKind5.Identifier && v.text === "undefined" || v.kind === SyntaxKind5.CallExpression && v.expression?.kind === SyntaxKind5.PropertyAccessExpression && v.expression.expression?.kind === SyntaxKind5.ThisKeyword && ["currency", "safeCurrency"].includes(v.expression.name?.text);
+  let ok = isRow(declaration.initializer);
+  const name = declaration.name?.text;
+  const visit = (n) => {
+    if (!ok) {
+      return;
+    }
+    if (n.kind === SyntaxKind5.BinaryExpression && n.left?.kind === SyntaxKind5.Identifier && n.left.text === name && n.operatorToken?.kind === SyntaxKind5.EqualsToken && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
+      ok = isRow(n.right);
+    } else if (n.kind === SyntaxKind5.ArrayLiteralExpression && n.parent?.kind === SyntaxKind5.BinaryExpression && n.parent.left === n && n.elements.some((e) => e.kind === SyntaxKind5.Identifier && e.text === name)) {
+      ok = false;
+    }
+    n.forEachChild(visit);
+  };
+  scope.forEachChild(visit);
+  return ok;
 };
 
 // src/javaTranspiler.ts

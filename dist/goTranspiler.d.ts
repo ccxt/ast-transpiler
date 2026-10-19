@@ -586,3 +586,6 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     goConcatDerefableStringOperand(node: any): boolean;
 }
+export interface GoTranspiler {
+    x02CurrencyRow(node: any): boolean;
+}
