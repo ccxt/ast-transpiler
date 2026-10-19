@@ -373,4 +373,11 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
     private allBranchesTerminate;
+    javaHx4MapPutIsNative(baseExpr: any, keys: any[]): boolean;
+    javaHx4PlainMapSource(container: any, value: any): boolean;
+    javaHx4DefaultIsPlain(value: any): boolean;
+    javaHx4NonSharedSource(value: any, depth: number): boolean;
+    javaHx4SourceVerdicts: WeakMap<any, boolean>;
+    javaHx4InProgress: Set<any>;
+    javaHx4NonSharedValue(value: any, depth: number): boolean;
 }
