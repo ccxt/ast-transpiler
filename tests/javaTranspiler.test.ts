@@ -6956,3 +6956,74 @@ describe('hx4 J05: integral mod compared with an int literal', () => {
         expect(out).toContain("Helpers.isEqual(");
     });
 });
+
+// hx4 J06
+describe('java native indexOf on an ===-narrowed string-literal union (hx4 J06)', () => {
+    test('a plain string narrowed by === literals prints String.indexOf', () => {
+        const input =
+        "class T {\n" +
+        "    test(path: string): void {\n" +
+        "        if (path === 'a/algo' || path === 'b') {\n" +
+        "            const i = path.indexOf('algo');\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)path).indexOf(\"algo\")");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    test('a declared literal union (may hold null) keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(path: 'a' | 'b'): void {\n" +
+        "        const i = path.indexOf('a');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(path, \"a\")");
+    });
+
+    test('a narrowed Str (string | undefined) local keeps the helper unless the target is a provable String', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    test(p: Str, t: any): void {\n" +
+        "        if (p === 'x' || p === 'y') {\n" +
+        "            const i = p.indexOf(t);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(p, t)");
+    });
+
+    test('a Str local narrowed by === literals prints String.indexOf for a literal target', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        let payload: Str = undefined;\n" +
+        "        payload = this.f();\n" +
+        "        if ((payload === '/v4/order') || (payload === '/future/x')) {\n" +
+        "            const i = payload.indexOf('future');\n" +
+        "        }\n" +
+        "    }\n" +
+        "    f(): Str { return 'a'; }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)payload).indexOf(\"future\")");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    test('an any receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(p: any): void {\n" +
+        "        const i = p.indexOf('x');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(p, \"x\")");
+    });
+});
