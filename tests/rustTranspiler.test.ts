@@ -1549,13 +1549,15 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    test('number + string keeps the add helper', () => {
+    // hx4 R09: a non-null string side puts `add` on its string branch (stringify_simple == Display).
+    test('number + string emits native concat', () => {
         const ts =
         'const a: number = 1;\n' +
         'const s: string = "q";\n' +
         'const c = a + s;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&a, &s)');
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, s).into());');
+        expect(output).not.toContain('add(&a, &s)');
     });
 
     // phase-2 rust-19: a `Str` (`string | undefined`) operand holds only a
@@ -4176,3 +4178,41 @@ describe('rust R07 native numeric/string helpers', () => {
         expect(rust('function f(a: any, b: number) { return a % b; }')).toContain('mod_val(&a, &b)');
     });
 });
+
+describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
+    const r09 = (code: string) => transpiler.transpileRust(code).content;
+
+    test('string + number and Str + number', () => {
+        const out = r09('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
+        expect(out).toContain('let mut a: Value = Value::Str(format!("{}{}", s, n).into());');
+        expect(out).toContain('add(&t, &n)');
+    });
+
+    test('number + any keeps the helper', () => {
+        const out = r09('function f (n: number, s: string, x: any) {\n    const a = s + x;\n    const b = x + n;\n    return [ a, b ];\n}\n');
+        expect(out).toContain('add(&s, &x)');
+        expect(out).toContain('add(&x, &n)');
+    });
+
+    test('.length on an any receiver minus/plus a number goes native', () => {
+        const out = r09('function f (x: any, n: number) {\n    const a = x.length - 1;\n    const b = x.length + n;\n    return [ a, b ];\n}\n');
+        expect(out).not.toContain('subtract(');
+        expect(out).not.toContain('add(');
+        expect(out).toContain('(match (&(get_array_length(&x)), &(Value::Int(1))) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
+    });
+
+    test('const length local of an any receiver compares natively', () => {
+        const out = r09('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
+        expect(out).toContain('if (length.as_f64() == Some(0.0))');
+        expect(out).toContain('if (length.as_f64() == other.as_f64())');
+        expect(out).not.toContain('is_equal(');
+    });
+
+    test('let length local, and any vs const length, keep the helpers', () => {
+        const out = r09('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
+        expect(out).toContain('is_equal(&length, &Value::Int(0))');
+        expect(out).toContain('is_equal(&l2, &y)');
+        expect(out).toContain('subtract(&l2, &y)');
+    });
+});
+

@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
+import { NodeFlags, SyntaxKind, type Block, type CallExpression, type Declaration, type Expression, type Identifier, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type VariableDeclaration } from "typescript/unstable/ast";
 import { isArrayLiteralExpression, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isMethodDeclaration, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isVariableDeclaration } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
@@ -694,6 +694,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Native `==`/`!=` on the unwrapped payload when the checker proves the
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
+        const r09 = this.rustR09LengthEquality(left, right, op); if (r09 !== undefined) return r09;
         const operator = (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';
         const leftLiteral = this.literalKindOfNode(left);
         const rightLiteral = this.literalKindOfNode(right);
@@ -1543,6 +1544,7 @@ export class RustTranspiler extends BaseTranspiler {
         } catch (e) {
             return undefined;
         }
+        const r09 = this.rustR09NativeAddSubtract(op, left, right, leftType, rightType, leftText, rightText); if (r09 !== undefined) return r09;
         if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
             return this.printNativeStringConcat(leftText, rightText);
         }
@@ -5141,5 +5143,61 @@ export class RustTranspiler extends BaseTranspiler {
             ' (Value::Float(x), Value::Int(y)) if *y != 0 => Value::Float(*x % *y as f64),' +
             ' (Value::Float(x), Value::Float(y)) if *y != 0.0 => Value::Float(x % y),' +
             ' _ => Value::Null })';
+    }
+
+    // hx4 R09 — `.length` always prints `Value::Int` (`get_array_length` / `Value::Int(len)`), so a
+    // `.length` read, or a `const` local initialised from one, is a never-null Int whatever its receiver.
+    rustR09IsDefiniteInt(node): boolean {
+        const inner = this.rustStripWrappers(node);
+        if (inner === undefined) return false;
+        if (isPropertyAccessExpression(inner)) return String(inner.name.text) === 'length';
+        if (!isIdentifier(inner)) return false;
+        const declaration: any = this.rustSingleLocalDeclaration(inner);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.name?.kind !== SyntaxKind.Identifier) return false;
+        if ((declaration.parent?.flags & NodeFlags.Const) === 0) return false;
+        const init = this.rustStripWrappers(declaration.initializer);
+        return init !== undefined && isPropertyAccessExpression(init) && String(init.name.text) === 'length';
+    }
+
+    // Int-only (definite) or checker-proven number (Int/Float/Null) operand that prints a `Value`.
+    rustR09NumericOperand(node): string | undefined {
+        if (this.rustR09IsDefiniteInt(node)) return 'definite';
+        return this.rustOperandKind(node) === 'number' ? 'number' : undefined;
+    }
+
+    // `a === b` with a definite Int side against a number literal, a number or another definite Int:
+    // is_equal compares Int/Float payloads as f64 and Null only equals Null, which `as_f64()` mirrors.
+    rustR09LengthEquality(left, right, op): string | undefined {
+        if (!this.rustR09IsDefiniteInt(left) && !this.rustR09IsDefiniteInt(right)) return undefined;
+        const operator = (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';
+        const [ definite, other ] = this.rustR09IsDefiniteInt(left) ? [ left, right ] : [ right, left ];
+        if (!this.printsValueExpression(definite)) return undefined;
+        const otherInner = this.rustStripWrappers(other);
+        if (otherInner !== undefined && otherInner.kind === SyntaxKind.NumericLiteral) {
+            const text = this.numericLiteralF64Text(otherInner);
+            if (text === undefined) return undefined;
+            return `${this.printNode(definite, 0)}.as_f64() ${operator} Some(${text})`;
+        }
+        if (this.rustR09NumericOperand(other) === undefined) return undefined;
+        return `${this.printNode(left, 0)}.as_f64() ${operator} ${this.printNode(right, 0)}.as_f64()`;
+    }
+
+    // `a + b` / `a - b` with a definite Int operand and a numeric one: the helper's Int/Float dispatch.
+    // `s + n` / `n + s` with s a non-null string and n numeric: the helper's string branch, i.e.
+    // `stringify_simple` of each side, which equals `Display` for Str/Int/Float/Null.
+    rustR09NativeAddSubtract(op, left, right, leftType, rightType, leftText: string, rightText: string): string | undefined {
+        if (op !== SyntaxKind.PlusToken && op !== SyntaxKind.MinusToken) return undefined;
+        const leftNumeric = this.rustR09NumericOperand(left);
+        const rightNumeric = this.rustR09NumericOperand(right);
+        if ((leftNumeric === 'definite' && rightNumeric !== undefined) || (rightNumeric === 'definite' && leftNumeric !== undefined)) {
+            return this.printNativeNumeric(op, leftText, rightText);
+        }
+        if (op !== SyntaxKind.PlusToken) return undefined;
+        const stringSide = this.isStringLikeType(leftType) && rightNumeric !== undefined ? left
+            : (this.isStringLikeType(rightType) && leftNumeric !== undefined ? right : undefined);
+        if (stringSide === undefined || !this.printsValueExpression(stringSide)) return undefined;
+        const inner = this.unwrapParensNode(stringSide);
+        if (inner !== undefined && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustNativeStrCalleeKind(inner) === 'str')) return undefined;
+        return this.printNativeStringConcat(leftText, rightText);
     }
 }

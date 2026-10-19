@@ -731,5 +731,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustNativeMathCall(node: any, op: string, parsedArg: string): string | undefined;
     printRustNativeNegate(operand: any, operandText: string): string | undefined;
     printRustNativeMod(left: any, right: any, leftText: string, rightText: string): string | undefined;
+    rustR09IsDefiniteInt(node: any): boolean;
+    rustR09NumericOperand(node: any): string | undefined;
+    rustR09LengthEquality(left: any, right: any, op: any): string | undefined;
+    rustR09NativeAddSubtract(op: any, left: any, right: any, leftType: any, rightType: any, leftText: string, rightText: string): string | undefined;
 }
 export {};
