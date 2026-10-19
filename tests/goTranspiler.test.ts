@@ -6687,3 +6687,44 @@ describe('hx4 G04 go arithmetic residual', () => {
         expect(output).toContain('Add(\"x\", typeVar)');
     });
 });
+
+describe('hx4 G06 length / indexOf on proven non-nil *string', () => {
+    const sq = (s: string) => s.replace(/\s+/g, ' ');
+    test('a narrowed *string length and indexOf deref natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b, c = undefined): string | undefined { return a; }\n" +
+        "    main (item) {\n" +
+        "        const side = this.safeString (item, 'side');\n" +
+        "        if (side !== undefined) {\n" +
+        "            if (side.length < 1) { return 'a'; }\n" +
+        "            if (side.indexOf ('-') >= 0) { return 'b'; }\n" +
+        "        }\n" +
+        "        return 'c';\n" +
+        "    }\n" +
+        "}\n";
+        const output = sq(transpiler.transpileGo(input).content);
+        expect(output).toContain('len(*side) < 1');
+        expect(output).toContain('strings.Index(*side, "-")');
+        expect(output).not.toContain('GetLength(side)');
+        expect(output).not.toContain('GetIndexOf(side');
+    });
+    test('a defaulted SafeString local derefs; an un-narrowed nilable one keeps the helpers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b, c = undefined): string | undefined { return a; }\n" +
+        "    main (item) {\n" +
+        "        const tag = this.safeString (item, 'tag', '');\n" +
+        "        const raw = this.safeString (item, 'raw');\n" +
+        "        const n = tag.length;\n" +
+        "        return [ n, raw.length, raw.indexOf ('x'), tag.indexOf (raw) ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = sq(transpiler.transpileGo(input).content);
+        expect(output).toContain('len(*tag)');
+        expect(output).toMatch(/Get(Array)?Length\(raw\)/);
+        expect(output).not.toContain('len(*raw)');
+        expect(output).toContain('if raw == nil { return -1 }'); // pre-existing guarded literal
+        expect(output).not.toContain('strings.Index(*tag, raw');
+    });
+});

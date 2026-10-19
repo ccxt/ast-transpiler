@@ -6030,7 +6030,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const type = (this.getChecker() as Checker).getTypeAtLocation(expression); // eslint-disable-line
             // this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
-            rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
+            rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? this.goHx4G06DerefLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
             rawExpression = `((IList<object>)${leftSide}).Add`;
@@ -7172,7 +7172,7 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
-        const native = this.goNativeIndexOf(node, name, parsedArg);
+        const native = this.goHx4G06DerefIndexOf(node, name, parsedArg) ?? this.goNativeIndexOf(node, name, parsedArg);
         if (native !== undefined) {
             return native;
         }
@@ -8462,6 +8462,49 @@ ${tryBodyBlock}
         return false;
     }
 
+
+
+    // hx4 G06
+    // a `*string` the checker narrows to string (or whose every write is a defaulted SafeString)
+    // is non-nil, so GetLength/GetArrayLength's deref + byte count is `len(*x)`
+    goHx4G06DerefLength(expression, printedText: string, lengthNode): string | undefined {
+        if ((expression?.kind !== SyntaxKind.Identifier) || (printedText !== expression.text)) {
+            return undefined;
+        }
+        if (this.goLengthFeedsArithmeticClassifier(lengthNode) || !this.goDerefableStringOperand(expression)) {
+            return undefined;
+        }
+        return `len(*${printedText})`;
+    }
+
+    // GetIndexOf on two operands that are Go strings once a proven-non-nil `*string` is deref'd:
+    // both sides reach the helper's `case string` arm, which is strings.Index
+    goHx4G06DerefIndexOf(node, name, parsedArg): string | undefined {
+        if ((typeof name !== 'string') || (typeof parsedArg !== 'string') || name.includes('\n') || parsedArg.includes('\n')) {
+            return undefined;
+        }
+        if (!this.goFileKeepsFileLevelImports() || !this.goStdlibImportIsPlaceable()) {
+            return undefined;
+        }
+        const operands = [ this.goUnwrapPrintedAssertions(node?.expression?.expression), this.goUnwrapPrintedAssertions(node?.arguments?.[0]) ];
+        const texts = [ name, parsedArg ];
+        if (!operands.some((o) => this.goDerefableStringOperand(o))) {
+            return undefined; // plain string pairs and nilable receivers stay with goNativeIndexOf
+        }
+        const out: string[] = [];
+        for (let i = 0; i < 2; i++) {
+            const o = operands[i];
+            if ((o?.kind === SyntaxKind.Identifier) && (texts[i] === o.text) && this.goDerefableStringOperand(o)) {
+                out.push('*' + texts[i]);
+            } else if (this.goIndexOfOperandType(o, texts[i]) === 'string') {
+                out.push(texts[i]);
+            } else {
+                return undefined;
+            }
+        }
+        this.goFileStdlibImports.add('strings');
+        return `strings.Index(${out[0]}, ${out[1]})`;
+    }
 
 }
 

@@ -28,13 +28,20 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 <<<<<<<< HEAD:dist/chunk-TTFFJXO6.cjs
+<<<<<<<< HEAD:dist/chunk-TTFFJXO6.cjs
 // ../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
 |||||||| a50c1505d07:dist/chunk-4FDYB2TT.cjs
 // node_modules/tsup/assets/cjs_shims.js
 ========
 // ../../../ts7perf-nm/cs-ast/node_modules/tsup/assets/cjs_shims.js
 >>>>>>>> hx4/G04:dist/chunk-CE5I57GB.cjs
+|||||||| a50c1505d07:dist/chunk-4FDYB2TT.cjs
+// node_modules/tsup/assets/cjs_shims.js
+========
+// ../../../ts7perf-nm/cs-ast/node_modules/tsup/assets/cjs_shims.js
+>>>>>>>> hx4/G06:dist/chunk-CE5I57GB.cjs
 var init_cjs_shims = __esm({
+<<<<<<<< HEAD:dist/chunk-TTFFJXO6.cjs
 <<<<<<<< HEAD:dist/chunk-TTFFJXO6.cjs
   "../../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
 |||||||| a50c1505d07:dist/chunk-4FDYB2TT.cjs
@@ -42,6 +49,11 @@ var init_cjs_shims = __esm({
 ========
   "../../../ts7perf-nm/cs-ast/node_modules/tsup/assets/cjs_shims.js"() {
 >>>>>>>> hx4/G04:dist/chunk-CE5I57GB.cjs
+|||||||| a50c1505d07:dist/chunk-4FDYB2TT.cjs
+  "node_modules/tsup/assets/cjs_shims.js"() {
+========
+  "../../../ts7perf-nm/cs-ast/node_modules/tsup/assets/cjs_shims.js"() {
+>>>>>>>> hx4/G06:dist/chunk-CE5I57GB.cjs
   }
 });
 
@@ -160,9 +172,15 @@ function typeTarget(type) {
 
 exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers; exports.symbolDeclarations = symbolDeclarations; exports.symbolValueDeclaration = symbolValueDeclaration; exports.signatureDeclaration = signatureDeclaration; exports.typeParts = typeParts; exports.typeTarget = typeTarget;
 <<<<<<<< HEAD:dist/chunk-TTFFJXO6.cjs
+<<<<<<<< HEAD:dist/chunk-TTFFJXO6.cjs
 //# sourceMappingURL=chunk-TTFFJXO6.cjs.map
 |||||||| a50c1505d07:dist/chunk-4FDYB2TT.cjs
 //# sourceMappingURL=chunk-4FDYB2TT.cjs.map
 ========
 //# sourceMappingURL=chunk-CE5I57GB.cjs.map
 >>>>>>>> hx4/G04:dist/chunk-CE5I57GB.cjs
+|||||||| a50c1505d07:dist/chunk-4FDYB2TT.cjs
+//# sourceMappingURL=chunk-4FDYB2TT.cjs.map
+========
+//# sourceMappingURL=chunk-CE5I57GB.cjs.map
+>>>>>>>> hx4/G06:dist/chunk-CE5I57GB.cjs
