@@ -562,6 +562,17 @@ export declare class GoTranspiler extends BaseTranspiler {
     g01IsWriteValue(access: any): boolean;
     g01MarketRow(node: any): boolean;
     g01DerefConsumer(access: any): boolean;
+    goG02NonPointerAccessorSource(expr: any): boolean;
+    goG02LiteralDefault(node: any): boolean;
+    goHx4G06DerefLength(expression: any, printedText: string, lengthNode: any): string | undefined;
+    goHx4G06DerefIndexOf(node: any, name: any, parsedArg: any): string | undefined;
+    goLiteralUnionNarrowedStringDeref(node: any): boolean;
+    GO_G09_NUMERIC_FIELDS: {
+        [tsName: string]: string;
+    };
+    goG09FieldKind(node: any): string | undefined;
+    goG09OperandKind(node: any, text: string): [string, boolean] | undefined;
+    printG09WideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
 }
 export interface GoTranspiler {
     goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {

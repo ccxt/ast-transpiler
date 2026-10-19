@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -681,5 +681,55 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The checker resolves the call to the base-tier implementation (a venue
      *  override could return anything). */
     private rustR01CalleeIsBase;
+    /** The class property declaration behind `this.<name>` when its annotation proves a plain dict. */
+    rustProvenDictThisField(node: Node): Declaration | undefined;
+    /** `this.<field>[a]` whose declared field type's element type is itself a plain dict
+     *  (`Dictionary<Dictionary<T>>`). */
+    rustProvenDictThisFieldElement(node: Node): boolean;
+    /** `this.<field>[k]` with a proven-dict field and a proven string key place. */
+    printNativeThisFieldDynamicMapAccess(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    private rustVecLocalDecisions;
+    rustVecLocalIsTyped(declaration: any): boolean;
+    rustVecLocalIsTypedUncached(declaration: any): boolean;
+    rustVecPushShape(call: any, name: string): boolean;
+    rustVecValueUse(n: any, name: string): boolean;
+    rustVecIsFinalUse(n: any, name: string): boolean;
+    rustVecBoxingCallee(callee: any): boolean;
+    rustVecLocalDeclarationOf(node: any): any;
+    printRustVecPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
+    transformIdentifier(node: any, identifier: any): string;
+    /** Source path of a node (forward slashes). */
+    r05Path(node: Node): string;
+    /** Test sources keep the helpers: tests-pipeline post-passes match `in_op(` text. */
+    r05IsTest(node: Node): boolean;
+    /** `k in X` with a non-literal key on a dict-shaped receiver: `in_op`'s Dict arm.
+     *  The Arr arm is the only other `true` path; the dict proof excludes it. */
+    r05InOp(key: any, obj: any): string | undefined;
+    /** `delete X[k]` on a receiver the native-insert proof admits (never a ws
+     *  subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`. */
+    r05Delete(node: any): string | undefined;
+    /** `this.<field>` with a declared plain-dict type that is no ws container: the
+     *  hand-written base builds these maps itself and never tags them. */
+    r05UntaggedField(node: any): boolean;
+    rustProvenDictThisFieldR05(node: any): boolean;
+    /** `Object.keys/values(X)` in REST-tier sources (`ts/src/<id>.ts`): no ws client
+     *  there, so X never carries the `__ws_subs_url`/`__ws_sub_ref` tags the helper filters. */
+    r05Enum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** Printed receiver usable as a method receiver, else undefined. */
+    rustNativeStringReceiver(node: any, receiverText: string, kind?: string): string | undefined;
+    /** Escaped text of a string-literal argument, else undefined. */
+    rustNativeStringLiteralArg(node: any): string | undefined;
+    printNativeStringCase(node: any, receiverText: string, method: string): string | undefined;
+    printNativeStringAffixTest(node: any, receiverText: string, method: string): string | undefined;
+    printNativeStringSplit(node: any, receiverText: string): string | undefined;
+    printNativeStringReplace(node: any, receiverText: string): string | undefined;
+    printNativeStringPadStart(node: any, receiverText: string): string | undefined;
+    printNativeStringIndexOfString(node: any, receiverText: string): string | undefined;
+    printNativeStringJoin(node: any, receiverText: string): string | undefined;
+    rustOperandKind(node: any): string | undefined;
+    printRustNativeToString(node: any, name: string): string | undefined;
+    printRustNativeMathCall(node: any, op: string, parsedArg: string): string | undefined;
+    printRustNativeNegate(operand: any, operandText: string): string | undefined;
+    printRustNativeMod(left: any, right: any, leftText: string, rightText: string): string | undefined;
 }
 export {};
