@@ -4049,3 +4049,39 @@ describe('hx4 R04: native Vec push on typed array locals', () => {
         }
     });
 });
+
+describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
+    let rest = '';
+    let ws = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r05/ts/src/venue.ts').content;
+        ws = transpiler.transpileRustByPath('./tests/files/input/hx4r05/ts/src/pro/venue.ts').content;
+    });
+
+    test('k in this.<dict field> reads contains_key', () => {
+        expect(rest).toContain('matches!((&self.balance, &code), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))');
+        expect(ws).toContain('matches!((&self.orderbooks, &symbol), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))');
+    });
+
+    test('delete on a dict field / literal-built local is shift_remove', () => {
+        expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.balance, &code) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+        expect(rest).toContain('if let Value::Dict(__d) = &mut request { std::sync::Arc::make_mut(__d).shift_remove("a"); }');
+        expect(ws).toContain('if let Value::Dict(__d) = &mut plain { std::sync::Arc::make_mut(__d).shift_remove("k"); }');
+    });
+
+    test('Object.keys / Object.values on REST dicts and untagged fields are native', () => {
+        expect(rest).toContain('Value::Array(query.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default())');
+        expect(rest).toContain('Value::Array(self.tickers.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default())');
+        expect(ws).toContain('Value::Array(self.orderbooks.as_map().map(|__m| __m.keys()');
+    });
+
+    test('any receivers, ws subscriptions and non-dict operands keep the helpers', () => {
+        expect(rest).toContain('remove(&mut response, &Value::Str("x".into()))');
+        expect(rest).toContain('in_op(&response, &code)');
+        expect(rest).toContain('object_keys(&flag)');
+        expect(ws).toContain('in_op(&client.subscriptions, &messageHash)');
+        expect(ws).toContain('remove(&mut client.subscriptions, &messageHash)');
+        expect(ws).toContain('remove(&mut subs, &messageHash)');
+        expect(ws).toContain('remove(&mut subscription, &symbol)');
+    });
+});
