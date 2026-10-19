@@ -3879,7 +3879,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return undefined;
+            return this.javaJ02FieldMapReadText(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
@@ -7768,4 +7768,34 @@ export class JavaTranspiler extends BaseTranspiler {
         walk(value);
         return !shared;
     }
+
+    // hx4 J02: `this.<field>[k]` on the J02 base map fields. ConcurrentHashMap.get(null) throws
+    // where the helper answers null, so a non-literal key is always null-tested; the receiver can
+    // be null too. Key and receiver print twice, so both must be side-effect free.
+    javaJ02FieldMapReadText(receiver, key): string | undefined {
+        const name = receiver?.name?.text;
+        if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
+            return undefined;
+        }
+        const literal = isStringLiteralLikeNode(key);
+        if (!literal && !this.javaRepeatableOperand(key)) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const keyText = this.printNode(key, 0);
+        const keyGuard = literal ? '' : `${keyText} == null || `;
+        return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+    }
 }
+
+// hx4 J02
+// more hand-written BaseExchange map fields: every write in BaseExchange.java and ts/src is a
+// HashMap / ConcurrentHashMap / Map-cast or null (markets_by_id = null, urls/fees from describe())
+const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
+    'tickers': true,
+    'bidsasks': true,
+    'trades': true,
+    'fees': true,
+    'urls': true,
+    'markets_by_id': true,
+};
