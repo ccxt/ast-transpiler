@@ -3940,7 +3940,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const goType = this.goRequiredStringParameterType(param);
             return ((goType !== undefined) && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType)
                 && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType)
-                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) ? goType : undefined;
+                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) ? goType : this.g11NativeParameterType(fn, param, index);
         }
         if (this.isAsyncFunction(fn)) {
             return undefined;
@@ -3952,7 +3952,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return goType;
             }
         }
-        return undefined;
+        return handlerParam ? undefined : this.g11NativeParameterType(fn, param, index);
     }
 
     goIsUnifiedStringParameter(methodName: string, index: number): boolean {
@@ -8707,4 +8707,52 @@ GoTranspiler.prototype.goConcatDerefableStringOperand = function (node) {
     }
     const checker: any = this.checkerOrUndefined();
     return (checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};
+
+// hx4 G11
+export interface GoTranspiler {
+    g11NativeParameterType(fn, param, index: number): string | undefined;
+    g11ParameterHasNullishDefault(body, param): boolean;
+}
+// A required parameter of a sync exchange-local method whose TS type is `Str`/`string`, `Dict`-shaped or
+// `List`: the Go type every call site passes (`string` first, then *string / map / []any), when the body
+// never writes another type, never nil-tests it and never `??`-defaults it (D2, D5)
+GoTranspiler.prototype.g11NativeParameterType = function (fn, param, index: number) {
+    if (this.isAsyncFunction(fn) || !this.goHasTreeCallSite(fn)) {
+        return undefined;
+    }
+    const candidates: string[] = [];
+    const type = this.checkerOrUndefined()?.getTypeAtLocation(param);
+    if (type !== undefined) {
+        const all = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
+        const parts = all.filter(p => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        if ((parts.length > 0) && parts.every(p => (p.flags & (TypeFlags.String | TypeFlags.StringLiteral)) !== 0)) {
+            candidates.push('string');
+        }
+    }
+    for (const goType of this.goNativeParameterTypeCandidates(param)) {
+        if (!candidates.includes(goType)) {
+            candidates.push(goType);
+        }
+    }
+    for (const goType of candidates) {
+        if (this.goParameterCallSitesPassType(fn, index, goType)
+            && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType)
+            && this.goParameterKeepsNilCompareNative(fn.body, param, goType)
+            && ((goType === '*string') || !this.g11ParameterHasNullishDefault(fn.body, param))) {
+            return goType;
+        }
+    }
+    return undefined;
+};
+
+// `x ?? d` / `x || d` reads the parameter's absent state, which a non-nilable Go type cannot hold
+GoTranspiler.prototype.g11ParameterHasNullishDefault = function (body, param) {
+    const name = param.name.text;
+    return this.hasNodeWhere(body, (n: any) => {
+        const parent: any = n.parent;
+        return (n.kind === SyntaxKind.Identifier) && (n.text === name) && (parent?.kind === SyntaxKind.BinaryExpression)
+            && (parent.left === n) && ((parent.operatorToken.kind === SyntaxKind.QuestionQuestionToken)
+            || (parent.operatorToken.kind === SyntaxKind.QuestionQuestionEqualsToken));
+    });
 };

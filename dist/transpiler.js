@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-WD722H3U.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -10569,7 +10569,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const index = fn.parameters.indexOf(param);
     if (!parseParam && !handlerParam) {
       const goType = this.goRequiredStringParameterType(param);
-      return goType !== void 0 && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType) ? goType : void 0;
+      return goType !== void 0 && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType) ? goType : this.g11NativeParameterType(fn, param, index);
     }
     if (this.isAsyncFunction(fn)) {
       return void 0;
@@ -10579,7 +10579,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return goType;
       }
     }
-    return void 0;
+    return handlerParam ? void 0 : this.g11NativeParameterType(fn, param, index);
   }
   goIsUnifiedStringParameter(methodName, index) {
     const indexes = Object.prototype.hasOwnProperty.call(this.unifiedStringParams, methodName) ? this.unifiedStringParams[methodName] : void 0;
@@ -14641,6 +14641,38 @@ GoTranspiler.prototype.goConcatDerefableStringOperand = function(node) {
   }
   const checker = this.checkerOrUndefined();
   return checker !== void 0 && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};
+GoTranspiler.prototype.g11NativeParameterType = function(fn, param, index) {
+  if (this.isAsyncFunction(fn) || !this.goHasTreeCallSite(fn)) {
+    return void 0;
+  }
+  const candidates = [];
+  const type = this.checkerOrUndefined()?.getTypeAtLocation(param);
+  if (type !== void 0) {
+    const all = typeof type.isUnionType === "function" && type.isUnionType() ? type.getTypes() : [type];
+    const parts = all.filter((p) => !(p.flags & (TypeFlags4.Undefined | TypeFlags4.Null)));
+    if (parts.length > 0 && parts.every((p) => (p.flags & (TypeFlags4.String | TypeFlags4.StringLiteral)) !== 0)) {
+      candidates.push("string");
+    }
+  }
+  for (const goType of this.goNativeParameterTypeCandidates(param)) {
+    if (!candidates.includes(goType)) {
+      candidates.push(goType);
+    }
+  }
+  for (const goType of candidates) {
+    if (this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType) && (goType === "*string" || !this.g11ParameterHasNullishDefault(fn.body, param))) {
+      return goType;
+    }
+  }
+  return void 0;
+};
+GoTranspiler.prototype.g11ParameterHasNullishDefault = function(body, param) {
+  const name = param.name.text;
+  return this.hasNodeWhere(body, (n) => {
+    const parent = n.parent;
+    return n.kind === SyntaxKind5.Identifier && n.text === name && parent?.kind === SyntaxKind5.BinaryExpression && parent.left === n && (parent.operatorToken.kind === SyntaxKind5.QuestionQuestionToken || parent.operatorToken.kind === SyntaxKind5.QuestionQuestionEqualsToken);
+  });
 };
 
 // src/javaTranspiler.ts
