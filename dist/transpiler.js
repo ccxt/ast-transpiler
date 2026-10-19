@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -22049,7 +22049,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   // `str.padStart(len, pad)` / `str.padEnd(len, pad)` → runtime helpers `(&Value, &Value, &Value)`.
   printPadStartCall(node, identation, name, parsedArg, parsedArg2) {
-    return `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
+    return this.printNativeStringPadStart(node, name) ?? `pad_start(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
   }
   printPadEndCall(node, identation, name, parsedArg, parsedArg2) {
     return `pad_end(${this.ensureRef(name)}, ${this.ensureRef(parsedArg)}, ${this.ensureRef(parsedArg2)})`;
@@ -24455,22 +24455,28 @@ ${this.getIden(identation)}})`;
     return `Value::Bool(contains(&${name}, &${parsedArg}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
-    return this.printNativeStringIndexOf(node, name) ?? `get_index_of(&${name}, &${parsedArg})`;
+    return this.printNativeStringIndexOf(node, name) ?? this.printNativeStringIndexOfString(node, name) ?? `get_index_of(&${name}, &${parsedArg})`;
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
+    const native = this.printNativeStringAffixTest(node, name, "starts_with");
+    if (native !== void 0)
+      return `Value::Bool(${native})`;
     return `Value::Bool(starts_with(&${name}, &${parsedArg}))`;
   }
   printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
+    const native = this.printNativeStringAffixTest(node, name, "ends_with");
+    if (native !== void 0)
+      return `Value::Bool(${native})`;
     return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
   }
   printTrimCall(node, identation, name = void 0) {
     return `trim(&${name})`;
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
-    return `join(&${name}, &${parsedArg})`;
+    return this.printNativeStringJoin(node, name) ?? `join(&${name}, &${parsedArg})`;
   }
   printSplitCall(node, identation, name = void 0, parsedArg = void 0) {
-    return `split(&${name}, &${parsedArg})`;
+    return this.printNativeStringSplit(node, name) ?? `split(&${name}, &${parsedArg})`;
   }
   printConcatCall(node, identation, name = void 0, parsedArg = void 0) {
     return `concat(${name}.clone(), ${parsedArg}.clone())`;
@@ -24482,10 +24488,10 @@ ${this.getIden(identation)}})`;
     return `to_string_val(&${name})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
-    return `to_upper(&${name})`;
+    return this.printNativeStringCase(node, name, "to_uppercase") ?? `to_upper(&${name})`;
   }
   printToLowerCaseCall(node, identation, name = void 0) {
-    return `to_lower(&${name})`;
+    return this.printNativeStringCase(node, name, "to_lowercase") ?? `to_lower(&${name})`;
   }
   printShiftCall(node, identation, name = void 0) {
     return `shift(${name}.clone())`;
@@ -24500,7 +24506,7 @@ ${this.getIden(identation)}})`;
     return this.printNativeStringSlice(node, name) ?? `slice(&${name}, &${parsedArg}, &${parsedArg2 ?? "Value::Null"})`;
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    return `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+    return this.printNativeStringReplace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
   }
   printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     return `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`;
@@ -24546,6 +24552,117 @@ ${iden}}`;
   }
   printSpreadElement(node, identation) {
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+  }
+  // hx4 R06: string methods on a checker-proven string receiver print native `str` code. The
+  // receiver is a `Value`; `as_str()` reaches the payload and its `None` arm is the helper's
+  // non-`Str` branch (Null / false / empty array / -1). Literal operands only, unless noted.
+  /** Printed receiver usable as a method receiver, else undefined. */
+  rustNativeStringReceiver(node, receiverText, kind = "string") {
+    if (node === void 0 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression))
+      return void 0;
+    if (typeof receiverText !== "string" || receiverText.includes("\n") || receiverText.trim().startsWith("&"))
+      return void 0;
+    const receiver = node.expression.expression;
+    if (receiver.kind === SyntaxKind7.ThisKeyword || receiver.kind === SyntaxKind7.SuperKeyword)
+      return void 0;
+    if (kind === "string" && this.primitiveKindOfType(this.typeOfNodeIfAny(receiver)) !== "string")
+      return void 0;
+    if (isIdentifier3(receiver) && this.rustStringLocalIdentifierIsTyped(receiver))
+      return void 0;
+    const text = receiverText.trim();
+    return /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(text) ? text : `(${text})`;
+  }
+  /** Escaped text of a string-literal argument, else undefined. */
+  rustNativeStringLiteralArg(node) {
+    if (node === void 0 || !isStringLiteral3(node) && !isNoSubstitutionTemplateLiteral(node))
+      return void 0;
+    if (node.text in this.StringLiteralReplacements)
+      return void 0;
+    return this.escapeRustStringLiteral(node.text);
+  }
+  // `x.toUpperCase()` / `x.toLowerCase()`: the helper's `Value::Str` arm, Null otherwise.
+  printNativeStringCase(node, receiverText, method) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText);
+    if (receiver === void 0 || (node.arguments?.length ?? 0) !== 0)
+      return void 0;
+    return `${receiver}.as_str().map(|__s| Value::Str(__s.${method}().into())).unwrap_or(Value::Null)`;
+  }
+  // `x.startsWith("lit")` / `x.endsWith("lit")` → a bool (false for a non-`Str` receiver).
+  printNativeStringAffixTest(node, receiverText, method) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText);
+    if (receiver === void 0 || node.arguments?.length !== 1)
+      return void 0;
+    const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+    if (literal === void 0)
+      return void 0;
+    return `${receiver}.as_str().is_some_and(|__s| __s.${method}("${literal}"))`;
+  }
+  // `x.split("lit")`: an array of the parts, the empty array for a non-`Str` receiver.
+  printNativeStringSplit(node, receiverText) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText);
+    if (receiver === void 0 || node.arguments?.length !== 1)
+      return void 0;
+    const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+    if (literal === void 0)
+      return void 0;
+    return `Value::Array(${receiver}.as_str().map(|__s| __s.split("${literal}").map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default())`;
+  }
+  // `x.replace("a", "b")`: the helper replaces every occurrence (`str::replace`), else the receiver.
+  printNativeStringReplace(node, receiverText) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText);
+    if (receiver === void 0 || node.arguments?.length !== 2)
+      return void 0;
+    const from = this.rustNativeStringLiteralArg(node.arguments[0]);
+    const to = this.rustNativeStringLiteralArg(node.arguments[1]);
+    if (from === void 0 || to === void 0)
+      return void 0;
+    return `${receiver}.as_str().map(|__s| Value::Str(__s.replace("${from}", "${to}").into())).unwrap_or_else(|| ${receiver}.clone())`;
+  }
+  // `x.padStart(N, "c")` with a one-char alphanumeric pad: `format!` width counts chars and never
+  // truncates, which is the helper's arm for a one-char pad.
+  printNativeStringPadStart(node, receiverText) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText);
+    if (receiver === void 0 || node.arguments?.length !== 2)
+      return void 0;
+    const width = this.rustSliceLiteralBound(node.arguments[0]);
+    const pad = node.arguments[1];
+    if (width === void 0 || width < 0 || width > 4096)
+      return void 0;
+    if (!isStringLiteral3(pad) && !isNoSubstitutionTemplateLiteral(pad) || !/^[A-Za-z0-9 ]$/.test(pad.text))
+      return void 0;
+    return `${receiver}.as_str().map(|__s| Value::Str(format!("{:${pad.text}>${width}}", __s).into())).unwrap_or(Value::Null)`;
+  }
+  // `x.indexOf(y)` with a proven-string needle: `-1` when either side is not a `Str` (byte index).
+  printNativeStringIndexOfString(node, receiverText) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText);
+    if (receiver === void 0 || node.arguments?.length !== 1)
+      return void 0;
+    const needle = node.arguments[0];
+    if (!isIdentifier3(needle) || this.primitiveKindOfType(this.typeOfNodeIfAny(needle)) !== "string")
+      return void 0;
+    if (!this.isDeclaredValueIdentifier(needle) || this.rustStringLocalIdentifierIsTyped(needle))
+      return void 0;
+    const needleText = this.printNode(needle, 0).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(needleText))
+      return void 0;
+    return `Value::Int(${receiver}.as_str().zip(${needleText}.as_str()).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))`;
+  }
+  // `xs.join("lit")` on a `string[]`: `Display` renders `Str`/`Null` like the helper does.
+  printNativeStringJoin(node, receiverText) {
+    const receiver = this.rustNativeStringReceiver(node, receiverText, "array");
+    if (receiver === void 0 || node.arguments?.length !== 1)
+      return void 0;
+    const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+    if (literal === void 0)
+      return void 0;
+    const checker = this.checkerOrUndefined();
+    const type = this.typeOfNodeIfAny(node.expression.expression);
+    if (checker === void 0 || type === void 0 || !checker.isArrayType(type))
+      return void 0;
+    const element = checker.getTypeArguments?.(type)?.[0];
+    if (this.primitiveKindOfType(element) !== "string")
+      return void 0;
+    return `Value::Str(${receiver}.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join("${literal}")).unwrap_or_default().into())`;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

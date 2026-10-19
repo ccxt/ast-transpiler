@@ -647,5 +647,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    /** Printed receiver usable as a method receiver, else undefined. */
+    rustNativeStringReceiver(node: any, receiverText: string, kind?: string): string | undefined;
+    /** Escaped text of a string-literal argument, else undefined. */
+    rustNativeStringLiteralArg(node: any): string | undefined;
+    printNativeStringCase(node: any, receiverText: string, method: string): string | undefined;
+    printNativeStringAffixTest(node: any, receiverText: string, method: string): string | undefined;
+    printNativeStringSplit(node: any, receiverText: string): string | undefined;
+    printNativeStringReplace(node: any, receiverText: string): string | undefined;
+    printNativeStringPadStart(node: any, receiverText: string): string | undefined;
+    printNativeStringIndexOfString(node: any, receiverText: string): string | undefined;
+    printNativeStringJoin(node: any, receiverText: string): string | undefined;
 }
 export {};
