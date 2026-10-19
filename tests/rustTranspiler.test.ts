@@ -3929,3 +3929,51 @@ describe('rust order book sides keep the runtime helpers', () => {
         expect(output).not.toContain('bids.as_array()');
     });
 });
+
+describe('hx4 R01 native element writes on plain-dict locals', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r01/ts/src/venue.ts').content;
+    });
+
+    test('a base-tier account () builder local inserts natively (sibling-block bindings)', () => {
+        expect(output).toContain(insert('account', 'free', 'Value::Str("1".into())'));
+        expect(output).toContain(insert('account', 'used', 'Value::Str("0".into())'));
+        expect(output).not.toContain('add_element_to_object(&mut account');
+    });
+
+    test('an undefined-initialised local reassigned only to literals inserts natively', () => {
+        expect(output).toContain(insert('headers', 'Content-Type', 'Value::Str("application/json".into())'));
+    });
+
+    test('element 0 of handleUntilOption on a plain request inserts natively', () => {
+        expect(output).toContain(insert('requestUntil', 'interval', 'Value::Str("1m".into())'));
+    });
+
+    test('a parse* result, a non-plain reassignment and a closure write keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut order, &Value::Str("status".into())');
+        expect(output).toContain('add_element_to_object(&mut mixed, &Value::Str("k".into())');
+        expect(output).toContain('add_element_to_object(&mut captured, &Value::Str("free".into())');
+    });
+
+    test('omit of itself / extend of plain dicts keep the local plain', () => {
+        expect(output).toContain(insert('request', 'b', 'Value::Int(2)'));
+        expect(output).toContain(insert('merged', 'd', 'Value::Int(4)'));
+    });
+
+    test('a local aliased into a let-bound literal keeps the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut aliased, &Value::Str("Content-Type".into())');
+    });
+
+    test('element 0 of a same-file tuple method returning a fresh literal inserts natively', () => {
+        expect(output).toContain(insert('request', 'settle', 'Value::Str("usdt".into())'));
+        expect(output).toContain('add_element_to_object(&mut echoed, &Value::Str("x".into())');
+    });
+
+    test('omit / extend of a foreign dict keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut foreign, &Value::Str("e".into())');
+        expect(output).toContain('add_element_to_object(&mut extended, &Value::Str("f".into())');
+    });
+});
