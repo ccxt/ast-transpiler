@@ -1530,6 +1530,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeArithmetic(op, left, right, leftText, rightText): string | undefined {
+        if (op === SyntaxKind.PercentToken) return this.printRustNativeMod(left, right, leftText, rightText);
         if (op !== SyntaxKind.PlusToken && op !== SyntaxKind.MinusToken &&
             op !== SyntaxKind.AsteriskToken && op !== SyntaxKind.SlashToken) {
             return undefined;
@@ -4209,7 +4210,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (operator === SyntaxKind.ExclamationToken) return idn + '!' + this.printCondition(operand, 0);
         if (operator !== SyntaxKind.MinusToken) return idn + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
         const operandText = this.printNode(operand, 0);
-        return idn + (this.foldNegateLiteral(operandText) ?? `negate(&${operandText})`);
+        return idn + (this.foldNegateLiteral(operandText) ?? this.printRustNativeNegate(operand, operandText) ?? `negate(&${operandText})`);
     }
 
     printObjectLiteralExpression(node, identation) {
@@ -4309,7 +4310,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printMathFloorCall(node, identation, parsedArg = undefined) {
-        return `math_floor(&${parsedArg})`;
+        return this.printRustNativeMathCall(node, 'floor', parsedArg) ?? `math_floor(&${parsedArg})`;
     }
 
     // No `.await` here: `printAwaitExpression` appends it for `await Promise.all(...)`.
@@ -4323,11 +4324,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printMathRoundCall(node, identation, parsedArg = undefined) {
-        return `math_round(&${parsedArg})`;
+        return this.printRustNativeMathCall(node, 'round', parsedArg) ?? `math_round(&${parsedArg})`;
     }
 
     printMathCeilCall(node, identation, parsedArg = undefined) {
-        return `math_ceil(&${parsedArg})`;
+        return this.printRustNativeMathCall(node, 'ceil', parsedArg) ?? `math_ceil(&${parsedArg})`;
     }
 
     printNumberIsIntegerCall(node, identation, parsedArg = undefined) {
@@ -4379,7 +4380,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printToStringCall(node, identation, name = undefined) {
-        return `to_string_val(&${name})`;
+        return this.printRustNativeToString(node, name) ?? `to_string_val(&${name})`;
     }
 
     printToUpperCaseCall(node, identation, name = undefined) {
@@ -5094,5 +5095,51 @@ export class RustTranspiler extends BaseTranspiler {
         const element = checker.getTypeArguments?.(type)?.[0];
         if (this.primitiveKindOfType(element) !== 'string') return undefined;
         return `Value::Str(${receiver}.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join("${literal}")).unwrap_or_default().into())`;
+    }
+
+    // hx4 R07 — numeric/string helpers on checker-proven `number` / `string` operands (nullish members
+    // allowed: the helper's Null arm is reproduced). Each native form answers exactly what the helper
+    // answers for Int/Float/Str/Null boxes; any other operand type keeps the helper.
+    rustOperandKind(node): string | undefined {
+        try {
+            if (node === undefined || !this.printsValueExpression(node)) return undefined;
+            return this.primitiveKindOfType(this.typeOfNodeIfAny(node));
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    // `x.toString()` on a number/string: `to_string_val` is `stringify_simple`, i.e. `Display`.
+    // Typed `Option<String>` receivers have no `Display`, so they keep the helper.
+    printRustNativeToString(node, name: string): string | undefined {
+        const receiver = node?.expression?.expression;
+        const kind = this.rustOperandKind(receiver);
+        if (kind !== 'number' && kind !== 'string') return undefined;
+        const inner = this.unwrapParensNode(receiver);
+        if (inner !== undefined && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustNativeStrCalleeKind(inner) === 'str')) return undefined;
+        return `Value::Str(format!("{}", ${name}).into())`;
+    }
+
+    // `Math.floor|round|ceil(n)`: the helper answers `Float(op(x))` for a numeric box, `Null` otherwise.
+    printRustNativeMathCall(node, op: string, parsedArg: string): string | undefined {
+        if (this.rustOperandKind(node?.arguments?.[0]) !== 'number') return undefined;
+        return `(${parsedArg}).as_f64().map(|__x| Value::Float(__x.${op}())).unwrap_or(Value::Null)`;
+    }
+
+    // `-n`: Int/Float flip sign in place, a Null box stays Null (helper's fallthrough).
+    printRustNativeNegate(operand, operandText: string): string | undefined {
+        if (this.rustOperandKind(operand) !== 'number') return undefined;
+        return `(match &(${operandText}) { Value::Int(x) => Value::Int(-x), Value::Float(x) => Value::Float(-x), _ => Value::Null })`;
+    }
+
+    // `a % b` on numbers: Int pair stays Int, any Float widens; a zero divisor or Null answers Null.
+    printRustNativeMod(left, right, leftText: string, rightText: string): string | undefined {
+        if (this.rustOperandKind(left) !== 'number' || this.rustOperandKind(right) !== 'number') return undefined;
+        return `(match (&(${leftText}), &(${rightText})) {` +
+            ' (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y),' +
+            ' (Value::Int(x), Value::Float(y)) if *y != 0.0 => Value::Float(*x as f64 % *y),' +
+            ' (Value::Float(x), Value::Int(y)) if *y != 0 => Value::Float(*x % *y as f64),' +
+            ' (Value::Float(x), Value::Float(y)) if *y != 0.0 => Value::Float(x % y),' +
+            ' _ => Value::Null })';
     }
 }

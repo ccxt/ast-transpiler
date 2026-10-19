@@ -4133,3 +4133,46 @@ describe('hx4 R06 native string methods on proven strings', () => {
         expect(o).toContain('replace_str(&a, &s,');
     });
 });
+
+// hx4 R07 — numeric/string helpers go native on checker-proven operands
+describe('rust R07 native numeric/string helpers', () => {
+    const rust = (ts: string) => transpiler.transpileRust(ts).content;
+    test('number toString prints Display format', () => {
+        const out = rust('function f(n: number) { const r = n.toString(); return r; }');
+        expect(out).toContain('Value::Str(format!("{}", n).into())');
+        expect(out).not.toContain('to_string_val(');
+    });
+    test('string toString prints Display format', () => {
+        const out = rust('function f(s: string) { const r = s.toString(); return r; }');
+        expect(out).toContain('Value::Str(format!("{}", s).into())');
+    });
+    test('any toString keeps the helper', () => {
+        expect(rust('function f(n: any) { const r = n.toString(); return r; }')).toContain('to_string_val(&n)');
+    });
+    test('Math.floor/round/ceil of a number go native', () => {
+        const out = rust('function f(n: number) { const a = Math.floor(n); const b = Math.round(n); const c = Math.ceil(n); return [a, b, c]; }');
+        expect(out).toContain('(n).as_f64().map(|__x| Value::Float(__x.floor())).unwrap_or(Value::Null)');
+        expect(out).toContain('__x.round()');
+        expect(out).toContain('__x.ceil()');
+        expect(out).not.toMatch(/math_(floor|round|ceil)\(/);
+    });
+    test('Math.floor of any keeps the helper', () => {
+        expect(rust('function f(n: any) { return Math.floor(n); }')).toContain('math_floor(&n)');
+    });
+    test('negate of a number goes native', () => {
+        const out = rust('function f(n: number) { const x = -n; return x; }');
+        expect(out).toContain('(match &(n) { Value::Int(x) => Value::Int(-x), Value::Float(x) => Value::Float(-x), _ => Value::Null })');
+        expect(out).not.toContain('negate(');
+    });
+    test('negate of any keeps the helper', () => {
+        expect(rust('function f(n: any) { return -n; }')).toContain('negate(&n)');
+    });
+    test('number % number goes native with zero guards', () => {
+        const out = rust('function f(a: number, b: number) { return a % b; }');
+        expect(out).toContain('(Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y)');
+        expect(out).not.toContain('mod_val(');
+    });
+    test('any % number keeps the helper', () => {
+        expect(rust('function f(a: any, b: number) { return a % b; }')).toContain('mod_val(&a, &b)');
+    });
+});
