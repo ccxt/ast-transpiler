@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -20699,6 +20699,229 @@ var JavaTranspiler = class extends BaseTranspiler {
     return false;
   }
 };
+var HX4_J09_SYNC_BASE_CALLS = /* @__PURE__ */ new Set([
+  "safeString",
+  "safeString2",
+  "safeStringN",
+  "safeValue",
+  "safeDict",
+  "safeInteger",
+  "json",
+  "throwExactlyMatchedException",
+  "throwBroadlyMatchedException"
+]);
+JavaTranspiler.prototype.hx4J09CcxtErrorClass = function(node) {
+  const checker = this.checkerOrUndefined();
+  let symbol;
+  try {
+    symbol = checker?.getSymbolAtLocation(node);
+    if (symbol !== void 0 && symbol.flags & SymbolFlags2.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+  } catch (e) {
+    return false;
+  }
+  const declaration = symbol?.declarations?.[0]?.resolve();
+  return declaration?.kind === SyntaxKind6.ClassDeclaration && /(^|[\\/])ts[\\/]src[\\/]base[\\/]errors\.ts$/.test(declaration.getSourceFile?.()?.fileName ?? "");
+};
+JavaTranspiler.prototype.hx4J09BoxIdentifier = function(node, seen, depth) {
+  const checker = this.checkerOrUndefined();
+  if (checker === void 0 || node?.kind !== SyntaxKind6.Identifier || depth > 6) {
+    return false;
+  }
+  const symbol = checker.getSymbolAtLocation(node);
+  const decl = symbol?.valueDeclaration?.resolve();
+  if (decl === void 0 || decl.name?.text !== node.text) {
+    return false;
+  }
+  if (seen.has(decl)) {
+    return true;
+  }
+  const next = new Set(seen);
+  next.add(decl);
+  const accepts = (value) => this.hx4J09BoxValue(value, next, depth + 1);
+  if (decl.kind === SyntaxKind6.BindingElement) {
+    const pattern = decl.parent;
+    const declaration = pattern?.parent;
+    if (decl.initializer !== void 0 || decl.dotDotDotToken !== void 0 || pattern?.kind !== SyntaxKind6.ArrayBindingPattern || declaration?.kind !== SyntaxKind6.VariableDeclaration) {
+      return false;
+    }
+    const index = pattern.elements.indexOf(decl);
+    if (!this.javaBooleanBoxTupleElement(declaration.initializer, index) && !this.hx4J09LiteralTupleElement(declaration.initializer, index)) {
+      return false;
+    }
+    return this.javaWritesAreBoxed(symbol, { initializer: void 0, parent: declaration }, next, accepts, true);
+  }
+  if (decl.kind !== SyntaxKind6.VariableDeclaration) {
+    return false;
+  }
+  let type;
+  try {
+    type = this.javaTypeOfDeclaration(decl);
+  } catch (e) {
+    return false;
+  }
+  if (!this.javaBooleanBoxType(type) && !this.javaNullableBooleanDeclaration(decl)) {
+    return false;
+  }
+  return this.javaWritesAreBoxed(symbol, decl, next, accepts, true);
+};
+JavaTranspiler.prototype.hx4J09BoxValue = function(node, seen, depth) {
+  if (node === void 0) {
+    return false;
+  }
+  if (node.kind === SyntaxKind6.ParenthesizedExpression || node.kind === SyntaxKind6.AsExpression || node.kind === SyntaxKind6.NonNullExpression) {
+    return this.hx4J09BoxValue(node.expression, seen, depth);
+  }
+  if (node.kind === SyntaxKind6.NullKeyword || node.kind === SyntaxKind6.Identifier && node.text === "undefined") {
+    return true;
+  }
+  if (node.kind === SyntaxKind6.ConditionalExpression) {
+    return this.hx4J09BoxValue(node.whenTrue, seen, depth) && this.hx4J09BoxValue(node.whenFalse, seen, depth);
+  }
+  if (node.kind === SyntaxKind6.Identifier) {
+    return this.hx4J09BoxIdentifier(node, seen, depth);
+  }
+  if (this.javaPrintsBooleanValue(node, /* @__PURE__ */ new Set())) {
+    return true;
+  }
+  if (node.kind !== SyntaxKind6.CallExpression) {
+    return false;
+  }
+  if (this.javaCallBooleanKind(node) !== void 0) {
+    return true;
+  }
+  const callee = node.expression;
+  if (!isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind6.ThisKeyword) {
+    return false;
+  }
+  const at = JAVA_THIS_BOOLEAN_BOX_METHODS[String(callee.name.text)];
+  if (at === void 0 || this.javaBooleanValueKind(node) === void 0 || !this.javaCalleeResolves(node)) {
+    return false;
+  }
+  const declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+  if (declaration?.name?.text !== callee.name.text || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? "")) {
+    return false;
+  }
+  const fallback = node.arguments?.[at];
+  return fallback !== void 0 && this.hx4J09BoxValue(fallback, seen, depth);
+};
+JavaTranspiler.prototype.hx4J09LiteralTupleElement = function(node, index) {
+  if (node?.kind !== SyntaxKind6.CallExpression || index < 0) {
+    return false;
+  }
+  const callee = node.expression;
+  if (!isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind6.ThisKeyword) {
+    return false;
+  }
+  let declaration;
+  try {
+    declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+  } catch (e) {
+    return false;
+  }
+  if (declaration?.kind !== SyntaxKind6.MethodDeclaration || declaration.body === void 0 || declaration.name?.text !== callee.name.text || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? "")) {
+    return false;
+  }
+  let returns = 0;
+  let ok = true;
+  const scan = (current) => {
+    if (!ok || current !== declaration && isFunctionLike(current)) {
+      return;
+    }
+    if (isReturnStatement3(current)) {
+      returns++;
+      const value = current.expression;
+      if (value === void 0 || !isArrayLiteralExpression3(value) || !this.javaPrintsBooleanValue(value.elements[index], /* @__PURE__ */ new Set())) {
+        ok = false;
+        return;
+      }
+    }
+    current.forEachChild(scan);
+  };
+  scan(declaration.body);
+  return ok && returns > 0;
+};
+JavaTranspiler.prototype.hx4J09CatchCannotWrap = function(node) {
+  if (node?.kind !== SyntaxKind6.Identifier) {
+    return false;
+  }
+  const checker = this.checkerOrUndefined();
+  const decl = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+  const clause = decl?.parent;
+  const tryStatement = clause?.parent;
+  if (decl?.kind !== SyntaxKind6.VariableDeclaration || clause?.kind !== SyntaxKind6.CatchClause || tryStatement?.kind !== SyntaxKind6.TryStatement || tryStatement.catchClause !== clause) {
+    return false;
+  }
+  let ok = true;
+  const scan = (current) => {
+    if (!ok) {
+      return;
+    }
+    if (isFunctionLike(current) || current.kind === SyntaxKind6.AwaitExpression || current.kind === SyntaxKind6.TryStatement) {
+      ok = false;
+      return;
+    }
+    if (current.kind === SyntaxKind6.CallExpression) {
+      const callee = current.expression;
+      if (!isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind6.ThisKeyword || !HX4_J09_SYNC_BASE_CALLS.has(String(callee.name.text))) {
+        ok = false;
+        return;
+      }
+      const declaration = checker.getResolvedSignature(current)?.declaration?.resolve();
+      if (declaration === void 0 || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? "")) {
+        ok = false;
+        return;
+      }
+    }
+    current.forEachChild(scan);
+  };
+  scan(tryStatement.tryBlock);
+  return ok;
+};
+JavaTranspiler.prototype.hx4J09CoreArgument = function(type, printed, node) {
+  if (node === void 0 || !isIdentifier2(node) || printed !== node.text || type !== "Long" && type !== "String") {
+    return void 0;
+  }
+  const declaration = this.javaDeclarationOfIdentifier(node);
+  if (declaration === void 0 || !isVariableDeclaration2(declaration) || declaration.name?.text !== node.text || (getCombinedNodeFlags(declaration) & NodeFlags.Const) === 0) {
+    return void 0;
+  }
+  const initializer = declaration.initializer;
+  if (initializer !== void 0 && isIdentifier2(initializer) && initializer.text === "undefined") {
+    return `(${type}) null`;
+  }
+  if (type === "Long" && initializer !== void 0 && isPropertyAccessExpression2(initializer) && initializer.name.text === "length" && this.javaDeclaredTypeOf(node) === "Integer") {
+    return `((long) ${printed})`;
+  }
+  return void 0;
+};
+{
+  const proto = JavaTranspiler.prototype;
+  const printCondition = proto.printCondition;
+  proto.printCondition = function(node, identation) {
+    const printed = printCondition.call(this, node, identation);
+    let inner = node;
+    while (inner?.kind === SyntaxKind6.ParenthesizedExpression) {
+      inner = inner.expression;
+    }
+    if (inner?.kind === SyntaxKind6.Identifier && printed.trimStart().startsWith(this.FALSY_WRAPPER_OPEN) && this.hx4J09BoxIdentifier(inner, /* @__PURE__ */ new Set(), 0)) {
+      return this.getIden(identation) + `Boolean.TRUE.equals(${this.printNode(inner, 0)})`;
+    }
+    return printed;
+  };
+  const printInstanceOfExpression = proto.printInstanceOfExpression;
+  proto.printInstanceOfExpression = function(node, identation) {
+    if (node.right?.kind === SyntaxKind6.Identifier && this.hx4J09CcxtErrorClass(node.right) && this.hx4J09CatchCannotWrap(node.left)) {
+      return this.getIden(identation) + `(${this.printNode(node.left, 0)} instanceof ${node.right.text})`;
+    }
+    return printInstanceOfExpression.call(this, node, identation);
+  };
+  const javaConvertToCoreType = proto.javaConvertToCoreType;
+  proto.javaConvertToCoreType = function(type, printed, node) {
+    return this.hx4J09CoreArgument(type, printed, node) ?? javaConvertToCoreType.call(this, type, printed, node);
+  };
+}
 
 // src/rustTranspiler.ts
 init_esm_shims();

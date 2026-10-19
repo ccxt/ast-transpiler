@@ -6733,3 +6733,175 @@ describe('java element write after a hand-back destructuring', () => {
         expect(output).toContain('Helpers.addElementToObject(request, "b", null)');
     });
 });
+
+// hx4 J09: the proofs anchor on base-tier declarations, so the fixture mirrors the repo layout
+describe('hx4 J09: isTrue / isInstance / core-argument residual', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j09');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej09.ts');
+    let out: string;
+    let byPath: Transpiler;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n" +
+            "export type Int = number | undefined;\n" +
+            "export type Bool = boolean | undefined;\n");
+        fs.writeFileSync(ERRORS_FIXTURE,
+            "class BaseError extends Error {\n}\n" +
+            "class BadSymbol extends BaseError {\n}\n" +
+            "export { BaseError, BadSymbol };\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict, Str, Int, Bool } from './types';\n" +
+            "export default class Exchange {\n" +
+            "    safeBool (d: any, k: any, defaultValue: Bool = undefined): boolean | undefined {\n" +
+            "        return defaultValue;\n" +
+            "    }\n" +
+            "    safeString (d: any, k: any, defaultValue: Str = undefined): Str {\n" +
+            "        return defaultValue;\n" +
+            "    }\n" +
+            "    handlePostOnly (isMarketOrder: boolean, option: boolean, params: Dict = {}): [boolean, Dict] {\n" +
+            "        if (isMarketOrder) {\n" +
+            "            return [ true, params ];\n" +
+            "        }\n" +
+            "        return [ false, params ];\n" +
+            "    }\n" +
+            "    handleOptionAndParams (params: Dict, m: string, o: string, d: any = undefined): [any, Dict] {\n" +
+            "        return [ d, params ];\n" +
+            "    }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str, Int } from './base/types';\n" +
+            "import Exchange from './base/Exchange';\n" +
+            "import { BadSymbol } from './base/errors';\n" +
+            "class Venue extends Exchange {\n" +
+            "    fetchRows (symbol: Str = undefined, limit: Int = undefined, params: Dict = {}): void {\n" +
+            "    }\n" +
+            "    other (x: any): any {\n" +
+            "        return x;\n" +
+            "    }\n" +
+            "    async later (x: any): Promise<any> {\n" +
+            "        return x;\n" +
+            "    }\n" +
+            "    boolDefault (params: Dict): void {\n" +
+            "        const d = this.safeBool (params, 'a', false);\n" +
+            "        const x1 = this.safeBool (params, 'b', d);\n" +
+            "        if (x1) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        const x2 = this.safeBool (params, 'b', this.other (1));\n" +
+            "        if (x2) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    boolChain (params: Dict, flag: boolean): void {\n" +
+            "        const raw = this.safeBool (params, 'a');\n" +
+            "        let y1: boolean = false;\n" +
+            "        if (raw !== undefined) {\n" +
+            "            y1 = raw;\n" +
+            "        }\n" +
+            "        if (y1) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        let y2: boolean = false;\n" +
+            "        if (raw !== undefined) {\n" +
+            "            y2 = this.other (raw);\n" +
+            "        }\n" +
+            "        if (y2) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        if (flag) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    postOnly (params: Dict): void {\n" +
+            "        const [ p1, rest ] = this.handlePostOnly (false, false, params);\n" +
+            "        if (p1) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        const [ p2, rest2 ] = this.handleOptionAndParams (params, 'm', 'p2');\n" +
+            "        if (p2) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    caught (params: Dict): void {\n" +
+            "        try {\n" +
+            "            this.safeString (params, 'a');\n" +
+            "        } catch (e1) {\n" +
+            "            if (e1 instanceof BadSymbol) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "            if (e1 instanceof Error) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "        try {\n" +
+            "            this.other (params);\n" +
+            "        } catch (e2) {\n" +
+            "            if (e2 instanceof BadSymbol) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "    async caughtAsync (params: Dict) {\n" +
+            "        try {\n" +
+            "            await this.later (params);\n" +
+            "        } catch (e3) {\n" +
+            "            if (e3 instanceof BadSymbol) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "    cores (rows: any[], other: any): void {\n" +
+            "        const s = undefined;\n" +
+            "        const n = rows.length;\n" +
+            "        this.fetchRows (s, n);\n" +
+            "        let t = undefined;\n" +
+            "        t = other;\n" +
+            "        this.fetchRows (t, other);\n" +
+            "    }\n" +
+            "}\n");
+        byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'n' ? 'Integer' : undefined);
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a safeBool local with a proven Boolean default prints Boolean.TRUE.equals', () => {
+        expect(out).toContain('if (Boolean.TRUE.equals(x1))');
+        expect(out).toContain('if (Helpers.isTrue(x2))');
+    });
+
+    test('a boolean local written from a proven local prints Boolean.TRUE.equals', () => {
+        expect(out).toContain('if (Boolean.TRUE.equals(y1))');
+        expect(out).toContain('if (Helpers.isTrue(y2))');
+        expect(out).not.toContain('Boolean.TRUE.equals(flag)');
+    });
+
+    test('a base tuple method returning boolean literals binds a Boolean element', () => {
+        expect(out).toContain('if (Boolean.TRUE.equals(p1))');
+        expect(out).toContain('if (Helpers.isTrue(p2))');
+    });
+
+    test('instanceof on a catch variable of a synchronous base-call try is native', () => {
+        expect(out).toContain('(e1 instanceof BadSymbol)');
+        expect(out).toContain('Helpers.isInstance(e1, Error.class)');
+        expect(out).toContain('Helpers.isInstance(e2, BadSymbol.class)');
+        expect(out).toContain('Helpers.isInstance(e3, BadSymbol.class)');
+    });
+
+    test('typed core slots: const undefined prints a typed null, Integer length widens', () => {
+        expect(out).toContain('this.fetchRows((String) null, ((long) n)');
+        expect(out).toContain('Helpers.toStringArg(t)');
+        expect(out).toContain('Helpers.toLongOrNull(other)');
+    });
+});
