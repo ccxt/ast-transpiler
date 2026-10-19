@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21938,6 +21938,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     return native === void 0 ? void 0 : `${leftText} = ${native}`;
   }
   printNativeArithmetic(op, left, right, leftText, rightText) {
+    if (op === SyntaxKind7.PercentToken)
+      return this.printRustNativeMod(left, right, leftText, rightText);
     if (op !== SyntaxKind7.PlusToken && op !== SyntaxKind7.MinusToken && op !== SyntaxKind7.AsteriskToken && op !== SyntaxKind7.SlashToken) {
       return void 0;
     }
@@ -24346,7 +24348,7 @@ ${idn}}`;
     if (operator !== SyntaxKind7.MinusToken)
       return idn + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
     const operandText = this.printNode(operand, 0);
-    return idn + (this.foldNegateLiteral(operandText) ?? `negate(&${operandText})`);
+    return idn + (this.foldNegateLiteral(operandText) ?? this.printRustNativeNegate(operand, operandText) ?? `negate(&${operandText})`);
   }
   printObjectLiteralExpression(node, identation) {
     const escapeKey = (s) => String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
@@ -24429,7 +24431,7 @@ ${this.getIden(identation)}})`;
     return `json_stringify(&${parsedArg})`;
   }
   printMathFloorCall(node, identation, parsedArg = void 0) {
-    return `math_floor(&${parsedArg})`;
+    return this.printRustNativeMathCall(node, "floor", parsedArg) ?? `math_floor(&${parsedArg})`;
   }
   // No `.await` here: `printAwaitExpression` appends it for `await Promise.all(...)`.
   printPromiseAllCall(node, identation, parsedArg = void 0) {
@@ -24440,10 +24442,10 @@ ${this.getIden(identation)}})`;
     return `${this.printNode(node.expression, identation)}.await`;
   }
   printMathRoundCall(node, identation, parsedArg = void 0) {
-    return `math_round(&${parsedArg})`;
+    return this.printRustNativeMathCall(node, "round", parsedArg) ?? `math_round(&${parsedArg})`;
   }
   printMathCeilCall(node, identation, parsedArg = void 0) {
-    return `math_ceil(&${parsedArg})`;
+    return this.printRustNativeMathCall(node, "ceil", parsedArg) ?? `math_ceil(&${parsedArg})`;
   }
   printNumberIsIntegerCall(node, identation, parsedArg = void 0) {
     return `is_integer(&${parsedArg})`;
@@ -24479,7 +24481,7 @@ ${this.getIden(identation)}})`;
     return `to_fixed(&${name}, &${parsedArg})`;
   }
   printToStringCall(node, identation, name = void 0) {
-    return `to_string_val(&${name})`;
+    return this.printRustNativeToString(node, name) ?? `to_string_val(&${name})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
     return `to_upper(&${name})`;
@@ -24546,6 +24548,48 @@ ${iden}}`;
   }
   printSpreadElement(node, identation) {
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+  }
+  // hx4 R07 — numeric/string helpers on checker-proven `number` / `string` operands (nullish members
+  // allowed: the helper's Null arm is reproduced). Each native form answers exactly what the helper
+  // answers for Int/Float/Str/Null boxes; any other operand type keeps the helper.
+  rustOperandKind(node) {
+    try {
+      if (node === void 0 || !this.printsValueExpression(node))
+        return void 0;
+      return this.primitiveKindOfType(this.typeOfNodeIfAny(node));
+    } catch (e) {
+      return void 0;
+    }
+  }
+  // `x.toString()` on a number/string: `to_string_val` is `stringify_simple`, i.e. `Display`.
+  // Typed `Option<String>` receivers have no `Display`, so they keep the helper.
+  printRustNativeToString(node, name) {
+    const receiver = node?.expression?.expression;
+    const kind = this.rustOperandKind(receiver);
+    if (kind !== "number" && kind !== "string")
+      return void 0;
+    const inner = this.unwrapParensNode(receiver);
+    if (inner !== void 0 && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustNativeStrCalleeKind(inner) === "str"))
+      return void 0;
+    return `Value::Str(format!("{}", ${name}).into())`;
+  }
+  // `Math.floor|round|ceil(n)`: the helper answers `Float(op(x))` for a numeric box, `Null` otherwise.
+  printRustNativeMathCall(node, op, parsedArg) {
+    if (this.rustOperandKind(node?.arguments?.[0]) !== "number")
+      return void 0;
+    return `(${parsedArg}).as_f64().map(|__x| Value::Float(__x.${op}())).unwrap_or(Value::Null)`;
+  }
+  // `-n`: Int/Float flip sign in place, a Null box stays Null (helper's fallthrough).
+  printRustNativeNegate(operand, operandText) {
+    if (this.rustOperandKind(operand) !== "number")
+      return void 0;
+    return `(match &(${operandText}) { Value::Int(x) => Value::Int(-x), Value::Float(x) => Value::Float(-x), _ => Value::Null })`;
+  }
+  // `a % b` on numbers: Int pair stays Int, any Float widens; a zero divisor or Null answers Null.
+  printRustNativeMod(left, right, leftText, rightText) {
+    if (this.rustOperandKind(left) !== "number" || this.rustOperandKind(right) !== "number")
+      return void 0;
+    return `(match (&(${leftText}), &(${rightText})) { (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y), (Value::Int(x), Value::Float(y)) if *y != 0.0 => Value::Float(*x as f64 % *y), (Value::Float(x), Value::Int(y)) if *y != 0 => Value::Float(*x % *y as f64), (Value::Float(x), Value::Float(y)) if *y != 0.0 => Value::Float(x % y), _ => Value::Null })`;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

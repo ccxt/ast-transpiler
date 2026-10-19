@@ -647,5 +647,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    rustOperandKind(node: any): string | undefined;
+    printRustNativeToString(node: any, name: string): string | undefined;
+    printRustNativeMathCall(node: any, op: string, parsedArg: string): string | undefined;
+    printRustNativeNegate(operand: any, operandText: string): string | undefined;
+    printRustNativeMod(left: any, right: any, leftText: string, rightText: string): string | undefined;
 }
 export {};
