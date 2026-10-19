@@ -3574,6 +3574,10 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.inOp(${objText}, ${keyText})`;
         }
 
+        const hx4J05 = this.printHx4J05ModComparison(left, right, op);
+        if (hx4J05 !== undefined) {
+            return hx4J05;
+        }
         // native comparison when both operands provably print as Java numbers. `>` is exact for every
         // numeric pair (isGreaterThan is a toDouble compare, NaN included); `>=` / `<` / `<=` also go
         // through the helper's isEqual, so they need operands isEqual reproduces exactly.
@@ -7785,6 +7789,59 @@ export class JavaTranspiler extends BaseTranspiler {
         const keyText = this.printNode(key, 0);
         const keyGuard = literal ? '' : `${keyText} == null || `;
         return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+    }
+
+    // hx4 J05
+    // `(a % N) <op> M` (N a non-zero integer literal, a an int/long operand, M an int literal): the
+    // native mod prints a finite integral double |v| < |N|, where isEqual (IsInteger -> toLong) and
+    // isGreaterThan (toDouble) both reduce to the plain double comparison against M.
+    javaHx4J05IntegralModOperand(node): boolean {
+        while (node !== undefined && node.kind === SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if (node === undefined || !isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.PercentToken) {
+            return false;
+        }
+        if (this.javaScalarFamily(node.left) !== 'number' || this.javaScalarFamily(node.right) !== 'number') {
+            return false;
+        }
+        const leftKind = this.javaProvableNumericKind(node.left);
+        if (leftKind !== 'int' && leftKind !== 'long' && !this.javaProvableCounterInt(node.left)) {
+            return false;
+        }
+        const divisor = node.right;
+        if (this.javaIntegerLiteralKind(divisor) !== 'int' || Number(divisor.text) === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    printHx4J05ModComparison(left, right, op): string | undefined {
+        const javaOps = {
+            [SyntaxKind.EqualsEqualsToken]: '==', [SyntaxKind.EqualsEqualsEqualsToken]: '==',
+            [SyntaxKind.ExclamationEqualsToken]: '!=', [SyntaxKind.ExclamationEqualsEqualsToken]: '!=',
+            [SyntaxKind.LessThanToken]: '<', [SyntaxKind.LessThanEqualsToken]: '<=',
+            [SyntaxKind.GreaterThanToken]: '>', [SyntaxKind.GreaterThanEqualsToken]: '>=',
+        };
+        const javaOp = javaOps[op];
+        if (javaOp === undefined) {
+            return undefined;
+        }
+        const modLeft = this.javaHx4J05IntegralModOperand(left);
+        const modRight = !modLeft && this.javaHx4J05IntegralModOperand(right);
+        if (!modLeft && !modRight) {
+            return undefined;
+        }
+        if (this.javaEqualityLiteralKind(modLeft ? right : left) !== 'int') {
+            return undefined;
+        }
+        const leftText = this.printNode(left, 0);
+        const rightText = this.printNode(right, 0);
+        // only when the mod side printed the native double remainder
+        if (!/^\(+double\) /.test(modLeft ? leftText : rightText)) {
+            return undefined;
+        }
+        return `(${leftText} ${javaOp} ${rightText})`;
     }
 }
 
