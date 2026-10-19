@@ -2435,7 +2435,8 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("IsGreaterThan(x, since)");
-        expect(output).toContain("IsGreaterThan(x, n)");
+        // hx4 G09: the int side widens to int64 the way the helper converts it
+        expect(output).toContain("(x != nil && *x > int64(n))");
     });
     test('an unguarded call operand keeps the helper', () => {
         // the nil test would short-circuit the call the helper evaluates once
@@ -2460,6 +2461,67 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("return (GetLength(arr) > -1)");
         expect(output).not.toContain("IsGreaterThan(GetLength(arr), -1)");
+    });
+    // hx4 G09
+    const g09Stubs =
+        "    rateLimit: number = 2000;\n" +
+        "    fetchHistoryCacheSize: number = 0;\n" +
+        "    safeInteger(a, b, c = undefined) { return a; }\n" +
+        "    safeFloat(a, b, c = undefined) { return a; }\n";
+    test('hx4 G09: mixed int/int64/float64 kinds widen the narrower side', () => {
+        const input =
+        "class Exchange {\n" +
+        g09Stubs +
+        "    f (arr, item) {\n" +
+        "        const n = arr.length;\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        const g = this.safeFloat (item, 'g');\n" +
+        "        return [ n >= x, x !== undefined && n < x, g !== undefined && g > n ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(x == nil || int64(n) >= *x)");
+        expect(output).toContain("(int64(n) < *x)");
+        expect(output).toContain("(*g > float64(n))");
+        expect(output).not.toContain("IsGreaterThanOrEqual(n, x)");
+    });
+    test('hx4 G09: float64 `<` against another kind keeps the helper; a length read widens', () => {
+        const input =
+        "class Exchange {\n" +
+        g09Stubs +
+        "    f (arr, item) {\n" +
+        "        const n = arr.length;\n" +
+        "        const g = this.safeFloat (item, 'g');\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        return [ g !== undefined && g < n, arr.length > x ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsLessThan(g, n)");
+        expect(output).toContain("(x == nil || int64(GetArrayLength(arr)) > *x)");
+    });
+    test('hx4 G09: base value fields compare natively', () => {
+        const input =
+        "class Exchange {\n" +
+        g09Stubs +
+        "    f () {\n" +
+        "        return [ this.rateLimit > 0, this.fetchHistoryCacheSize > 0 ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(this.RateLimit > 0)");
+        expect(output).toContain("(this.FetchHistoryCacheSize > 0)");
+    });
+    test('hx4 G09: a same-named field outside the base class keeps the helper', () => {
+        const input =
+        "class Venue {\n" +
+        "    rateLimit: number = 2000;\n" +
+        "    f () {\n" +
+        "        return this.rateLimit > 0;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsGreaterThan(this.RateLimit, 0)");
     });
 });
 

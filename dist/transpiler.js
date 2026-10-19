@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -7813,6 +7813,13 @@ var GoTranspiler = class extends BaseTranspiler {
     // operand of a binary expression, -1 inside parentheses (never below 1), and
     // back to 1 for composite literal elements.
     this.goExprDepth = 1;
+    // hx4 G09
+    // hand-written BaseExchange value fields (go/v4/exchange.go) read as `this.<Field>`
+    this.GO_G09_NUMERIC_FIELDS = {
+      "rateLimit": "float64",
+      "fetchHistoryCacheSize": "int",
+      "minFundingAddressLength": "int"
+    };
     this.requiresParameterType = true;
     this.requiresReturnType = true;
     this.asyncTranspiling = false;
@@ -10083,7 +10090,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
       }
       if (ORDERED_COMPARISON_OPERATORS[op] !== void 0) {
-        const inlined = this.printInlineOrderedComparison(left, right, leftText, rightText, op);
+        const inlined = this.printInlineOrderedComparison(left, right, leftText, rightText, op) ?? this.printG09WideningComparison(left, right, leftText, rightText, op);
         if (inlined !== void 0) {
           return inlined;
         }
@@ -14290,6 +14297,99 @@ ${this.getIden(level)}}()`;
     }
     const lastStatement = statements[statements.length - 1];
     return (isIfStatement2(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
+  }
+  // `this.rateLimit` & co.: only when the checker resolves the property to the base
+  // `class Exchange` declaration (a venue redeclaring it prints its own field)
+  goG09FieldKind(node) {
+    node = this.goUnwrapParenthesizedNode(node);
+    if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
+      return void 0;
+    }
+    const kind = this.GO_G09_NUMERIC_FIELDS[node.name?.escapedText ?? node.name?.text];
+    if (kind === void 0) {
+      return void 0;
+    }
+    const checker = this.checkerOrUndefined();
+    const declaration = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    if (declaration?.kind !== SyntaxKind5.PropertyDeclaration || declaration.parent?.kind !== SyntaxKind5.ClassDeclaration) {
+      return void 0;
+    }
+    const className = declaration.parent.name?.escapedText ?? declaration.parent.name?.text;
+    return className === "Exchange" ? kind : void 0;
+  }
+  // [kind, pointer] of one ordered-comparison operand, undefined when unprovable
+  goG09OperandKind(node, text) {
+    const pointee = this.goOrderedComparisonPointerKind(node);
+    if (pointee !== void 0) {
+      return [pointee, true];
+    }
+    const field = this.goG09FieldKind(node);
+    if (field !== void 0) {
+      return [field, false];
+    }
+    const kind = this.goOperandNumericKind(node, text);
+    return kind === void 0 ? void 0 : [kind, false];
+  }
+  // Ordered comparisons the phase-1 rule refuses only because the two concrete kinds differ
+  // (int vs int64, int/int64 vs float64) or an operand is a typed base field. The helper
+  // converts the narrower side exactly like `int64(x)` / `float64(x)`; nil and NaN rules stay.
+  printG09WideningComparison(left, right, leftText, rightText, op) {
+    const operator = ORDERED_COMPARISON_OPERATORS[op];
+    if (operator === void 0) {
+      return void 0;
+    }
+    if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+      return void 0;
+    }
+    const l = this.goG09OperandKind(left, leftText);
+    const r = this.goG09OperandKind(right, rightText);
+    if (l === void 0 || r === void 0) {
+      return void 0;
+    }
+    let kind = this.goComparisonKind(left, l[0], right, r[0]);
+    let lv = l[1] ? `*${leftText}` : leftText;
+    let rv = r[1] ? `*${rightText}` : rightText;
+    if (kind === void 0) {
+      if (this.goIsNumericConstant(left) || this.goIsNumericConstant(right)) {
+        return void 0;
+      }
+      kind = l[0] === "float64" || r[0] === "float64" ? "float64" : "int64";
+      if (l[0] !== kind) {
+        lv = `${kind}(${lv})`;
+      }
+      if (r[0] !== kind) {
+        rv = `${kind}(${rv})`;
+      }
+    }
+    if (kind === "float64" && (operator === "<" || operator === "<=")) {
+      return void 0;
+    }
+    const leftNil = l[1] && !this.goHasEnclosingNilGuard(left);
+    const rightNil = r[1] && !this.goHasEnclosingNilGuard(right);
+    if (leftNil && !r[1] && !this.goIsPureComparisonOperand(right) || rightNil && !l[1] && !this.goIsPureComparisonOperand(left)) {
+      return void 0;
+    }
+    const greater = operator === ">" || operator === ">=";
+    const cmp = `${lv} ${operator} ${rv}`;
+    if (!leftNil && !rightNil) {
+      return `(${cmp})`;
+    }
+    if (leftNil && !rightNil) {
+      return greater ? `(${leftText} != nil && ${cmp})` : `(${leftText} == nil || ${cmp})`;
+    }
+    if (!leftNil && rightNil) {
+      return greater ? `(${rightText} == nil || ${cmp})` : `(${rightText} != nil && ${cmp})`;
+    }
+    if (operator === ">") {
+      return `(${leftText} != nil && (${rightText} == nil || ${cmp}))`;
+    }
+    if (operator === ">=") {
+      return `(${rightText} == nil || (${leftText} != nil && ${cmp}))`;
+    }
+    if (operator === "<") {
+      return `(${rightText} != nil && (${leftText} == nil || ${cmp}))`;
+    }
+    return `(${leftText} == nil || (${rightText} != nil && ${cmp}))`;
   }
 };
 

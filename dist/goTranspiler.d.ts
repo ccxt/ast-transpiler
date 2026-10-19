@@ -556,4 +556,10 @@ export declare class GoTranspiler extends BaseTranspiler {
      * Check if the last statement in a block is a conditional with returns in all branches
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
+    GO_G09_NUMERIC_FIELDS: {
+        [tsName: string]: string;
+    };
+    goG09FieldKind(node: any): string | undefined;
+    goG09OperandKind(node: any, text: string): [string, boolean] | undefined;
+    printG09WideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
 }
