@@ -960,9 +960,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (csharpType === undefined) {
             return undefined;
         }
-        const func = this.csharpEnclosingFunction(node);
-        if (func === undefined || this.csharpReceiverIsRewritten(func, expression)) {
-            return undefined; // a reassigned receiver is not the object the declared type describes
+        if (!this.csharpHx4DeclaredReceiverReadable(node, expression)) {
+            return undefined;
         }
         const receiver = this.printNode(expression, 0);
         if (csharpType.indexOf('Dictionary<') >= 0) {
@@ -5218,6 +5217,12 @@ export class CSharpTranspiler extends BaseTranspiler {
     //     }
     //     return res;
     // }
+
+    // hx4 C01: a declared C# collection keeps its static type across every write, and the
+    // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
+    csharpHx4DeclaredReceiverReadable(node, expression): boolean {
+        return this.csharpEnclosingFunction(node) !== undefined && isIdentifier(expression);
+    }
 }
 
 // if (this.requiresCallExpressionCast) {
