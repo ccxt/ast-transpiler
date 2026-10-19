@@ -4009,3 +4009,43 @@ describe('rust this-field dynamic dict reads (hx4 R02)', () => {
         expect(output).not.toContain('self.balance.as_map()');
     });
 });
+
+describe('hx4 R04: native Vec push on typed array locals', () => {
+    const wrap = (body: string) => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (items: any[]) {\n${body}\n    }\n}`;
+    test('push-only local returned is a Vec<Value> with native push', () => {
+        const out = transpiler.transpileRust(wrap('        const result = [];\n        result.push (items[0]);\n        result.push (this.parseX (1));\n        return result;')).content;
+        expect(out).toContain('let mut result: Vec<Value> = Vec::new();');
+        expect(out).toContain('result.push(self.parseX(Value::Int(1)));');
+        expect(out).toContain('return Value::from(result);');
+        expect(out).not.toContain('append_to_array');
+    });
+    test('length read and this-call argument in a return box once', () => {
+        const out = transpiler.transpileRust(wrap('        const result = [];\n        const item = items[0];\n        result.push (item);\n        const n = result.length;\n        return this.filterBy (result, n);')).content;
+        expect(out).toContain('result.push(item.clone());');
+        expect(out).toContain('Value::Int(result.len() as i64)');
+        expect(out).toContain('return self.filterBy(Value::from(result), n);');
+    });
+    test('final-use argument / object value outside a loop box once', () => {
+        const out = transpiler.transpileRust(wrap('        const args = [];\n        args.push (items[0]);\n        const request = { \'args\': args };\n        return this.parseX (request);')).content;
+        expect(out).toContain('let mut args: Vec<Value> = Vec::new();');
+        expect(out).toContain('Value::from(args)');
+        const out2 = transpiler.transpileRust(wrap('        const hashes = [];\n        hashes.push (1);\n        const r = this.filterBy (hashes, 1);\n        return r;')).content;
+        expect(out2).toContain('self.filterBy(Value::from(hashes), Value::Int(1))');
+    });
+    test('negative: alias, non-return argument, element read or non-empty init keep the box', () => {
+        for (const body of [
+            '        const out = [];\n        out.push (1);\n        const other = out;\n        return other;',
+            '        const out = [];\n        out.push (1);\n        this.parseX (out);\n        return out;',
+            '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
+            '        const out = [];\n        out.push (1);\n        return this.filterBy (out, out);',
+            '        const out = [];\n        out.push (1);\n        return out[0];',
+            '        const out = [ 1 ];\n        out.push (2);\n        return out;',
+            '        const out = [];\n        out.push (out.length);\n        return out;',
+            '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
+        ]) {
+            const out = transpiler.transpileRust(wrap(body)).content;
+            expect(out).toContain('append_to_array(&mut out');
+            expect(out).not.toContain('Vec<Value>');
+        }
+    });
+});
