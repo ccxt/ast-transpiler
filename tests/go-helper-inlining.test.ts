@@ -116,10 +116,10 @@ describe('go .length -> len on a slice', () => {
         expect(output).toContain('var n int = len(s)');
         expect(output).not.toContain('GetLength(');
     });
-    test('a *string local keeps GetLength', () => {
+    test('a *string local that may be nil keeps the length helper', () => {
         const ts =
         "class Test {\n" +
-        "    safeString (a: any, b: any): string { return a[b]; }\n" +
+        "    safeString (a: any, b: any): string | undefined { return a[b]; }\n" +
         "    f (a: any) {\n" +
         "        const s = this.safeString (a, 'b')\n" +
         "        const n = s.length\n" +
@@ -127,7 +127,8 @@ describe('go .length -> len on a slice', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('GetLength(s)');
+        expect(output).toContain('GetArrayLength(s)');
+        expect(output).not.toContain('len(*s)');
         expect(output).not.toContain('len(s)');
     });
     test('a *string local with a TS-`any` type keeps GetArrayLength', () => {
@@ -180,7 +181,7 @@ describe('go .length -> len on a slice', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('Subtract(GetLength(s), 2)');
+        expect(output).toContain('int64(GetLength(s)) - 2');
         expect(output).not.toContain('len(s)');
     });
 });
