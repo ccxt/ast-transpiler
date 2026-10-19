@@ -8775,7 +8775,7 @@ GoTranspiler.prototype.g11NativeParameterType = function (fn, param, index: numb
             candidates.push('string');
         }
     }
-    for (const goType of this.goNativeParameterTypeCandidates(param)) {
+    for (const goType of this.goNativeParameterTypeCandidates(param).concat(this.g13NumericParameterCandidates(param))) {
         if (!candidates.includes(goType)) {
             candidates.push(goType);
         }
@@ -8783,8 +8783,8 @@ GoTranspiler.prototype.g11NativeParameterType = function (fn, param, index: numb
     for (const goType of candidates) {
         if (this.goParameterCallSitesPassType(fn, index, goType)
             && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType)
-            && this.goParameterKeepsNilCompareNative(fn.body, param, goType)
-            && ((goType === '*string') || !this.g11ParameterHasNullishDefault(fn.body, param))) {
+            && (goType.startsWith('*') || this.goParameterKeepsNilCompareNative(fn.body, param, goType))
+            && (goType.startsWith('*') || !this.g11ParameterHasNullishDefault(fn.body, param))) {
             return goType;
         }
     }
@@ -8800,4 +8800,20 @@ GoTranspiler.prototype.g11ParameterHasNullishDefault = function (body, param) {
             && (parent.left === n) && ((parent.operatorToken.kind === SyntaxKind.QuestionQuestionToken)
             || (parent.operatorToken.kind === SyntaxKind.QuestionQuestionEqualsToken));
     });
+};
+
+// hx4 G13
+export interface GoTranspiler {
+    g13NumericParameterCandidates(param): string[];
+}
+// a required `Int` / `Num` / `number` parameter: the pointer Go type the GetArg twins already use
+// for `Int` / `Num` (nil is the absent state); a non-nullable `number` takes the plain value type its callers pass
+GoTranspiler.prototype.g13NumericParameterCandidates = function (param) {
+    const declared = (param?.type !== undefined) ? String(param.type.getText()).trim() : undefined;
+    switch (declared) {
+    case 'Int': return ['*int64'];
+    case 'Num': return ['*float64'];
+    case 'number': return ['int64', 'float64'];
+    }
+    return [];
 };

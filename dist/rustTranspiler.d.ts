@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -735,5 +735,53 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustR09NumericOperand(node: any): string | undefined;
     rustR09LengthEquality(left: any, right: any, op: any): string | undefined;
     rustR09NativeAddSubtract(op: any, left: any, right: any, leftType: any, rightType: any, leftText: string, rightText: string): string | undefined;
+    /** 'local' for an R01-proven plain-dict local, 'param' for a plain-kept dict parameter. */
+    rustR10PlainReceiver(node: Node): 'local' | 'param' | undefined;
+    /** A literal-key read (`x['k']` / `x.k`) on a proven plain receiver. */
+    rustR10LiteralReadOk(receiverNode: Node, keyText: string): boolean;
+    /** `x[k]` on a proven plain receiver with a `Value` key place (`string` or `any` typed). */
+    rustR10DynamicRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    r11VecUse(n: any): boolean;
+    r11LoopBetween(n: any): boolean;
+    r11VecReadShape(access: any): boolean;
+    printElementAccessExpressionExceptionIfAny(node: any): any;
+    r11ProvenListValue(node: any, depth?: number): boolean;
+    /** Base-tier bool readers whose Rust form returns `Value::Bool` or `Value::Null`
+     *  (`safe_bool*` keep only `Value::Bool` or the default; the `check_option_bool` stub). */
+    private static readonly RUST_R12_BOOL_READERS;
+    private static readonly RUST_R12_DICT_READERS;
+    /** A REST venue file (`ts/src/<id>.ts`): no base / pro / prediction tier. */
+    private static readonly RUST_R12_REST_FILE;
+    /** Extra plain-dict write sources (R01 write-history proof), REST venue files only: no
+     *  runtime tagged handle (book, ws subscription, cache bucket) is reachable there. */
+    private rustR12Visiting;
+    rustR12PlainSource(node: any, depth?: number): boolean;
+    /** `this.options`, a parameter, or a const local whose initializer reads no `this` field
+     *  but `options` and no tagged container (`hashmap`, `subscriptions`, `futures`). */
+    rustR12UnsharedDict(arg: any): boolean;
+    /** `this.m (…)` on a sync method of the calling file whose every `return` is a plain
+     *  literal, a plain local, or `this.extend|omit|keysort (plain, …unshared)`. */
+    rustR12PlainBuilder(call: any, depth: number): boolean;
+    rustR12PlainReturn(expr: any, depth: number): boolean;
+    /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
+     *  overload set), in the calling file or the base tier. */
+    rustR12MethodImpl(call: any): any;
+    /** The expression's Rust value is always `Value::Bool(_)` or `Value::Null`. */
+    rustR12BoolValue(expr: any, depth?: number): boolean;
+    /** A base `safeBool*` with a bool default, `checkOptionBool`, or a method (calling file or
+     *  base tier) whose every `return` is such a value. */
+    rustR12BoolCall(call: any, depth: number): boolean;
+    rustR12EveryReturn(call: any, depth: number, ok: (e: any) => boolean): boolean;
+    /** Element `index` of `this.m (…)`'s tuple is a bool value on every return path. */
+    rustR12BoolTupleElement(expr: any, index: number, depth: number): boolean;
+    /** A local whose declaration and every write store a bool value. Locals the printer or
+     *  ccxt's narrowBoolLocals may declare `bool` (bool-expression initializer) are left out. */
+    rustR12BoolLocal(ident: any, depth: number): boolean;
+    /** `if (x)` on a local or `this.m (…)` proven a bool value: `x.as_bool() == Some(true)`
+     *  is `is_true` on `Value::Bool`/`Value::Null`; bool slots only (leading-token boxing). */
+    rustR12NativeTruthiness(node: any): string | undefined;
+    /** `x === true|false` with `x` proven a bool value: `is_equal` against a `Value::Bool` is
+     *  the payload compare there (Null matches neither). */
+    rustR12NativeBoolEquality(left: any, right: any, op: any): string | undefined;
 }
 export {};

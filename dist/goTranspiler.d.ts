@@ -593,3 +593,6 @@ export interface GoTranspiler {
     g11NativeParameterType(fn: any, param: any, index: number): string | undefined;
     g11ParameterHasNullishDefault(body: any, param: any): boolean;
 }
+export interface GoTranspiler {
+    g13NumericParameterCandidates(param: any): string[];
+}

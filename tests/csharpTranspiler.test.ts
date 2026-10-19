@@ -1791,6 +1791,41 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object last = getValue(items, -1);');
         expect(output).toContain('object id = getValue(other, "id");');
     });
+    test('hx4 C11: identifier keys on declared collections and base dict fields read natively', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        const previousLocal = printer.csharpLocalTypeOf;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'row') ? 'Dictionary<string, object>' : ((declaration?.name?.text === 'items') ? 'List<object>' : undefined);
+        printer.csharpLocalTypeOf = (node: any) => (node?.text === 'key') ? 'string?' : ((node?.text === 'big') ? 'Int64' : ((node?.text === 'i') ? 'int' : undefined));
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    has: any; urls: any; timeframes: any;\n" +
+        "    main(row: any, items: any, other: any, key: any, big: any, k2: any) {\n" +
+        "        const out = [];\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            out.push (items[i]);\n" +
+        "        }\n" +
+        "        const a = row[key];\n" +
+        "        const b = this.has[key];\n" +
+        "        const c = this.urls[key];\n" +
+        "        const d = other[key];\n" +
+        "        const e = items[big];\n" +
+        "        const f = row[k2];\n" +
+        "        const g = this.timeframes[k2];\n" +
+        "        return [ out, a, b, c, d, e, f, g ];\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        printer.csharpLocalTypeOf = previousLocal;
+        expect(output).toContain('(items != null && i < items.Count ? items[i] : null)');
+        expect(output).toContain('object a = (row != null && key != null && row.ContainsKey(key) ? row[key] : null);');
+        expect(output).toContain('object b = (this.has != null && key != null && this.has.ContainsKey(key) ? this.has[key] : null);');
+        expect(output).toContain('object c = (this.urls != null && key != null && ((IDictionary<string, object>)this.urls).ContainsKey(key) ? ((IDictionary<string, object>)this.urls)[key] : null);');
+        expect(output).toContain('object d = getValue(other, key);');
+        expect(output).toContain('object e = getValue(items, big);');
+        expect(output).toContain('object f = getValue(row, k2);');
+        expect(output).toContain('object g = getValue(this.timeframes, k2);');
+    });
     test('a non-dictionary declared-local resolver answer keeps getValue', () => {
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpDeclaredLocalTypeResolver;

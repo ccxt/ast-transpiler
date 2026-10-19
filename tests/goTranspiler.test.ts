@@ -5841,6 +5841,59 @@ describe('hx4 G11: required params of exchange-local methods typed from every ca
     });
 });
 
+describe('hx4 G13: numeric required params typed from every caller', () => {
+    const base =
+        "type Dict = { [key: string]: any };\n" +
+        "type Int = number | undefined;\n" +
+        "type Num = number | undefined;\n" +
+        "class Base {\n" +
+        "    safeInteger (a, b, c?): Int { return undefined; }\n" +
+        "    safeNumber (a, b, c?): Num { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    milliseconds (): number { return 0; }\n" +
+        "}\n";
+
+    test('Int / Num parameters every caller passes as the same pointer go native', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    closest (limit: Int, step: number) {\n" +
+            "        if (limit === undefined) { return step; }\n" +
+            "        return [ limit, step ];\n" +
+            "    }\n" +
+            "    use (o) {\n" +
+            "        const l = this.safeInteger (o, 'l');\n" +
+            "        const s = this.milliseconds ();\n" +
+            "        return this.closest (l, s);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) Closest(limit *int64, step int64) any {');
+    });
+
+    test('a mixed or any caller, an async method or a ?? default keeps the box', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    a (limit: Int) { return limit; }\n" +
+            "    b (limit: Int) { return limit; }\n" +
+            "    async c (limit: Int) { return limit; }\n" +
+            "    d (n: number) { const v = n ?? 1; return v; }\n" +
+            "    async use (o) {\n" +
+            "        const l = this.safeInteger (o, 'l');\n" +
+            "        this.a (l); this.a (this.safeValue (o, 'x'));\n" +
+            "        this.b (this.safeValue (o, 'x'));\n" +
+            "        await this.c (l);\n" +
+            "        this.d (this.safeValue (o, 'x'));\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) A(limit any) any {');
+        expect(output).toContain('func (this *Test) B(limit any) any {');
+        expect(output).toContain('func (this *Test) cBody(ch chan any, limit any) any {');
+        expect(output).toContain('func (this *Test) D(n any) any {');
+    });
+});
+
 describe('native parameter types across the ts/src tree (B-02)', () => {
     // a scoped run's program holds one file, so the sibling files of the same ts/src
     // tree (pro/ and the derived exchanges) are only provable textually: the fixture

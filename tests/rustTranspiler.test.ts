@@ -2310,11 +2310,11 @@ describe('rust is_true over a proven boolean Value', () => {
         expect(output).not.toContain('is_true(&self.safeBool2');
     });
 
-    test('a boolean-returning method keeps the helper', () => {
+    test('a method returning only bool literals tests as_bool natively (hx4 R12)', () => {
         const ts = boolClass('        if (this.isLinear(this.options)) { return 1; }');
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_true(&self.isLinear(self.options))');
-        expect(output).not.toContain('matches!(self.isLinear');
+        expect(output).toContain('if self.isLinear(self.options).as_bool() == Some(true) {');
+        expect(output).not.toContain('is_true(&self.isLinear');
     });
 
     test('a logical stored in a Value local keeps the helper', () => {
@@ -3097,8 +3097,9 @@ describe('rust typed-parameter dict reads', () => {
 
     test('a reassigned Dict parameter keeps the helper (D2)', () => {
         const ts = DICT_DECL +
+            "function g (): any { return []; }\n" +
             "function f (balance: Dict, code: string) {\n" +
-            "    balance = {};\n" +
+            "    balance = g ();\n" +
             "    return balance[code];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
@@ -3674,8 +3675,9 @@ describe('rust typed-receiver native reads (D-28)', () => {
     test('an any-typed local keeps the helper', () => {
         const ts =
             'class T {\n' +
+            '    g(): any { return []; }\n' +
             '    m(code: string) {\n' +
-            '        const currencies: any = {};\n' +
+            '        const currencies: any = this.g ();\n' +
             '        return currencies[code];\n' +
             '    }\n' +
             '}';
@@ -3688,9 +3690,10 @@ describe('rust typed-receiver native reads (D-28)', () => {
         const ts =
             PLAIN +
             'class T {\n' +
+            '    g(): any { return []; }\n' +
             '    m(code: string) {\n' +
             '        let currencies: Plain = {};\n' +
-            '        currencies = {};\n' +
+            '        currencies = this.g ();\n' +
             '        return currencies[code];\n' +
             '    }\n' +
             '}';
@@ -4037,10 +4040,8 @@ describe('hx4 R04: native Vec push on typed array locals', () => {
     test('negative: alias, non-return argument, element read or non-empty init keep the box', () => {
         for (const body of [
             '        const out = [];\n        out.push (1);\n        const other = out;\n        return other;',
-            '        const out = [];\n        out.push (1);\n        this.parseX (out);\n        return out;',
             '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
             '        const out = [];\n        out.push (1);\n        return this.filterBy (out, out);',
-            '        const out = [];\n        out.push (1);\n        return out[0];',
             '        const out = [ 1 ];\n        out.push (2);\n        return out;',
             '        const out = [];\n        out.push (out.length);\n        return out;',
             '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
@@ -4216,3 +4217,104 @@ describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
     });
 });
 
+describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => {
+    const dyn = (receiver: string, key: string) =>
+        `${receiver}.as_map().and_then(|__m| ${key}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r10/ts/src/venue.ts').content;
+    });
+
+    test('a Dict parameter read with an any-typed key reads natively', () => {
+        expect(output).toContain(`let mut value: Value = ${dyn('params', 'key')};`);
+        expect(output).not.toContain('get_value(&params, &key);\n            out');
+    });
+
+    test('a literal-built local and an account () local read an untyped key natively', () => {
+        expect(output).toContain(`let mut viaCode: Value = ${dyn('result', 'code')};`);
+        expect(output).toContain(dyn('account', 'code'));
+    });
+
+    test('a reassigned param, a parse* local and a numeric key keep the helper', () => {
+        expect(output).toContain('return get_value(&params, &key);');
+        expect(output).toContain('return get_value(&order, &key);');
+        expect(output).toContain('return get_value(&params, &n);');
+    });
+});
+
+describe('hx4 R11: relaxed Vec locals and native list length', () => {
+    const wrap = (body: string, params = 'items: any[]') => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (${params}) {\n${body}\n    }\n}`;
+    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    test('a non-final this-call argument clones into its box', () => {
+        const out = rs('        const out = [];\n        out.push (1);\n        this.parseX (out);\n        return out;');
+        expect(out).toContain('let mut out: Vec<Value> = Vec::new();');
+        expect(out).toContain('self.parseX(Value::from(out.clone()));');
+        expect(out).toContain('return Value::from(out);');
+        expect(out).not.toContain('append_to_array');
+    });
+    test('index reads on a Vec local use Vec::get', () => {
+        const out = rs('        const out = [];\n        out.push (1);\n        for (let i = 0; i < out.length; i++) {\n            const v = out[i];\n            this.parseX (v);\n        }\n        return out[0];');
+        expect(out).toContain('let mut out: Vec<Value> = Vec::new();');
+        expect(out).toContain('let mut v: Value = out.get((i).as_i64().map_or(usize::MAX, |__n| __n as usize)).cloned().unwrap_or(Value::Null);');
+        expect(out).toContain('return out.get(0).cloned().unwrap_or(Value::Null);');
+    });
+    test('negative: in-loop this-call arg, element write, chained read, &mut self callee keep the box', () => {
+        for (const body of [
+            '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
+            '        const out = [];\n        out.push (1);\n        out[0] = 2;\n        return out;',
+            '        const out = [];\n        out.push (items);\n        return out[0][1];',
+            '        const out = [];\n        out.push (1);\n        this.extend (out);\n        return out;',
+            '        const out = [];\n        out.push (1);\n        const k = \'a\';\n        return out[k];',
+        ]) {
+            const out = rs(body);
+            expect(out).toContain('append_to_array(&mut out');
+            expect(out).not.toContain('Vec<Value>');
+        }
+    });
+    test('length of a split / array-literal-returning call local is native', () => {
+        const out = rs('        const parts = s.split (\'-\');\n        const n = parts.length;\n        return n;', 's');
+        expect(out).toContain('parts.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))');
+        expect(out).not.toContain('get_array_length');
+    });
+    test('negative: any-typed and reassigned locals keep get_array_length', () => {
+        expect(rs('        const n = items2.length;\n        return n;', 'items2')).toContain('get_array_length(&items2)');
+        expect(rs('        let parts = s.split (\'-\');\n        parts = s;\n        return parts.length;', 's')).toContain('get_array_length(&parts)');
+    });
+});
+
+describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r12/ts/src/venue.ts').content;
+    });
+
+    test('a base safeDict read of caller data with no default inserts natively', () => {
+        expect(output).toContain(insert('bare', 'a', 'Value::Int(1)'));
+    });
+
+    test('a same-file sync builder returning literals / extend of them inserts natively', () => {
+        expect(output).toContain(insert('request', 'clientOid', 'Value::Str("1".into())'));
+    });
+
+    test('a non-plain default and a pass-through method keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut nonPlainDefault, &Value::Str("b".into())');
+        expect(output).toContain('add_element_to_object(&mut parsed, &Value::Str("x".into())');
+    });
+
+    test('bool tuple elements compare natively against true', () => {
+        expect(output).toContain('(enableUnifiedMargin.as_bool() == Some(true)) || (enableUnifiedAccount.as_bool() == Some(true))');
+    });
+
+    test('bool tuple elements and bool-returning methods test truthiness natively', () => {
+        expect(output).toContain('if paginate.as_bool() == Some(true) {');
+        expect(output).toContain('if isTrigger.as_bool() == Some(true) {');
+        expect(output).toContain('if !(self.isConditionalOrder(&[params]).as_bool() == Some(true)) {');
+    });
+
+    test('an any-valued method / tuple element keeps is_true', () => {
+        expect(output).toContain('if is_true(&self.looseFlag(&[params])) {');
+        expect(output).toContain('if is_true(&loose) {');
+    });
+});

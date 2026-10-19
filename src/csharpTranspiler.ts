@@ -804,6 +804,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (listRead !== undefined) {
             return listRead;
         }
+        const keyRead = (this.ELEMENT_ACCESS_WRAPPER_OPEN && !this.printElementAccessExpressionExceptionIfAny(node))
+            ? this.csharpHx4IdentifierKeyRead(node.expression, node.argumentExpression) : undefined;
+        if (keyRead !== undefined) {
+            return keyRead; // hx4 C11
+        }
         return super.printElementAccessExpression(node, identation);
     }
 
@@ -5222,6 +5227,78 @@ export class CSharpTranspiler extends BaseTranspiler {
     // null/ContainsKey/Count test reads the live value, so only an enclosing function is needed
     csharpHx4DeclaredReceiverReadable(node, expression): boolean {
         return this.csharpEnclosingFunction(node) !== undefined && isIdentifier(expression);
+    }
+
+    // hx4 C11: `x[i]` / `m[k]` with an identifier key on a declared collection or a base dict field.
+    // The emission carries GetValue's own null/missing-key/past-the-end tests; a negative index
+    // throws in both. Key must be declared `int` (list) or `string`/`string?` (dictionary).
+    csharpHx4IdentifierKeyRead(expression, argumentExpression): string | undefined {
+        if (!isIdentifier(argumentExpression) || !this.csharpHx4IsPlainRead(argumentExpression.parent)) {
+            return undefined;
+        }
+        const fieldTypes = { 'has': 'Dictionary<string, object>', 'features': 'Dictionary<string, object>', 'timeframes': 'Dictionary<string, object>', 'options': 'ConcurrentDictionary<string, object>', 'markets': 'IDictionary<string, object>', 'urls': 'object', 'currencies': 'object' };
+        let receiver: string | undefined;
+        let csharpType: string | undefined;
+        if (isPropertyAccessExpression(expression) && expression.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(expression.name)
+            && Object.prototype.hasOwnProperty.call(fieldTypes, expression.name.text as string)) {
+            const field = this.printNode(expression, 0);
+            csharpType = fieldTypes[expression.name.text as string];
+            receiver = (csharpType === 'object') ? `((IDictionary<string, object>)${field})` : field;
+            const key = this.csharpHx4DeclaredKeyType(argumentExpression);
+            if (key !== 'string' && key !== 'string?') {
+                return undefined;
+            }
+            const printedKey = this.printNode(argumentExpression, 0);
+            return `(${field} != null && ${printedKey} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        }
+        if (!isIdentifier(expression) || CSHARP_MARKET_RECEIVER_NAMES.indexOf(expression.text as string) >= 0) {
+            return undefined;
+        }
+        csharpType = this.csharpDeclaredCollectionType(expression);
+        if (csharpType === undefined) {
+            const printed = (typeof (this as any).csharpPrintedLocalType === 'function') ? (this as any).csharpPrintedLocalType(expression) : undefined;
+            csharpType = (CSHARP_NATIVE_COLLECTION_TYPES.indexOf(printed) >= 0) ? printed : undefined;
+        }
+        if (csharpType === undefined || this.csharpEnclosingFunction(expression) === undefined) {
+            return undefined;
+        }
+        receiver = this.printNode(expression, 0);
+        const printedKey = this.printNode(argumentExpression, 0);
+        const keyType = this.csharpHx4DeclaredKeyType(argumentExpression);
+        if (csharpType.indexOf('Dictionary<') >= 0) {
+            if (keyType !== 'string' && keyType !== 'string?') {
+                return undefined;
+            }
+            return `(${receiver} != null && ${printedKey} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
+        }
+        if (keyType !== 'int') {
+            return undefined; // Int64/object indices do not bind the List indexer
+        }
+        return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : null)`;
+    }
+
+    // a read that is no write target: not the left of any assignment, not ++/--, not delete
+    csharpHx4IsPlainRead(node): boolean {
+        const parent: any = node?.parent;
+        if (parent?.kind === SyntaxKind.BinaryExpression && parent.left === node && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
+            return false;
+        }
+        return !isDeleteExpression(parent) && !isPrefixUnaryExpression(parent) && !isPostfixUnaryExpression(parent);
+    }
+
+    // the C# type the key identifier's emitted declaration carries: the printer's own table, then
+    // the build layer's declared-local hook (which retypes for-counters and string locals)
+    csharpHx4DeclaredKeyType(key): string | undefined {
+        const typed = this.csharpTypedLocalType(key);
+        if (typed !== undefined) {
+            return typed;
+        }
+        const printer: any = this;
+        const printed = (typeof printer.csharpPrintedLocalType === 'function') ? printer.csharpPrintedLocalType(key) : undefined;
+        if (printed !== undefined) {
+            return printed;
+        }
+        return (typeof this.csharpLocalTypeOf === 'function') ? this.csharpLocalTypeOf(key) : undefined;
     }
 }
 
