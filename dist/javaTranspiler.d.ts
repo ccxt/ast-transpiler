@@ -381,3 +381,11 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHx4InProgress: Set<any>;
     javaHx4NonSharedValue(value: any, depth: number): boolean;
 }
+export interface JavaTranspiler {
+    hx4J09BoxIdentifier(node: any, seen: Set<any>, depth: number): boolean;
+    hx4J09BoxValue(node: any, seen: Set<any>, depth: number): boolean;
+    hx4J09LiteralTupleElement(node: any, index: number): boolean;
+    hx4J09CatchCannotWrap(node: any): boolean;
+    hx4J09CoreArgument(type: string, printed: string, node: any): string | undefined;
+    hx4J09CcxtErrorClass(node: any): boolean;
+}

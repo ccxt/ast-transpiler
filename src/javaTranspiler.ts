@@ -7895,3 +7895,265 @@ const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
     'urls': true,
     'markets_by_id': true,
 };
+
+// hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands
+const HX4_J09_SYNC_BASE_CALLS = new Set<string>([
+    'safeString', 'safeString2', 'safeStringN', 'safeValue', 'safeDict', 'safeInteger', 'json',
+    'throwExactlyMatchedException', 'throwBroadlyMatchedException',
+]);
+
+export interface JavaTranspiler {
+    hx4J09BoxIdentifier(node, seen: Set<any>, depth: number): boolean;
+    hx4J09BoxValue(node, seen: Set<any>, depth: number): boolean;
+    hx4J09LiteralTupleElement(node, index: number): boolean;
+    hx4J09CatchCannotWrap(node): boolean;
+    hx4J09CoreArgument(type: string, printed: string, node): string | undefined;
+    hx4J09CcxtErrorClass(node): boolean;
+}
+
+// a class declared in ts/src/base/errors.ts: its Java twin extends RuntimeException, so
+// `catchVar instanceof X` compiles against the `Exception` catch parameter
+JavaTranspiler.prototype.hx4J09CcxtErrorClass = function (node): boolean {
+    const checker: any = this.checkerOrUndefined();
+    let symbol: any;
+    try {
+        symbol = checker?.getSymbolAtLocation(node);
+        if (symbol !== undefined && (symbol.flags & SymbolFlags.Alias)) {
+            symbol = checker.getAliasedSymbol(symbol);
+        }
+    } catch (e) {
+        return false;
+    }
+    const declaration: any = symbol?.declarations?.[0]?.resolve();
+    return declaration?.kind === SyntaxKind.ClassDeclaration
+        && /(^|[\\/])ts[\\/]src[\\/]base[\\/]errors\.ts$/.test(declaration.getSourceFile?.()?.fileName ?? '');
+};
+
+// a local whose declared TS type is boolean-family and whose every write (D2 scan, tuples
+// included) is a Boolean-or-null box; a write cycle back to a local under proof is accepted
+JavaTranspiler.prototype.hx4J09BoxIdentifier = function (node, seen: Set<any>, depth: number): boolean {
+    const checker: any = this.checkerOrUndefined();
+    if (checker === undefined || node?.kind !== SyntaxKind.Identifier || depth > 6) {
+        return false;
+    }
+    const symbol = checker.getSymbolAtLocation(node);
+    const decl: any = symbol?.valueDeclaration?.resolve();
+    if (decl === undefined || decl.name?.text !== node.text) {
+        return false;
+    }
+    if (seen.has(decl)) {
+        return true;
+    }
+    const next = new Set(seen);
+    next.add(decl);
+    const accepts = (value) => this.hx4J09BoxValue(value, next, depth + 1);
+    if (decl.kind === SyntaxKind.BindingElement) {
+        const pattern = decl.parent;
+        const declaration = pattern?.parent;
+        if (decl.initializer !== undefined || decl.dotDotDotToken !== undefined
+            || pattern?.kind !== SyntaxKind.ArrayBindingPattern || declaration?.kind !== SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        const index = pattern.elements.indexOf(decl);
+        if (!this.javaBooleanBoxTupleElement(declaration.initializer, index)
+            && !this.hx4J09LiteralTupleElement(declaration.initializer, index)) {
+            return false;
+        }
+        return this.javaWritesAreBoxed(symbol, { initializer: undefined, parent: declaration }, next, accepts, true);
+    }
+    if (decl.kind !== SyntaxKind.VariableDeclaration) {
+        return false; // parameters are boxes their callers fill
+    }
+    let type;
+    try {
+        type = this.javaTypeOfDeclaration(decl);
+    } catch (e) {
+        return false;
+    }
+    if (!this.javaBooleanBoxType(type) && !this.javaNullableBooleanDeclaration(decl)) {
+        return false;
+    }
+    return this.javaWritesAreBoxed(symbol, decl, next, accepts, true);
+};
+
+// a value whose printed Java is a Boolean, boolean or null
+JavaTranspiler.prototype.hx4J09BoxValue = function (node, seen: Set<any>, depth: number): boolean {
+    if (node === undefined) {
+        return false;
+    }
+    if (node.kind === SyntaxKind.ParenthesizedExpression || node.kind === SyntaxKind.AsExpression
+        || node.kind === SyntaxKind.NonNullExpression) {
+        return this.hx4J09BoxValue(node.expression, seen, depth);
+    }
+    if (node.kind === SyntaxKind.NullKeyword || (node.kind === SyntaxKind.Identifier && node.text === 'undefined')) {
+        return true;
+    }
+    if (node.kind === SyntaxKind.ConditionalExpression) {
+        return this.hx4J09BoxValue(node.whenTrue, seen, depth) && this.hx4J09BoxValue(node.whenFalse, seen, depth);
+    }
+    if (node.kind === SyntaxKind.Identifier) {
+        return this.hx4J09BoxIdentifier(node, seen, depth);
+    }
+    if (this.javaPrintsBooleanValue(node, new Set<any>())) {
+        return true;
+    }
+    if (node.kind !== SyntaxKind.CallExpression) {
+        return false;
+    }
+    if (this.javaCallBooleanKind(node) !== undefined) {
+        return true;
+    }
+    // safeBool* with a non-literal default: the accessor returns a Boolean member or the default
+    const callee = node.expression;
+    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) {
+        return false;
+    }
+    const at = JAVA_THIS_BOOLEAN_BOX_METHODS[String(callee.name.text)];
+    if (at === undefined || this.javaBooleanValueKind(node) === undefined || !this.javaCalleeResolves(node)) {
+        return false;
+    }
+    const declaration: any = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+    if (declaration?.name?.text !== callee.name.text
+        || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+        return false;
+    }
+    const fallback = node.arguments?.[at];
+    return fallback !== undefined && this.hx4J09BoxValue(fallback, seen, depth);
+};
+
+// element `index` of a base-tier `this.m(..)` whose every return is an array literal with a
+// Java boolean at that position (`handlePostOnly`: `[ true, p ]` / `[ false, p ]`)
+JavaTranspiler.prototype.hx4J09LiteralTupleElement = function (node, index: number): boolean {
+    if (node?.kind !== SyntaxKind.CallExpression || index < 0) {
+        return false;
+    }
+    const callee = node.expression;
+    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) {
+        return false;
+    }
+    let declaration: any;
+    try {
+        declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+    } catch (e) {
+        return false;
+    }
+    if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined
+        || declaration.name?.text !== callee.name.text
+        || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+        return false;
+    }
+    let returns = 0;
+    let ok = true;
+    const scan = (current: Node) => {
+        if (!ok || (current !== declaration && isFunctionLike(current))) {
+            return;
+        }
+        if (isReturnStatement(current)) {
+            returns++;
+            const value: any = current.expression;
+            if (value === undefined || !isArrayLiteralExpression(value)
+                || !this.javaPrintsBooleanValue(value.elements[index], new Set<any>())) {
+                ok = false;
+                return;
+            }
+        }
+        current.forEachChild(scan);
+    };
+    scan(declaration.body);
+    return ok && returns > 0;
+};
+
+// `e instanceof X` on a catch variable equals Helpers.isInstance (which first unwraps a
+// CompletionException/ExecutionException) when the try block cannot raise a wrapped one:
+// no await, every call a synchronous base-tier accessor/thrower
+JavaTranspiler.prototype.hx4J09CatchCannotWrap = function (node): boolean {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const decl: any = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const clause = decl?.parent;
+    const tryStatement = clause?.parent;
+    if (decl?.kind !== SyntaxKind.VariableDeclaration || clause?.kind !== SyntaxKind.CatchClause
+        || tryStatement?.kind !== SyntaxKind.TryStatement || tryStatement.catchClause !== clause) {
+        return false;
+    }
+    let ok = true;
+    const scan = (current: any) => {
+        if (!ok) {
+            return;
+        }
+        if (isFunctionLike(current) || current.kind === SyntaxKind.AwaitExpression || current.kind === SyntaxKind.TryStatement) {
+            ok = false;
+            return;
+        }
+        if (current.kind === SyntaxKind.CallExpression) {
+            const callee = current.expression;
+            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+                || !HX4_J09_SYNC_BASE_CALLS.has(String(callee.name.text))) {
+                ok = false;
+                return;
+            }
+            const declaration: any = checker.getResolvedSignature(current)?.declaration?.resolve();
+            if (declaration === undefined
+                || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+                ok = false;
+                return;
+            }
+        }
+        current.forEachChild(scan);
+    };
+    scan(tryStatement.tryBlock);
+    return ok;
+};
+
+// core-argument conversions a declaration already proves: a const `= undefined` local is
+// null; a const `x.length` local the build layer declares Integer widens to the Long slot
+JavaTranspiler.prototype.hx4J09CoreArgument = function (type: string, printed: string, node): string | undefined {
+    if (node === undefined || !isIdentifier(node) || printed !== node.text || (type !== 'Long' && type !== 'String')) {
+        return undefined;
+    }
+    const declaration: any = this.javaDeclarationOfIdentifier(node);
+    if (declaration === undefined || !isVariableDeclaration(declaration) || (declaration.name as any)?.text !== node.text
+        || (getCombinedNodeFlags(declaration) & NodeFlags.Const) === 0) {
+        return undefined;
+    }
+    const initializer = declaration.initializer;
+    if (initializer !== undefined && isIdentifier(initializer) && initializer.text === 'undefined') {
+        return `(${type}) null`;
+    }
+    if (type === 'Long' && initializer !== undefined && isPropertyAccessExpression(initializer)
+        && initializer.name.text === 'length' && this.javaDeclaredTypeOf(node) === 'Integer') {
+        return `((long) ${printed})`;
+    }
+    return undefined;
+};
+
+{
+    const proto: any = JavaTranspiler.prototype;
+    const printCondition = proto.printCondition;
+    proto.printCondition = function (node, identation) {
+        const printed: string = printCondition.call(this, node, identation);
+        let inner = node;
+        while (inner?.kind === SyntaxKind.ParenthesizedExpression) {
+            inner = inner.expression;
+        }
+        if (inner?.kind === SyntaxKind.Identifier && printed.trimStart().startsWith(this.FALSY_WRAPPER_OPEN)
+            && this.hx4J09BoxIdentifier(inner, new Set<any>(), 0)) {
+            return this.getIden(identation) + `Boolean.TRUE.equals(${this.printNode(inner, 0)})`;
+        }
+        return printed;
+    };
+    const printInstanceOfExpression = proto.printInstanceOfExpression;
+    proto.printInstanceOfExpression = function (node, identation) {
+        if (node.right?.kind === SyntaxKind.Identifier && this.hx4J09CcxtErrorClass(node.right)
+            && this.hx4J09CatchCannotWrap(node.left)) {
+            return this.getIden(identation) + `(${this.printNode(node.left, 0)} instanceof ${node.right.text})`;
+        }
+        return printInstanceOfExpression.call(this, node, identation);
+    };
+    const javaConvertToCoreType = proto.javaConvertToCoreType;
+    proto.javaConvertToCoreType = function (type: string, printed: string, node) {
+        return this.hx4J09CoreArgument(type, printed, node) ?? javaConvertToCoreType.call(this, type, printed, node);
+    };
+}
