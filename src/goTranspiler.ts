@@ -1586,7 +1586,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // text for a proven string, or the deref goNativeBinaryText adds for a derefable
     // `*string` leaf. undefined keeps the helper call.
     goStringConcatOperandType(node, printedText: string): string | undefined {
-        if (this.goDerefableStringOperand(node)) {
+        if (this.goConcatDerefableStringOperand(node)) {
             return 'string';
         }
         return (this.goOperandStaticType(node, printedText) === 'string') ? 'string' : undefined;
@@ -1883,6 +1883,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             }
             return { 'goType': 'string', 'text': this.goNativeBinaryText(node, '+', leftText, rightText) };
         }
+        const widened = this.goNativeIntWideningArithmetic(node, leftType, rightType, leftText, rightText);
+        if (widened !== undefined) {
+            return widened;
+        }
         const goType = this.goNativeNumericResultType(op, leftType, rightType, node);
         if (goType === undefined) {
             return undefined;
@@ -2044,7 +2048,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
             // a derefable `*string` leaf is the only operand that prints in a different
             // shape than the printer produced: the operator needs its pointee
-            const leaf = this.goDerefableStringOperand(operand) ? ('*' + text.trim()) : text;
+            const leaf = this.goConcatDerefableStringOperand(operand) ? ('*' + text.trim()) : text;
             return this.goNativeOperandText(operand, leaf);
         };
         const left = operandText(node.left, leftText);
@@ -8480,3 +8484,63 @@ ${tryBodyBlock}
 // hx4 G02: key-argument count of the base safeValue family; ws cache classes (Go constructors return a non-nil *T)
 const GO_G02_SAFE_VALUE_KEYS: { [name: string]: number } = { 'safeValue': 2, 'safeValue2': 3, 'safeValueN': 2 };
 const GO_G02_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide' ];
+
+// hx4 G04
+export interface GoTranspiler {
+    goNativeIntWideningArithmetic(node, leftType: string, rightType: string, leftText: string, rightText: string): { goType: string, text: string } | undefined;
+}
+// `a - b` / `a * b` / `a + b` with one int64 and one int operand (or an int `- * %N` in a `var` initializer):
+// the helper boxes int64 (Add/Subtract/Mod via the float path, Multiply via reflect Int()); Go refuses
+// the mixed operator, so the int side converts. Exact under the helper's own 2^53 float bound.
+GoTranspiler.prototype.goNativeIntWideningArithmetic = function (node, leftType: string, rightType: string, leftText: string, rightText: string) {
+    const op = node.operatorToken.kind;
+    const isMod = (op === SyntaxKind.PercentToken) && this.isNonZeroIntegerLiteral(node.right);
+    if ((op !== SyntaxKind.MinusToken) && (op !== SyntaxKind.AsteriskToken) && (op !== SyntaxKind.PlusToken) && !isMod) {
+        return undefined;
+    }
+    const mixed = ((leftType === 'int64') && (rightType === 'int')) || ((leftType === 'int') && (rightType === 'int64'));
+    // `var x int64 = n - 1` over an `int` local: Subtract/Multiply box int64, so the int side converts
+    const intKinds = [ 'int', 'const-int' ];
+    const declaredInt64 = (op !== SyntaxKind.PlusToken) && intKinds.includes(leftType) && intKinds.includes(rightType)
+        && ((leftType === 'int') || (rightType === 'int')) && this.goInsideTypedDeclarationInitializer(node);
+    if ((!mixed || isMod) && !declaredInt64) {
+        return undefined;
+    }
+    const operand = (operandNode, operandType: string, printed: string) => (operandType === 'int')
+        ? 'int64(' + this.goUnwrapPrintedParens(printed.trim()) + ')'
+        : this.goNativeOperandText(operandNode, printed);
+    const left = operand(node.left, leftType, leftText);
+    const right = operand(node.right, rightType, rightText);
+    const symbol = this.SupportedKindNames[op];
+    const separator = this.goBinarySeparator(symbol, right, node.left, node.right);
+    return { 'goType': 'int64', 'text': left + separator + symbol + separator + right };
+};
+
+export interface GoTranspiler {
+    goStringLiteralUnionType(type): boolean;
+}
+// `if (x === 'a' || x === 'b')` narrows a `Str` local to a union of string literals: every member
+// is a non-nilable string, so the deref is as safe as for a plain narrowed `string`
+GoTranspiler.prototype.goStringLiteralUnionType = function (type) {
+    if ((type === undefined) || ((type.flags & TypeFlags.Union) === 0)) {
+        return false;
+    }
+    const members = type.getTypes();
+    return (members.length > 0) && members.every((member) => (member.flags & TypeFlags.StringLike) !== 0);
+};
+
+export interface GoTranspiler {
+    goConcatDerefableStringOperand(node): boolean;
+}
+// the concat rule's `*string` leaf proof: goDerefableStringOperand, or a declared `*string`
+// identifier the checker narrowed to a union of string literals at this use
+GoTranspiler.prototype.goConcatDerefableStringOperand = function (node) {
+    if (this.goDerefableStringOperand(node)) {
+        return true;
+    }
+    if ((node?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(node) !== '*string')) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    return (checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};

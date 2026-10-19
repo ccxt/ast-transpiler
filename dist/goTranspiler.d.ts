@@ -563,3 +563,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     g01MarketRow(node: any): boolean;
     g01DerefConsumer(access: any): boolean;
 }
+export interface GoTranspiler {
+    goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {
+        goType: string;
+        text: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    goStringLiteralUnionType(type: any): boolean;
+}
+export interface GoTranspiler {
+    goConcatDerefableStringOperand(node: any): boolean;
+}

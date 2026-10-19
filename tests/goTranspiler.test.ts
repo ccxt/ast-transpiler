@@ -3142,7 +3142,7 @@ describe('go native element assignment', () => {
         expect(output).toContain("var z any = Mod(this.Milliseconds(), 0)");
         expect(output).toContain("var float2 any = Mod(MathFloor(value), 2.5)");
     });
-    test('Subtract on an int-typed helper result keeps the helper (it returns int64)', () => {
+    test('Subtract on an int-typed helper result widens to int64 (the helper returns int64)', () => {
         const input =
         "class T {\n" +
         "    f (a: string[]) {\n" +
@@ -3151,7 +3151,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var n any = Subtract(GetArrayLength(a), 1)");
+        expect(output).toContain("var n any = int64(GetArrayLength(a)) - 1");
+        expect(output).not.toContain("Subtract(");
     });
     test('Add on an int-typed helper result is native (the helper returns int too)', () => {
         const input =
@@ -3189,7 +3190,7 @@ describe('go native element assignment', () => {
         expect(output).toContain("var index any = i + 1");
         expect(output).not.toContain("Add(i, 1)");
     });
-    test('an inferred counter keeps Subtract and Multiply (both helpers return int64)', () => {
+    test('an inferred counter widens Subtract and Multiply to int64 (both helpers return int64)', () => {
         const input =
         "class T {\n" +
         "    f (n: number) {\n" +
@@ -3201,8 +3202,9 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Subtract(i, 1)");
-        expect(output).toContain("Multiply(i, 2)");
+        expect(output).toContain("int64(i) - 1");
+        expect(output).toContain("int64(i) * 2");
+        expect(output).not.toContain("var a any = i - 1");
     });
     test('an inferred counter keeps Add when its literal would not fit a Go int', () => {
         const input =
@@ -3257,7 +3259,7 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("callDynamically(\"log\", i+1, a)");
     });
-    test('an int64 call plus an int counter keeps the helper (mixed kinds)', () => {
+    test('an int64 call plus an int counter widens the int side (Add boxes int64 for the mix)', () => {
         const input =
         "class T {\n" +
         "    milliseconds (): number { return 1; }\n" +
@@ -3269,7 +3271,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Add(this.Milliseconds(), i)");
+        expect(output).toContain("this.Milliseconds() + int64(i)");
+        expect(output).not.toContain("Add(");
     });
     test('concatenating into a typed string field is a compound assignment', () => {
         const input =
@@ -5298,7 +5301,7 @@ describe('go native arithmetic result rows (Divide/Multiply/Subtract/Mod)', () =
     });
     test('a declaration position keeps the call for the declared-local table', () => {
         expect(body(main("        const last = arr.length - 1;\n        const rest = arr.length % 7;\n        return [last, rest];\n")))
-            .toContain("var last any = Subtract(GetArrayLength(arr), 1) var rest any = Mod(GetArrayLength(arr), 7)");
+            .toContain("var last any = int64(GetArrayLength(arr)) - 1 var rest any = int64(GetArrayLength(arr)) % 7");
         expect(body(main("        const scaled = 10 * 1000;\n        return scaled;\n")))
             .toContain("var scaled any = 10 * 1000");
     });
@@ -6599,5 +6602,88 @@ describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws cach
     test('a later pointer write keeps the helper', () => {
         const out = write("        let v = this.safeValue (p, 'a');\n        if (p) { v = this.safeString (p, 'b'); }\n        if (v === undefined) { return 1; }\n");
         expect(out).toContain('IsEqual(v, nil)');
+    });
+});
+
+// hx4 G04: int/int64 widening and string-literal-union concat leaves
+describe('hx4 G04 go arithmetic residual', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('int64 minus an int local widens the int side', () => {
+        const input =
+        "class Exchange {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    main (rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        let now = this.milliseconds ();\n" +
+        "        let x = undefined;\n" +
+        "        x = now - n;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('x = now - int64(n)');
+        expect(output).not.toContain('Subtract(');
+    });
+    test('an int local times an int64 call widens the int side', () => {
+        const input =
+        "class Exchange {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    main (rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        let x = undefined;\n" +
+        "        x = n * this.milliseconds ();\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('x = int64(n) * this.Milliseconds()');
+    });
+    test('mixed-width Divide and Mod keep the helper (nil / NaN on a zero divisor)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    main (rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        const now = this.milliseconds ();\n" +
+        "        let x = undefined;\n" +
+        "        x = now / n;\n" +
+        "        let y = undefined;\n" +
+        "        y = now % n;\n" +
+        "        return [x, y];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('Divide(now, n)');
+        expect(output).toContain('Mod(now, n)');
+    });
+    test('an any operand keeps Subtract', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a: any, rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        let x = undefined;\n" +
+        "        x = a - n;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('Subtract(a, n)');
+    });
+    test('a *string narrowed to a string-literal union is a concat leaf', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeStringUpper (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (order: any) {\n" +
+        "        const type = this.safeStringUpper (order, 'type');\n" +
+        "        if (type === 'STOP_MARKET' || type === 'STOP_LIMIT') {\n" +
+        "            throw new Error ('Invalid order type: ' + type + '.');\n" +
+        "        }\n" +
+        "        return 'x' + type;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('Error(\"Invalid order type: \" + *typeVar + \".\")');
+        // outside the guard the local may be nil: the helper stays
+        expect(output).toContain('Add(\"x\", typeVar)');
     });
 });
