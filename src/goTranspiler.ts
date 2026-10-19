@@ -7993,7 +7993,7 @@ ${tryBodyBlock}
         case SyntaxKind.CallExpression:
             return this.goTypeOfInitializer(node, printed);
         case SyntaxKind.Identifier:
-            return this.goDeclaredTypeOfIdentifier(node);
+            return this.goDeclaredTypeOfIdentifier(node) ?? this.g01MapParamType(node);
         }
         return undefined;
     }
@@ -8290,6 +8290,117 @@ ${tryBodyBlock}
         return (isIfStatement(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
     }
 
+    // hx4 G01
+    // a defaulted parameter bound through GetArgMap is a Go map[string]any; an element read of it
+    // indexes natively only where g01ReadOk proves the deref-free read answers what GetValue did
+    g01MapParamType(node): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        let decl: any;
+        try {
+            decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return undefined;
+        }
+        if ((decl?.kind !== SyntaxKind.Parameter) || (this.goGetArgParameterType(decl) !== 'map[string]any')) {
+            return undefined;
+        }
+        const access: any = node.parent;
+        if ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === node)
+            && (this.g01ReadOk(node, access) !== 'map[string]any')) {
+            return undefined;
+        }
+        return 'map[string]any';
+    }
+
+    // `receiver[k]` may replace GetValue(receiver, k) on a declared map[string]any: literal key, not a
+    // compared operand, not an element-write value (the ccxt write pass proves those from the helper
+    // spelling), and a market row or a consumer that derefScalars the value as GetValue did
+    g01ReadOk(receiver, access): string | undefined {
+        if (this.goIsComparedOperand(access) || this.g01IsWriteValue(access) || !this.g01LiteralKey(access.argumentExpression)) {
+            return undefined;
+        }
+        return (this.g01MarketRow(receiver) || this.g01DerefConsumer(access)) ? 'map[string]any' : undefined;
+    }
+
+    // a string literal or a non-negative integer literal key
+    g01LiteralKey(key): boolean {
+        return (key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+            || ((key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${key.text ?? ''}`));
+    }
+
+    // `y[k] = x["lit"]`
+    g01IsWriteValue(access): boolean {
+        let operand: any = access;
+        while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            operand = operand.parent;
+        }
+        const parent: any = operand.parent;
+        return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === operand)
+            && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left?.kind === SyntaxKind.ElementAccessExpression);
+    }
+
+    // a Market-typed local written only by `this.market (…)` (or undefined): that accessor returns
+    // MarketTyped rows, whose values derefScalar leaves unchanged. Currency rows can hold *string values.
+    g01MarketRow(node): boolean {
+        let type: any;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const names = [ type?.aliasSymbol?.name, type?.symbol?.name ];
+        if (!names.some((n) => [ 'Market', 'MarketInterface' ].includes(n))) {
+            return false;
+        }
+        const declaration = this.goDeclarationOfIdentifier(node);
+        const scope: any = (declaration === undefined) ? undefined : this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const isRow = (v: any) => (v === undefined) || ((v.kind === SyntaxKind.Identifier) && (v.text === 'undefined'))
+            || ((v.kind === SyntaxKind.CallExpression) && (v.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (v.expression.expression?.kind === SyntaxKind.ThisKeyword) && (v.expression.name?.text === 'market'));
+        let ok = isRow(declaration.initializer);
+        const name = declaration.name?.text;
+        const visit = (n: any) => {
+            if (!ok) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.BinaryExpression) && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)
+                && (n.operatorToken?.kind === SyntaxKind.EqualsToken) && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
+                ok = isRow(n.right);
+            } else if ((n.kind === SyntaxKind.ArrayLiteralExpression) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+                && n.elements.some((e: any) => (e.kind === SyntaxKind.Identifier) && (e.text === name))) {
+                ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return ok;
+    }
+
+    // the read is the container of an enclosing element read, an operand of `in`, or an argument of a
+    // SafeValueN-backed accessor (or safeCurrencyCode): each derefScalars it, so GetValue's deref is redundant
+    g01DerefConsumer(access): boolean {
+        let operand: any = access;
+        while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            operand = operand.parent;
+        }
+        const parent: any = operand.parent;
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === operand)) {
+            return !this.isGoElementAccessAssignmentTarget(parent);
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.InKeyword)) {
+            return true;
+        }
+        const callee: any = parent?.expression;
+        return (parent?.kind === SyntaxKind.CallExpression) && (parent.arguments.indexOf(operand) >= 0)
+            && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+            && /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|IntegerProduct|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|safeCurrencyCode)$/.test(`${callee.name?.text ?? ''}`);
+    }
 
 }
 

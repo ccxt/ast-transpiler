@@ -556,4 +556,10 @@ export declare class GoTranspiler extends BaseTranspiler {
      * Check if the last statement in a block is a conditional with returns in all branches
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
+    g01MapParamType(node: any): string | undefined;
+    g01ReadOk(receiver: any, access: any): string | undefined;
+    g01LiteralKey(key: any): boolean;
+    g01IsWriteValue(access: any): boolean;
+    g01MarketRow(node: any): boolean;
+    g01DerefConsumer(access: any): boolean;
 }

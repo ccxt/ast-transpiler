@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-CTKEJPGZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -14041,7 +14041,7 @@ ${tryBodyBlock}
       case SyntaxKind5.CallExpression:
         return this.goTypeOfInitializer(node, printed);
       case SyntaxKind5.Identifier:
-        return this.goDeclaredTypeOfIdentifier(node);
+        return this.goDeclaredTypeOfIdentifier(node) ?? this.g01MapParamType(node);
     }
     return void 0;
   }
@@ -14290,6 +14290,103 @@ ${this.getIden(level)}}()`;
     }
     const lastStatement = statements[statements.length - 1];
     return (isIfStatement2(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
+  }
+  // hx4 G01
+  // a defaulted parameter bound through GetArgMap is a Go map[string]any; an element read of it
+  // indexes natively only where g01ReadOk proves the deref-free read answers what GetValue did
+  g01MapParamType(node) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    let decl;
+    try {
+      decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    } catch (e) {
+      return void 0;
+    }
+    if (decl?.kind !== SyntaxKind5.Parameter || this.goGetArgParameterType(decl) !== "map[string]any") {
+      return void 0;
+    }
+    const access = node.parent;
+    if (access?.kind === SyntaxKind5.ElementAccessExpression && access.expression === node && this.g01ReadOk(node, access) !== "map[string]any") {
+      return void 0;
+    }
+    return "map[string]any";
+  }
+  // `receiver[k]` may replace GetValue(receiver, k) on a declared map[string]any: literal key, not a
+  // compared operand, not an element-write value (the ccxt write pass proves those from the helper
+  // spelling), and a market row or a consumer that derefScalars the value as GetValue did
+  g01ReadOk(receiver, access) {
+    if (this.goIsComparedOperand(access) || this.g01IsWriteValue(access) || !this.g01LiteralKey(access.argumentExpression)) {
+      return void 0;
+    }
+    return this.g01MarketRow(receiver) || this.g01DerefConsumer(access) ? "map[string]any" : void 0;
+  }
+  // a string literal or a non-negative integer literal key
+  g01LiteralKey(key) {
+    return key?.kind === SyntaxKind5.StringLiteral || key?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral || key?.kind === SyntaxKind5.NumericLiteral && /^\d+$/.test(`${key.text ?? ""}`);
+  }
+  // `y[k] = x["lit"]`
+  g01IsWriteValue(access) {
+    let operand = access;
+    while (operand.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+      operand = operand.parent;
+    }
+    const parent = operand.parent;
+    return parent?.kind === SyntaxKind5.BinaryExpression && parent.right === operand && parent.operatorToken?.kind === SyntaxKind5.EqualsToken && parent.left?.kind === SyntaxKind5.ElementAccessExpression;
+  }
+  // a Market-typed local written only by `this.market (…)` (or undefined): that accessor returns
+  // MarketTyped rows, whose values derefScalar leaves unchanged. Currency rows can hold *string values.
+  g01MarketRow(node) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    const names = [type?.aliasSymbol?.name, type?.symbol?.name];
+    if (!names.some((n) => ["Market", "MarketInterface"].includes(n))) {
+      return false;
+    }
+    const declaration = this.goDeclarationOfIdentifier(node);
+    const scope = declaration === void 0 ? void 0 : this.goEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return false;
+    }
+    const isRow = (v) => v === void 0 || v.kind === SyntaxKind5.Identifier && v.text === "undefined" || v.kind === SyntaxKind5.CallExpression && v.expression?.kind === SyntaxKind5.PropertyAccessExpression && v.expression.expression?.kind === SyntaxKind5.ThisKeyword && v.expression.name?.text === "market";
+    let ok = isRow(declaration.initializer);
+    const name = declaration.name?.text;
+    const visit = (n) => {
+      if (!ok) {
+        return;
+      }
+      if (n.kind === SyntaxKind5.BinaryExpression && n.left?.kind === SyntaxKind5.Identifier && n.left.text === name && n.operatorToken?.kind === SyntaxKind5.EqualsToken && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
+        ok = isRow(n.right);
+      } else if (n.kind === SyntaxKind5.ArrayLiteralExpression && n.parent?.kind === SyntaxKind5.BinaryExpression && n.parent.left === n && n.elements.some((e) => e.kind === SyntaxKind5.Identifier && e.text === name)) {
+        ok = false;
+      }
+      n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    return ok;
+  }
+  // the read is the container of an enclosing element read, an operand of `in`, or an argument of a
+  // SafeValueN-backed accessor (or safeCurrencyCode): each derefScalars it, so GetValue's deref is redundant
+  g01DerefConsumer(access) {
+    let operand = access;
+    while (operand.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+      operand = operand.parent;
+    }
+    const parent = operand.parent;
+    if (parent?.kind === SyntaxKind5.ElementAccessExpression && parent.expression === operand) {
+      return !this.isGoElementAccessAssignmentTarget(parent);
+    }
+    if (parent?.kind === SyntaxKind5.BinaryExpression && parent.operatorToken?.kind === SyntaxKind5.InKeyword) {
+      return true;
+    }
+    const callee = parent?.expression;
+    return parent?.kind === SyntaxKind5.CallExpression && parent.arguments.indexOf(operand) >= 0 && callee?.kind === SyntaxKind5.PropertyAccessExpression && callee.expression?.kind === SyntaxKind5.ThisKeyword && /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|IntegerProduct|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|safeCurrencyCode)$/.test(`${callee.name?.text ?? ""}`);
   }
 };
 
