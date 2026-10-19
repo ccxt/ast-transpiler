@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -13359,7 +13359,7 @@ ${this.getIden(level)}}()`;
       }
       if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
         result.push(texts[i]);
-      } else if (expected[i] === "string" && !texts[i].includes("\n") && this.goDerefableStringOperand(operand)) {
+      } else if (expected[i] === "string" && !texts[i].includes("\n") && (this.goDerefableStringOperand(operand) || this.goLiteralUnionNarrowedStringDeref(operand))) {
         result.push("*" + texts[i].trim());
       } else {
         return void 0;
@@ -13444,7 +13444,7 @@ ${this.getIden(level)}}()`;
       if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "string") {
         return name;
       }
-      if (receiver !== void 0 && this.goDerefableStringOperand(receiver)) {
+      if (receiver !== void 0 && (this.goDerefableStringOperand(receiver) || this.goLiteralUnionNarrowedStringDeref(receiver))) {
         return "*" + name.trim();
       }
       if (receiver !== void 0 && this.goOperandStaticType(receiver, name) === "int64" && this.goStdlibImportIsPlaceable()) {
@@ -14290,6 +14290,21 @@ ${this.getIden(level)}}()`;
     }
     const lastStatement = statements[statements.length - 1];
     return (isIfStatement2(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
+  }
+  // hx4 G08
+  // a `*string` local the checker narrowed to a union of string literals (`x === 'A' || x === 'B'`):
+  // every member is a string, so the Go pointer is non-nil at this read and may be dereferenced
+  goLiteralUnionNarrowedStringDeref(node) {
+    if (node?.kind !== SyntaxKind5.Identifier || this.goDeclaredTypeOfIdentifier(node) !== "*string") {
+      return false;
+    }
+    const checker = this.checkerOrUndefined();
+    const type = checker?.getTypeAtLocation(node);
+    if (type === void 0 || (type.flags & TypeFlags4.Union) === 0) {
+      return false;
+    }
+    const members = type.getTypes?.() ?? [];
+    return members.length > 0 && members.every((member) => (member.flags & TypeFlags4.StringLiteral) !== 0);
   }
 };
 

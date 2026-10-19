@@ -6512,3 +6512,40 @@ describe('go string locals rewritten by self-concatenation', () => {
         expect(output).toContain('var d any = ""');
     });
 });
+
+// hx4 G08
+describe('go string helpers on a *string narrowed to string literals', () => {
+    test('a literal-union narrowed *string is dereferenced, a nilable or mixed one keeps the helper', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class Base { safeString (a, b, c?): Str { return undefined; } }\n" +
+        "class Test extends Base {\n" +
+        "    main (d, n: number) {\n" +
+        "        const x = this.safeString (d, 'a');\n" +
+        "        const y = this.safeString (d, 'b');\n" +
+        "        const z = this.safeString (d, 'c');\n" +
+        "        const r = [];\n" +
+        "        if ((x === 'TAKER') || (x === 'MAKER')) {\n" +
+        "            r.push (x.toLowerCase ());\n" +
+        "            r.push (x.split ('A'));\n" +
+        "            r.push (x.toString ());\n" +
+        "        }\n" +
+        "        if ((y === 'Q') || (n === 1)) {\n" +
+        "            r.push (y.toUpperCase ());\n" +
+        "        }\n" +
+        "        r.push (z.toLowerCase ());\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('strings.ToLower(*x)');
+        expect(output).toContain('strings.Split(*x, "A")');
+        expect(output).toContain('r = append(r, *x)');
+        // `y` is not narrowed when `n === 1` holds: helper kept
+        expect(output).toContain('ToUpper(y)');
+        expect(output).not.toContain('strings.ToUpper(*y)');
+        // `z` is never tested: nil reaches the helper's "" branch
+        expect(output).toContain('ToLower(z)');
+        expect(output).not.toContain('strings.ToLower(*z)');
+    });
+});
