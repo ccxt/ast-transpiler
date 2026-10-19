@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-VNDHHGGT.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -22013,7 +22013,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (op === SyntaxKind7.InKeyword) {
       const shadow = this.rustParamShadowOf(right);
-      return (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.printNativeInOperator(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
+      return (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.printNativeInOperator(left, right) ?? this.r05InOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
     }
     if ((op === SyntaxKind7.PlusEqualsToken || op === SyntaxKind7.MinusEqualsToken) && left.kind !== SyntaxKind7.ElementAccessExpression) {
       const isPlus = op === SyntaxKind7.PlusEqualsToken;
@@ -24370,7 +24370,7 @@ ${this.getIden(identation)}})`;
     return `Value::from(vec![${node.elements.map((e) => this.printNode(e, 0)).join(", ")}])`;
   }
   printDeleteExpression(node, identation) {
-    return `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+    return this.r05Delete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
   }
   printInstanceOfExpression(node, identation) {
     return `${this.getIden(identation)}is_instance(&${this.printNode(node.left, 0)}, &${this.printNode(node.right, 0)})`;
@@ -24417,10 +24417,10 @@ ${this.getIden(identation)}})`;
     return `Value::Bool(${this.nativeValuePredicateText("array", node?.arguments?.[0], parsedArg) ?? `is_array(&${parsedArg})`})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
-    return `object_keys(&${parsedArg})`;
+    return this.r05Enum(node, parsedArg, "keys") ?? `object_keys(&${parsedArg})`;
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
-    return `object_values(&${parsedArg})`;
+    return this.r05Enum(node, parsedArg, "values") ?? `object_values(&${parsedArg})`;
   }
   printJsonParseCall(node, identation, parsedArg = void 0) {
     return `json_parse(&${parsedArg})`;
@@ -24546,6 +24546,92 @@ ${iden}}`;
   }
   printSpreadElement(node, identation) {
     return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+  }
+  // hx4 R05 — native IndexMap ops for `k in X`, `delete X[k]`, `Object.keys/values(X)`.
+  /** Source path of a node (forward slashes). */
+  r05Path(node) {
+    const src = node?.getSourceFile?.();
+    return typeof src?.fileName === "string" ? src.fileName.replace(/\\/g, "/") : "";
+  }
+  /** Test sources keep the helpers: tests-pipeline post-passes match `in_op(` text. */
+  r05IsTest(node) {
+    return /\/test\//.test(this.r05Path(node));
+  }
+  /** `k in X` with a non-literal key on a dict-shaped receiver: `in_op`'s Dict arm.
+   *  The Arr arm is the only other `true` path; the dict proof excludes it. */
+  r05InOp(key, obj) {
+    const recv = this.rustStripWrappers(obj);
+    if (this.r05IsTest(obj) || !this.isShallowValueReceiver(recv) || this.rustParamShadowOf(recv) !== void 0 || isPropertyAccessExpression3(recv) && _RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(recv.name.text)) || !this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
+      return void 0;
+    }
+    const objExpr = this.printNode(obj, 0).trim();
+    const keyExpr = this.printNode(key, 0).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyExpr) || keyExpr === "self") {
+      return void 0;
+    }
+    return `Value::Bool(matches!((&${objExpr}, &${keyExpr}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
+  }
+  /** `delete X[k]` on a receiver the native-insert proof admits (never a ws
+   *  subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`. */
+  r05Delete(node) {
+    const target = node?.expression;
+    if (target === void 0 || !isElementAccessExpression4(target) || this.r05IsTest(node)) {
+      return void 0;
+    }
+    const base = target.expression;
+    const receiver = this.rustNativeInsertReceiver(base);
+    const restTier = /\/ts\/src\/[^/]+\.ts$/.test(this.r05Path(node));
+    if (receiver !== void 0 && !receiver.isField && !restTier && receiver.plain !== true) {
+      return void 0;
+    }
+    if (receiver === void 0 || this.rustParamShadowOf(base) !== void 0 || !this.rustReceiverStaysDict(base, receiver) || receiver.isField && _RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(receiver.nameNode.text)) || !receiver.isField && this.rustLocalInitReadsTaggedContainer(base)) {
+      return void 0;
+    }
+    const recv = this.printNode(base, 0).trim();
+    const keyNode = target.argumentExpression;
+    const literal = isStringLiteral3(keyNode) ? this.rustStringLiteralOf(this.printNode(keyNode, 0).trim()) : void 0;
+    if (literal !== void 0) {
+      return `if let Value::Dict(__d) = &mut ${recv} { std::sync::Arc::make_mut(__d).shift_remove(${literal}); }`;
+    }
+    const keyExpr = this.printNode(keyNode, 0).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyExpr) || keyExpr === "self" || keyExpr === recv) {
+      return void 0;
+    }
+    return `if let (Value::Dict(__d), Value::Str(__k)) = (&mut ${recv}, &${keyExpr}) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }`;
+  }
+  /** `this.<field>` with a declared plain-dict type that is no ws container: the
+   *  hand-written base builds these maps itself and never tags them. */
+  r05UntaggedField(node) {
+    return isPropertyAccessExpression3(node) && node.expression.kind === SyntaxKind7.ThisKeyword && !_RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(node.name.text)) && !_RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(String(node.name.text)) && this.rustProvenDictThisFieldR05(node);
+  }
+  rustProvenDictThisFieldR05(node) {
+    let declaration;
+    try {
+      declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(node.name));
+    } catch (e) {
+      return false;
+    }
+    if (declaration === void 0 || declaration.kind !== SyntaxKind7.PropertyDeclaration || declaration.type === void 0)
+      return false;
+    const type = this.getCheckedTypeOf(declaration.type);
+    return type !== void 0 && this.isProvenMapType(type);
+  }
+  /** `Object.keys/values(X)` in REST-tier sources (`ts/src/<id>.ts`): no ws client
+   *  there, so X never carries the `__ws_subs_url`/`__ws_sub_ref` tags the helper filters. */
+  r05Enum(node, parsedArg, kind) {
+    const arg = this.rustStripWrappers(node?.arguments?.[0]);
+    if (arg === void 0 || parsedArg === void 0 || !(/\/ts\/src\/[^/]+\.ts$/.test(this.r05Path(node)) || this.r05UntaggedField(arg)) || !(isIdentifier3(arg) || isPropertyAccessExpression3(arg) || isElementAccessExpression4(arg) || isCallExpression6(arg)) || this.rustParamShadowOf(arg) !== void 0) {
+      return void 0;
+    }
+    const type = this.typeOfNodeIfAny(arg);
+    const parts = type === void 0 ? [] : type.flags & TypeFlags6.Union ? typeParts(type) ?? [] : [type];
+    if (parts.some((p) => this.getChecker().isArrayType(p) || this.getChecker().isTupleType(p) || (p.flags & (TypeFlags6.StringLike | TypeFlags6.NumberLike | TypeFlags6.BooleanLike | TypeFlags6.BigIntLike)) !== 0)) {
+      return void 0;
+    }
+    const text = parsedArg.trim();
+    const recv = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(text) ? text : `(${text})`;
+    const body = kind === "keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
+    return `Value::Array(${recv}.as_map().map(|__m| ${body}).unwrap_or_default())`;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

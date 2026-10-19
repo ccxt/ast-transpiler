@@ -1623,7 +1623,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
             return (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
-                ?? this.printNativeInOperator(left, right)
+                ?? this.printNativeInOperator(left, right) ?? this.r05InOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
         // `+=` / `-=` on regular variables
@@ -4234,7 +4234,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        return `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+        return this.r05Delete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
     }
 
     printInstanceOfExpression(node, identation) {
@@ -4292,11 +4292,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return `object_keys(&${parsedArg})`;
+        return this.r05Enum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return `object_values(&${parsedArg})`;
+        return this.r05Enum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
     printJsonParseCall(node, identation, parsedArg = undefined) {
@@ -4453,5 +4453,112 @@ export class RustTranspiler extends BaseTranspiler {
 
     printSpreadElement(node, identation) {
         return `${this.getIden(identation)}${this.printNode(node.expression, 0)}`;
+    }
+
+    // hx4 R05 — native IndexMap ops for `k in X`, `delete X[k]`, `Object.keys/values(X)`.
+
+    /** Source path of a node (forward slashes). */
+    r05Path(node: Node): string {
+        const src: any = (node as any)?.getSourceFile?.();
+        return typeof src?.fileName === 'string' ? src.fileName.replace(/\\/g, '/') : '';
+    }
+
+    /** Test sources keep the helpers: tests-pipeline post-passes match `in_op(` text. */
+    r05IsTest(node: Node): boolean {
+        return /\/test\//.test(this.r05Path(node));
+    }
+
+    /** `k in X` with a non-literal key on a dict-shaped receiver: `in_op`'s Dict arm.
+     *  The Arr arm is the only other `true` path; the dict proof excludes it. */
+    r05InOp(key, obj): string | undefined {
+        const recv: any = this.rustStripWrappers(obj);
+        if (this.r05IsTest(obj) || !this.isShallowValueReceiver(recv) || this.rustParamShadowOf(recv) !== undefined
+            || (isPropertyAccessExpression(recv) && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(recv.name.text)))
+            || !this.isDictShapedType(this.typeOfNodeIfAny(obj))) {
+            return undefined;
+        }
+        const objExpr = this.printNode(obj, 0).trim();
+        const keyExpr = this.printNode(key, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyExpr) || keyExpr === 'self') {
+            return undefined; // the key is borrowed beside the receiver: plain locals only
+        }
+        return `Value::Bool(matches!((&${objExpr}, &${keyExpr}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
+    }
+
+    /** `delete X[k]` on a receiver the native-insert proof admits (never a ws
+     *  subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`. */
+    r05Delete(node): string | undefined {
+        const target: any = node?.expression;
+        if (target === undefined || !isElementAccessExpression(target) || this.r05IsTest(node)) {
+            return undefined;
+        }
+        const base: any = target.expression;
+        const receiver = this.rustNativeInsertReceiver(base);
+        // ws-capable tiers: a local/param may alias a `client.subscriptions` snapshot
+        // (live-store route in the helper); admit only fields and literal-built locals.
+        const restTier = /\/ts\/src\/[^/]+\.ts$/.test(this.r05Path(node));
+        if (receiver !== undefined && !receiver.isField && !restTier && receiver.plain !== true) {
+            return undefined;
+        }
+        if (receiver === undefined || this.rustParamShadowOf(base) !== undefined
+            || !this.rustReceiverStaysDict(base, receiver)
+            || (receiver.isField && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(receiver.nameNode.text)))
+            || (!receiver.isField && this.rustLocalInitReadsTaggedContainer(base))) {
+            return undefined;
+        }
+        const recv = this.printNode(base, 0).trim();
+        const keyNode: any = target.argumentExpression;
+        const literal = isStringLiteral(keyNode) ? this.rustStringLiteralOf(this.printNode(keyNode, 0).trim()) : undefined;
+        if (literal !== undefined) {
+            return `if let Value::Dict(__d) = &mut ${recv} { std::sync::Arc::make_mut(__d).shift_remove(${literal}); }`;
+        }
+        const keyExpr = this.printNode(keyNode, 0).trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyExpr) || keyExpr === 'self' || keyExpr === recv) {
+            return undefined;
+        }
+        return `if let (Value::Dict(__d), Value::Str(__k)) = (&mut ${recv}, &${keyExpr}) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }`;
+    }
+
+    /** `this.<field>` with a declared plain-dict type that is no ws container: the
+     *  hand-written base builds these maps itself and never tags them. */
+    r05UntaggedField(node): boolean {
+        return isPropertyAccessExpression(node) && node.expression.kind === SyntaxKind.ThisKeyword
+            && !RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(node.name.text))
+            && !RustTranspiler.RUST_TAGGED_HANDLE_FIELDS.has(String(node.name.text))
+            && this.rustProvenDictThisFieldR05(node);
+    }
+
+    rustProvenDictThisFieldR05(node): boolean {
+        let declaration: any;
+        try {
+            declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(node.name));
+        } catch (e) {
+            return false;
+        }
+        if (declaration === undefined || declaration.kind !== SyntaxKind.PropertyDeclaration || declaration.type === undefined) return false;
+        const type = this.getCheckedTypeOf(declaration.type);
+        return type !== undefined && this.isProvenMapType(type);
+    }
+
+    /** `Object.keys/values(X)` in REST-tier sources (`ts/src/<id>.ts`): no ws client
+     *  there, so X never carries the `__ws_subs_url`/`__ws_sub_ref` tags the helper filters. */
+    r05Enum(node, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg: any = this.rustStripWrappers(node?.arguments?.[0]);
+        if (arg === undefined || parsedArg === undefined
+            || !(/\/ts\/src\/[^/]+\.ts$/.test(this.r05Path(node)) || this.r05UntaggedField(arg))
+            || !(isIdentifier(arg) || isPropertyAccessExpression(arg) || isElementAccessExpression(arg) || isCallExpression(arg))
+            || this.rustParamShadowOf(arg) !== undefined) {
+            return undefined;
+        }
+        const type = this.typeOfNodeIfAny(arg);
+        const parts: Type[] = type === undefined ? [] : ((type.flags & TypeFlags.Union) ? (typeParts(type) ?? []) : [type]);
+        if (parts.some((p) => this.getChecker().isArrayType(p) || this.getChecker().isTupleType(p)
+            || (p.flags & (TypeFlags.StringLike | TypeFlags.NumberLike | TypeFlags.BooleanLike | TypeFlags.BigIntLike)) !== 0)) {
+            return undefined; // native-typed locals (bool / Option<String>) have no `as_map`
+        }
+        const text = parsedArg.trim();
+        const recv = /^[A-Za-z_][A-Za-z0-9_.]*$/.test(text) ? text : `(${text})`;
+        const body = kind === 'keys' ? '__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()' : '__m.values().cloned().collect()';
+        return `Value::Array(${recv}.as_map().map(|__m| ${body}).unwrap_or_default())`;
     }
 }

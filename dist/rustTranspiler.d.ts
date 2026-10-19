@@ -647,5 +647,22 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    /** Source path of a node (forward slashes). */
+    r05Path(node: Node): string;
+    /** Test sources keep the helpers: tests-pipeline post-passes match `in_op(` text. */
+    r05IsTest(node: Node): boolean;
+    /** `k in X` with a non-literal key on a dict-shaped receiver: `in_op`'s Dict arm.
+     *  The Arr arm is the only other `true` path; the dict proof excludes it. */
+    r05InOp(key: any, obj: any): string | undefined;
+    /** `delete X[k]` on a receiver the native-insert proof admits (never a ws
+     *  subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`. */
+    r05Delete(node: any): string | undefined;
+    /** `this.<field>` with a declared plain-dict type that is no ws container: the
+     *  hand-written base builds these maps itself and never tags them. */
+    r05UntaggedField(node: any): boolean;
+    rustProvenDictThisFieldR05(node: any): boolean;
+    /** `Object.keys/values(X)` in REST-tier sources (`ts/src/<id>.ts`): no ws client
+     *  there, so X never carries the `__ws_subs_url`/`__ws_sub_ref` tags the helper filters. */
+    r05Enum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
 }
 export {};
