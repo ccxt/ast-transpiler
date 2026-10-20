@@ -61,4 +61,3 @@ declare class TranspilationError extends Error {
     constructor(id: any, message: any, nodeText: any, start: any, end: any);
 }
 export { Languages, TranspilationMode, IFileImport, ITranspiledFile, IFileExport, ITranspileContext, ITranspileProgramCache, TranspilationError, IInput, IMethodType, IParameterType };
-//# sourceMappingURL=types.d.ts.map

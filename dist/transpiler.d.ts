@@ -92,4 +92,3 @@ declare class TranspileProgramBatch {
 }
 export { Transpiler, TranspileProgramBatch, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, SyntaxKind, alignGoTrailingComments, RUST_DECLARED_DICT_LOCALS, };
 export type { RustDeclaredDictLocalEntry };
-//# sourceMappingURL=transpiler.d.ts.map

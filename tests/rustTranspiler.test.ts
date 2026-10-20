@@ -4514,3 +4514,20 @@ describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', ()
         expect(prediction).toContain('let mut loose: Value = object_keys(&response);');
     });
 });
+
+describe('hx4 R20 bool-call equality and numeric add', () => {
+    const src = "class A {\n    sbeReadUint (h: string, o: number, l: number): number { return o + l; }\n    sum (...a: any[]): any { return a[0]; }\n    run (requestPath: any, frameHex: string, frameLength: number, x: any, flag: any) {\n        const blockLength = this.sbeReadUint (frameHex, 0, 2);\n        const position = this.sum (blockLength, 8);\n        if (requestPath.endsWith ('login') === true) { return 1; }\n        if (position + 4 > frameLength) { return 0; }\n        const k = x + 1;\n        return [ x.startsWith ('z') !== true, k, flag === true ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('startsWith/endsWith compared to a bool literal is the bare bool', () => {
+        expect(o).toContain('if (ends_with(&requestPath, &Value::Str("login".into()))) {');
+        expect(o).toContain('Value::Bool(!starts_with(&x, &Value::Str("z".into())))');
+    });
+    test('+ on numeric-kind operands is the native match', () => {
+        expect(o).toContain('if (match (&(position), &(Value::Int(4))) { (Value::Int(x), Value::Int(y)) => Value::Int(x + y),');
+    });
+    test('any operands keep the helpers', () => {
+        expect(o).toContain('add(&x, &Value::Int(1))');
+        expect(o).toContain('is_equal(&flag, &Value::Bool(true))');
+    });
+});

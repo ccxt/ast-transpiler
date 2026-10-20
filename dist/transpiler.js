@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-WD722H3U.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -22276,6 +22276,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const r13 = this.printRustR13ProvenStrEquality(left, right, op);
     if (r13 !== void 0)
       return r13;
+    const r20 = this.r20BoolCallEquality(left, right, op);
+    if (r20 !== void 0)
+      return r20;
     const operator = op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken ? "==" : "!=";
     const leftLiteral = this.literalKindOfNode(left);
     const rightLiteral = this.literalKindOfNode(right);
@@ -23000,6 +23003,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const r16 = this.rustR16NativeArithmetic(op, left, right, leftText, rightText);
     if (r16 !== void 0)
       return r16;
+    const r20 = this.r20NativeNumericAdd(op, left, right, leftText, rightText);
+    if (r20 !== void 0)
+      return r20;
     if (op === SyntaxKind7.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType))) {
       return this.printNativeStringConcat(leftText, rightText);
     }
@@ -27315,6 +27321,60 @@ ${iden}}`;
     const arg = parsedArg.trim();
     const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== "self" && arg !== "true" && arg !== "false" ? `${arg}.clone()` : arg;
     return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value}); }`;
+  }
+  // hx4 R20 — `startsWith/endsWith(..) === true|false` compares the runtime fn's bare bool
+  // (is_equal of two Bool boxes is the payload compare); `a + b` on R16 numeric kinds is the
+  // `add` helper's Int/Float/Null dispatch, the same native match as `-`/`*`.
+  r20BoolCallEquality(left, right, op) {
+    const l = this.unwrapParensNode(left);
+    const r = this.unwrapParensNode(right);
+    const isBoolLit = (n) => n?.kind === SyntaxKind7.TrueKeyword || n?.kind === SyntaxKind7.FalseKeyword;
+    if (isBoolLit(l) === isBoolLit(r))
+      return void 0;
+    const literal = isBoolLit(l) ? l : r;
+    const call = isBoolLit(l) ? r : l;
+    if (!isCallExpression6(call) || !isPropertyAccessExpression3(call.expression))
+      return void 0;
+    const name = String(call.expression.name.text);
+    if (name !== "startsWith" && name !== "endsWith" || call.arguments.length !== 1)
+      return void 0;
+    const text = this.printNode(call, 0).trim();
+    const fn = name === "startsWith" ? "starts_with" : "ends_with";
+    const m = /^Value::Bool\((.*)\)$/s.exec(text);
+    if (m === null || !m[1].startsWith(`${fn}(`) || !this.r20Balanced(m[1]) || text.includes("\n"))
+      return void 0;
+    const equals = op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken;
+    return literal.kind === SyntaxKind7.TrueKeyword === equals ? m[1] : `!${m[1]}`;
+  }
+  /** `fn(...)` whose first `(` closes at the very end (string literals skipped). */
+  r20Balanced(text) {
+    let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (c === '"') {
+        for (i++; i < text.length && text[i] !== '"'; i++)
+          if (text[i] === "\\")
+            i++;
+        continue;
+      }
+      if (c === "(")
+        depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0 && i !== text.length - 1)
+          return false;
+      }
+    }
+    return depth === 0 && text.endsWith(")");
+  }
+  r20NativeNumericAdd(op, left, right, leftText, rightText) {
+    if (op !== SyntaxKind7.PlusToken)
+      return void 0;
+    if (!this.printsValueExpression(this.rustStripWrappers(left)) || !this.printsValueExpression(this.rustStripWrappers(right)))
+      return void 0;
+    if (this.rustR16NumericKind(left) === void 0 || this.rustR16NumericKind(right) === void 0)
+      return void 0;
+    return this.printNativeNumeric(op, leftText, rightText);
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

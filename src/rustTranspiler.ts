@@ -697,6 +697,7 @@ export class RustTranspiler extends BaseTranspiler {
         const r09 = this.rustR09LengthEquality(left, right, op); if (r09 !== undefined) return r09;
         const r12 = this.rustR12NativeBoolEquality(left, right, op); if (r12 !== undefined) return r12;
         const r13 = this.printRustR13ProvenStrEquality(left, right, op); if (r13 !== undefined) return r13;
+        const r20 = this.r20BoolCallEquality(left, right, op); if (r20 !== undefined) return r20;
         const operator = (op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';
         const leftLiteral = this.literalKindOfNode(left);
         const rightLiteral = this.literalKindOfNode(right);
@@ -1549,6 +1550,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const r09 = this.rustR09NativeAddSubtract(op, left, right, leftType, rightType, leftText, rightText); if (r09 !== undefined) return r09;
         const r16 = this.rustR16NativeArithmetic(op, left, right, leftText, rightText); if (r16 !== undefined) return r16;
+        const r20 = this.r20NativeNumericAdd(op, left, right, leftText, rightText); if (r20 !== undefined) return r20;
         if (op === SyntaxKind.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType))) {
             return this.printNativeStringConcat(leftText, rightText);
         }
@@ -6164,5 +6166,45 @@ export class RustTranspiler extends BaseTranspiler {
         // `append_to_array` takes the value by move; ccxt's post-pass cloned a bare local there.
         const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== 'self' && arg !== 'true' && arg !== 'false' ? `${arg}.clone()` : arg;
         return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value}); }`;
+    }
+
+    // hx4 R20 — `startsWith/endsWith(..) === true|false` compares the runtime fn's bare bool
+    // (is_equal of two Bool boxes is the payload compare); `a + b` on R16 numeric kinds is the
+    // `add` helper's Int/Float/Null dispatch, the same native match as `-`/`*`.
+    r20BoolCallEquality(left, right, op): string | undefined {
+        const l: any = this.unwrapParensNode(left);
+        const r: any = this.unwrapParensNode(right);
+        const isBoolLit = (n: any) => n?.kind === SyntaxKind.TrueKeyword || n?.kind === SyntaxKind.FalseKeyword;
+        if (isBoolLit(l) === isBoolLit(r)) return undefined;
+        const literal: any = isBoolLit(l) ? l : r;
+        const call: any = isBoolLit(l) ? r : l;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression)) return undefined;
+        const name = String(call.expression.name.text);
+        if ((name !== 'startsWith' && name !== 'endsWith') || call.arguments.length !== 1) return undefined;
+        const text = this.printNode(call, 0).trim();
+        const fn = name === 'startsWith' ? 'starts_with' : 'ends_with';
+        const m = /^Value::Bool\((.*)\)$/s.exec(text);
+        if (m === null || !m[1].startsWith(`${fn}(`) || !this.r20Balanced(m[1]) || text.includes('\n')) return undefined;
+        const equals = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        return (literal.kind === SyntaxKind.TrueKeyword) === equals ? m[1] : `!${m[1]}`;
+    }
+
+    /** `fn(...)` whose first `(` closes at the very end (string literals skipped). */
+    r20Balanced(text: string): boolean {
+        let depth = 0;
+        for (let i = 0; i < text.length; i++) {
+            const c = text[i];
+            if (c === '"') { for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++; continue; }
+            if (c === '(') depth++;
+            else if (c === ')') { depth--; if (depth === 0 && i !== text.length - 1) return false; }
+        }
+        return depth === 0 && text.endsWith(')');
+    }
+
+    r20NativeNumericAdd(op, left, right, leftText: string, rightText: string): string | undefined {
+        if (op !== SyntaxKind.PlusToken) return undefined;
+        if (!this.printsValueExpression(this.rustStripWrappers(left)) || !this.printsValueExpression(this.rustStripWrappers(right))) return undefined;
+        if (this.rustR16NumericKind(left) === undefined || this.rustR16NumericKind(right) === undefined) return undefined;
+        return this.printNativeNumeric(op, leftText, rightText);
     }
 }

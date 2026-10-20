@@ -393,4 +393,3 @@ export interface JavaTranspiler {
     hx4J09CoreArgument(type: string, printed: string, node: any): string | undefined;
     hx4J09CcxtErrorClass(node: any): boolean;
 }
-//# sourceMappingURL=javaTranspiler.d.ts.map

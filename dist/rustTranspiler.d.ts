@@ -848,6 +848,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     r18ArrLength(node: any, receiver: string): string | undefined;
     /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */
     r18ArrPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
+    r20BoolCallEquality(left: any, right: any, op: any): string | undefined;
+    /** `fn(...)` whose first `(` closes at the very end (string literals skipped). */
+    r20Balanced(text: string): boolean;
+    r20NativeNumericAdd(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
 }
 export {};
-//# sourceMappingURL=rustTranspiler.d.ts.map
