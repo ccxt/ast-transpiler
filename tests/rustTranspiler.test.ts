@@ -4579,3 +4579,34 @@ describe('hx4 R22 self-referential numeric writes, always-Str locals, Str orderi
         expect(o).toContain('is_less_than_or_equal(&x, &Value::Str("b".into()))');
     });
 });
+
+describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
+    let base = '';
+    let pro = '';
+    beforeAll(() => {
+        base = transpiler.transpileRustByPath('./tests/files/input/hx4r23/ts/src/base/Exchange.ts').content;
+        pro = transpiler.transpileRustByPath('./tests/files/input/hx4r23/ts/src/pro/venue.ts').content;
+    });
+
+    test('base extend copies of locals / typed Dict params insert natively', () => {
+        expect(base).toContain('if let Value::Dict(__d) = &mut itemWithKey { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&keyName), key.clone()); }');
+        expect(base).toContain('if let Value::Dict(__d) = &mut result { std::sync::Arc::make_mut(__d).insert("swap".into(), Value::Bool(false)); }');
+    });
+
+    test('base safeDict(this.options, k, {}) local reads natively', () => {
+        expect(base).toContain('accountsByType.as_map().and_then(|__m| account.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('base extend of an any parameter keeps the helper', () => {
+        expect(base).toContain('add_element_to_object(&mut r, &Value::Str("x".into()), Value::Int(1));');
+    });
+
+    test('pro extend of a proven local inserts natively; extend of a handler parameter keeps the helper', () => {
+        expect(pro).toContain('if let Value::Dict(__d) = &mut request { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); }');
+        expect(pro).toContain('add_element_to_object(&mut loose, &Value::Str("id".into()), Value::Int(2));');
+    });
+
+    test('pro safeDict(this.options, k, {}) local reads natively', () => {
+        expect(pro).toContain('subs.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null)');
+    });
+});

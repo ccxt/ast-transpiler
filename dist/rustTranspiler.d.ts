@@ -877,5 +877,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `Option<&str>` text of an operand that is always `Value::Str` / `Value::Null`, else undefined. */
     r22StrOrNullOperand(node: any): string | undefined;
     r22StrOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    r23Tier(node: Node): 'rest' | 'base' | 'pro' | undefined;
+    r23PlainSourceTier(node: Node): boolean;
+    /** A copied/read dict argument outside REST: in pro only `this.options` or a proven plain
+     *  local; in base also a parameter annotated with a plain-dict type (no `any` caller handle). */
+    r23TierSourceOk(arg: any): boolean;
+    /** `this.extend (plain, …unshared)` / `this.omit|keysort (plain, …)` called directly
+     *  (not only as a builder's return): the same fresh-copy proof as `rustR12PlainReturn`. */
+    private r23CopyVisiting;
+    r23FreshCopy(node: any, depth: number): boolean;
 }
 export {};

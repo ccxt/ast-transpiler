@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-PU4W7OZB.js";
+} from "./chunk-WD722H3U.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21906,6 +21906,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     /** Locals whose Arr-only proof is in progress (a self-referencing write proves nothing new). */
     this.r21ArrVisiting = /* @__PURE__ */ new Set();
     this.r22StrVisiting = /* @__PURE__ */ new Map();
+    /** `this.extend (plain, …unshared)` / `this.omit|keysort (plain, …)` called directly
+     *  (not only as a builder's return): the same fresh-copy proof as `rustR12PlainReturn`. */
+    this.r23CopyVisiting = /* @__PURE__ */ new Set();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -26486,15 +26489,17 @@ ${iden}}`;
     return this.r11ProvenListValue(declaration.initializer, depth + 1);
   }
   rustR12PlainSource(node, depth = 0) {
-    if (depth > 4 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword || !_RustTranspiler.RUST_R12_REST_FILE.test(String(node.getSourceFile().fileName).replace(/\\/g, "/"))) {
+    if (depth > 4 || !isCallExpression6(node) || !isPropertyAccessExpression3(node.expression) || node.expression.expression.kind !== SyntaxKind7.ThisKeyword || !this.r23PlainSourceTier(node)) {
       return false;
     }
     const callee = String(node.expression.name.text);
     const defaultIndex = _RustTranspiler.RUST_R12_DICT_READERS[callee];
     if (defaultIndex !== void 0) {
       const fallback = this.rustStripWrappers(node.arguments[defaultIndex]);
-      return this.rustR01CalleeIsBase(node) && node.arguments.length <= defaultIndex + 1 && (fallback === void 0 || this.rustPlainDictLiteral(fallback) || this.rustTypeIsUndefinedish(fallback)) && this.rustR12UnsharedDict(node.arguments[0]);
+      return this.rustR01CalleeIsBase(node) && node.arguments.length <= defaultIndex + 1 && (fallback === void 0 || this.rustPlainDictLiteral(fallback) || this.rustTypeIsUndefinedish(fallback)) && this.rustR12UnsharedDict(node.arguments[0]) && this.r23TierSourceOk(node.arguments[0]);
     }
+    if (this.r23FreshCopy(node, depth))
+      return true;
     return this.rustR12PlainBuilder(node, depth);
   }
   /** `this.options`, a parameter, or a const local whose initializer reads no `this` field
@@ -26577,7 +26582,7 @@ ${iden}}`;
     const callee = String(node.expression.name.text);
     if (callee === "omit" || callee === "keysort")
       return plainHead(node.arguments[0]);
-    return callee === "extend" && plainHead(node.arguments[0]) && node.arguments.slice(1).every((a) => plainHead(a) || this.rustR12UnsharedDict(a));
+    return callee === "extend" && plainHead(node.arguments[0]) && node.arguments.slice(1).every((a) => plainHead(a) || this.rustR12UnsharedDict(a) && this.r23TierSourceOk(a));
   }
   /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
    *  overload set), in the calling file or the base tier. */
@@ -27528,6 +27533,52 @@ ${iden}}`;
     const order = `(match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p ${strict} __q, _ => __x ${strict} __y })`;
     const text = `(match (${a}, ${b}) { (Some(__x), Some(__y)) => ${order}${orEqual ? " || __x == __y" : ""}, ${orEqual ? "(None, None) => true, " : ""}_ => false })`;
     return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
+  }
+  // hx4 R23 — the R12 plain sources (`safeDict*(x, k, {})`, same-file builders, `extend|omit`)
+  // also hold in the base tier and pro files, where a tagged handle can only arrive through a
+  // parameter: base admits typed plain-dict parameters, pro admits no parameter at all.
+  r23Tier(node) {
+    const path3 = this.r05Path(node);
+    if (_RustTranspiler.RUST_R12_REST_FILE.test(path3) && /\/ts\/src\/[^/]+\.ts$/.test(path3))
+      return "rest";
+    if (_RustTranspiler.RUST_BASE_TIER_FILE.test(path3) && !/\/base\/ws\//.test(path3))
+      return "base";
+    if (/\/ts\/src\/pro\/[^/]+\.ts$/.test(path3))
+      return "pro";
+    return void 0;
+  }
+  r23PlainSourceTier(node) {
+    return this.r23Tier(node) !== void 0;
+  }
+  /** A copied/read dict argument outside REST: in pro only `this.options` or a proven plain
+   *  local; in base also a parameter annotated with a plain-dict type (no `any` caller handle). */
+  r23TierSourceOk(arg) {
+    const tier = this.r23Tier(arg);
+    if (tier === "rest")
+      return true;
+    const node = this.rustStripWrappers(arg);
+    if (node === void 0 || !isIdentifier3(node))
+      return true;
+    const declaration = this.rustSingleLocalDeclaration(node);
+    if (tier === "pro")
+      return declaration !== void 0 && !isParameterDeclaration3(declaration) && this.rustR10PlainReceiver(node) === "local";
+    if (declaration === void 0 || !isParameterDeclaration3(declaration))
+      return true;
+    if (tier !== "base" || declaration.type === void 0 || declaration.dotDotDotToken !== void 0)
+      return false;
+    const type = this.getCheckedTypeOf(declaration.type);
+    return type !== void 0 && this.isProvenMapType(type) && !this.rustParameterIsClientHandle(declaration);
+  }
+  r23FreshCopy(node, depth) {
+    const callee = String(node.expression.name.text);
+    if (callee !== "extend" && callee !== "omit" && callee !== "keysort" || this.r23CopyVisiting.has(node))
+      return false;
+    this.r23CopyVisiting.add(node);
+    try {
+      return this.rustR12PlainReturn(node, depth);
+    } finally {
+      this.r23CopyVisiting.delete(node);
+    }
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips
