@@ -5353,7 +5353,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustR12PlainSource(node: any, depth = 0): boolean {
         if (depth > 4 || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
             || node.expression.expression.kind !== SyntaxKind.ThisKeyword
-            || !RustTranspiler.RUST_R12_REST_FILE.test(String(node.getSourceFile().fileName).replace(/\\/g, '/'))) {
+            || !this.r23PlainSourceTier(node)) {
             return false;
         }
         const callee = String(node.expression.name.text);
@@ -5362,8 +5362,9 @@ export class RustTranspiler extends BaseTranspiler {
             const fallback: any = this.rustStripWrappers(node.arguments[defaultIndex]);
             return this.rustR01CalleeIsBase(node) && node.arguments.length <= defaultIndex + 1
                 && (fallback === undefined || this.rustPlainDictLiteral(fallback) || this.rustTypeIsUndefinedish(fallback))
-                && this.rustR12UnsharedDict(node.arguments[0]);
+                && this.rustR12UnsharedDict(node.arguments[0]) && this.r23TierSourceOk(node.arguments[0]);
         }
+        if (this.r23FreshCopy(node, depth)) return true;
         return this.rustR12PlainBuilder(node, depth);
     }
 
@@ -5442,7 +5443,7 @@ export class RustTranspiler extends BaseTranspiler {
         const callee = String(node.expression.name.text);
         if (callee === 'omit' || callee === 'keysort') return plainHead(node.arguments[0]);
         return callee === 'extend' && plainHead(node.arguments[0])
-            && node.arguments.slice(1).every((a) => plainHead(a) || this.rustR12UnsharedDict(a));
+            && node.arguments.slice(1).every((a) => plainHead(a) || (this.rustR12UnsharedDict(a) && this.r23TierSourceOk(a)));
     }
 
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
@@ -6266,6 +6267,53 @@ export class RustTranspiler extends BaseTranspiler {
             return this.r18ArrLocal(ident, false);
         } finally {
             this.r21ArrVisiting.delete(declaration);
+        }
+    }
+
+    // hx4 R23 — the R12 plain sources (`safeDict*(x, k, {})`, same-file builders, `extend|omit`)
+    // also hold in the base tier and pro files, where a tagged handle can only arrive through a
+    // parameter: base admits typed plain-dict parameters, pro admits no parameter at all.
+    r23Tier(node: Node): 'rest' | 'base' | 'pro' | undefined {
+        const path = this.r05Path(node);
+        if (RustTranspiler.RUST_R12_REST_FILE.test(path) && /\/ts\/src\/[^/]+\.ts$/.test(path)) return 'rest';
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(path) && !/\/base\/ws\//.test(path)) return 'base';
+        if (/\/ts\/src\/pro\/[^/]+\.ts$/.test(path)) return 'pro';
+        return undefined;
+    }
+
+    r23PlainSourceTier(node: Node): boolean {
+        return this.r23Tier(node) !== undefined;
+    }
+
+    /** A copied/read dict argument outside REST: in pro only `this.options` or a proven plain
+     *  local; in base also a parameter annotated with a plain-dict type (no `any` caller handle). */
+    r23TierSourceOk(arg: any): boolean {
+        const tier = this.r23Tier(arg);
+        if (tier === 'rest') return true;
+        const node: any = this.rustStripWrappers(arg);
+        if (node === undefined || !isIdentifier(node)) return true;
+        const declaration: any = this.rustSingleLocalDeclaration(node);
+        // pro: a local read source must itself be proven plain (its root may be a handler parameter)
+        if (tier === 'pro') return declaration !== undefined && !isParameterDeclaration(declaration) && this.rustR10PlainReceiver(node) === 'local';
+        if (declaration === undefined || !isParameterDeclaration(declaration)) return true;
+        if (tier !== 'base' || declaration.type === undefined || declaration.dotDotDotToken !== undefined) return false;
+        const type = this.getCheckedTypeOf(declaration.type);
+        return type !== undefined && this.isProvenMapType(type) && !this.rustParameterIsClientHandle(declaration);
+    }
+
+    /** `this.extend (plain, …unshared)` / `this.omit|keysort (plain, …)` called directly
+     *  (not only as a builder's return): the same fresh-copy proof as `rustR12PlainReturn`. */
+    private r23CopyVisiting = new Set<any>();
+
+    r23FreshCopy(node: any, depth: number): boolean {
+        const callee = String(node.expression.name.text);
+        // the R01 -> R12 hop restarts `depth`: a copy reached again through its own local proves nothing
+        if ((callee !== 'extend' && callee !== 'omit' && callee !== 'keysort') || this.r23CopyVisiting.has(node)) return false;
+        this.r23CopyVisiting.add(node);
+        try {
+            return this.rustR12PlainReturn(node, depth);
+        } finally {
+            this.r23CopyVisiting.delete(node);
         }
     }
 }

@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -865,5 +865,14 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
     r21ArrSource(n: any): boolean;
     r21ArrAlias(ident: any): boolean;
+    r23Tier(node: Node): 'rest' | 'base' | 'pro' | undefined;
+    r23PlainSourceTier(node: Node): boolean;
+    /** A copied/read dict argument outside REST: in pro only `this.options` or a proven plain
+     *  local; in base also a parameter annotated with a plain-dict type (no `any` caller handle). */
+    r23TierSourceOk(arg: any): boolean;
+    /** `this.extend (plain, …unshared)` / `this.omit|keysort (plain, …)` called directly
+     *  (not only as a builder's return): the same fresh-copy proof as `rustR12PlainReturn`. */
+    private r23CopyVisiting;
+    r23FreshCopy(node: any, depth: number): boolean;
 }
 export {};
