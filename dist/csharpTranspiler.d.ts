@@ -254,7 +254,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeSliceCall(node: any, name: any): string;
     csharpSliceLiteralBound(node: any): any;
     csharpSliceBoundExpression(value: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "list" | "string";
+    csharpSliceReceiverKind(expression: any): "string" | "list";
     csharpSliceStringType(type: any): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;

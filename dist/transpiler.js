@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-PU4W7OZB.js";
+} from "./chunk-WD722H3U.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21903,6 +21903,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // locals whose every write is numeric, and flow-narrowed (guarded non-undefined) number identifiers.
     this.rustR16InProgress = /* @__PURE__ */ new Set();
     this.rustR16Assumed = /* @__PURE__ */ new Set();
+    /** Locals whose Arr-only proof is in progress (a self-referencing write proves nothing new). */
+    this.r21ArrVisiting = /* @__PURE__ */ new Set();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -25110,7 +25112,7 @@ ${ind}let ${view}: &${map} = &${arc};
    *  emitted where no such hoist is needed. */
   isNativeAccessPositionSafe(node) {
     const parent = node.parent;
-    if (parent && (isPropertyAccessExpression3(parent) || isCallExpression6(parent)) && parent.expression === node)
+    if (parent && (isPropertyAccessExpression3(parent) || isCallExpression6(parent)) && parent.expression === node && !this.r21PureStringMethodReceiver(node))
       return false;
     const root = this.rootPlaceText(node);
     for (let current = node.parent; current; current = current.parent) {
@@ -25479,10 +25481,10 @@ ${this.getIden(identation)}})`;
     return `Value::Bool(${this.nativeValuePredicateText("array", node?.arguments?.[0], parsedArg) ?? `is_array(&${parsedArg})`})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
-    return this.r05Enum(node, parsedArg, "keys") ?? this.r18PredictionEnum(node, parsedArg, "keys") ?? `object_keys(&${parsedArg})`;
+    return this.r05Enum(node, parsedArg, "keys") ?? this.r18PredictionEnum(node, parsedArg, "keys") ?? this.r21BaseEnum(node, parsedArg, "keys") ?? `object_keys(&${parsedArg})`;
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
-    return this.r05Enum(node, parsedArg, "values") ?? this.r18PredictionEnum(node, parsedArg, "values") ?? `object_values(&${parsedArg})`;
+    return this.r05Enum(node, parsedArg, "values") ?? this.r18PredictionEnum(node, parsedArg, "values") ?? this.r21BaseEnum(node, parsedArg, "values") ?? `object_values(&${parsedArg})`;
   }
   printJsonParseCall(node, identation, parsedArg = void 0) {
     return `json_parse(&${parsedArg})`;
@@ -27246,6 +27248,8 @@ ${iden}}`;
     const n = this.rustStripWrappers(node);
     if (n === void 0)
       return false;
+    if (this.r21ArrSource(n))
+      return true;
     if (isArrayLiteralExpression4(n))
       return !n.elements.some((e) => e.kind === SyntaxKind7.SpreadElement);
     if (n.kind === SyntaxKind7.NullKeyword || isIdentifier3(n) && String(n.text) === "undefined")
@@ -27375,6 +27379,56 @@ ${iden}}`;
     if (this.rustR16NumericKind(left) === void 0 || this.rustR16NumericKind(right) === void 0)
       return void 0;
     return this.printNativeNumeric(op, leftText, rightText);
+  }
+  // hx4 R21 — `Object.keys/values` on an R10-proven plain local in the base tier (the
+  // helper's ws-tag filter is a no-op on a map built from literals), and native map reads
+  // that are the receiver of a non-mutating string method (`currency['id'].toUpperCase ()`).
+  /** Base-tier (`ts/src/base/**`) `Object.keys/values(x)` on an R10-proven plain local. */
+  r21BaseEnum(node, parsedArg, kind) {
+    const arg = this.rustStripWrappers(node?.arguments?.[0]);
+    if (arg === void 0 || parsedArg === void 0 || !isIdentifier3(arg) || !_RustTranspiler.RUST_BASE_TIER_FILE.test(this.r05Path(node)) || this.rustR10PlainReceiver(arg) !== "local")
+      return void 0;
+    const body = kind === "keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
+    return `Value::Array(${parsedArg.trim()}.as_map().map(|__m| ${body}).unwrap_or_default())`;
+  }
+  /** `x['k'].m (…)` with `m` a non-mutating string method on a checker-`string` read: no
+   *  ccxt pass rewrites that target (only `.push` / calls of the read itself). */
+  r21PureStringMethodReceiver(node) {
+    const access = node?.parent;
+    const call = access?.parent;
+    if (!isElementAccessExpression4(node) || access === void 0 || !isPropertyAccessExpression3(access) || access.expression !== node || call === void 0 || !isCallExpression6(call) || call.expression !== access || !_RustTranspiler.RUST_R21_PURE_STRING_METHODS.has(String(access.name.text)))
+      return false;
+    const type = this.typeOfNodeIfAny(node);
+    return type !== void 0 && (type.flags & TypeFlags6.StringLike) !== 0;
+  }
+  /** More always-`Value::Arr` sources for the R18 proof: base `arrayConcat` (Array on every
+   *  arm), base `sortBy`/`sortBy2` of an Arr-only local (returns its input's variant), and a
+   *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
+  r21ArrSource(n) {
+    if (isCallExpression6(n) && isPropertyAccessExpression3(n.expression) && n.expression.expression.kind === SyntaxKind7.ThisKeyword) {
+      const callee = String(n.expression.name.text);
+      if (callee === "arrayConcat")
+        return n.arguments.length === 2 && this.rustR01CalleeIsBase(n);
+      if (callee === "sortBy" || callee === "sortBy2") {
+        const first = this.rustStripWrappers(n.arguments[0]);
+        return first !== void 0 && isIdentifier3(first) && this.rustR01CalleeIsBase(n) && this.r21ArrAlias(first);
+      }
+      return false;
+    }
+    return isIdentifier3(n) && String(n.text) !== "undefined" && this.r21ArrAlias(n);
+  }
+  r21ArrAlias(ident) {
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || !isVariableDeclaration3(declaration))
+      return false;
+    if (this.r21ArrVisiting.has(declaration))
+      return true;
+    this.r21ArrVisiting.add(declaration);
+    try {
+      return this.r18ArrLocal(ident, false);
+    } finally {
+      this.r21ArrVisiting.delete(declaration);
+    }
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips
@@ -27680,6 +27734,7 @@ _RustTranspiler.RUST_R12_DICT_READERS = { safeDict: 2, safeDict2: 3, safeDictN: 
 _RustTranspiler.RUST_R12_REST_FILE = /ts\/src\/[^/]+\.ts$/;
 /** Base-tier array readers whose result is the stored `Value::Arr` or the default argument. */
 _RustTranspiler.RUST_R18_LIST_READERS = { safeList: 2, safeList2: 3, safeListN: 2 };
+_RustTranspiler.RUST_R21_PURE_STRING_METHODS = /* @__PURE__ */ new Set(["toUpperCase", "toLowerCase", "trim", "startsWith", "endsWith", "split"]);
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts

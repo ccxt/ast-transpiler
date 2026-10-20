@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -852,5 +852,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `fn(...)` whose first `(` closes at the very end (string literals skipped). */
     r20Balanced(text: string): boolean;
     r20NativeNumericAdd(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    /** Base-tier (`ts/src/base/**`) `Object.keys/values(x)` on an R10-proven plain local. */
+    r21BaseEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    private static readonly RUST_R21_PURE_STRING_METHODS;
+    /** `x['k'].m (…)` with `m` a non-mutating string method on a checker-`string` read: no
+     *  ccxt pass rewrites that target (only `.push` / calls of the read itself). */
+    r21PureStringMethodReceiver(node: any): boolean;
+    /** Locals whose Arr-only proof is in progress (a self-referencing write proves nothing new). */
+    private r21ArrVisiting;
+    /** More always-`Value::Arr` sources for the R18 proof: base `arrayConcat` (Array on every
+     *  arm), base `sortBy`/`sortBy2` of an Arr-only local (returns its input's variant), and a
+     *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
+    r21ArrSource(n: any): boolean;
+    r21ArrAlias(ident: any): boolean;
 }
 export {};
