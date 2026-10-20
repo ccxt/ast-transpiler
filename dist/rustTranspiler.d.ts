@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -865,5 +865,17 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
     r21ArrSource(n: any): boolean;
     r21ArrAlias(ident: any): boolean;
+    r22AssumedNumericSelf(inner: any): string | undefined;
+    private r22StrVisiting;
+    /** Always `Value::Str`: R17 shapes, a `+` chain with such an operand, or an always-Str local. */
+    r22AlwaysStr(node: any): boolean;
+    /** A plain `Value` local, never captured by a closure, whose every write is always-Str (`x += e`
+     *  keeps it), or Str|Null (R13 source / nullish) when the checker narrows this read to `string`. */
+    r22AlwaysStrLocal(ident: any, allowNull?: boolean): boolean;
+    r22ConcatAnchor(node: any): boolean;
+    r22ConcatIsAnchored(left: any, right: any, leftType: any, rightType: any): boolean;
+    /** `Option<&str>` text of an operand that is always `Value::Str` / `Value::Null`, else undefined. */
+    r22StrOrNullOperand(node: any): string | undefined;
+    r22StrOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
 }
 export {};

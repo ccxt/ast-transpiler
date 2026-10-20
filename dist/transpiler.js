@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-WD722H3U.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -21905,6 +21905,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     this.rustR16Assumed = /* @__PURE__ */ new Set();
     /** Locals whose Arr-only proof is in progress (a self-referencing write proves nothing new). */
     this.r21ArrVisiting = /* @__PURE__ */ new Set();
+    this.r22StrVisiting = /* @__PURE__ */ new Map();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -22943,7 +22944,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const ordered = op === SyntaxKind7.LessThanToken || op === SyntaxKind7.GreaterThanToken;
     const proven = leftKind === "definite" || rightKind === "definite" || (ordered ? leftKind !== void 0 || rightKind !== void 0 : leftKind === "number" && rightKind === "number");
     if (!proven && !this.rustR16OrderedProven(op, left, right)) {
-      return void 0;
+      return this.r22StrOrderedComparison(node, op, left, right);
     }
     return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
   }
@@ -23008,7 +23009,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const r20 = this.r20NativeNumericAdd(op, left, right, leftText, rightText);
     if (r20 !== void 0)
       return r20;
-    if (op === SyntaxKind7.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType))) {
+    if (op === SyntaxKind7.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType) || this.r22ConcatIsAnchored(left, right, leftType, rightType))) {
       return this.printNativeStringConcat(leftText, rightText);
     }
     if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -27001,8 +27002,10 @@ ${iden}}`;
   }
   rustR16NumericKind(node, depth = 0) {
     const inner = this.rustStripWrappers(node);
-    if (inner === void 0 || depth > 8 || this.rustR16InProgress.has(inner))
+    if (inner === void 0 || depth > 8)
       return void 0;
+    if (this.rustR16InProgress.has(inner))
+      return this.r22AssumedNumericSelf(inner);
     this.rustR16InProgress.add(inner);
     try {
       const structural = this.rustR16StructuralKind(inner, depth);
@@ -27429,6 +27432,102 @@ ${iden}}`;
     } finally {
       this.r21ArrVisiting.delete(declaration);
     }
+  }
+  // hx4 R22 — an R16 local re-read inside its own write (`p = p + 4`) is the assumed kind.
+  r22AssumedNumericSelf(inner) {
+    if (!isIdentifier3(inner))
+      return void 0;
+    const declaration = this.rustSingleLocalDeclaration(inner);
+    return declaration !== void 0 && this.rustR16Assumed.has(declaration) ? "number" : void 0;
+  }
+  /** Always `Value::Str`: R17 shapes, a `+` chain with such an operand, or an always-Str local. */
+  r22AlwaysStr(node) {
+    const inner = this.unwrapParensNode(node);
+    if (inner === void 0)
+      return false;
+    if (this.r17AlwaysStr(inner))
+      return true;
+    if (isBinaryExpression5(inner) && inner.operatorToken.kind === SyntaxKind7.PlusToken)
+      return this.r22AlwaysStr(inner.left) || this.r22AlwaysStr(inner.right);
+    return isIdentifier3(inner) && this.r22AlwaysStrLocal(inner);
+  }
+  /** A plain `Value` local, never captured by a closure, whose every write is always-Str (`x += e`
+   *  keeps it), or Str|Null (R13 source / nullish) when the checker narrows this read to `string`. */
+  r22AlwaysStrLocal(ident, allowNull = false) {
+    if (this.rustParamShadowOf(ident) !== void 0 || this.rustStringLocalIdentifierIsTyped(ident) || this.rustVecLocalDeclarationOf(ident) !== void 0)
+      return false;
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name) || declaration.initializer === void 0)
+      return false;
+    if (this.r22StrVisiting.has(declaration))
+      return allowNull || this.r22StrVisiting.get(declaration) === false;
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0)
+      return false;
+    const here = this.typeOfNodeIfAny(ident);
+    const narrowed = allowNull || here !== void 0 && this.isStringLikeType(here);
+    const nullish = (e) => {
+      const n = this.unwrapParensNode(e);
+      return n?.kind === SyntaxKind7.NullKeyword || isIdentifier3(n) && String(n.text) === "undefined";
+    };
+    const local = (e) => {
+      const n = this.unwrapParensNode(e);
+      return isIdentifier3(n) && (this.rustR13ProvenStrIdentifier(n) || this.r22AlwaysStrLocal(n, true));
+    };
+    const source = (e) => this.r22AlwaysStr(e) || narrowed && (nullish(e) || this.rustR13ProvenStrSource(e) || local(e));
+    this.r22StrVisiting.set(declaration, allowNull);
+    try {
+      if (!source(declaration.initializer))
+        return false;
+      return this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
+        if (this.rustEnclosingFunction(n) !== fn || this.rustR13WriteTarget(n))
+          return false;
+        const parent = n.parent;
+        if ((parent?.kind === SyntaxKind7.PrefixUnaryExpression || parent?.kind === SyntaxKind7.PostfixUnaryExpression) && parent.operator !== SyntaxKind7.ExclamationToken)
+          return false;
+        if (!isBinaryExpression5(parent) || parent.left !== n || !rustIsAssignmentOperator(parent.operatorToken.kind))
+          return true;
+        const op = parent.operatorToken.kind;
+        return op === SyntaxKind7.PlusEqualsToken || op === SyntaxKind7.EqualsToken && source(parent.right);
+      });
+    } finally {
+      this.r22StrVisiting.delete(declaration);
+    }
+  }
+  r22ConcatAnchor(node) {
+    const inner = this.unwrapParensNode(node);
+    return inner !== void 0 && this.printsValueExpression(inner) && this.r22AlwaysStr(inner);
+  }
+  r22ConcatIsAnchored(left, right, leftType, rightType) {
+    return this.r22ConcatAnchor(left) && this.r17ConcatOperandSafe(right, rightType) || this.r22ConcatAnchor(right) && this.r17ConcatOperandSafe(left, leftType);
+  }
+  /** `Option<&str>` text of an operand that is always `Value::Str` / `Value::Null`, else undefined. */
+  r22StrOrNullOperand(node) {
+    const inner = this.rustStripWrappers(node);
+    if (inner === void 0)
+      return void 0;
+    if (isStringLiteral3(inner))
+      return inner.text in this.StringLiteralReplacements ? void 0 : `Some(${this.quotedStringLiteral(inner.text)})`;
+    if (isIdentifier3(inner) && this.r22AlwaysStrLocal(inner, true)) {
+      const text = this.printNode(inner, 0).trim();
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? `${text}.as_str()` : void 0;
+    }
+    const operand = this.rustR13StrOperand(inner, true);
+    return operand === void 0 ? void 0 : `${operand}.as_str()`;
+  }
+  // `a < b` (`<=`, `>`, `>=`) on Str|Null operands: the helper's f64 parse of both strings, else
+  // `str` order; `<=`/`>=` OR in `is_equal` (string equality, Null == Null).
+  r22StrOrderedComparison(node, op, left, right) {
+    const operator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+    const a = this.r22StrOrNullOperand(left);
+    const b = a === void 0 ? void 0 : this.r22StrOrNullOperand(right);
+    if (operator === void 0 || b === void 0)
+      return void 0;
+    const strict = operator.charAt(0);
+    const orEqual = operator.length === 2;
+    const order = `(match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p ${strict} __q, _ => __x ${strict} __y })`;
+    const text = `(match (${a}, ${b}) { (Some(__x), Some(__y)) => ${order}${orEqual ? " || __x == __y" : ""}, ${orEqual ? "(None, None) => true, " : ""}_ => false })`;
+    return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

@@ -301,7 +301,7 @@ describe('rust transpiling tests', () => {
         expect(output).not.toContain('Value::Bool(a.as_f64()');
     });
 
-    test('string comparison keeps the helper', () => {
+    test('string comparison replicates the helper natively (hx4 R22)', () => {
         const ts =
         "let a = 'x';\n" +
         "let b = 'y';\n" +
@@ -309,7 +309,7 @@ describe('rust transpiling tests', () => {
         "    const x = 1;\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than(&a, &b)');
+        expect(output).toContain('(match (a.as_str(), b.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }), _ => false })');
     });
 
     test('any-typed comparison keeps the helper', () => {
@@ -438,7 +438,7 @@ describe('rust transpiling tests', () => {
 
     // Two strings are the helper's lexical branch — a numeric-string literal
     // goes through the same path, so it must keep the helper.
-    test('string against a numeric-string literal keeps the helper', () => {
+    test('string against a numeric-string literal keeps the f64 parse (hx4 R22)', () => {
         const ts =
         "function f(hex: string) {\n" +
         "    if (hex >= '80') {\n" +
@@ -446,7 +446,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&hex, &Value::Str("80".into()))');
+        expect(output).toContain('(match (hex.as_str(), Some("80")) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p > __q, _ => __x > __y }) || __x == __y, (None, None) => true, _ => false })');
     });
 
     test('object keys', () => {
@@ -1635,14 +1635,14 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    test('string + any keeps the add helper', () => {
+    test('always-Str local + any concatenates natively (hx4 R22)', () => {
         const ts =
         'function h(): any { return 2; }\n' +
         'const a: string = "x";\n' +
         'const b = h();\n' +
         'const c = a + b;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&a, &b)');
+        expect(output).toContain('Value::Str(format!("{}{}", a, b).into())');
     });
 
     test('x++ / x-- on a number emit native increment', () => {
@@ -4555,5 +4555,27 @@ describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method rece
     test('a string-typed map read receiving toUpperCase reads natively; an any read keeps get_value', () => {
         expect(rest).toContain('(currency.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))');
         expect(rest).toMatch(/get_value\(&raw, &Value::Str\("id"\.into\(\)\)\)|get_value_k\(&raw, "id"\)/);
+    });
+});
+
+describe('hx4 R22 self-referential numeric writes, always-Str locals, Str ordering', () => {
+    const src = "type Str = string | undefined;\nclass A {\n    sum (...a: any[]): any { return a[0]; }\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    json (x: any): string { return ''; }\n    run (blockLength: number, raw: any, snap: any, method: string, path: string, params: any, x: any) {\n        let position = this.sum (blockLength, 8);\n        position = position + 4;\n        let earliest: Str = undefined;\n        const gameTime = this.safeString (raw, 'gameTime');\n        if ((gameTime !== undefined) && ((earliest === undefined) || (gameTime < earliest))) {\n            earliest = gameTime;\n        }\n        const version = this.safeString (snap, 'v', '');\n        const held = this.safeString (snap, 'h', '');\n        const newer = (held !== '') && (version <= held);\n        let body: any = undefined;\n        if (method === 'POST') { body = this.json (params); }\n        let auth = '/' + path;\n        if (body !== undefined) { auth = auth + body; }\n        let maybe = this.safeString (x, 'k');\n        const bad = maybe + body;\n        const loose = x < raw;\n        const anyLe = x <= 'b';\n        return [ position, earliest, newer, auth, bad, loose, anyLe ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('a numeric local re-read in its own write goes native', () => {
+        expect(o).toContain('position = (match (&(position), &(Value::Int(4))) {');
+        expect(o).not.toContain('add(&position');
+    });
+    test('Str|Null ordering replicates the helper natively', () => {
+        expect(o).toContain('(match (gameTime.as_str(), earliest.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }), _ => false })');
+        expect(o).toContain('(held.as_str() != Some("")) && ((match (version.as_str(), held.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }) || __x == __y, (None, None) => true, _ => false })));');
+    });
+    test('a local whose every write is always-Str anchors a native concat', () => {
+        expect(o).toContain('auth = Value::Str(format!("{}{}", auth, body).into());');
+    });
+    test('unproven operands keep the helpers', () => {
+        expect(o).toContain('add(&maybe, &body)');
+        expect(o).toContain('is_less_than(&x, &raw)');
+        expect(o).toContain('is_less_than_or_equal(&x, &Value::Str("b".into()))');
     });
 });

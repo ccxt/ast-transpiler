@@ -1473,7 +1473,7 @@ export class RustTranspiler extends BaseTranspiler {
                 ? (leftKind !== undefined || rightKind !== undefined)
                 : (leftKind === 'number' && rightKind === 'number'));
         if (!proven && !this.rustR16OrderedProven(op, left, right)) {
-            return undefined;
+            return this.r22StrOrderedComparison(node, op, left, right);
         }
         return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
     }
@@ -1551,7 +1551,8 @@ export class RustTranspiler extends BaseTranspiler {
         const r09 = this.rustR09NativeAddSubtract(op, left, right, leftType, rightType, leftText, rightText); if (r09 !== undefined) return r09;
         const r16 = this.rustR16NativeArithmetic(op, left, right, leftText, rightText); if (r16 !== undefined) return r16;
         const r20 = this.r20NativeNumericAdd(op, left, right, leftText, rightText); if (r20 !== undefined) return r20;
-        if (op === SyntaxKind.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType))) {
+        if (op === SyntaxKind.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType)
+            || this.r22ConcatIsAnchored(left, right, leftType, rightType))) {
             return this.printNativeStringConcat(leftText, rightText);
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -5858,7 +5859,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustR16NumericKind(node, depth = 0): string | undefined {
         const inner: any = this.rustStripWrappers(node);
-        if (inner === undefined || depth > 8 || this.rustR16InProgress.has(inner)) return undefined;
+        if (inner === undefined || depth > 8) return undefined;
+        if (this.rustR16InProgress.has(inner)) return this.r22AssumedNumericSelf(inner);
         this.rustR16InProgress.add(inner);
         try {
             const structural = this.rustR16StructuralKind(inner, depth);
@@ -6267,5 +6269,91 @@ export class RustTranspiler extends BaseTranspiler {
         } finally {
             this.r21ArrVisiting.delete(declaration);
         }
+    }
+
+    // hx4 R22 — an R16 local re-read inside its own write (`p = p + 4`) is the assumed kind.
+    r22AssumedNumericSelf(inner: any): string | undefined {
+        if (!isIdentifier(inner)) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(inner);
+        return declaration !== undefined && this.rustR16Assumed.has(declaration) ? 'number' : undefined;
+    }
+
+    private r22StrVisiting = new Map<any, boolean>();
+
+    /** Always `Value::Str`: R17 shapes, a `+` chain with such an operand, or an always-Str local. */
+    r22AlwaysStr(node: any): boolean {
+        const inner: any = this.unwrapParensNode(node);
+        if (inner === undefined) return false;
+        if (this.r17AlwaysStr(inner)) return true;
+        if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken) return this.r22AlwaysStr(inner.left) || this.r22AlwaysStr(inner.right);
+        return isIdentifier(inner) && this.r22AlwaysStrLocal(inner);
+    }
+
+    /** A plain `Value` local, never captured by a closure, whose every write is always-Str (`x += e`
+     *  keeps it), or Str|Null (R13 source / nullish) when the checker narrows this read to `string`. */
+    r22AlwaysStrLocal(ident: any, allowNull = false): boolean {
+        if (this.rustParamShadowOf(ident) !== undefined || this.rustStringLocalIdentifierIsTyped(ident) || this.rustVecLocalDeclarationOf(ident) !== undefined) return false;
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.initializer === undefined) return false;
+        // inductive: a cycle back to a local under proof assumes that proof (strict covers lax)
+        if (this.r22StrVisiting.has(declaration)) return allowNull || this.r22StrVisiting.get(declaration) === false;
+        const fn = this.rustEnclosingFunction(declaration);
+        if (fn === undefined) return false;
+        const here: any = this.typeOfNodeIfAny(ident);
+        const narrowed = allowNull || (here !== undefined && this.isStringLikeType(here));
+        const nullish = (e: any) => { const n: any = this.unwrapParensNode(e); return n?.kind === SyntaxKind.NullKeyword || (isIdentifier(n) && String(n.text) === 'undefined'); };
+        const local = (e: any) => { const n: any = this.unwrapParensNode(e); return isIdentifier(n) && (this.rustR13ProvenStrIdentifier(n) || this.r22AlwaysStrLocal(n, true)); };
+        const source = (e: any) => this.r22AlwaysStr(e) || (narrowed && (nullish(e) || this.rustR13ProvenStrSource(e) || local(e)));
+        this.r22StrVisiting.set(declaration, allowNull);
+        try {
+            if (!source(declaration.initializer)) return false;
+            return this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+                if (this.rustEnclosingFunction(n) !== fn || this.rustR13WriteTarget(n)) return false;
+                const parent: any = n.parent;
+                if ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression) && parent.operator !== SyntaxKind.ExclamationToken) return false;
+                if (!isBinaryExpression(parent) || parent.left !== n || !rustIsAssignmentOperator(parent.operatorToken.kind)) return true;
+                const op = parent.operatorToken.kind;
+                return op === SyntaxKind.PlusEqualsToken || (op === SyntaxKind.EqualsToken && source(parent.right));
+            });
+        } finally {
+            this.r22StrVisiting.delete(declaration);
+        }
+    }
+
+    r22ConcatAnchor(node: any): boolean {
+        const inner: any = this.unwrapParensNode(node);
+        return inner !== undefined && this.printsValueExpression(inner) && this.r22AlwaysStr(inner);
+    }
+
+    r22ConcatIsAnchored(left, right, leftType, rightType): boolean {
+        return (this.r22ConcatAnchor(left) && this.r17ConcatOperandSafe(right, rightType))
+            || (this.r22ConcatAnchor(right) && this.r17ConcatOperandSafe(left, leftType));
+    }
+
+    /** `Option<&str>` text of an operand that is always `Value::Str` / `Value::Null`, else undefined. */
+    r22StrOrNullOperand(node: any): string | undefined {
+        const inner: any = this.rustStripWrappers(node);
+        if (inner === undefined) return undefined;
+        if (isStringLiteral(inner)) return inner.text in this.StringLiteralReplacements ? undefined : `Some(${this.quotedStringLiteral(inner.text)})`;
+        if (isIdentifier(inner) && this.r22AlwaysStrLocal(inner, true)) {
+            const text = this.printNode(inner, 0).trim();
+            return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? `${text}.as_str()` : undefined;
+        }
+        const operand = this.rustR13StrOperand(inner, true);
+        return operand === undefined ? undefined : `${operand}.as_str()`;
+    }
+
+    // `a < b` (`<=`, `>`, `>=`) on Str|Null operands: the helper's f64 parse of both strings, else
+    // `str` order; `<=`/`>=` OR in `is_equal` (string equality, Null == Null).
+    r22StrOrderedComparison(node, op, left, right): string | undefined {
+        const operator = RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+        const a = this.r22StrOrNullOperand(left);
+        const b = a === undefined ? undefined : this.r22StrOrNullOperand(right);
+        if (operator === undefined || b === undefined) return undefined;
+        const strict = operator.charAt(0);
+        const orEqual = operator.length === 2;
+        const order = `(match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p ${strict} __q, _ => __x ${strict} __y })`;
+        const text = `(match (${a}, ${b}) { (Some(__x), Some(__y)) => ${order}${orEqual ? ' || __x == __y' : ''}, ${orEqual ? '(None, None) => true, ' : ''}_ => false })`;
+        return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
     }
 }
