@@ -773,7 +773,7 @@ export class RustTranspiler extends BaseTranspiler {
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
         if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return `Value::Int(${receiver}.len() as i64)`;
         if (this.r11ProvenListValue(node.expression)) return `${receiver}.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))`;
-        return `get_array_length(&${receiver})`;
+        return this.r18ArrLength(node, receiver) ?? `get_array_length(&${receiver})`;
     }
 
     /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
@@ -1471,7 +1471,7 @@ export class RustTranspiler extends BaseTranspiler {
             (ordered
                 ? (leftKind !== undefined || rightKind !== undefined)
                 : (leftKind === 'number' && rightKind === 'number'));
-        if (!proven) {
+        if (!proven && !this.rustR16OrderedProven(op, left, right)) {
             return undefined;
         }
         return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
@@ -1534,7 +1534,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeArithmetic(op, left, right, leftText, rightText): string | undefined {
-        if (op === SyntaxKind.PercentToken) return this.printRustNativeMod(left, right, leftText, rightText);
+        if (op === SyntaxKind.PercentToken) return this.printRustNativeMod(left, right, leftText, rightText) ?? this.rustR16NativeArithmetic(op, left, right, leftText, rightText);
         if (op !== SyntaxKind.PlusToken && op !== SyntaxKind.MinusToken &&
             op !== SyntaxKind.AsteriskToken && op !== SyntaxKind.SlashToken) {
             return undefined;
@@ -1548,7 +1548,8 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const r09 = this.rustR09NativeAddSubtract(op, left, right, leftType, rightType, leftText, rightText); if (r09 !== undefined) return r09;
-        if (op === SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
+        const r16 = this.rustR16NativeArithmetic(op, left, right, leftText, rightText); if (r16 !== undefined) return r16;
+        if (op === SyntaxKind.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType))) {
             return this.printNativeStringConcat(leftText, rightText);
         }
         if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -1629,7 +1630,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
             return (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
-                ?? this.printNativeInOperator(left, right) ?? this.r05InOp(left, right)
+                ?? this.printNativeInOperator(left, right) ?? this.r18LiteralInOp(left, right) ?? this.r05InOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
         // `+=` / `-=` on regular variables
@@ -4301,11 +4302,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return this.r05Enum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
+        return this.r05Enum(node, parsedArg, 'keys') ?? this.r18PredictionEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return this.r05Enum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
+        return this.r05Enum(node, parsedArg, 'values') ?? this.r18PredictionEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
     printJsonParseCall(node, identation, parsedArg = undefined) {
@@ -4343,7 +4344,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printRustVecPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
+        return this.printRustVecPush(node, name, parsedArg) ?? this.r18ArrPush(node, name, parsedArg) ?? `append_to_array(&mut ${name}, ${parsedArg})`;
     }
 
     printIncludesCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -4355,19 +4356,19 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printStartsWithCall(node, identation, name = undefined, parsedArg = undefined) {
-        const native = this.printNativeStringAffixTest(node, name, 'starts_with');
+        const native = this.printNativeStringAffixTest(node, name, 'starts_with') ?? this.r17PrintAffixTest(node, name, 'starts_with');
         if (native !== undefined) return `Value::Bool(${native})`;
         return `Value::Bool(starts_with(&${name}, &${parsedArg}))`;
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
-        const native = this.printNativeStringAffixTest(node, name, 'ends_with');
+        const native = this.printNativeStringAffixTest(node, name, 'ends_with') ?? this.r17PrintAffixTest(node, name, 'ends_with');
         if (native !== undefined) return `Value::Bool(${native})`;
         return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
     }
 
     printTrimCall(node, identation, name = undefined) {
-        return `trim(&${name})`;
+        return this.r17PrintTrim(node, name) ?? `trim(&${name})`;
     }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
@@ -4415,11 +4416,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return this.printNativeStringReplace(node, name) ?? this.printRustR13Replace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+        return this.printNativeStringReplace(node, name) ?? this.printRustR13Replace(node, name) ?? this.r17PrintReplace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+        return this.printNativeStringReplace(node, name) ?? this.printRustR13Replace(node, name) ?? this.r17PrintReplace(node, name) ?? `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`;
     }
 
     // `{}` (Display) renders an ExchangeError as `[Kind] message`; `{:?}` would dump the struct fields.
@@ -5137,7 +5138,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `-n`: Int/Float flip sign in place, a Null box stays Null (helper's fallthrough).
     printRustNativeNegate(operand, operandText: string): string | undefined {
-        if (this.rustOperandKind(operand) !== 'number') return undefined;
+        if (this.rustOperandKind(operand) !== 'number' && this.rustR16NumericKind(operand) === undefined) return undefined;
         return `(match &(${operandText}) { Value::Int(x) => Value::Int(-x), Value::Float(x) => Value::Float(-x), _ => Value::Null })`;
     }
 
@@ -5846,5 +5847,322 @@ export class RustTranspiler extends BaseTranspiler {
         return !(this.rustScopeNameNodes(fn, name) as any[]).some((m) => m.kind === SyntaxKind.Identifier && m !== n
             && (m.getStart?.() ?? m.pos) >= end && isPropertyAccessExpression(m.parent) && m.parent.expression === m
             && String(m.parent.name.text) === 'push');
+    }
+    // hx4 R16 — numeric operand kinds beyond the checker: 'definite' = always Int/Float (never Null),
+    // 'number' = Int/Float/Null. Covers `this.sum` of numbers, numeric same-file method returns,
+    // locals whose every write is numeric, and flow-narrowed (guarded non-undefined) number identifiers.
+    private rustR16InProgress = new Set<any>();
+    private rustR16Assumed = new Set<any>();
+
+    rustR16NumericKind(node, depth = 0): string | undefined {
+        const inner: any = this.rustStripWrappers(node);
+        if (inner === undefined || depth > 8 || this.rustR16InProgress.has(inner)) return undefined;
+        this.rustR16InProgress.add(inner);
+        try {
+            const structural = this.rustR16StructuralKind(inner, depth);
+            if (structural === 'definite') return 'definite';
+            if (structural === 'number') return 'number';
+            return this.rustOperandKind(inner) === 'number' ? 'number' : undefined;
+        } catch (e) {
+            return undefined;
+        } finally {
+            this.rustR16InProgress.delete(inner);
+        }
+    }
+
+    rustR16Combine(kinds: (string | undefined)[]): string | undefined {
+        if (kinds.length === 0 || kinds.some((k) => k === undefined)) return undefined;
+        return kinds.every((k) => k === 'definite') ? 'definite' : 'number';
+    }
+
+    rustR16StructuralKind(inner: any, depth: number): string | undefined {
+        if (inner.kind === SyntaxKind.NumericLiteral) return 'definite';
+        if (isPrefixUnaryExpression(inner) && inner.operator === SyntaxKind.MinusToken && inner.operand.kind === SyntaxKind.NumericLiteral) return 'definite';
+        if (this.rustR09IsDefiniteInt(inner)) return 'definite';
+        if (isCallExpression(inner) && this.callExpressionName(inner) === 'indexOf') return 'definite';
+        if (isBinaryExpression(inner)) {
+            const op = inner.operatorToken.kind;
+            if (op !== SyntaxKind.PlusToken && op !== SyntaxKind.MinusToken && op !== SyntaxKind.AsteriskToken
+                && op !== SyntaxKind.SlashToken && op !== SyntaxKind.PercentToken) return undefined;
+            const both = this.rustR16Combine([ this.rustR16NumericKind(inner.left, depth + 1), this.rustR16NumericKind(inner.right, depth + 1) ]);
+            // `/` and `%` answer Null for a zero divisor
+            return (both === 'definite' && (op === SyntaxKind.SlashToken || op === SyntaxKind.PercentToken)) ? 'number' : both;
+        }
+        if (isCallExpression(inner)) return this.rustR16CallKind(inner, depth);
+        if (isIdentifier(inner)) return this.rustR16IdentifierKind(inner, depth);
+        return undefined;
+    }
+
+    rustR16CallKind(call: any, depth: number): string | undefined {
+        const callee = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (String(callee.name.text) === 'sum') {
+            return this.rustR16Combine(call.arguments.map((a) => this.rustR16NumericKind(a, depth + 1)));
+        }
+        let declaration: any;
+        try {
+            declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call));
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined
+            || declaration.getSourceFile() !== call.getSourceFile()) return undefined;
+        const kinds: (string | undefined)[] = [];
+        const visit = (n: any) => {
+            if (n !== declaration && isFunctionLike(n)) return;
+            if (isReturnStatement(n)) kinds.push(n.expression === undefined ? undefined : this.rustR16NumericKind(n.expression, depth + 1));
+            n.forEachChild?.(visit);
+        };
+        declaration.body.forEachChild(visit);
+        return this.rustR16Combine(kinds) === undefined ? undefined : 'number';
+    }
+
+    rustR16IdentifierKind(ident: any, depth: number): string | undefined {
+        if (this.rustParamShadowOf(ident) !== undefined || !this.printsValueExpression(ident)) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || declaration.name?.kind !== SyntaxKind.Identifier) return undefined;
+        // a guard removed `undefined` from a nullable declaration: the box is Int/Float here
+        const here: any = this.typeOfNodeIfAny(ident);
+        const declared: any = this.typeOfNodeIfAny(declaration.name);
+        if (here !== undefined && declared !== undefined && (here.flags === TypeFlags.Number || here.flags === TypeFlags.NumberLiteral)
+            && (declared.flags & TypeFlags.Union) && (typeParts(declared) ?? []).some((t: any) => t.flags & (TypeFlags.Undefined | TypeFlags.Null))
+            && !this.rustR16HasWrites(declaration)) {
+            return 'definite';
+        }
+        // an explicit annotation (`let a: any = 1`) declares a polymorphic box: keep the helper
+        if (!isVariableDeclaration(declaration) || declaration.initializer === undefined || declaration.type !== undefined) return undefined;
+        // inductive: a write reading the local itself (`r = this.sum (r, n)`) assumes it numeric
+        if (this.rustR16Assumed.has(declaration)) return 'number';
+        this.rustR16Assumed.add(declaration);
+        try {
+            return this.rustR16WrittenKind(declaration, depth);
+        } finally {
+            this.rustR16Assumed.delete(declaration);
+        }
+    }
+
+    rustR16WrittenKind(declaration: any, depth: number): string | undefined {
+        const kinds: (string | undefined)[] = [ this.rustR16NumericKind(declaration.initializer, depth + 1) ];
+        const fn = this.rustEnclosingFunction(declaration);
+        if (fn === undefined) return undefined;
+        const name = String(declaration.name.text);
+        for (const m of this.rustScopeNameNodes(fn, name) as any[]) {
+            if (m.kind !== SyntaxKind.Identifier || m === declaration.name) continue;
+            const parent: any = m.parent;
+            if (isBinaryExpression(parent) && parent.left === m && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+                const op = parent.operatorToken.kind;
+                const right = this.rustR16NumericKind(parent.right, depth + 1);
+                if (op === SyntaxKind.EqualsToken || op === SyntaxKind.PlusEqualsToken || op === SyntaxKind.MinusEqualsToken || op === SyntaxKind.AsteriskEqualsToken) kinds.push(right);
+                else if (op === SyntaxKind.SlashEqualsToken || op === SyntaxKind.PercentEqualsToken) kinds.push(right === undefined ? undefined : 'number');
+                else kinds.push(undefined);
+            } else if ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)) {
+                continue;
+            } else if (parent !== undefined && ((isArrayLiteralExpression(parent) && isBinaryExpression(parent.parent) && parent.parent.left === parent)
+                || ((isForOfStatement(parent) || isForInStatement(parent)) && parent.initializer === m))) {
+                kinds.push(undefined);
+            }
+        }
+        return this.rustR16Combine(kinds);
+    }
+
+    // No assignment / `++` / `--` names the binding: only control-flow guards narrow it.
+    rustR16HasWrites(declaration: any): boolean {
+        const fn = isParameterDeclaration(declaration) ? declaration.parent : this.rustEnclosingFunction(declaration);
+        if (fn === undefined) return true;
+        return (this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]).some((m) => {
+            const parent: any = m.parent;
+            if (m.kind !== SyntaxKind.Identifier || m === declaration.name) return false;
+            return (isBinaryExpression(parent) && parent.left === m && rustIsAssignmentOperator(parent.operatorToken.kind))
+                || parent?.kind === SyntaxKind.PrefixUnaryExpression && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)
+                || parent?.kind === SyntaxKind.PostfixUnaryExpression;
+        });
+    }
+
+    // Both sides Int/Float/Null: `<`/`>` are f64 compares with Null false; `<=`/`>=` also OR in
+    // `is_equal` (Null == Null), so they need one never-null side.
+    rustR16OrderedProven(op, left, right): boolean {
+        const l = this.rustR16NumericKind(left);
+        const r = this.rustR16NumericKind(right);
+        if (l === undefined || r === undefined) return false;
+        return op === SyntaxKind.LessThanToken || op === SyntaxKind.GreaterThanToken || l === 'definite' || r === 'definite';
+    }
+
+    // `a - b` / `a * b` / `a / b` / `a % b` on operands proven Int/Float/Null: the helper's dispatch.
+    rustR16NativeArithmetic(op, left, right, leftText: string, rightText: string): string | undefined {
+        if (op !== SyntaxKind.MinusToken && op !== SyntaxKind.AsteriskToken && op !== SyntaxKind.SlashToken && op !== SyntaxKind.PercentToken) return undefined;
+        if (!this.printsValueExpression(this.rustStripWrappers(left)) || !this.printsValueExpression(this.rustStripWrappers(right))) return undefined;
+        if (this.rustR16NumericKind(left) === undefined || this.rustR16NumericKind(right) === undefined) return undefined;
+        if (op !== SyntaxKind.PercentToken) return this.printNativeNumeric(op, leftText, rightText);
+        return `(match (&(${leftText}), &(${rightText})) {` +
+            ' (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y),' +
+            ' (Value::Int(x), Value::Float(y)) if *y != 0.0 => Value::Float(*x as f64 % *y),' +
+            ' (Value::Float(x), Value::Int(y)) if *y != 0 => Value::Float(*x % *y as f64),' +
+            ' (Value::Float(x), Value::Float(y)) if *y != 0.0 => Value::Float(x % y),' +
+            ' _ => Value::Null })';
+    }
+
+    // hx4 R17 — string helpers on proven-`Str` operands. `add(a, b)` with one side always a
+    // `Value::Str` takes the helper's `string_concat` arm, which is `Display` for every box but a
+    // Precise dict (only `new Precise` locals, typed `Precise`), so the other side may be any non-Precise box.
+    r17AlwaysStr(node): boolean {
+        const inner: any = this.unwrapParensNode(node);
+        if (inner === undefined) return false;
+        if (isStringLiteral(inner) || isNoSubstitutionTemplateLiteral(inner)) return true;
+        if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.PlusToken) return this.r17AlwaysStr(inner.left) || this.r17AlwaysStr(inner.right);
+        return isCallExpression(inner) && isPropertyAccessExpression(inner.expression) && inner.expression.name.text === 'toString'
+            && (inner.arguments?.length ?? 0) === 0 && this.printsValueExpression(inner.expression.expression);
+    }
+
+    r17ConcatOperandSafe(node, type): boolean {
+        if (this.r17AlwaysStr(node)) return true;
+        const inner: any = this.unwrapParensNode(node);
+        if (!this.printsValueExpression(inner) || this.rustNativeStrCalleeKind(inner) === 'str') return false;
+        // typed `String`/`Vec<Value>` locals print without a `Value` box
+        if (isIdentifier(inner) && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustVecLocalDeclarationOf(inner) !== undefined)) return false;
+        const parts: any[] = type === undefined ? [] : ((type.flags & TypeFlags.Union) ? (typeParts(type) ?? []) : [type]);
+        return parts.length > 0 && parts.every((t) => String(t?.symbol?.escapedName ?? t?.symbol?.name ?? '') !== 'Precise');
+    }
+
+    r17ConcatIsAnchored(left, right, leftType, rightType): boolean {
+        return (this.r17AlwaysStr(left) && this.r17ConcatOperandSafe(right, rightType))
+            || (this.r17AlwaysStr(right) && this.r17ConcatOperandSafe(left, leftType));
+    }
+
+    /** R06 checker-string or R13 proven-`Str` receiver printed as a plain name / parenthesised. */
+    r17Receiver(node, receiverText: string): string | undefined {
+        return this.rustNativeStringReceiver(node, receiverText) ?? this.rustR13Receiver(node, receiverText);
+    }
+
+    // `x.trim()`: the helper's `Str` arm is `str::trim`, Null otherwise.
+    r17PrintTrim(node, receiverText: string): string | undefined {
+        const receiver = this.r17Receiver(node, receiverText);
+        if (receiver === undefined || (node.arguments?.length ?? 0) !== 0) return undefined;
+        return `${receiver}.as_str().map(|__s| Value::Str(__s.trim().to_string().into())).unwrap_or(Value::Null)`;
+    }
+
+    // `x.startsWith(p)` / `x.endsWith(p)` with a proven/checker string operand: false unless both are `Str`.
+    r17PrintAffixTest(node, receiverText: string, method: string): string | undefined {
+        if (node?.arguments?.length !== 1) return undefined;
+        const receiver = this.r17Receiver(node, receiverText);
+        const arg = receiver === undefined ? undefined : this.rustR13StrOperand(node.arguments[0], true);
+        if (arg === undefined) return undefined;
+        return `${receiver}.as_str().zip(${arg}.as_str()).is_some_and(|(__s, __p)| __s.${method}(__p))`;
+    }
+
+    // `x.replace(p, r)` / `x.replaceAll(p, r)`: both helpers replace every occurrence when all three
+    // are `Str`, else return the receiver; `p`/`r` are literals or proven/checker string operands.
+    r17PrintReplace(node, receiverText: string): string | undefined {
+        if (node?.arguments?.length !== 2) return undefined;
+        const receiver = this.r17Receiver(node, receiverText);
+        if (receiver === undefined || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(receiver)) return undefined;
+        const operand = (arg) => {
+            const literal = this.rustNativeStringLiteralArg(arg);
+            return literal !== undefined ? `Value::Str("${literal}".into())` : this.rustR13StrOperand(arg, true);
+        };
+        const from = operand(node.arguments[0]);
+        const to = operand(node.arguments[1]);
+        if (from === undefined || to === undefined) return undefined;
+        return `match (${receiver}.as_str(), ${from}.as_str(), ${to}.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => ${receiver}.clone() }`;
+    }
+
+    // hx4 R18 — collection helpers on locals whose runtime shape is proven: `"k" in x` on an R10
+    // plain-dict receiver, `Object.keys/values` on one in prediction sources, and `.length` /
+    // `.push` on a `Value::Arr`-only local (never a book/cache marker the helpers route).
+
+    /** `"lit" in x` where x is an R10-proven plain local / plain-kept Dict parameter. */
+    r18LiteralInOp(key, obj): string | undefined {
+        if (!isStringLiteral(key) || this.r05IsTest(key)) return undefined;
+        const recv: any = this.rustStripWrappers(obj);
+        if (recv === undefined || !isIdentifier(recv) || this.rustR10PlainReceiver(recv) === undefined) return undefined;
+        const keyLiteral = this.rustStringLiteralOf(this.printStringLiteral(key));
+        if (keyLiteral === undefined) return undefined;
+        return `Value::Bool(matches!(&${this.printNode(recv, 0).trim()}, Value::Dict(__d) if __d.contains_key(${keyLiteral})))`;
+    }
+
+    /** `Object.keys/values(x)` in `ts/src/prediction/<id>.ts` on an R10-proven plain local. */
+    r18PredictionEnum(node, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg: any = this.rustStripWrappers(node?.arguments?.[0]);
+        if (arg === undefined || parsedArg === undefined || !isIdentifier(arg)
+            || !/\/ts\/src\/prediction\/[^/]+\.ts$/.test(this.r05Path(node))
+            || this.rustR10PlainReceiver(arg) !== 'local') return undefined;
+        const body = kind === 'keys' ? '__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()' : '__m.values().cloned().collect()';
+        return `Value::Array(${parsedArg.trim()}.as_map().map(|__m| ${body}).unwrap_or_default())`;
+    }
+
+    /** Base-tier array readers whose result is the stored `Value::Arr` or the default argument. */
+    private static readonly RUST_R18_LIST_READERS: { [name: string]: number } = { safeList: 2, safeList2: 3, safeListN: 2 };
+
+    /** A source that is a `Value::Arr` or `Value::Null` (both helpers agree with `len()` / a no-op
+     *  push there): `[...]`, nullish, a runtime `split`, base `toArray`, or a base `safeList*`
+     *  read whose default is absent, nullish or `[...]`. */
+    r18ArrSource(node: any, allowNull: boolean): boolean {
+        const n: any = this.rustStripWrappers(node);
+        if (n === undefined) return false;
+        if (isArrayLiteralExpression(n)) return !n.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement);
+        if (n.kind === SyntaxKind.NullKeyword || (isIdentifier(n) && String(n.text) === 'undefined')) return allowNull;
+        if (this.rustCallPrintsRuntimeSplit(n)) return true;
+        if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee = String(n.expression.name.text);
+        if (callee === 'toArray') return n.arguments.length === 1 && this.rustR01CalleeIsBase(n);
+        const index = RustTranspiler.RUST_R18_LIST_READERS[callee];
+        if (index === undefined || n.arguments.length > index + 1) return false;
+        const fallback: any = this.rustStripWrappers(n.arguments[index]);
+        const arrDefault = fallback !== undefined && isArrayLiteralExpression(fallback);
+        return (arrDefault || (allowNull && (fallback === undefined || fallback.kind === SyntaxKind.NullKeyword
+            || (isIdentifier(fallback) && String(fallback.text) === 'undefined')))) && this.rustR01CalleeIsBase(n);
+    }
+
+    /** A local whose every write (declaration included) is an `r18ArrSource`, never captured by
+     *  a closure: its `Value` is a plain `Value::Arr` (the runtime never tags an array). */
+    r18ArrLocal(ident: any, allowNull: boolean): boolean {
+        if (ident === undefined || !isIdentifier(ident) || this.rustParamShadowOf(ident) !== undefined || this.r05IsTest(ident)) return false;
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !this.r18ArrSource(declaration.initializer, allowNull)) return false;
+        const scope = this.rustEnclosingFunction(declaration);
+        if (scope === undefined || isSourceFile(scope) || this.rustEnclosingFunction(ident) !== scope) return false;
+        const name = String(declaration.name.text);
+        const symbol = this.rustSymbolOf(declaration.name);
+        if (symbol === undefined) return false;
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (n.kind !== SyntaxKind.Identifier || n === declaration.name || this.rustSymbolOf(n) !== symbol) continue;
+            if (this.rustEnclosingFunction(n) !== scope) return false;
+            let target: any = n;
+            while (target.parent !== undefined && (isParenthesizedExpression(target.parent) || isNonNullExpression(target.parent) || isAsExpression(target.parent))) target = target.parent;
+            const parent: any = target.parent;
+            if (parent === undefined) continue;
+            // a dict-literal field aliasing the local feeds ccxt's writeBackAliasedArrayMutations (keys on the helper)
+            if (parent.kind === SyntaxKind.ShorthandPropertyAssignment || (parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === target)) return false;
+            if (isBinaryExpression(parent) && parent.left === target && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+                if (parent.operatorToken.kind !== SyntaxKind.EqualsToken || !this.r18ArrSource(parent.right, allowNull)) return false;
+                continue;
+            }
+            if (parent.kind === SyntaxKind.ArrayLiteralExpression && isBinaryExpression(parent.parent) && parent.parent.left === parent) return false;
+            if ((parent.kind === SyntaxKind.PrefixUnaryExpression || parent.kind === SyntaxKind.PostfixUnaryExpression)
+                && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)) return false;
+        }
+        return true;
+    }
+
+    /** `x.length` on an Arr-only local: `get_array_length`'s marker arms need a Dict. */
+    r18ArrLength(node, receiver: string): string | undefined {
+        const recv: any = this.rustStripWrappers(node?.expression);
+        if (!this.r18ArrLocal(recv, true)) return undefined;
+        return `Value::Int(${receiver}.len() as i64)`;
+    }
+
+    /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */
+    r18ArrPush(node, name: string | undefined, parsedArg: string | undefined): string | undefined {
+        const recv: any = node?.expression?.expression;
+        if (name === undefined || parsedArg === undefined || node?.arguments?.length !== 1
+            || node.arguments[0].kind === SyntaxKind.SpreadElement || node.parent?.kind !== SyntaxKind.ExpressionStatement
+            || !this.r18ArrLocal(recv, false) || name.trim() !== this.printNode(recv, 0).trim()) return undefined;
+        // the argument is evaluated while `name` is mutably borrowed: it must not read it
+        if (!this.rustVecPushShape(node, String(recv.text))) return undefined;
+        const arg = parsedArg.trim();
+        // `append_to_array` takes the value by move; ccxt's post-pass cloned a bare local there.
+        const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== 'self' && arg !== 'true' && arg !== 'false' ? `${arg}.clone()` : arg;
+        return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value}); }`;
     }
 }

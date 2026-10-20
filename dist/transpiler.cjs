@@ -21897,6 +21897,11 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     /** Extra plain-dict write sources (R01 write-history proof), REST venue files only: no
      *  runtime tagged handle (book, ws subscription, cache bucket) is reachable there. */
     this.rustR12Visiting = /* @__PURE__ */ new Set();
+    // hx4 R16 — numeric operand kinds beyond the checker: 'definite' = always Int/Float (never Null),
+    // 'number' = Int/Float/Null. Covers `this.sum` of numbers, numeric same-file method returns,
+    // locals whose every write is numeric, and flow-narrowed (guarded non-undefined) number identifiers.
+    this.rustR16InProgress = /* @__PURE__ */ new Set();
+    this.rustR16Assumed = /* @__PURE__ */ new Set();
     this.requiresParameterType = true;
     this.requiresReturnType = false;
     this.asyncTranspiling = true;
@@ -22347,7 +22352,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return `Value::Int(${receiver}.len() as i64)`;
     if (this.r11ProvenListValue(node.expression))
       return `${receiver}.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))`;
-    return `get_array_length(&${receiver})`;
+    return _nullishCoalesce(this.r18ArrLength(node, receiver), () => ( `get_array_length(&${receiver})`));
   }
   /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
    *  local initialised from one. The WS runtime keeps those sides as marker dicts
@@ -22931,7 +22936,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const rightKind = this.rustNumericOperandKind(right);
     const ordered = op === _ast.SyntaxKind.LessThanToken || op === _ast.SyntaxKind.GreaterThanToken;
     const proven = leftKind === "definite" || rightKind === "definite" || (ordered ? leftKind !== void 0 || rightKind !== void 0 : leftKind === "number" && rightKind === "number");
-    if (!proven) {
+    if (!proven && !this.rustR16OrderedProven(op, left, right)) {
       return void 0;
     }
     return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
@@ -22976,7 +22981,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   }
   printNativeArithmetic(op, left, right, leftText, rightText) {
     if (op === _ast.SyntaxKind.PercentToken)
-      return this.printRustNativeMod(left, right, leftText, rightText);
+      return _nullishCoalesce(this.printRustNativeMod(left, right, leftText, rightText), () => ( this.rustR16NativeArithmetic(op, left, right, leftText, rightText)));
     if (op !== _ast.SyntaxKind.PlusToken && op !== _ast.SyntaxKind.MinusToken && op !== _ast.SyntaxKind.AsteriskToken && op !== _ast.SyntaxKind.SlashToken) {
       return void 0;
     }
@@ -22991,7 +22996,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const r09 = this.rustR09NativeAddSubtract(op, left, right, leftType, rightType, leftText, rightText);
     if (r09 !== void 0)
       return r09;
-    if (op === _ast.SyntaxKind.PlusToken && this.isNativeStringConcatPair(leftType, rightType)) {
+    const r16 = this.rustR16NativeArithmetic(op, left, right, leftText, rightText);
+    if (r16 !== void 0)
+      return r16;
+    if (op === _ast.SyntaxKind.PlusToken && (this.isNativeStringConcatPair(leftType, rightType) || this.r17ConcatIsAnchored(left, right, leftType, rightType))) {
       return this.printNativeStringConcat(leftText, rightText);
     }
     if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
@@ -23055,7 +23063,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (op === _ast.SyntaxKind.InKeyword) {
       const shadow = this.rustParamShadowOf(right);
-      return _nullishCoalesce(_nullishCoalesce(_nullishCoalesce((shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0), () => ( this.printNativeInOperator(left, right))), () => ( this.r05InOp(left, right))), () => ( `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`));
+      return _nullishCoalesce(_nullishCoalesce(_nullishCoalesce(_nullishCoalesce((shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0), () => ( this.printNativeInOperator(left, right))), () => ( this.r18LiteralInOp(left, right))), () => ( this.r05InOp(left, right))), () => ( `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`));
     }
     if ((op === _ast.SyntaxKind.PlusEqualsToken || op === _ast.SyntaxKind.MinusEqualsToken) && left.kind !== _ast.SyntaxKind.ElementAccessExpression) {
       const isPlus = op === _ast.SyntaxKind.PlusEqualsToken;
@@ -25464,10 +25472,10 @@ ${this.getIden(identation)}})`;
     return `Value::Bool(${_nullishCoalesce(this.nativeValuePredicateText("array", _optionalChain([node, 'optionalAccess', _2471 => _2471.arguments, 'optionalAccess', _2472 => _2472[0]]), parsedArg), () => ( `is_array(&${parsedArg})`))})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
-    return _nullishCoalesce(this.r05Enum(node, parsedArg, "keys"), () => ( `object_keys(&${parsedArg})`));
+    return _nullishCoalesce(_nullishCoalesce(this.r05Enum(node, parsedArg, "keys"), () => ( this.r18PredictionEnum(node, parsedArg, "keys"))), () => ( `object_keys(&${parsedArg})`));
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
-    return _nullishCoalesce(this.r05Enum(node, parsedArg, "values"), () => ( `object_values(&${parsedArg})`));
+    return _nullishCoalesce(_nullishCoalesce(this.r05Enum(node, parsedArg, "values"), () => ( this.r18PredictionEnum(node, parsedArg, "values"))), () => ( `object_values(&${parsedArg})`));
   }
   printJsonParseCall(node, identation, parsedArg = void 0) {
     return `json_parse(&${parsedArg})`;
@@ -25496,7 +25504,7 @@ ${this.getIden(identation)}})`;
     return `is_integer(&${parsedArg})`;
   }
   printArrayPushCall(node, identation, name = void 0, parsedArg = void 0) {
-    return _nullishCoalesce(this.printRustVecPush(node, name, parsedArg), () => ( `append_to_array(&mut ${name}, ${parsedArg})`));
+    return _nullishCoalesce(_nullishCoalesce(this.printRustVecPush(node, name, parsedArg), () => ( this.r18ArrPush(node, name, parsedArg))), () => ( `append_to_array(&mut ${name}, ${parsedArg})`));
   }
   printIncludesCall(node, identation, name = void 0, parsedArg = void 0) {
     return `Value::Bool(contains(&${name}, &${parsedArg}))`;
@@ -25505,19 +25513,19 @@ ${this.getIden(identation)}})`;
     return _nullishCoalesce(_nullishCoalesce(this.printNativeStringIndexOf(node, name), () => ( this.printNativeStringIndexOfString(node, name))), () => ( `get_index_of(&${name}, &${parsedArg})`));
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    const native = this.printNativeStringAffixTest(node, name, "starts_with");
+    const native = _nullishCoalesce(this.printNativeStringAffixTest(node, name, "starts_with"), () => ( this.r17PrintAffixTest(node, name, "starts_with")));
     if (native !== void 0)
       return `Value::Bool(${native})`;
     return `Value::Bool(starts_with(&${name}, &${parsedArg}))`;
   }
   printEndsWithCall(node, identation, name = void 0, parsedArg = void 0) {
-    const native = this.printNativeStringAffixTest(node, name, "ends_with");
+    const native = _nullishCoalesce(this.printNativeStringAffixTest(node, name, "ends_with"), () => ( this.r17PrintAffixTest(node, name, "ends_with")));
     if (native !== void 0)
       return `Value::Bool(${native})`;
     return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
   }
   printTrimCall(node, identation, name = void 0) {
-    return `trim(&${name})`;
+    return _nullishCoalesce(this.r17PrintTrim(node, name), () => ( `trim(&${name})`));
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
     return _nullishCoalesce(_nullishCoalesce(this.r15PrintVecJoin(node), () => ( this.printNativeStringJoin(node, name))), () => ( `join(&${name}, &${parsedArg})`));
@@ -25553,10 +25561,10 @@ ${this.getIden(identation)}})`;
     return _nullishCoalesce(this.printNativeStringSlice(node, name), () => ( `slice(&${name}, &${parsedArg}, &${_nullishCoalesce(parsedArg2, () => ( "Value::Null"))})`));
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    return _nullishCoalesce(_nullishCoalesce(this.printNativeStringReplace(node, name), () => ( this.printRustR13Replace(node, name))), () => ( `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`));
+    return _nullishCoalesce(_nullishCoalesce(_nullishCoalesce(this.printNativeStringReplace(node, name), () => ( this.printRustR13Replace(node, name))), () => ( this.r17PrintReplace(node, name))), () => ( `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`));
   }
   printReplaceAllCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    return `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+    return _nullishCoalesce(_nullishCoalesce(_nullishCoalesce(this.printNativeStringReplace(node, name), () => ( this.printRustR13Replace(node, name))), () => ( this.r17PrintReplace(node, name))), () => ( `replace_all_str(&${name}, &${parsedArg}, &${parsedArg2})`));
   }
   // `{}` (Display) renders an ExchangeError as `[Kind] message`; `{:?}` would dump the struct fields.
   printThrowStatement(node, identation) {
@@ -26248,7 +26256,7 @@ ${iden}}`;
   }
   // `-n`: Int/Float flip sign in place, a Null box stays Null (helper's fallthrough).
   printRustNativeNegate(operand, operandText) {
-    if (this.rustOperandKind(operand) !== "number")
+    if (this.rustOperandKind(operand) !== "number" && this.rustR16NumericKind(operand) === void 0)
       return void 0;
     return `(match &(${operandText}) { Value::Int(x) => Value::Int(-x), Value::Float(x) => Value::Float(-x), _ => Value::Null })`;
   }
@@ -26982,6 +26990,331 @@ ${iden}}`;
     const end = _nullishCoalesce(_optionalChain([n, 'access', _2595 => _2595.getEnd, 'optionalCall', _2596 => _2596()]), () => ( n.end));
     return !this.rustScopeNameNodes(fn, name).some((m) => m.kind === _ast.SyntaxKind.Identifier && m !== n && (_nullishCoalesce(_optionalChain([m, 'access', _2597 => _2597.getStart, 'optionalCall', _2598 => _2598()]), () => ( m.pos))) >= end && _is.isPropertyAccessExpression.call(void 0, m.parent) && m.parent.expression === m && String(m.parent.name.text) === "push");
   }
+  rustR16NumericKind(node, depth = 0) {
+    const inner = this.rustStripWrappers(node);
+    if (inner === void 0 || depth > 8 || this.rustR16InProgress.has(inner))
+      return void 0;
+    this.rustR16InProgress.add(inner);
+    try {
+      const structural = this.rustR16StructuralKind(inner, depth);
+      if (structural === "definite")
+        return "definite";
+      if (structural === "number")
+        return "number";
+      return this.rustOperandKind(inner) === "number" ? "number" : void 0;
+    } catch (e) {
+      return void 0;
+    } finally {
+      this.rustR16InProgress.delete(inner);
+    }
+  }
+  rustR16Combine(kinds) {
+    if (kinds.length === 0 || kinds.some((k) => k === void 0))
+      return void 0;
+    return kinds.every((k) => k === "definite") ? "definite" : "number";
+  }
+  rustR16StructuralKind(inner, depth) {
+    if (inner.kind === _ast.SyntaxKind.NumericLiteral)
+      return "definite";
+    if (_is.isPrefixUnaryExpression.call(void 0, inner) && inner.operator === _ast.SyntaxKind.MinusToken && inner.operand.kind === _ast.SyntaxKind.NumericLiteral)
+      return "definite";
+    if (this.rustR09IsDefiniteInt(inner))
+      return "definite";
+    if (_is.isCallExpression.call(void 0, inner) && this.callExpressionName(inner) === "indexOf")
+      return "definite";
+    if (_is.isBinaryExpression.call(void 0, inner)) {
+      const op = inner.operatorToken.kind;
+      if (op !== _ast.SyntaxKind.PlusToken && op !== _ast.SyntaxKind.MinusToken && op !== _ast.SyntaxKind.AsteriskToken && op !== _ast.SyntaxKind.SlashToken && op !== _ast.SyntaxKind.PercentToken)
+        return void 0;
+      const both = this.rustR16Combine([this.rustR16NumericKind(inner.left, depth + 1), this.rustR16NumericKind(inner.right, depth + 1)]);
+      return both === "definite" && (op === _ast.SyntaxKind.SlashToken || op === _ast.SyntaxKind.PercentToken) ? "number" : both;
+    }
+    if (_is.isCallExpression.call(void 0, inner))
+      return this.rustR16CallKind(inner, depth);
+    if (_is.isIdentifier.call(void 0, inner))
+      return this.rustR16IdentifierKind(inner, depth);
+    return void 0;
+  }
+  rustR16CallKind(call, depth) {
+    const callee = call.expression;
+    if (!_is.isPropertyAccessExpression.call(void 0, callee) || callee.expression.kind !== _ast.SyntaxKind.ThisKeyword)
+      return void 0;
+    if (String(callee.name.text) === "sum") {
+      return this.rustR16Combine(call.arguments.map((a) => this.rustR16NumericKind(a, depth + 1)));
+    }
+    let declaration;
+    try {
+      declaration = _chunkUBXMRIM6cjs.signatureDeclaration.call(void 0, this.getChecker().getResolvedSignature(call));
+    } catch (e) {
+      return void 0;
+    }
+    if (_optionalChain([declaration, 'optionalAccess', _2599 => _2599.kind]) !== _ast.SyntaxKind.MethodDeclaration || declaration.body === void 0 || declaration.getSourceFile() !== call.getSourceFile())
+      return void 0;
+    const kinds = [];
+    const visit = (n) => {
+      if (n !== declaration && _chunkUBXMRIM6cjs.isFunctionLike.call(void 0, n))
+        return;
+      if (_is.isReturnStatement.call(void 0, n))
+        kinds.push(n.expression === void 0 ? void 0 : this.rustR16NumericKind(n.expression, depth + 1));
+      _optionalChain([n, 'access', _2600 => _2600.forEachChild, 'optionalCall', _2601 => _2601(visit)]);
+    };
+    declaration.body.forEachChild(visit);
+    return this.rustR16Combine(kinds) === void 0 ? void 0 : "number";
+  }
+  rustR16IdentifierKind(ident, depth) {
+    if (this.rustParamShadowOf(ident) !== void 0 || !this.printsValueExpression(ident))
+      return void 0;
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || _optionalChain([declaration, 'access', _2602 => _2602.name, 'optionalAccess', _2603 => _2603.kind]) !== _ast.SyntaxKind.Identifier)
+      return void 0;
+    const here = this.typeOfNodeIfAny(ident);
+    const declared = this.typeOfNodeIfAny(declaration.name);
+    if (here !== void 0 && declared !== void 0 && (here.flags === _sync.TypeFlags.Number || here.flags === _sync.TypeFlags.NumberLiteral) && declared.flags & _sync.TypeFlags.Union && (_nullishCoalesce(_chunkUBXMRIM6cjs.typeParts.call(void 0, declared), () => ( []))).some((t) => t.flags & (_sync.TypeFlags.Undefined | _sync.TypeFlags.Null)) && !this.rustR16HasWrites(declaration)) {
+      return "definite";
+    }
+    if (!_is.isVariableDeclaration.call(void 0, declaration) || declaration.initializer === void 0 || declaration.type !== void 0)
+      return void 0;
+    if (this.rustR16Assumed.has(declaration))
+      return "number";
+    this.rustR16Assumed.add(declaration);
+    try {
+      return this.rustR16WrittenKind(declaration, depth);
+    } finally {
+      this.rustR16Assumed.delete(declaration);
+    }
+  }
+  rustR16WrittenKind(declaration, depth) {
+    const kinds = [this.rustR16NumericKind(declaration.initializer, depth + 1)];
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0)
+      return void 0;
+    const name = String(declaration.name.text);
+    for (const m of this.rustScopeNameNodes(fn, name)) {
+      if (m.kind !== _ast.SyntaxKind.Identifier || m === declaration.name)
+        continue;
+      const parent = m.parent;
+      if (_is.isBinaryExpression.call(void 0, parent) && parent.left === m && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+        const op = parent.operatorToken.kind;
+        const right = this.rustR16NumericKind(parent.right, depth + 1);
+        if (op === _ast.SyntaxKind.EqualsToken || op === _ast.SyntaxKind.PlusEqualsToken || op === _ast.SyntaxKind.MinusEqualsToken || op === _ast.SyntaxKind.AsteriskEqualsToken)
+          kinds.push(right);
+        else if (op === _ast.SyntaxKind.SlashEqualsToken || op === _ast.SyntaxKind.PercentEqualsToken)
+          kinds.push(right === void 0 ? void 0 : "number");
+        else
+          kinds.push(void 0);
+      } else if ((_optionalChain([parent, 'optionalAccess', _2604 => _2604.kind]) === _ast.SyntaxKind.PrefixUnaryExpression || _optionalChain([parent, 'optionalAccess', _2605 => _2605.kind]) === _ast.SyntaxKind.PostfixUnaryExpression) && (parent.operator === _ast.SyntaxKind.PlusPlusToken || parent.operator === _ast.SyntaxKind.MinusMinusToken)) {
+        continue;
+      } else if (parent !== void 0 && (_is.isArrayLiteralExpression.call(void 0, parent) && _is.isBinaryExpression.call(void 0, parent.parent) && parent.parent.left === parent || (_is.isForOfStatement.call(void 0, parent) || _is.isForInStatement.call(void 0, parent)) && parent.initializer === m)) {
+        kinds.push(void 0);
+      }
+    }
+    return this.rustR16Combine(kinds);
+  }
+  // No assignment / `++` / `--` names the binding: only control-flow guards narrow it.
+  rustR16HasWrites(declaration) {
+    const fn = _is.isParameterDeclaration.call(void 0, declaration) ? declaration.parent : this.rustEnclosingFunction(declaration);
+    if (fn === void 0)
+      return true;
+    return this.rustScopeNameNodes(fn, String(declaration.name.text)).some((m) => {
+      const parent = m.parent;
+      if (m.kind !== _ast.SyntaxKind.Identifier || m === declaration.name)
+        return false;
+      return _is.isBinaryExpression.call(void 0, parent) && parent.left === m && rustIsAssignmentOperator(parent.operatorToken.kind) || _optionalChain([parent, 'optionalAccess', _2606 => _2606.kind]) === _ast.SyntaxKind.PrefixUnaryExpression && (parent.operator === _ast.SyntaxKind.PlusPlusToken || parent.operator === _ast.SyntaxKind.MinusMinusToken) || _optionalChain([parent, 'optionalAccess', _2607 => _2607.kind]) === _ast.SyntaxKind.PostfixUnaryExpression;
+    });
+  }
+  // Both sides Int/Float/Null: `<`/`>` are f64 compares with Null false; `<=`/`>=` also OR in
+  // `is_equal` (Null == Null), so they need one never-null side.
+  rustR16OrderedProven(op, left, right) {
+    const l = this.rustR16NumericKind(left);
+    const r = this.rustR16NumericKind(right);
+    if (l === void 0 || r === void 0)
+      return false;
+    return op === _ast.SyntaxKind.LessThanToken || op === _ast.SyntaxKind.GreaterThanToken || l === "definite" || r === "definite";
+  }
+  // `a - b` / `a * b` / `a / b` / `a % b` on operands proven Int/Float/Null: the helper's dispatch.
+  rustR16NativeArithmetic(op, left, right, leftText, rightText) {
+    if (op !== _ast.SyntaxKind.MinusToken && op !== _ast.SyntaxKind.AsteriskToken && op !== _ast.SyntaxKind.SlashToken && op !== _ast.SyntaxKind.PercentToken)
+      return void 0;
+    if (!this.printsValueExpression(this.rustStripWrappers(left)) || !this.printsValueExpression(this.rustStripWrappers(right)))
+      return void 0;
+    if (this.rustR16NumericKind(left) === void 0 || this.rustR16NumericKind(right) === void 0)
+      return void 0;
+    if (op !== _ast.SyntaxKind.PercentToken)
+      return this.printNativeNumeric(op, leftText, rightText);
+    return `(match (&(${leftText}), &(${rightText})) { (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y), (Value::Int(x), Value::Float(y)) if *y != 0.0 => Value::Float(*x as f64 % *y), (Value::Float(x), Value::Int(y)) if *y != 0 => Value::Float(*x % *y as f64), (Value::Float(x), Value::Float(y)) if *y != 0.0 => Value::Float(x % y), _ => Value::Null })`;
+  }
+  // hx4 R17 — string helpers on proven-`Str` operands. `add(a, b)` with one side always a
+  // `Value::Str` takes the helper's `string_concat` arm, which is `Display` for every box but a
+  // Precise dict (only `new Precise` locals, typed `Precise`), so the other side may be any non-Precise box.
+  r17AlwaysStr(node) {
+    const inner = this.unwrapParensNode(node);
+    if (inner === void 0)
+      return false;
+    if (_is.isStringLiteral.call(void 0, inner) || _is.isNoSubstitutionTemplateLiteral.call(void 0, inner))
+      return true;
+    if (_is.isBinaryExpression.call(void 0, inner) && inner.operatorToken.kind === _ast.SyntaxKind.PlusToken)
+      return this.r17AlwaysStr(inner.left) || this.r17AlwaysStr(inner.right);
+    return _is.isCallExpression.call(void 0, inner) && _is.isPropertyAccessExpression.call(void 0, inner.expression) && inner.expression.name.text === "toString" && (_nullishCoalesce(_optionalChain([inner, 'access', _2608 => _2608.arguments, 'optionalAccess', _2609 => _2609.length]), () => ( 0))) === 0 && this.printsValueExpression(inner.expression.expression);
+  }
+  r17ConcatOperandSafe(node, type) {
+    if (this.r17AlwaysStr(node))
+      return true;
+    const inner = this.unwrapParensNode(node);
+    if (!this.printsValueExpression(inner) || this.rustNativeStrCalleeKind(inner) === "str")
+      return false;
+    if (_is.isIdentifier.call(void 0, inner) && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustVecLocalDeclarationOf(inner) !== void 0))
+      return false;
+    const parts = type === void 0 ? [] : type.flags & _sync.TypeFlags.Union ? _nullishCoalesce(_chunkUBXMRIM6cjs.typeParts.call(void 0, type), () => ( [])) : [type];
+    return parts.length > 0 && parts.every((t) => String(_nullishCoalesce(_nullishCoalesce(_optionalChain([t, 'optionalAccess', _2610 => _2610.symbol, 'optionalAccess', _2611 => _2611.escapedName]), () => ( _optionalChain([t, 'optionalAccess', _2612 => _2612.symbol, 'optionalAccess', _2613 => _2613.name]))), () => ( ""))) !== "Precise");
+  }
+  r17ConcatIsAnchored(left, right, leftType, rightType) {
+    return this.r17AlwaysStr(left) && this.r17ConcatOperandSafe(right, rightType) || this.r17AlwaysStr(right) && this.r17ConcatOperandSafe(left, leftType);
+  }
+  /** R06 checker-string or R13 proven-`Str` receiver printed as a plain name / parenthesised. */
+  r17Receiver(node, receiverText) {
+    return _nullishCoalesce(this.rustNativeStringReceiver(node, receiverText), () => ( this.rustR13Receiver(node, receiverText)));
+  }
+  // `x.trim()`: the helper's `Str` arm is `str::trim`, Null otherwise.
+  r17PrintTrim(node, receiverText) {
+    const receiver = this.r17Receiver(node, receiverText);
+    if (receiver === void 0 || (_nullishCoalesce(_optionalChain([node, 'access', _2614 => _2614.arguments, 'optionalAccess', _2615 => _2615.length]), () => ( 0))) !== 0)
+      return void 0;
+    return `${receiver}.as_str().map(|__s| Value::Str(__s.trim().to_string().into())).unwrap_or(Value::Null)`;
+  }
+  // `x.startsWith(p)` / `x.endsWith(p)` with a proven/checker string operand: false unless both are `Str`.
+  r17PrintAffixTest(node, receiverText, method) {
+    if (_optionalChain([node, 'optionalAccess', _2616 => _2616.arguments, 'optionalAccess', _2617 => _2617.length]) !== 1)
+      return void 0;
+    const receiver = this.r17Receiver(node, receiverText);
+    const arg = receiver === void 0 ? void 0 : this.rustR13StrOperand(node.arguments[0], true);
+    if (arg === void 0)
+      return void 0;
+    return `${receiver}.as_str().zip(${arg}.as_str()).is_some_and(|(__s, __p)| __s.${method}(__p))`;
+  }
+  // `x.replace(p, r)` / `x.replaceAll(p, r)`: both helpers replace every occurrence when all three
+  // are `Str`, else return the receiver; `p`/`r` are literals or proven/checker string operands.
+  r17PrintReplace(node, receiverText) {
+    if (_optionalChain([node, 'optionalAccess', _2618 => _2618.arguments, 'optionalAccess', _2619 => _2619.length]) !== 2)
+      return void 0;
+    const receiver = this.r17Receiver(node, receiverText);
+    if (receiver === void 0 || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(receiver))
+      return void 0;
+    const operand = (arg) => {
+      const literal = this.rustNativeStringLiteralArg(arg);
+      return literal !== void 0 ? `Value::Str("${literal}".into())` : this.rustR13StrOperand(arg, true);
+    };
+    const from = operand(node.arguments[0]);
+    const to = operand(node.arguments[1]);
+    if (from === void 0 || to === void 0)
+      return void 0;
+    return `match (${receiver}.as_str(), ${from}.as_str(), ${to}.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => ${receiver}.clone() }`;
+  }
+  // hx4 R18 — collection helpers on locals whose runtime shape is proven: `"k" in x` on an R10
+  // plain-dict receiver, `Object.keys/values` on one in prediction sources, and `.length` /
+  // `.push` on a `Value::Arr`-only local (never a book/cache marker the helpers route).
+  /** `"lit" in x` where x is an R10-proven plain local / plain-kept Dict parameter. */
+  r18LiteralInOp(key, obj) {
+    if (!_is.isStringLiteral.call(void 0, key) || this.r05IsTest(key))
+      return void 0;
+    const recv = this.rustStripWrappers(obj);
+    if (recv === void 0 || !_is.isIdentifier.call(void 0, recv) || this.rustR10PlainReceiver(recv) === void 0)
+      return void 0;
+    const keyLiteral = this.rustStringLiteralOf(this.printStringLiteral(key));
+    if (keyLiteral === void 0)
+      return void 0;
+    return `Value::Bool(matches!(&${this.printNode(recv, 0).trim()}, Value::Dict(__d) if __d.contains_key(${keyLiteral})))`;
+  }
+  /** `Object.keys/values(x)` in `ts/src/prediction/<id>.ts` on an R10-proven plain local. */
+  r18PredictionEnum(node, parsedArg, kind) {
+    const arg = this.rustStripWrappers(_optionalChain([node, 'optionalAccess', _2620 => _2620.arguments, 'optionalAccess', _2621 => _2621[0]]));
+    if (arg === void 0 || parsedArg === void 0 || !_is.isIdentifier.call(void 0, arg) || !/\/ts\/src\/prediction\/[^/]+\.ts$/.test(this.r05Path(node)) || this.rustR10PlainReceiver(arg) !== "local")
+      return void 0;
+    const body = kind === "keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
+    return `Value::Array(${parsedArg.trim()}.as_map().map(|__m| ${body}).unwrap_or_default())`;
+  }
+  /** A source that is a `Value::Arr` or `Value::Null` (both helpers agree with `len()` / a no-op
+   *  push there): `[...]`, nullish, a runtime `split`, base `toArray`, or a base `safeList*`
+   *  read whose default is absent, nullish or `[...]`. */
+  r18ArrSource(node, allowNull) {
+    const n = this.rustStripWrappers(node);
+    if (n === void 0)
+      return false;
+    if (_is.isArrayLiteralExpression.call(void 0, n))
+      return !n.elements.some((e) => e.kind === _ast.SyntaxKind.SpreadElement);
+    if (n.kind === _ast.SyntaxKind.NullKeyword || _is.isIdentifier.call(void 0, n) && String(n.text) === "undefined")
+      return allowNull;
+    if (this.rustCallPrintsRuntimeSplit(n))
+      return true;
+    if (!_is.isCallExpression.call(void 0, n) || !_is.isPropertyAccessExpression.call(void 0, n.expression) || n.expression.expression.kind !== _ast.SyntaxKind.ThisKeyword)
+      return false;
+    const callee = String(n.expression.name.text);
+    if (callee === "toArray")
+      return n.arguments.length === 1 && this.rustR01CalleeIsBase(n);
+    const index = _RustTranspiler.RUST_R18_LIST_READERS[callee];
+    if (index === void 0 || n.arguments.length > index + 1)
+      return false;
+    const fallback = this.rustStripWrappers(n.arguments[index]);
+    const arrDefault = fallback !== void 0 && _is.isArrayLiteralExpression.call(void 0, fallback);
+    return (arrDefault || allowNull && (fallback === void 0 || fallback.kind === _ast.SyntaxKind.NullKeyword || _is.isIdentifier.call(void 0, fallback) && String(fallback.text) === "undefined")) && this.rustR01CalleeIsBase(n);
+  }
+  /** A local whose every write (declaration included) is an `r18ArrSource`, never captured by
+   *  a closure: its `Value` is a plain `Value::Arr` (the runtime never tags an array). */
+  r18ArrLocal(ident, allowNull) {
+    if (ident === void 0 || !_is.isIdentifier.call(void 0, ident) || this.rustParamShadowOf(ident) !== void 0 || this.r05IsTest(ident))
+      return false;
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || !this.r18ArrSource(declaration.initializer, allowNull))
+      return false;
+    const scope = this.rustEnclosingFunction(declaration);
+    if (scope === void 0 || _is.isSourceFile.call(void 0, scope) || this.rustEnclosingFunction(ident) !== scope)
+      return false;
+    const name = String(declaration.name.text);
+    const symbol = this.rustSymbolOf(declaration.name);
+    if (symbol === void 0)
+      return false;
+    for (const n of this.rustScopeNameNodes(scope, name)) {
+      if (n.kind !== _ast.SyntaxKind.Identifier || n === declaration.name || this.rustSymbolOf(n) !== symbol)
+        continue;
+      if (this.rustEnclosingFunction(n) !== scope)
+        return false;
+      let target = n;
+      while (target.parent !== void 0 && (_is.isParenthesizedExpression.call(void 0, target.parent) || _is.isNonNullExpression.call(void 0, target.parent) || _is.isAsExpression.call(void 0, target.parent)))
+        target = target.parent;
+      const parent = target.parent;
+      if (parent === void 0)
+        continue;
+      if (parent.kind === _ast.SyntaxKind.ShorthandPropertyAssignment || parent.kind === _ast.SyntaxKind.PropertyAssignment && parent.initializer === target)
+        return false;
+      if (_is.isBinaryExpression.call(void 0, parent) && parent.left === target && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+        if (parent.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || !this.r18ArrSource(parent.right, allowNull))
+          return false;
+        continue;
+      }
+      if (parent.kind === _ast.SyntaxKind.ArrayLiteralExpression && _is.isBinaryExpression.call(void 0, parent.parent) && parent.parent.left === parent)
+        return false;
+      if ((parent.kind === _ast.SyntaxKind.PrefixUnaryExpression || parent.kind === _ast.SyntaxKind.PostfixUnaryExpression) && (parent.operator === _ast.SyntaxKind.PlusPlusToken || parent.operator === _ast.SyntaxKind.MinusMinusToken))
+        return false;
+    }
+    return true;
+  }
+  /** `x.length` on an Arr-only local: `get_array_length`'s marker arms need a Dict. */
+  r18ArrLength(node, receiver) {
+    const recv = this.rustStripWrappers(_optionalChain([node, 'optionalAccess', _2622 => _2622.expression]));
+    if (!this.r18ArrLocal(recv, true))
+      return void 0;
+    return `Value::Int(${receiver}.len() as i64)`;
+  }
+  /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */
+  r18ArrPush(node, name, parsedArg) {
+    const recv = _optionalChain([node, 'optionalAccess', _2623 => _2623.expression, 'optionalAccess', _2624 => _2624.expression]);
+    if (name === void 0 || parsedArg === void 0 || _optionalChain([node, 'optionalAccess', _2625 => _2625.arguments, 'optionalAccess', _2626 => _2626.length]) !== 1 || node.arguments[0].kind === _ast.SyntaxKind.SpreadElement || _optionalChain([node, 'access', _2627 => _2627.parent, 'optionalAccess', _2628 => _2628.kind]) !== _ast.SyntaxKind.ExpressionStatement || !this.r18ArrLocal(recv, false) || name.trim() !== this.printNode(recv, 0).trim())
+      return void 0;
+    if (!this.rustVecPushShape(node, String(recv.text)))
+      return void 0;
+    const arg = parsedArg.trim();
+    const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== "self" && arg !== "true" && arg !== "false" ? `${arg}.clone()` : arg;
+    return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value}); }`;
+  }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips
 _RustTranspiler.RUST_PREFETCH_TYPE_KINDS = /* @__PURE__ */ new Set([
@@ -27284,6 +27617,8 @@ _RustTranspiler.RUST_R12_BOOL_READERS = { safeBool: 2, safeBool2: 3, safeBoolN: 
 _RustTranspiler.RUST_R12_DICT_READERS = { safeDict: 2, safeDict2: 3, safeDictN: 2 };
 /** A REST venue file (`ts/src/<id>.ts`): no base / pro / prediction tier. */
 _RustTranspiler.RUST_R12_REST_FILE = /ts\/src\/[^/]+\.ts$/;
+/** Base-tier array readers whose result is the stored `Value::Arr` or the default argument. */
+_RustTranspiler.RUST_R18_LIST_READERS = { safeList: 2, safeList2: 3, safeListN: 2 };
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts
@@ -27442,7 +27777,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _2599 => _2599.body, 'optionalAccess', _2600 => _2600.statements, 'access', _2601 => _2601.forEach, 'call', _2602 => _2602((statement) => {
+    _optionalChain([node, 'access', _2629 => _2629.body, 'optionalAccess', _2630 => _2630.statements, 'access', _2631 => _2631.forEach, 'call', _2632 => _2632((statement) => {
       if (_is.isExpressionStatement.call(void 0, statement)) {
         const expression = statement.expression;
         if (_is.isCallExpression.call(void 0, expression)) {
@@ -27603,7 +27938,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _2603 => _2603.name, 'access', _2604 => _2604.kind]) === _ast.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _2633 => _2633.name, 'access', _2634 => _2634.kind]) === _ast.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -27856,14 +28191,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _ast.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _2605 => _2605.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _2635 => _2635.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _ast.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _2606 => _2606.getChecker, 'call', _2607 => _2607(), 'access', _2608 => _2608.getDeclaredTypeOfSymbol, 'call', _2609 => _2609(symbol), 'access', _2610 => _2610.getSymbol, 'call', _2611 => _2611(), 'optionalAccess', _2612 => _2612.declarations]), () => ( []))).map((d) => d.resolve());
+          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _2636 => _2636.getChecker, 'call', _2637 => _2637(), 'access', _2638 => _2638.getDeclaredTypeOfSymbol, 'call', _2639 => _2639(symbol), 'access', _2640 => _2640.getSymbol, 'call', _2641 => _2641(), 'optionalAccess', _2642 => _2642.declarations]), () => ( []))).map((d) => d.resolve());
           const isClassDeclaration5 = declarations.find((l) => l.kind === _ast.SyntaxKind.InterfaceDeclaration || l.kind === _ast.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration5) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -27978,7 +28313,7 @@ function memoizePairMethod(owner, name) {
     if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
       return original.apply(owner, args);
     }
-    const cached = _optionalChain([cache, 'access', _2613 => _2613.get, 'call', _2614 => _2614(a), 'optionalAccess', _2615 => _2615.get, 'call', _2616 => _2616(b)]);
+    const cached = _optionalChain([cache, 'access', _2643 => _2643.get, 'call', _2644 => _2644(a), 'optionalAccess', _2645 => _2645.get, 'call', _2646 => _2646(b)]);
     if (cached !== void 0) {
       return cached === UNDEFINED_SENTINEL ? void 0 : cached;
     }
@@ -28018,7 +28353,7 @@ function memoizeUnaryMethod(owner, name) {
 }
 function memoizeBinaryKindMethod(owner, name) {
   const unary = owner[name];
-  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2617 => _2617.original]), () => ( unary));
+  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _2647 => _2647.original]), () => ( unary));
   if (typeof original !== "function") {
     return;
   }
@@ -28068,17 +28403,17 @@ function prefetchChecker(checker, root, options = {}) {
   const typeNodes = [], symbolNodes = [], callNodes = [];
   const visit = (node) => {
     const kind = node.kind;
-    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _2618 => _2618.has, 'optionalCall', _2619 => _2619(node)]))
+    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _2648 => _2648.has, 'optionalCall', _2649 => _2649(node)]))
       typeNodes.push(node);
-    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _2620 => _2620.has, 'optionalCall', _2621 => _2621(node)]))
+    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _2650 => _2650.has, 'optionalCall', _2651 => _2651(node)]))
       symbolNodes.push(node);
-    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _2622 => _2622.has, 'optionalCall', _2623 => _2623(node)]))
+    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _2652 => _2652.has, 'optionalCall', _2653 => _2653(node)]))
       callNodes.push(node);
     node.forEachChild(visit);
   };
   visit(root);
   const run = (nodes, fn) => {
-    if (_optionalChain([fn, 'optionalAccess', _2624 => _2624.seed]) === void 0 || fn.original === void 0)
+    if (_optionalChain([fn, 'optionalAccess', _2654 => _2654.seed]) === void 0 || fn.original === void 0)
       return;
     for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
       const chunk = nodes.slice(i, i + PREFETCH_BATCH);
@@ -28094,7 +28429,7 @@ function prefetchChecker(checker, root, options = {}) {
   run(typeNodes, getType);
   run(symbolNodes, getSymbol);
   const api = checker.__astTranspilerApi;
-  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _2625 => _2625.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _2626 => _2626.original, 'optionalAccess', _2627 => _2627.gen]) !== void 0) {
+  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _2655 => _2655.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _2656 => _2656.original, 'optionalAccess', _2657 => _2657.gen]) !== void 0) {
     for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
       const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
       const gens = chunk.map((n) => {
@@ -28121,7 +28456,7 @@ function prefetchChecker(checker, root, options = {}) {
 function prefetchDeclarationSignatures(checker, api, root) {
   const getSigDecl = checker.getSignatureFromDeclaration;
   const getTypeOfSymbolAtLocation = checker.getTypeOfSymbolAtLocation;
-  if (_optionalChain([getSigDecl, 'optionalAccess', _2628 => _2628.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _2629 => _2629.original, 'optionalAccess', _2630 => _2630.gen]) === void 0)
+  if (_optionalChain([getSigDecl, 'optionalAccess', _2658 => _2658.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _2659 => _2659.original, 'optionalAccess', _2660 => _2660.gen]) === void 0)
     return;
   const decls = [];
   const visit = (node) => {
@@ -28147,9 +28482,9 @@ function prefetchDeclarationSignatures(checker, api, root) {
     }())));
     api.batch(...chunk.map((decl) => safe(function* () {
       const type = checker.getTypeAtLocation(decl);
-      const symbol = _optionalChain([type, 'optionalAccess', _2631 => _2631.getSymbol, 'optionalAccess', _2632 => _2632.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
-      const location = _optionalChain([symbol, 'optionalAccess', _2633 => _2633.valueDeclaration, 'optionalAccess', _2634 => _2634.resolve, 'call', _2635 => _2635()]);
-      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _2636 => _2636.seed2]) === void 0)
+      const symbol = _optionalChain([type, 'optionalAccess', _2661 => _2661.getSymbol, 'optionalAccess', _2662 => _2662.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
+      const location = _optionalChain([symbol, 'optionalAccess', _2663 => _2663.valueDeclaration, 'optionalAccess', _2664 => _2664.resolve, 'call', _2665 => _2665()]);
+      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _2666 => _2666.seed2]) === void 0)
         return;
       const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
       getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
@@ -28241,7 +28576,7 @@ var Transpiler = class _Transpiler {
     const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path2.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _2637 => _2637.dispose, 'call', _2638 => _2638()]);
+    _optionalChain([previous, 'optionalAccess', _2667 => _2667.dispose, 'call', _2668 => _2668()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -28265,7 +28600,7 @@ var Transpiler = class _Transpiler {
   // long as the file's text on disk still equals the snapshot's. Replaces any
   // previous shared program; pass [] to drop it.
   setSharedProgram(paths) {
-    _optionalChain([this, 'access', _2639 => _2639.programCache, 'access', _2640 => _2640.shared, 'optionalAccess', _2641 => _2641.snapshot, 'access', _2642 => _2642.dispose, 'call', _2643 => _2643()]);
+    _optionalChain([this, 'access', _2669 => _2669.programCache, 'access', _2670 => _2670.shared, 'optionalAccess', _2671 => _2671.snapshot, 'access', _2672 => _2672.dispose, 'call', _2673 => _2673()]);
     this.programCache.shared = void 0;
     if (paths.length === 0) {
       return;

@@ -326,3 +326,4 @@ declare class BaseTranspiler {
     getMethodTypes(file: any): IMethodType[];
 }
 export { BaseTranspiler };
+//# sourceMappingURL=baseTranspiler.d.ts.map

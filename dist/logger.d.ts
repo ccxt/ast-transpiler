@@ -7,3 +7,4 @@ declare class Logger {
     static error(message: string): void;
 }
 export { Logger };
+//# sourceMappingURL=logger.d.ts.map

@@ -295,3 +295,4 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpHx4IsPlainRead(node: any): boolean;
     csharpHx4DeclaredKeyType(key: any): string | undefined;
 }
+//# sourceMappingURL=csharpTranspiler.d.ts.map

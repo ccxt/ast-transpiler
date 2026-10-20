@@ -812,5 +812,42 @@ export declare class RustTranspiler extends BaseTranspiler {
     r15VecJoinUse(access: any): boolean;
     r15PrintVecJoin(node: any): string | undefined;
     r15VecPropertyUse(n: any): boolean;
+    private rustR16InProgress;
+    private rustR16Assumed;
+    rustR16NumericKind(node: any, depth?: number): string | undefined;
+    rustR16Combine(kinds: (string | undefined)[]): string | undefined;
+    rustR16StructuralKind(inner: any, depth: number): string | undefined;
+    rustR16CallKind(call: any, depth: number): string | undefined;
+    rustR16IdentifierKind(ident: any, depth: number): string | undefined;
+    rustR16WrittenKind(declaration: any, depth: number): string | undefined;
+    rustR16HasWrites(declaration: any): boolean;
+    rustR16OrderedProven(op: any, left: any, right: any): boolean;
+    rustR16NativeArithmetic(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    r17AlwaysStr(node: any): boolean;
+    r17ConcatOperandSafe(node: any, type: any): boolean;
+    r17ConcatIsAnchored(left: any, right: any, leftType: any, rightType: any): boolean;
+    /** R06 checker-string or R13 proven-`Str` receiver printed as a plain name / parenthesised. */
+    r17Receiver(node: any, receiverText: string): string | undefined;
+    r17PrintTrim(node: any, receiverText: string): string | undefined;
+    r17PrintAffixTest(node: any, receiverText: string, method: string): string | undefined;
+    r17PrintReplace(node: any, receiverText: string): string | undefined;
+    /** `"lit" in x` where x is an R10-proven plain local / plain-kept Dict parameter. */
+    r18LiteralInOp(key: any, obj: any): string | undefined;
+    /** `Object.keys/values(x)` in `ts/src/prediction/<id>.ts` on an R10-proven plain local. */
+    r18PredictionEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** Base-tier array readers whose result is the stored `Value::Arr` or the default argument. */
+    private static readonly RUST_R18_LIST_READERS;
+    /** A source that is a `Value::Arr` or `Value::Null` (both helpers agree with `len()` / a no-op
+     *  push there): `[...]`, nullish, a runtime `split`, base `toArray`, or a base `safeList*`
+     *  read whose default is absent, nullish or `[...]`. */
+    r18ArrSource(node: any, allowNull: boolean): boolean;
+    /** A local whose every write (declaration included) is an `r18ArrSource`, never captured by
+     *  a closure: its `Value` is a plain `Value::Arr` (the runtime never tags an array). */
+    r18ArrLocal(ident: any, allowNull: boolean): boolean;
+    /** `x.length` on an Arr-only local: `get_array_length`'s marker arms need a Dict. */
+    r18ArrLength(node: any, receiver: string): string | undefined;
+    /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */
+    r18ArrPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
 }
 export {};
+//# sourceMappingURL=rustTranspiler.d.ts.map

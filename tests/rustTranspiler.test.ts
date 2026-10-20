@@ -4047,7 +4047,8 @@ describe('hx4 R04: native Vec push on typed array locals', () => {
             '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
         ]) {
             const out = transpiler.transpileRust(wrap(body)).content;
-            expect(out).toContain('append_to_array(&mut out');
+            // the box stays (hx4 R18 may spell its Arr push natively)
+            expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
             expect(out).not.toContain('Vec<Value>');
         }
     });
@@ -4133,7 +4134,8 @@ describe('hx4 R06 native string methods on proven strings', () => {
         const o = out("        return [a.split(s), a.startsWith(s), a.replace(s, 'y')];", 'a: string, s: string');
         // hx4 R13: a string-variable split delimiter / replace pattern goes native
         expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __d)| __s.split(__d)');
-        expect(o).toContain('starts_with(&a, &s)');
+        // hx4 R17: a string-variable affix goes native too
+        expect(o).toContain('a.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
         expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, \"y\").into()))');
     });
 });
@@ -4268,7 +4270,8 @@ describe('hx4 R11: relaxed Vec locals and native list length', () => {
             '        const out = [];\n        out.push (1);\n        const k = \'a\';\n        return out[k];',
         ]) {
             const out = rs(body);
-            expect(out).toContain('append_to_array(&mut out');
+            // the box stays (hx4 R18 may spell its Arr push natively)
+            expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
             expect(out).not.toContain('Vec<Value>');
         }
     });
@@ -4332,7 +4335,7 @@ describe('hx4 R13 proven-Str safeString locals: native equality / replace / spli
         expect(replaceOut).toContain('let mut marketId: Value = subscription.as_str().zip(prefix.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| subscription.clone());');
         expect(replaceOut).toContain('code = code.as_str().zip(net.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| code.clone());');
         expect(replaceOut).toContain('let mut parts: Value = Value::Array(code.as_str().zip(id.as_str()).map(|(__s, __d)| __s.split(__d).map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
-        expect(replaceOut).toContain('.as_str().zip((add(&Value::Str(".".into()), &crate::value::get_value_k(&o, "x"))).as_str())');
+        expect(replaceOut).toContain('.as_str().zip((Value::Str(format!("{}{}", Value::Str(".".into()), crate::value::get_value_k(&o, "x")).into())).as_str())');
         expect(replaceOut).toContain('let mut s: Value = Value::Str(format!("{}", id).into());');
         expect(replaceOut).not.toContain('replace_str(');
     });
@@ -4402,5 +4405,112 @@ describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple l
 
     test('a negated bool tuple local tests as_bool natively', () => {
         expect(output).toContain('else if !(stock.as_bool() == Some(true)) {');
+    });
+});
+
+describe('hx4 R16 rust math/comparison on structurally numeric operands', () => {
+    const r16 = (code: string) => transpiler.transpileRust(code).content;
+    const src = 'class X {\n' +
+        '    sum (...xs: any[]): any { return xs[0]; }\n' +
+        '    readU (s: string, n: number): any { let result = 0; result = this.sum (result, n * 2); return result; }\n' +
+        '    f (ids: string[], chunkSize: number, bits0: string, limit: number | undefined, a: any, bid: number | undefined) {\n' +
+        '        const idsLength = ids.length;\n' +
+        '        const c = this.sum (idsLength, chunkSize - 1) / chunkSize;\n' +
+        '        const m = this.sum (bid, 1) / 2;\n' +
+        '        let bits = this.readU (bits0, 1);\n' +
+        '        const bit = bits % 2;\n' +
+        '        bits = (bits - bit) / 2;\n' +
+        '        const neg = -(this.readU (bits0, 2));\n' +
+        '        let errors = 0;\n' +
+        '        while (errors <= limit) { errors += 1; }\n' +
+        '        const q = -1 * ids.length;\n' +
+        '        const anyCmp = a <= bid;\n' +
+        '        const anySub = a - 1;\n' +
+        '        const anySum = this.sum (a, 1) / 2;\n' +
+        '        const nullCmp = bid <= limit;\n' +
+        '        return [ c, m, bit, neg, q, anyCmp, anySub, anySum, nullCmp, bits ];\n' +
+        '    }\n' +
+        '}\n';
+    let out = '';
+    beforeAll(() => { out = r16(src); });
+
+    test('this.sum of numbers, numeric method returns and inductive locals go native', () => {
+        expect(out).toContain('let mut bit: Value = (match (&(bits), &(Value::Int(2))) { (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y)');
+        expect(out).toContain('bits = (match ((((match (&(bits), &(bit)) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
+        expect(out).toContain('let mut neg: Value = (match &((self.readU(bits0, Value::Int(2)))) { Value::Int(x) => Value::Int(-x)');
+        expect(out).toContain('let mut q: Value = (match (&(Value::Int(-1)), &(Value::Int(ids.len() as i64))) {');
+        expect(out).not.toContain('divide(&self.sum(&[idsLength');
+        expect(out).not.toContain('mod_val(&bits');
+        expect(out).not.toContain('negate(');
+    });
+
+    test('<= with a literal-initialised numeric local against a nullable number is native', () => {
+        expect(out).toContain('while errors.as_f64().unwrap_or(f64::NAN) <= limit.as_f64().unwrap_or(f64::NAN) {');
+    });
+
+    test('any operands and two nullable sides of <= keep the helpers', () => {
+        expect(out).toContain('is_less_than_or_equal(&a, &bid)');
+        expect(out).toContain('subtract(&a, &Value::Int(1))');
+        expect(out).toContain('divide(&self.sum(a, Value::Int(1)), &Value::Int(2))');
+        expect(out).toContain('let mut m: Value = (match ((self.sum(bid, Value::Int(1))).as_f64(), (Value::Int(2)).as_f64())');
+        expect(out).toContain('is_less_than_or_equal(&bid, &limit)');
+    });
+});
+
+describe('hx4 R17 string helpers and anchored concat', () => {
+    const src = "type Str = string | undefined;\nclass Precise { constructor (s: string) {} }\nclass A {\n    id: string = 'a';\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    run (x: any, code: string, s: Str, n: number) {\n        const h = this.safeString (x, 'h', '');\n        let qs = '';\n        qs = qs.replaceAll ('%2C', ',');\n        const r = code.replace (s, h);\n        const p = new Precise ('1');\n        return [ h.trim (), code.startsWith (s), code.endsWith (h), qs, r, this.id + ' x ' + x, 'n' + n, 'p' + p, x + 'y', x.trim (), x.replaceAll ('a', 'b'), x.startsWith (s) ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('trim / startsWith / endsWith / replaceAll / replace on proven strings go native', () => {
+        expect(o).toContain('h.as_str().map(|__s| Value::Str(__s.trim().to_string().into())).unwrap_or(Value::Null)');
+        expect(o).toContain('code.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
+        expect(o).toContain('code.as_str().zip(h.as_str()).is_some_and(|(__s, __p)| __s.ends_with(__p))');
+        expect(o).toContain('qs = qs.as_str().map(|__s| Value::Str(__s.replace("%2C", ",").into())).unwrap_or_else(|| qs.clone());');
+        expect(o).toContain('match (code.as_str(), s.as_str(), h.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => code.clone() }');
+    });
+    test('concat anchored on an always-Str side goes native for any non-Precise box', () => {
+        expect(o).toContain('Value::Str(format!("{}{}", Value::Str(format!("{}{}", self.id, Value::Str(" x ".into())).into()), x).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", Value::Str("n".into()), n).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", x, Value::Str("y".into())).into())');
+    });
+    test('Precise operands and any receivers keep the helpers', () => {
+        expect(o).toContain('add(&Value::Str("p".into()), &p)');
+        expect(o).toContain('trim(&x)');
+        expect(o).toContain('replace_all_str(&x,');
+        expect(o).toContain('starts_with(&x, &s)');
+    });
+});
+
+describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', () => {
+    let rest = '';
+    let prediction = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r18/ts/src/venue.ts').content;
+        prediction = transpiler.transpileRustByPath('./tests/files/input/hx4r18/ts/src/prediction/venue.ts').content;
+    });
+
+    test('push on a [] local / length on a toArray local are native', () => {
+        expect(rest).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(rows.as_array()');
+        expect(rest).toContain('return Value::from(vec![out, count, Value::Int(parsed.len() as i64)]);');
+    });
+
+    test('literal-key in on an R10 plain local is contains_key', () => {
+        expect(rest).toContain('if (matches!(&account, Value::Dict(__d) if __d.contains_key("free"))) {');
+        expect(rest).toContain('in_op(&response, &Value::Str("code".into()))');
+    });
+
+    test('rebound, nullable-push, dict-aliased and closure-captured locals keep the helpers', () => {
+        expect(rest).toContain('append_to_array(&mut list, Value::Int(2));');
+        expect(rest).toContain('return get_array_length(&list);');
+        expect(rest).toContain('append_to_array(&mut maybe, Value::Int(3));');
+        expect(rest).toContain('append_to_array(&mut ids, args);');
+        expect(rest).toContain('append_to_array(&mut items, Value::Int(4));');
+        expect(rest).toContain('append_to_array(&mut seq, Value::Int(seq.len() as i64));');
+    });
+
+    test('Object.keys / Object.values on a prediction plain local are native; any keeps the helper', () => {
+        expect(prediction).toContain('let mut queryKeys: Value = Value::Array(query.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default());');
+        expect(prediction).toContain('let mut queryValues: Value = Value::Array(query.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default());');
+        expect(prediction).toContain('let mut loose: Value = object_keys(&response);');
     });
 });

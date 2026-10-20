@@ -68,3 +68,4 @@ export declare class CppTranspiler extends BaseTranspiler {
     printThrowStatement(node: any, identation: any): string;
     getExceptionalAccessTokenIfAny(node: any): string;
 }
+//# sourceMappingURL=cppTranspiler.d.ts.map
