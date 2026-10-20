@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -783,5 +783,34 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `x === true|false` with `x` proven a bool value: `is_equal` against a `Value::Bool` is
      *  the payload compare there (Null matches neither). */
     rustR12NativeBoolEquality(left: any, right: any, op: any): string | undefined;
+    rustR13ProvenStrSource(node: any): boolean;
+    rustR13ProvenStrIdentifier(node: any): boolean;
+    /** A destructuring / for-in-of target: a write the direct-assignment check cannot see. */
+    rustR13WriteTarget(node: any): boolean;
+    /** `x` / `(x as string)` → the identifier under parens / `as`. */
+    rustR13PeelCast(node: any): any;
+    /** Printed text of an operand that is always `Value::Str` / `Value::Null`, else undefined:
+     *  a proven-`Str` local, a checker-`string` declared local/param (the R06 needle rule), or
+     *  `"lit" + e` / `e + "lit"` (the `add` helper's string branch always yields `Value::Str`). */
+    rustR13StrOperand(node: any, allowChecker: boolean): string | undefined;
+    printRustR13ProvenStrEquality(left: any, right: any, op: any): string | undefined;
+    /** Receiver text when the call's receiver is a proven-`Str` local (R06 covers checker strings). */
+    rustR13Receiver(node: any, receiverText: string): string | undefined;
+    /** R06's checker-string receiver, when it prints as a bare name (it is read twice). */
+    rustR13PlainReceiver(node: any, receiverText: string): string | undefined;
+    printRustR13Replace(node: any, receiverText: string): string | undefined;
+    printRustR13Split(node: any, receiverText: string): string | undefined;
+    printRustR13ToString(node: any, receiverText: string): string | undefined;
+    printRustR13Case(node: any, receiverText: string, method: string): string | undefined;
+    /** A bodiless overload signature whose class also holds the bodied implementation. */
+    r14BaseOverload(declaration: any): boolean;
+    /** `x[a ± b]` on a checker-proven list, each operand a numeric literal, a `Value` loop
+     *  counter or a `const n = y.length` local: the key prints as a `Value` number, so the
+     *  list arm of `get_value` (Int index, else miss) is spelled natively. */
+    r14ListArithIndex(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    r14ValueNumberOperand(node: any): boolean;
+    r15VecJoinUse(access: any): boolean;
+    r15PrintVecJoin(node: any): string | undefined;
+    r15VecPropertyUse(n: any): boolean;
 }
 export {};

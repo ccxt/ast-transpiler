@@ -66,7 +66,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     getVarKey(node: any): string;
     equalityOperandFamily(type: any): string | undefined;
     isNullishLiteral(node: any): boolean;
-    javaEqualityLiteralKind(node: any): "int" | "double" | "long";
+    javaEqualityLiteralKind(node: any): "double" | "int" | "long";
     javaNativeLengthKind(node: any): string;
     isJavaPrimitiveCounterReference(node: any): boolean;
     javaLocalNumberKind(node: any, depth: any): any;
@@ -98,7 +98,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaIntegerLiteralKind(node: any): "int" | "long";
     isVarargsArrayReference(node: any, depth?: number): any;
     isJavaListType(type: any): boolean;
-    javaLengthKind(expression: any): "String" | "List" | "StringOrNull" | "ListOrNull";
+    javaLengthKind(expression: any): "List" | "ListOrNull" | "String" | "StringOrNull";
     isJavaListValueType(type: any): any;
     isJavaListBackedClassType(type: any): boolean;
     isJavaNullishUnion(type: any, isMember: any): any;
@@ -107,7 +107,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;
     isJavaFloatLiteral(node: any): boolean;
-    javaPrintedCallKind(node: any): "int" | "double" | "long";
+    javaPrintedCallKind(node: any): "double" | "int" | "long";
     javaComparisonOperandsAreExact(left: any, leftKind: any, right: any, rightKind: any): boolean;
     javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
     isJavaMapType(type: any): boolean;
@@ -224,7 +224,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printNativePadStart(node: any, name: any): string;
     javaCharLiteral(character: any): any;
     javaUnwrapParentheses(node: any): any;
-    javaNativeArithmeticType(node: any): "String" | "Long" | "Double";
+    javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
     javaEnclosingFunction(node: any): any;
     javaArithmeticWriteIsSafe(right: any, javaType: any): boolean;
     javaScopingBlock(node: any): any;
@@ -232,7 +232,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBindingsAreDisjoint(declaration: any, other: any): boolean;
     javaArithmeticLocalUseIsSafe(node: any, declaration: any, javaType: any): boolean;
     javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
-    javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
+    javaArithmeticLocalType(declaration: any): "Double" | "Long" | "String";
     javaProvableNumericDoubleOperand(node: any): boolean;
     getFinalVarName(varName: string): string;
     getOriginalVarName(name: string): string;

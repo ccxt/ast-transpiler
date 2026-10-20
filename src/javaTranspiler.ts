@@ -8157,3 +8157,72 @@ JavaTranspiler.prototype.hx4J09CoreArgument = function (type: string, printed: s
         return this.hx4J09CoreArgument(type, printed, node) ?? javaConvertToCoreType.call(this, type, printed, node);
     };
 }
+
+// hx4 J15: two declared numeric boxes compare by value, never by reference. Same-class integral
+// boxes take Objects.equals (Helpers.isEqual's null table + toLong compare); a Double on either side
+// compares doubleValue() (isEqual's toDouble: 0.0 == -0.0, NaN != NaN), other integral pairs longValue().
+{
+    const proto: any = JavaTranspiler.prototype;
+    const printNativeEquality = proto.printNativeEqualityIfProvable;
+    proto.printNativeEqualityIfProvable = function (node, leftText: string, rightText: string): string | undefined {
+        const op = node?.operatorToken?.kind;
+        const negated = op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken;
+        if (negated || op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) {
+            const left = this.javaDeclaredNumericFamily(node.left);
+            const right = this.javaDeclaredNumericFamily(node.right);
+            // a declared Boolean: isEqual answers false across classes and by value within Boolean
+            const isBool = (n) => String(this.javaDeclaredTypeOf(n) ?? '').trim() === 'Boolean';
+            if (isBool(node.left) || isBool(node.right)) {
+                return `${negated ? '!' : ''}java.util.Objects.equals(${leftText}, ${rightText})`;
+            }
+            if (JAVA_BOXED_NUMERIC_TYPES.has(left) && JAVA_BOXED_NUMERIC_TYPES.has(right)) {
+                let equal: string;
+                if (left === right && left !== 'Double') {
+                    equal = `java.util.Objects.equals(${leftText}, ${rightText})`;
+                } else {
+                    const unbox = (left === 'Double' || right === 'Double') ? 'doubleValue' : 'longValue';
+                    equal = `(${leftText} == null ? ${rightText} == null : (${rightText} != null && ${leftText}.${unbox}() == ${rightText}.${unbox}()))`;
+                }
+                return negated ? `!${equal}` : equal;
+            }
+        }
+        return printNativeEquality.call(this, node, leftText, rightText);
+    };
+}
+
+// hx4 J16: an awaited implicit-API call (declared in ts/src/abstract/<id>.ts, body `this.request(..)`)
+// hands back a fresh Jackson parse of the HTTP body: never a field map or a ws client map, whatever
+// its arguments read, so J01's non-shared proof admits it as a put source.
+const JAVA_J16_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9_]+\.ts$/;
+{
+    const proto: any = JavaTranspiler.prototype;
+    const nonSharedValue = proto.javaHx4NonSharedValue;
+    proto.javaHx4NonSharedValue = function (value, depth: number): boolean {
+        return this.javaJ16ImplicitApiResponse(value) || nonSharedValue.call(this, value, depth);
+    };
+    proto.javaJ16ImplicitApiResponse = function (value): boolean {
+        let node = this.unwrapPrintTransparentExpression(value);
+        if (node?.kind !== SyntaxKind.AwaitExpression) {
+            return false;
+        }
+        node = this.unwrapPrintTransparentExpression(node.expression);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        let declaration: any;
+        try {
+            declaration = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        const fileName = declaration?.getSourceFile?.()?.fileName;
+        if (typeof fileName !== 'string' || !JAVA_J16_IMPLICIT_API_FILE.test(fileName) || !declaration.body) {
+            return false;
+        }
+        const statements = declaration.body.statements ?? [];
+        const ret = statements.length === 1 && isReturnStatement(statements[0]) ? statements[0].expression : undefined;
+        return ret !== undefined && isCallExpression(ret) && isPropertyAccessExpression(ret.expression)
+            && ret.expression.expression.kind === SyntaxKind.ThisKeyword && ret.expression.name.text === 'request';
+    };
+}

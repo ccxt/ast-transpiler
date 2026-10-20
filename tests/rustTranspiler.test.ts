@@ -4131,9 +4131,10 @@ describe('hx4 R06 native string methods on proven strings', () => {
     });
     test('non-literal operands keep the helpers', () => {
         const o = out("        return [a.split(s), a.startsWith(s), a.replace(s, 'y')];", 'a: string, s: string');
-        expect(o).toContain('split(&a, &s)');
+        // hx4 R13: a string-variable split delimiter / replace pattern goes native
+        expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __d)| __s.split(__d)');
         expect(o).toContain('starts_with(&a, &s)');
-        expect(o).toContain('replace_str(&a, &s,');
+        expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, \"y\").into()))');
     });
 });
 
@@ -4316,5 +4317,90 @@ describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () 
     test('an any-valued method / tuple element keeps is_true', () => {
         expect(output).toContain('if is_true(&self.looseFlag(&[params])) {');
         expect(output).toContain('if is_true(&loose) {');
+    });
+});
+
+describe('hx4 R13 proven-Str safeString locals: native equality / replace / split / toString / case', () => {
+    let replaceOut = '';
+    let eqOut = '';
+    beforeAll(() => {
+        replaceOut = transpiler.transpileRust("class X {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return undefined; }\n    f (o: any, timeframe: string) {\n        const subscription = this.safeString (o, 'n', '');\n        const prefix = timeframe + '_';\n        const marketId = subscription.replace (prefix, '');\n        const net = this.safeString (o, 'network');\n        let code: string = this.safeString (o, 'code', '');\n        code = code.replace (net, '');\n        const id = this.safeString (o, 'id');\n        const parts = (code as string).split (id as string);\n        const s = (id as string).toString ();\n        const h = code.replace ('.' + o['x'], '');\n        return [ marketId, code, parts, s, h ];\n    }\n}\n").content;
+        eqOut = transpiler.transpileRust("class X {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return undefined; }\n    safeString2 (o: any, k: any, k2: any, d: any = undefined): string | undefined { return undefined; }\n    safeValue (o: any, k: any, d: any = undefined): any { return undefined; }\n    f (o: any, net: any) {\n        const a: any = this.safeString (o, 'a');\n        const b: any = this.safeString2 (o, 'b', 'c');\n        if (a === b) { return 1; }\n        const c: any = this.safeString (o, 'c', net);\n        if (a === c) { return 2; }\n        let d: any = this.safeString (o, 'd');\n        d = this.safeValue (o, 'x');\n        if (a !== d) { return 3; }\n        let e: any = this.safeString (o, 'e');\n        [ e ] = o;\n        if (a === e) { return 4; }\n        const g: any = this.safeString (o, 'g', 'z');\n        const u = g.toUpperCase ();\n        const t = a.toString ();\n        const v = d.toString ();\n        return [ u, t, v ];\n    }\n}\n").content;
+    });
+
+    test('replace / split with a string-variable operand print native str ops', () => {
+        expect(replaceOut).toContain('let mut marketId: Value = subscription.as_str().zip(prefix.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| subscription.clone());');
+        expect(replaceOut).toContain('code = code.as_str().zip(net.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| code.clone());');
+        expect(replaceOut).toContain('let mut parts: Value = Value::Array(code.as_str().zip(id.as_str()).map(|(__s, __d)| __s.split(__d).map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
+        expect(replaceOut).toContain('.as_str().zip((add(&Value::Str(".".into()), &crate::value::get_value_k(&o, "x"))).as_str())');
+        expect(replaceOut).toContain('let mut s: Value = Value::Str(format!("{}", id).into());');
+        expect(replaceOut).not.toContain('replace_str(');
+    });
+
+    test('two proven-Str `any` locals compare with PartialEq', () => {
+        expect(eqOut).toContain('if (a == b) {');
+        expect(eqOut).toContain('if (a == c) {');
+        expect(eqOut).toContain('let mut u: Value = g.as_str().map(|__s| Value::Str(__s.to_uppercase().into())).unwrap_or(Value::Null);');
+        expect(eqOut).toContain('let mut t: Value = Value::Str(format!("{}", a).into());');
+    });
+
+    test('a non-string write or destructuring write keeps the helpers', () => {
+        expect(eqOut).toContain('if !is_equal(&a, &d) {');
+        expect(eqOut).toContain('if is_equal(&a, &e) {');
+        expect(eqOut).toContain('let mut v: Value = to_string_val(&d);');
+    });
+});
+
+describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict and list proofs', () => {
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r14/ts/src/venue.ts').content;
+    });
+
+    test('a dynamic-key read on an overloaded safeDict local with a {} default is native', () => {
+        expect(output).toContain('let mut found: Value = byAlt.as_map().and_then(|__m| id.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+    });
+
+    test('a non-plain default and a write-back bind keep get_value', () => {
+        expect(output).toContain('return get_value(&loose, &id);');
+        expect(output).toContain('let mut value: Value = get_value(&ledger, &key);');
+    });
+
+    test('an overloaded safeBool with a bool default tests truthiness natively', () => {
+        expect(output).toContain('if flag.as_bool() == Some(true) {');
+    });
+
+    test('list reads at counter/length arithmetic indices are native; an any-typed operand keeps get_value', () => {
+        expect(output).toContain('last = trades.as_array().and_then(|__arr| match &((match (&(numTrades), &(Value::Int(1)))');
+        expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &((match (&(i), &(Value::Int(1)))');
+        expect(output).toContain('Value::Int(__n) if *__n >= 0 => __arr.get(*__n as usize), _ => None }).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('get_value(&trades, &subtract(&k, &Value::Int(1)))');
+    });
+});
+
+describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple locals', () => {
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r15/ts/src/venue.ts').content;
+    });
+
+    test('a string[] local joined with a literal is a Vec with a native join', () => {
+        expect(output).toContain('let mut out: Vec<Value> = Vec::new();');
+        expect(output).toContain('Value::Str(out.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join(",").into())');
+    });
+
+    test('object-literal values are boxed clones, the last one a move', () => {
+        expect(output).toContain('m.insert("ids".to_string(), Value::from(out.clone()));');
+        expect(output).toContain('m.insert("more".to_string(), Value::from(out));');
+    });
+
+    test('a value pushed after the literal, an any[] join and an in-loop literal keep the helper', () => {
+        expect(output).toContain('append_to_array(&mut late, Value::Str("x".into()));');
+        expect(output).toContain('return join(&loose, &Value::Str(",".into()));');
+        expect(output).toContain('append_to_array(&mut looped, Value::Str("a".into()));');
+    });
+
+    test('a negated bool tuple local tests as_bool natively', () => {
+        expect(output).toContain('else if !(stock.as_bool() == Some(true)) {');
     });
 });

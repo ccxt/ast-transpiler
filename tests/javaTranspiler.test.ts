@@ -7199,3 +7199,151 @@ describe('hx4 J09: isTrue / isInstance / core-argument residual', () => {
         expect(out).toContain('Helpers.toLongOrNull(other)');
     });
 });
+
+describe('hx4 J15: equality on two declared numeric boxes compares values', () => {
+    const withTypes = (types: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => types[String(d?.name?.text)];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const src = (expr: string) =>
+        "class T {\\n" +
+        "    f(p: any, q: any): boolean {\\n" +
+        "        const a = p;\\n" +
+        "        const b = q;\\n" +
+        "        return " + expr + ";\\n" +
+        "    }\\n" +
+        "}";
+
+    test('two Longs: Objects.equals, never a reference ==/!=', () => {
+        withTypes({ a: 'Long', b: 'Long' }, () => {
+            const eq = transpiler.transpileJava(src("a === b")).content;
+            const ne = transpiler.transpileJava(src("a !== b")).content;
+            expect(eq).toContain("java.util.Objects.equals(a, b)");
+            expect(ne).toContain("!java.util.Objects.equals(a, b)");
+            expect(eq + ne).not.toMatch(/a [!=]= b/);
+        });
+    });
+
+    test('a Double box compares doubleValue with the helper null table', () => {
+        withTypes({ a: 'Double', b: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a === b")).content)
+                .toContain("(a == null ? b == null : (b != null && a.doubleValue() == b.doubleValue()))");
+        });
+        withTypes({ a: 'Double', b: 'Double' }, () => {
+            expect(transpiler.transpileJava(src("a !== b")).content)
+                .toContain("!(a == null ? b == null : (b != null && a.doubleValue() == b.doubleValue()))");
+        });
+    });
+
+    test('mixed integral boxes compare longValue', () => {
+        withTypes({ a: 'Integer', b: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a === b")).content)
+                .toContain("(a == null ? b == null : (b != null && a.longValue() == b.longValue()))");
+        });
+    });
+
+    test('a declared Boolean compares with Objects.equals', () => {
+        withTypes({ a: 'Boolean' }, () => {
+            expect(transpiler.transpileJava(src("a === b")).content).toContain("java.util.Objects.equals(a, b)");
+            expect(transpiler.transpileJava(src("a !== true")).content).toContain("!java.util.Objects.equals(a, true)");
+        });
+    });
+
+    test('a box against a literal keeps the J05 guarded operator', () => {
+        withTypes({ a: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a === 5")).content).toContain("(a != null && a == 5)");
+        });
+    });
+});
+
+// hx4 J16: an awaited implicit-API call (ts/src/abstract/<id>.ts, body `this.request(..)`) is a fresh
+// parse: a safeDict of its response takes the native put even when the call's arguments read a field
+describe('hx4 J16: implicit-API response is a non-shared put source', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j16');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const ABSTRACT = path.join(TMP, 'ts', 'src', 'abstract', 'x.ts');
+    const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
+    let out: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.mkdirSync(path.dirname(ABSTRACT), { recursive: true });
+        fs.writeFileSync(BASE, "export class T {\n" +
+            "    options: any = {};\n" +
+            "    request(path: any, api: any, method: any, params: any, config: any): Promise<any> { return undefined as any; }\n" +
+            "    safeDict(d: any, k: any, def: any = undefined): any { return def; }\n" +
+            "    safeInteger(d: any, k: any): number | undefined { return undefined; }\n" +
+            "    extend(...args: any[]): any { return {}; }\n" +
+            "}\n");
+        fs.writeFileSync(ABSTRACT, "import { T } from '../base/Exchange.js';\n" +
+            "export abstract class X extends T {\n" +
+            "    privatePostA (params = {}): Promise<any> { return this.request ('a', 'private', 'POST', params, {}); }\n" +
+            "    privatePostB (params = {}): Promise<any> { return this.request ('b', 'private', 'POST', params, {}); }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE, "import { X } from './abstract/x.js';\n" +
+            "export class V extends X {\n" +
+            "    other (params = {}): Promise<any> { return this.request ('c', 'private', 'POST', params, {}); }\n" +
+            "    async p1 (params: any): Promise<any> {\n" +
+            "        const response = await this.privatePostA (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['p1'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    async p2 (params: any): Promise<any> {\n" +
+            "        let response = undefined;\n" +
+            "        if (params['uta'] === true) {\n" +
+            "            response = await this.privatePostA (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        } else {\n" +
+            "            response = await this.privatePostB (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        }\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['p2'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    async n1 (params: any): Promise<any> {\n" +
+            "        const response = await this.other (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['n1'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    async n2 (params: any): Promise<any> {\n" +
+            "        let response = await this.privatePostA (params);\n" +
+            "        response = this.options;\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['n2'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
+            (declaration?.kind !== undefined && declaration.name?.text === 'data') ? 'Map<String, Object>' : undefined;
+        out = byPath.transpileJavaByPath(VENUE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('awaited implicit-API response read off a field-reading argument: native put', () => {
+        expect(out).toContain('data.put("p1", this.safeInteger(response, "requestTime"))');
+    });
+
+    test('null-initialised local written only by awaited implicit-API calls: native put', () => {
+        expect(out).toContain('data.put("p2", this.safeInteger(response, "requestTime"))');
+    });
+
+    test('an awaited venue method (not in ts/src/abstract) keeps the helper', () => {
+        expect(out).toContain('Helpers.addElementToObject(data, "n1"');
+    });
+
+    test('a response later reassigned from a field keeps the helper', () => {
+        expect(out).toContain('Helpers.addElementToObject(data, "n2"');
+    });
+});
