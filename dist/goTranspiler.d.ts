@@ -596,4 +596,3 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     g13NumericParameterCandidates(param: any): string[];
 }
-//# sourceMappingURL=goTranspiler.d.ts.map

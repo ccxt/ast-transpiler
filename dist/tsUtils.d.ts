@@ -14,4 +14,3 @@ declare function signatureDeclaration(signature: any): Node | undefined;
 declare function typeParts(type: any): any[] | undefined;
 declare function typeTarget(type: any): any;
 export { symbolDeclarations, symbolValueDeclaration, signatureDeclaration, typeParts, typeTarget };
-//# sourceMappingURL=tsUtils.d.ts.map

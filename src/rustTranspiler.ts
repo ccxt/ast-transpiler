@@ -3888,7 +3888,7 @@ export class RustTranspiler extends BaseTranspiler {
     isNativeAccessPositionSafe(node: Node): boolean {
         const parent = node.parent;
         // `x['k'].push(...)` / `x['k'](...)`: the post-pass rewrites the target.
-        if (parent && (isPropertyAccessExpression(parent) || isCallExpression(parent)) && parent.expression === node) return false;
+        if (parent && (isPropertyAccessExpression(parent) || isCallExpression(parent)) && parent.expression === node && !this.r21PureStringMethodReceiver(node)) return false;
         const root = this.rootPlaceText(node);
         for (let current: any = node.parent; current; current = current.parent) {
             if (isStatement(current) || isSourceFile(current) || isFunctionLike(current)) break;
@@ -4302,11 +4302,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return this.r05Enum(node, parsedArg, 'keys') ?? this.r18PredictionEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
+        return this.r05Enum(node, parsedArg, 'keys') ?? this.r18PredictionEnum(node, parsedArg, 'keys') ?? this.r21BaseEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return this.r05Enum(node, parsedArg, 'values') ?? this.r18PredictionEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
+        return this.r05Enum(node, parsedArg, 'values') ?? this.r18PredictionEnum(node, parsedArg, 'values') ?? this.r21BaseEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
     printJsonParseCall(node, identation, parsedArg = undefined) {
@@ -6099,6 +6099,7 @@ export class RustTranspiler extends BaseTranspiler {
     r18ArrSource(node: any, allowNull: boolean): boolean {
         const n: any = this.rustStripWrappers(node);
         if (n === undefined) return false;
+        if (this.r21ArrSource(n)) return true;
         if (isArrayLiteralExpression(n)) return !n.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement);
         if (n.kind === SyntaxKind.NullKeyword || (isIdentifier(n) && String(n.text) === 'undefined')) return allowNull;
         if (this.rustCallPrintsRuntimeSplit(n)) return true;
@@ -6164,5 +6165,65 @@ export class RustTranspiler extends BaseTranspiler {
         // `append_to_array` takes the value by move; ccxt's post-pass cloned a bare local there.
         const value = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(arg) && arg !== 'self' && arg !== 'true' && arg !== 'false' ? `${arg}.clone()` : arg;
         return `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value}); }`;
+    }
+
+    // hx4 R21 — `Object.keys/values` on an R10-proven plain local in the base tier (the
+    // helper's ws-tag filter is a no-op on a map built from literals), and native map reads
+    // that are the receiver of a non-mutating string method (`currency['id'].toUpperCase ()`).
+
+    /** Base-tier (`ts/src/base/**`) `Object.keys/values(x)` on an R10-proven plain local. */
+    r21BaseEnum(node, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg: any = this.rustStripWrappers(node?.arguments?.[0]);
+        if (arg === undefined || parsedArg === undefined || !isIdentifier(arg)
+            || !RustTranspiler.RUST_BASE_TIER_FILE.test(this.r05Path(node))
+            || this.rustR10PlainReceiver(arg) !== 'local') return undefined;
+        const body = kind === 'keys' ? '__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()' : '__m.values().cloned().collect()';
+        return `Value::Array(${parsedArg.trim()}.as_map().map(|__m| ${body}).unwrap_or_default())`;
+    }
+
+    private static readonly RUST_R21_PURE_STRING_METHODS = new Set([ 'toUpperCase', 'toLowerCase', 'trim', 'startsWith', 'endsWith', 'split' ]);
+
+    /** `x['k'].m (…)` with `m` a non-mutating string method on a checker-`string` read: no
+     *  ccxt pass rewrites that target (only `.push` / calls of the read itself). */
+    r21PureStringMethodReceiver(node: any): boolean {
+        const access: any = node?.parent;
+        const call: any = access?.parent;
+        if (!isElementAccessExpression(node) || access === undefined || !isPropertyAccessExpression(access) || access.expression !== node
+            || call === undefined || !isCallExpression(call) || call.expression !== access
+            || !RustTranspiler.RUST_R21_PURE_STRING_METHODS.has(String(access.name.text))) return false;
+        const type = this.typeOfNodeIfAny(node);
+        return type !== undefined && (type.flags & TypeFlags.StringLike) !== 0;
+    }
+
+    /** Locals whose Arr-only proof is in progress (a self-referencing write proves nothing new). */
+    private r21ArrVisiting = new Set<any>();
+
+    /** More always-`Value::Arr` sources for the R18 proof: base `arrayConcat` (Array on every
+     *  arm), base `sortBy`/`sortBy2` of an Arr-only local (returns its input's variant), and a
+     *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
+    r21ArrSource(n: any): boolean {
+        if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword) {
+            const callee = String(n.expression.name.text);
+            if (callee === 'arrayConcat') return n.arguments.length === 2 && this.rustR01CalleeIsBase(n);
+            if (callee === 'sortBy' || callee === 'sortBy2') {
+                const first: any = this.rustStripWrappers(n.arguments[0]);
+                return first !== undefined && isIdentifier(first) && this.rustR01CalleeIsBase(n) && this.r21ArrAlias(first);
+            }
+            return false;
+        }
+        return isIdentifier(n) && String(n.text) !== 'undefined' && this.r21ArrAlias(n);
+    }
+
+    r21ArrAlias(ident: any): boolean {
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+        // the local under proof: its other writes decide
+        if (this.r21ArrVisiting.has(declaration)) return true;
+        this.r21ArrVisiting.add(declaration);
+        try {
+            return this.r18ArrLocal(ident, false);
+        } finally {
+            this.r21ArrVisiting.delete(declaration);
+        }
     }
 }

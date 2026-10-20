@@ -4514,3 +4514,29 @@ describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', ()
         expect(prediction).toContain('let mut loose: Value = object_keys(&response);');
     });
 });
+
+describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method receivers', () => {
+    let base = '';
+    let rest = '';
+    beforeAll(() => {
+        base = transpiler.transpileRustByPath('./tests/files/input/hx4r21/ts/src/base/Exchange.ts').content;
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r21/ts/src/venue.ts').content;
+    });
+
+    test('Object.keys / Object.values on a base-tier plain local are native; any keeps the helper', () => {
+        expect(base).toContain('let mut keys: Value = Value::Array(built.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default());');
+        expect(base).toContain('let mut values: Value = Value::Array(built.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default());');
+        expect(base).toContain('object_keys(&response)');
+    });
+
+    test('push on a local re-sorted by sortBy / built by arrayConcat is native; an any alias keeps the helper', () => {
+        expect(base).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(Value::Int(1)); }');
+        expect(base).toContain('if let Value::Arr(__a) = &mut joined { std::sync::Arc::make_mut(__a).push(Value::Int(2)); }');
+        expect(base).toContain('append_to_array(&mut loose, Value::Int(3));');
+    });
+
+    test('a string-typed map read receiving toUpperCase reads natively; an any read keeps get_value', () => {
+        expect(rest).toContain('(currency.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))');
+        expect(rest).toMatch(/get_value\(&raw, &Value::Str\("id"\.into\(\)\)\)|get_value_k\(&raw, "id"\)/);
+    });
+});

@@ -50,4 +50,3 @@ export declare class PythonTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     getCustomOperatorIfAny(left: any, right: any, operator: any): "is" | "is not";
 }
-//# sourceMappingURL=pythonTranspiler.d.ts.map

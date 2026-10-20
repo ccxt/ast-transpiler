@@ -53,4 +53,3 @@ export declare class PhpTranspiler extends BaseTranspiler {
     transformLeadingComment(comment: any): string;
     initConfig(): void;
 }
-//# sourceMappingURL=phpTranspiler.d.ts.map
