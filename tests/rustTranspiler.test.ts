@@ -320,7 +320,7 @@ describe('rust transpiling tests', () => {
         "    const x = 1;\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
     });
 
     // One number at runtime already pins `<`/`>` to the helper's f64 compare
@@ -359,7 +359,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&x, &y)');
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
     });
 
     test('less or equal with a single typed number operand keeps the helper', () => {
@@ -370,7 +370,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than_or_equal(&x, &y)');
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
     });
 
     // A numeric literal / `.length` / `indexOf` is Int or Float at runtime,
@@ -503,19 +503,19 @@ describe('rust transpiling tests', () => {
     test('subtraction wrapping', () => {
         const ts = 'const c = a - b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('subtract(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
     });
 
     test('multiplication wrapping', () => {
         const ts = 'const c = a * b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('multiply(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y),'); // hx4 R25
     });
 
     test('division wrapping', () => {
         const ts = 'const c = a / b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('divide(&a, &b)');
+        expect(output).toContain('(Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y)'); // hx4 R25
     });
 
     test('modulo wrapping', () => {
@@ -528,25 +528,26 @@ describe('rust transpiling tests', () => {
     test('less than wrapping', () => {
         const ts = 'const r = a < b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
     });
 
     test('less than or equal wrapping', () => {
         const ts = 'const r = a <= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than_or_equal(&a, &b)');
+        expect(output).toContain('__x < __y'); // hx4 R25
+        expect(output).toContain('(Value::Null, Value::Null) => true');
     });
 
     test('greater than wrapping', () => {
         const ts = 'const r = a > b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than(&a, &b)');
+        expect(output).toContain('__x > __y'); // hx4 R25
     });
 
     test('greater than or equal wrapping', () => {
         const ts = 'const r = a >= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&a, &b)');
+        expect(output).toContain('__x > __y'); // hx4 R25
     });
 
     // Compound assignment
@@ -559,7 +560,7 @@ describe('rust transpiling tests', () => {
     test('-= assignment', () => {
         const ts = 'x -= 1;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('x = subtract(&x, &Value::Int(1))');
+        expect(output).toContain('x = (match (&(x), &(Value::Int(1))) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
     });
 
     // Postfix unary
@@ -4216,7 +4217,7 @@ describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
         const out = r09('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
         expect(out).toContain('is_equal(&length, &Value::Int(0))');
         expect(out).toContain('is_equal(&l2, &y)');
-        expect(out).toContain('subtract(&l2, &y)');
+        expect(out).toContain('(match (&(l2), &(y)) {'); // hx4 R25
     });
 });
 
@@ -4377,7 +4378,7 @@ describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict
         expect(output).toContain('last = trades.as_array().and_then(|__arr| match &((match (&(numTrades), &(Value::Int(1)))');
         expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &((match (&(i), &(Value::Int(1)))');
         expect(output).toContain('Value::Int(__n) if *__n >= 0 => __arr.get(*__n as usize), _ => None }).cloned().unwrap_or(Value::Null)');
-        expect(output).toContain('get_value(&trades, &subtract(&k, &Value::Int(1)))');
+        expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // hx4 R25
     });
 });
 
@@ -4449,11 +4450,11 @@ describe('hx4 R16 rust math/comparison on structurally numeric operands', () => 
     });
 
     test('any operands and two nullable sides of <= keep the helpers', () => {
-        expect(out).toContain('is_less_than_or_equal(&a, &bid)');
-        expect(out).toContain('subtract(&a, &Value::Int(1))');
-        expect(out).toContain('divide(&self.sum(a, Value::Int(1)), &Value::Int(2))');
+        expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // hx4 R25
+        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // hx4 R25
         expect(out).toContain('let mut m: Value = (match ((self.sum(bid, Value::Int(1))).as_f64(), (Value::Int(2)).as_f64())');
-        expect(out).toContain('is_less_than_or_equal(&bid, &limit)');
+        expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // hx4 R25
     });
 });
 
@@ -4575,8 +4576,8 @@ describe('hx4 R22 self-referential numeric writes, always-Str locals, Str orderi
     });
     test('unproven operands keep the helpers', () => {
         expect(o).toContain('add(&maybe, &body)');
-        expect(o).toContain('is_less_than(&x, &raw)');
-        expect(o).toContain('is_less_than_or_equal(&x, &Value::Str("b".into()))');
+        expect(o).toContain('(match (&(x), &(raw)) { (__a, __b) =>'); // hx4 R25
+        expect(o).toContain('(match (&(x), &(Value::Str("b".into()))) { (__a, __b) =>'); // hx4 R25
     });
 });
 
@@ -4608,5 +4609,59 @@ describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
 
     test('pro safeDict(this.options, k, {}) local reads natively', () => {
         expect(pro).toContain('subs.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null)');
+    });
+});
+
+describe('hx4 R25 inline math/comparison dispatch and Str|Null field concat', () => {
+    const src = "class A {\n    convertToBigIntCustom (x: any) {\n        return parseInt (x);\n    }\n    signHash (hash: any, privateKey: any) {\n        const signature = ecdsa (hash, privateKey);\n        const r = signature['r'];\n        const s = signature['s'];\n        return {\n            'r': r.padStart (64, '0'),\n            's': s.padStart (64, '0'),\n            'v': 27,\n        };\n    }\n    signMessage (message: any, privateKey: any) {\n        return this.signHash (message, privateKey.slice (-64));\n    }\n    signOnboardingAction (): object {\n        const signature = this.signMessage ('x', 'y');\n        return signature;\n    }\n    run (request: any, params: any, config: any, cache: any[], h: any) {\n        const amountMultiplier = this.convertToBigIntCustom ('1000000');\n        const amountInt = request['num_tokens'] * amountMultiplier;\n        const z = this.parseToInt (request['num_tokens'] * amountMultiplier);\n        const limit = params['limit'];\n        const entry = config[0];\n        if (limit <= entry[0]) { return 1; }\n        const signature: any = this.signOnboardingAction ();\n        const pk = this.hashMessage (signature['r'] + signature['s']);\n        const cacheLength = cache.length;\n        const snapshotDelay = this.handleOption ('a', 'b', 25);\n        if (cacheLength === snapshotDelay) { return 2; }\n        if (h === 1) { return 3; }\n        return [ amountInt, z, pk ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('any * numeric-call operand prints the multiply dispatch inline', () => {
+        expect(o).toContain('let mut amountInt: Value = (match (&(crate::value::get_value_k(&request, "num_tokens")), &(amountMultiplier)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y), (__a, __b) =>');
+        expect(o).not.toContain('multiply(');
+    });
+    test('any <= any prints the coercing order plus is_equal inline', () => {
+        expect(o).toContain('if (match (&(limit), &(get_value(&entry, &Value::Int(0)))) { (__a, __b) =>');
+        expect(o).toContain('(Value::Null, Value::Null) => true');
+        expect(o).not.toContain('is_less_than_or_equal(');
+    });
+    test('Str|Null fields of a same-file returned literal concatenate natively', () => {
+        expect(o).toContain('self.hashMessage((match (&(crate::value::get_value_k(&signature, "r")), &(crate::value::get_value_k(&signature, "s"))) { (Value::Null, Value::Null) => Value::Null, (__a, __b) => Value::Str(format!("{}{}", __a, __b).into()) }))');
+        expect(o).not.toContain('add(');
+    });
+    test('a non-literal field source keeps the add helper', () => {
+        const n = transpiler.transpileRust('class B {\n    run (x: any) {\n        const s = x[0];\n        return s[\'r\'] + s[\'s\'];\n    }\n}\n').content;
+        expect(n).toContain('add(&');
+    });
+});
+
+describe('hx4 R26 tuple slot-1 params of base handle*AndParams helpers', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    let rest = '';
+    let pro = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r26/ts/src/venue.ts').content;
+        pro = transpiler.transpileRustByPath('./tests/files/input/hx4r26/ts/src/pro/venue.ts').content;
+    });
+
+    test('const [ a, p ] = handleOptionBoolAndParams (params, …) inserts natively on p', () => {
+        expect(rest).toContain(insert('paramsStock', 'stock', 'Value::Bool(true)'));
+        expect(rest).not.toContain('add_element_to_object(&mut paramsStock');
+    });
+
+    test('[ a, p ] = handleMarketTypeAndParams (…, params) write: native insert and read', () => {
+        expect(rest).not.toContain('add_element_to_object(&mut paramsType');
+        expect(rest).toContain('paramsType.as_map().and_then(|__m| __m.get("other")).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('an unproven params argument or a non-listed handler keeps the helper', () => {
+        expect(rest).toContain('add_element_to_object(&mut paramsLoose');
+        expect(rest).toContain('add_element_to_object(&mut paramsOther');
+    });
+
+    test('pro: a parameter source keeps the helper, a plain local source goes native', () => {
+        expect(pro).toContain('add_element_to_object(&mut paramsStock');
+        expect(pro).not.toContain('add_element_to_object(&mut paramsLocal');
     });
 });

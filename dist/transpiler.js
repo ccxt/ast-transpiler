@@ -22947,7 +22947,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const ordered = op === SyntaxKind7.LessThanToken || op === SyntaxKind7.GreaterThanToken;
     const proven = leftKind === "definite" || rightKind === "definite" || (ordered ? leftKind !== void 0 || rightKind !== void 0 : leftKind === "number" && rightKind === "number");
     if (!proven && !this.rustR16OrderedProven(op, left, right)) {
-      return this.r22StrOrderedComparison(node, op, left, right);
+      return this.r22StrOrderedComparison(node, op, left, right) ?? this.r25NativeLooseOrderedComparison(node, op, left, right);
     }
     return this.printNativeNumericComparison(node, operator, this.printNode(left, 0), this.printNode(right, 0));
   }
@@ -23016,7 +23016,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return this.printNativeStringConcat(leftText, rightText);
     }
     if (!this.isNumberLikeType(leftType) || !this.isNumberLikeType(rightType)) {
-      return void 0;
+      return this.r25NativeCoercingArithmetic(op, left, right, leftText, rightText);
     }
     return this.printNativeNumeric(op, leftText, rightText);
   }
@@ -25699,10 +25699,10 @@ ${iden}}`;
   rustR01TupleBindingStaysPlain(ident, element, depth) {
     const pattern = element.parent;
     const declaration = pattern?.parent;
-    if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || declaration === void 0 || !isVariableDeclaration3(declaration) || pattern.elements.indexOf(element) !== 0 || element.name?.kind !== SyntaxKind7.Identifier || element.initializer !== void 0 || element.dotDotDotToken !== void 0) {
+    if (pattern?.kind !== SyntaxKind7.ArrayBindingPattern || declaration === void 0 || !isVariableDeclaration3(declaration) || ![0, 1].includes(pattern.elements.indexOf(element)) || element.name?.kind !== SyntaxKind7.Identifier || element.initializer !== void 0 || element.dotDotDotToken !== void 0) {
       return false;
     }
-    if (!this.rustR01TupleHeadIsPlain(declaration.initializer, void 0, depth)) {
+    if (pattern.elements.indexOf(element) === 1 ? !this.r26ParamsSlot(declaration.initializer, void 0, depth) : !this.rustR01TupleHeadIsPlain(declaration.initializer, void 0, depth)) {
       return false;
     }
     const scope = this.rustEnclosingFunction(declaration);
@@ -25758,7 +25758,7 @@ ${iden}}`;
   /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
    *  argument handed back (base-tier implementation, no override). */
   rustR01RequestTupleWrite(rhs, index, name) {
-    return index === 0 && this.rustR01TupleHeadIsPlain(rhs, name, 0);
+    return index === 1 ? this.r26ParamsSlot(rhs, name, 0) : index === 0 && this.rustR01TupleHeadIsPlain(rhs, name, 0);
   }
   /** Element 0 of `this.m (…)` is a plain dict: `m` is the base-tier
    *  `handleUntilOption` (returns its `request` argument), or a method of the
@@ -27580,6 +27580,161 @@ ${iden}}`;
       this.r23CopyVisiting.delete(node);
     }
   }
+  // hx4 R25 — `a - b` / `a * b` / `a / b` and `a < b` (`<=`, `>`, `>=`) on unproven `Value`s print the
+  // helper's own dispatch inline (f64 coercion: Int/Float, Str parse, Bool 1/0; `<=`/`>=` OR in
+  // `is_equal`); `a + b` on two Str|Null operands (fields of same-file object literals) is `format!`.
+  r25LooseF64(binding) {
+    return `(match ${binding} { Value::Int(__n) => Some(*__n as f64), Value::Float(__f) => Some(*__f), Value::Str(__s) => __s.parse::<f64>().ok(), Value::Bool(__b) => Some(if *__b { 1.0 } else { 0.0 }), _ => None })`;
+  }
+  r25PlainValueOperand(node) {
+    const inner = this.rustStripWrappers(node);
+    if (inner === void 0 || !this.printsValueExpression(inner) || this.rustNativeStrCalleeKind(inner) === "str")
+      return false;
+    if (isIdentifier3(inner) && this.rustParamShadowOf(inner) !== void 0)
+      return false;
+    return !(isIdentifier3(inner) && (this.rustStringLocalIdentifierIsTyped(inner) || this.rustVecLocalDeclarationOf(inner) !== void 0));
+  }
+  r25NativeCoercingArithmetic(op, left, right, leftText, rightText) {
+    if (op === SyntaxKind7.PlusToken)
+      return this.r25NativeStrOrNullConcat(left, right, leftText, rightText);
+    if (op !== SyntaxKind7.MinusToken && op !== SyntaxKind7.AsteriskToken && op !== SyntaxKind7.SlashToken)
+      return void 0;
+    if (!this.r25PlainValueOperand(left) || !this.r25PlainValueOperand(right))
+      return void 0;
+    const a = this.rustR16NumericKind(left) !== void 0 ? "__a.as_f64()" : this.r25LooseF64("__a");
+    const b = this.rustR16NumericKind(right) !== void 0 ? "__b.as_f64()" : this.r25LooseF64("__b");
+    if (op === SyntaxKind7.SlashToken) {
+      return `(match (&(${leftText}), &(${rightText})) { (__a, __b) => match (${a}, ${b}) { (Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y), _ => Value::Null } })`;
+    }
+    const sign = op === SyntaxKind7.MinusToken ? "-" : "*";
+    return `(match (&(${leftText}), &(${rightText})) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x ${sign} __y), (__a, __b) => match (${a}, ${b}) { (Some(__x), Some(__y)) => Value::Float(__x ${sign} __y), _ => Value::Null } })`;
+  }
+  // is_less_than / is_greater_than: f64 order when both coerce, else `str` order of two Str;
+  // the `-or_equal` forms OR in is_equal (Null==Null, same-variant payload, Int exact, else f64).
+  r25NativeLooseOrderedComparison(node, op, left, right) {
+    const operator = _RustTranspiler.NATIVE_COMPARISON_OPERATORS[op];
+    if (operator === void 0 || !this.r25PlainValueOperand(left) || !this.r25PlainValueOperand(right))
+      return void 0;
+    const strict = operator.charAt(0);
+    const p = `(${this.r25LooseF64("__a")}, ${this.r25LooseF64("__b")})`;
+    const order = `(match ${p} { (Some(__x), Some(__y)) => __x ${strict} __y, _ => matches!((__a, __b), (Value::Str(__x), Value::Str(__y)) if __x ${strict} __y) })`;
+    const equal = ` || (match (__a, __b) { (Value::Null, Value::Null) => true, (Value::Bool(__x), Value::Bool(__y)) => __x == __y, (Value::Str(__x), Value::Str(__y)) => __x == __y, (Value::Int(__x), Value::Int(__y)) => __x == __y, (Value::Float(__x), Value::Float(__y)) => __x == __y, _ => matches!(${p}, (Some(__x), Some(__y)) if __x == __y) })`;
+    const text = `(match (&(${this.printNode(left, 0)}), &(${this.printNode(right, 0)})) { (__a, __b) => ${order}${operator.length === 2 ? equal : ""} })`;
+    return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
+  }
+  // Str+Str / Str+Null take `string_concat` (Display, Null is "null"); Null+Null is Null.
+  r25NativeStrOrNullConcat(left, right, leftText, rightText) {
+    if (!this.r25StrOrNull(left, 0) || !this.r25StrOrNull(right, 0))
+      return void 0;
+    return `(match (&(${leftText}), &(${rightText})) { (Value::Null, Value::Null) => Value::Null, (__a, __b) => Value::Str(format!("{}{}", __a, __b).into()) })`;
+  }
+  r25StrOrNull(node, depth) {
+    const inner = this.rustStripWrappers(node);
+    if (inner === void 0 || depth > 12 || !this.r25PlainValueOperand(inner))
+      return false;
+    if (isStringLiteral3(inner) || this.r22AlwaysStr(inner))
+      return true;
+    if (isCallExpression6(inner) && isPropertyAccessExpression3(inner.expression) && (String(inner.expression.name.text) === "padStart" || String(inner.expression.name.text) === "padEnd"))
+      return true;
+    if (!isElementAccessExpression4(inner) || !isStringLiteral3(inner.argumentExpression))
+      return false;
+    return this.r25DictFieldStrOrNull(inner.expression, String(inner.argumentExpression.text), depth + 1);
+  }
+  /** Every dict `node` can evaluate to holds `key` as Str/Null or lacks it (a read of a missing key / non-dict is Null). */
+  r25DictFieldStrOrNull(node, key, depth) {
+    const inner = this.rustStripWrappers(node);
+    if (inner === void 0 || depth > 12)
+      return false;
+    if (inner.kind === SyntaxKind7.NullKeyword || isIdentifier3(inner) && String(inner.text) === "undefined")
+      return true;
+    if (isObjectLiteralExpression4(inner)) {
+      for (const p of inner.properties) {
+        if (p.kind !== SyntaxKind7.PropertyAssignment)
+          return false;
+        const name = p.name;
+        const text = isStringLiteral3(name) || isIdentifier3(name) ? String(name.text) : void 0;
+        if (text === void 0)
+          return false;
+        if (text === key && !this.r25StrOrNull(p.initializer, depth + 1))
+          return false;
+      }
+      return true;
+    }
+    if (isCallExpression6(inner))
+      return this.r25MethodFieldStrOrNull(inner, key, depth + 1);
+    if (!isIdentifier3(inner))
+      return false;
+    const declaration = this.rustSingleLocalDeclaration(inner);
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name) || declaration.initializer === void 0 || (declaration.parent?.flags & NodeFlags2.Const) === 0)
+      return false;
+    const fn = this.rustEnclosingFunction(declaration);
+    if (fn === void 0)
+      return false;
+    for (const m of this.rustScopeNameNodes(fn, String(declaration.name.text))) {
+      if (m === declaration.name || m.kind !== SyntaxKind7.Identifier)
+        continue;
+      let top = m;
+      while (isElementAccessExpression4(top.parent) && top.parent.expression === top)
+        top = top.parent;
+      if (top === m)
+        continue;
+      const parent = top.parent;
+      if (isDeleteExpression2(parent) || isBinaryExpression5(parent) && parent.left === top && rustIsAssignmentOperator(parent.operatorToken.kind))
+        return false;
+    }
+    return this.r25DictFieldStrOrNull(declaration.initializer, key, depth + 1);
+  }
+  /** `this.m(..)` resolved to a same-file method with a body whose every return holds `key` as Str/Null. */
+  r25MethodFieldStrOrNull(call, key, depth) {
+    const callee = call.expression;
+    if (!isPropertyAccessExpression3(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    let declaration;
+    try {
+      declaration = signatureDeclaration(this.getChecker().getResolvedSignature(call));
+    } catch (e) {
+      return false;
+    }
+    if (declaration?.kind !== SyntaxKind7.MethodDeclaration || declaration.body === void 0 || declaration.getSourceFile() !== call.getSourceFile() || _RustTranspiler.RUST_BASE_TIER_FILE.test(this.r05Path(call)))
+      return false;
+    let ok = true;
+    const visit = (n) => {
+      if (!ok || n !== declaration && isFunctionLike(n))
+        return;
+      if (isReturnStatement4(n) && n.expression !== void 0 && !this.r25DictFieldStrOrNull(n.expression, key, depth + 1))
+        ok = false;
+      n.forEachChild?.(visit);
+    };
+    declaration.body.forEachChild(visit);
+    return ok;
+  }
+  r26ParamsSlot(rhs, selfName, depth) {
+    const call = this.rustStripWrappers(rhs);
+    if (depth > 4 || call === void 0 || !isCallExpression6(call) || !isPropertyAccessExpression3(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || this.r23Tier(call) === void 0) {
+      return false;
+    }
+    const index = _RustTranspiler.R26_PARAMS_SLOT_ARG[String(call.expression.name.text)];
+    if (index === void 0 || !this.rustR01CalleeIsBase(call))
+      return false;
+    const arg = this.rustStripWrappers(call.arguments[index]);
+    if (arg === void 0)
+      return call.arguments.length <= index;
+    if (this.rustPlainDictLiteral(arg))
+      return true;
+    if (!isIdentifier3(arg))
+      return false;
+    if (String(arg.text) === selfName)
+      return true;
+    const declaration = this.rustSingleLocalDeclaration(arg);
+    if (declaration !== void 0 && isParameterDeclaration3(declaration)) {
+      return this.r23TierSourceOk(arg) && (this.r23Tier(arg) !== "base" || this.rustParamStaysPlainDict(declaration));
+    }
+    try {
+      return this.rustR10PlainReceiver(arg) === "local";
+    } catch (e) {
+      return false;
+    }
+  }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips
 _RustTranspiler.RUST_PREFETCH_TYPE_KINDS = /* @__PURE__ */ new Set([
@@ -27885,6 +28040,29 @@ _RustTranspiler.RUST_R12_REST_FILE = /ts\/src\/[^/]+\.ts$/;
 /** Base-tier array readers whose result is the stored `Value::Arr` or the default argument. */
 _RustTranspiler.RUST_R18_LIST_READERS = { safeList: 2, safeList2: 3, safeListN: 2 };
 _RustTranspiler.RUST_R21_PURE_STRING_METHODS = /* @__PURE__ */ new Set(["toUpperCase", "toLowerCase", "trim", "startsWith", "endsWith", "split"]);
+// hx4 R26 — tuple slot 1 of the base `handle*AndParams` / `handleParam*` helpers is their
+// params argument or an `omit` copy of it: plain when that argument is a plain source.
+_RustTranspiler.R26_PARAMS_SLOT_ARG = {
+  handleOptionAndParams: 0,
+  handleOptionAndParams2: 0,
+  handleOptionStringAndParams: 0,
+  handleOptionStringAndParams2: 0,
+  handleOptionBoolAndParams: 0,
+  handleOptionBoolAndParams2: 0,
+  handleOptionIntegerAndParams: 0,
+  handleOptionIntegerAndParams2: 0,
+  handleParamString: 0,
+  handleParamString2: 0,
+  handleParamInteger: 0,
+  handleParamInteger2: 0,
+  handleParamBool: 0,
+  handleParamBool2: 0,
+  handleNetworkCodeAndParams: 0,
+  handleMarginModeAndParams: 1,
+  handleMarketTypeAndParams: 2,
+  handleSubTypeAndParams: 2,
+  handleMaxEntriesPerRequestAndParams: 2
+};
 var RustTranspiler = _RustTranspiler;
 
 // src/cppTranspiler.ts

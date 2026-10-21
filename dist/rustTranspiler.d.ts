@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -886,5 +886,17 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  (not only as a builder's return): the same fresh-copy proof as `rustR12PlainReturn`. */
     private r23CopyVisiting;
     r23FreshCopy(node: any, depth: number): boolean;
+    r25LooseF64(binding: string): string;
+    r25PlainValueOperand(node: any): boolean;
+    r25NativeCoercingArithmetic(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    r25NativeLooseOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    r25NativeStrOrNullConcat(left: any, right: any, leftText: string, rightText: string): string | undefined;
+    r25StrOrNull(node: any, depth: number): boolean;
+    /** Every dict `node` can evaluate to holds `key` as Str/Null or lacks it (a read of a missing key / non-dict is Null). */
+    r25DictFieldStrOrNull(node: any, key: string, depth: number): boolean;
+    /** `this.m(..)` resolved to a same-file method with a body whose every return holds `key` as Str/Null. */
+    r25MethodFieldStrOrNull(call: any, key: string, depth: number): boolean;
+    private static readonly R26_PARAMS_SLOT_ARG;
+    r26ParamsSlot(rhs: Node, selfName: string | undefined, depth: number): boolean;
 }
 export {};
