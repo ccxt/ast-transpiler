@@ -3376,7 +3376,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                     }
                     // prefixUnaryNeg/Plus(ref x) has int / Int64 / double twins only: a
                     // nullable or reference local would not bind any overload
-                    if (safeAccessor && (op !== SyntaxKind.ExclamationToken) && (csharpType !== 'int') && (csharpType !== 'Int64') && (csharpType !== 'double')) {
+                    if (safeAccessor && (op !== SyntaxKind.ExclamationToken) && (csharpType !== 'int') && (csharpType !== 'Int64') && (csharpType !== 'double')
+                        && !this.csharpHx4GuardedNullableNegation(parent, csharpType)) {
                         return true;
                     }
                 }
@@ -4749,7 +4750,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (operator === SyntaxKind.PlusToken) {
             return `prefixUnaryPlus(ref ${leftSide})`;
         }
-        const nativeNegation = this.csharpNativeNegatedLocal(operand, leftSide);
+        const nativeNegation = this.csharpNativeNegatedLocal(operand, leftSide) ?? this.csharpHx4NativeNegatedNullableLocal(node, leftSide);
         if (nativeNegation !== undefined) {
             return nativeNegation;
         }
@@ -5299,6 +5300,45 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         return (typeof this.csharpLocalTypeOf === 'function') ? this.csharpLocalTypeOf(key) : undefined;
     }
+
+    // hx4 L44: `-x` on a local declared `double?` (a safeNumber read) inside a
+    // non-null guard on x (`if (x !== undefined)`, `x !== undefined && ...`, early exit). The guard
+    // proves the box is a number, so the local keeps its nullable scalar type and the negation is the
+    // helper's own in-place body `(x = -x)` (lifted: x is non-null here). Unguarded reads keep `object`.
+    csharpHx4GuardedNullableNegation(node, csharpType: string): boolean {
+        if (csharpType !== 'double?') {
+            return false;
+        }
+        if (!isPrefixUnaryExpression(node) || (node.operator !== SyntaxKind.MinusToken) || !isIdentifier(node.operand)) {
+            return false;
+        }
+        return this.csharpNullGuardAdmitsRead(node, node.operand);
+    }
+
+    // the C# type the local's printed declaration finally carries; an embedding build layer that
+    // retypes `object x = ...` after printing overrides this with its own (final) answer
+    csharpHx4DeclaredLocalType(declaration): string | undefined {
+        return this.getCSharpLocalType(declaration);
+    }
+
+    csharpHx4NativeNegatedNullableLocal(node, leftSide: string): string | undefined {
+        const operand = node.operand;
+        if (!isIdentifier(operand)) {
+            return undefined;
+        }
+        // the prefix the declaration printed (`double? x = ...`): the printer's own decision, or the
+        // embedding build layer's wrapped one; a declaration list of several bindings prints `object`
+        const declaration: any = this.getChecker().getSymbolAtLocation(operand)?.valueDeclaration?.resolve();
+        if (!declaration || !isVariableDeclaration(declaration) || (declaration.parent?.declarations?.length !== 1)) {
+            return undefined;
+        }
+        const declared = this.csharpHx4DeclaredLocalType(declaration);
+        if (!this.csharpHx4GuardedNullableNegation(node, declared)) {
+            return undefined;
+        }
+        return `(${leftSide} = -${leftSide})`;
+    }
+
 }
 
 // if (this.requiresCallExpressionCast) {

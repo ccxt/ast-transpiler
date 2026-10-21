@@ -294,4 +294,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpHx4IdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
     csharpHx4IsPlainRead(node: any): boolean;
     csharpHx4DeclaredKeyType(key: any): string | undefined;
+    csharpHx4GuardedNullableNegation(node: any, csharpType: string): boolean;
+    csharpHx4DeclaredLocalType(declaration: any): string | undefined;
+    csharpHx4NativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
 }

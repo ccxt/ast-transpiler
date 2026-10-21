@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-PU4W7OZB.js";
+} from "./chunk-WD722H3U.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -5515,7 +5515,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
           if (op === SyntaxKind4.PlusPlusToken || op === SyntaxKind4.MinusMinusToken) {
             return true;
           }
-          if (safeAccessor && op !== SyntaxKind4.ExclamationToken && csharpType !== "int" && csharpType !== "Int64" && csharpType !== "double") {
+          if (safeAccessor && op !== SyntaxKind4.ExclamationToken && csharpType !== "int" && csharpType !== "Int64" && csharpType !== "double" && !this.csharpHx4GuardedNullableNegation(parent, csharpType)) {
             return true;
           }
         }
@@ -6652,7 +6652,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (operator === SyntaxKind4.PlusToken) {
       return `prefixUnaryPlus(ref ${leftSide})`;
     }
-    const nativeNegation = this.csharpNativeNegatedLocal(operand, leftSide);
+    const nativeNegation = this.csharpNativeNegatedLocal(operand, leftSide) ?? this.csharpHx4NativeNegatedNullableLocal(node, leftSide);
     if (nativeNegation !== void 0) {
       return nativeNegation;
     }
@@ -7150,6 +7150,39 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return printed;
     }
     return typeof this.csharpLocalTypeOf === "function" ? this.csharpLocalTypeOf(key) : void 0;
+  }
+  // hx4 L44: `-x` on a local declared `double?` (a safeNumber read) inside a
+  // non-null guard on x (`if (x !== undefined)`, `x !== undefined && ...`, early exit). The guard
+  // proves the box is a number, so the local keeps its nullable scalar type and the negation is the
+  // helper's own in-place body `(x = -x)` (lifted: x is non-null here). Unguarded reads keep `object`.
+  csharpHx4GuardedNullableNegation(node, csharpType) {
+    if (csharpType !== "double?") {
+      return false;
+    }
+    if (!isPrefixUnaryExpression(node) || node.operator !== SyntaxKind4.MinusToken || !isIdentifier(node.operand)) {
+      return false;
+    }
+    return this.csharpNullGuardAdmitsRead(node, node.operand);
+  }
+  // the C# type the local's printed declaration finally carries; an embedding build layer that
+  // retypes `object x = ...` after printing overrides this with its own (final) answer
+  csharpHx4DeclaredLocalType(declaration) {
+    return this.getCSharpLocalType(declaration);
+  }
+  csharpHx4NativeNegatedNullableLocal(node, leftSide) {
+    const operand = node.operand;
+    if (!isIdentifier(operand)) {
+      return void 0;
+    }
+    const declaration = this.getChecker().getSymbolAtLocation(operand)?.valueDeclaration?.resolve();
+    if (!declaration || !isVariableDeclaration(declaration) || declaration.parent?.declarations?.length !== 1) {
+      return void 0;
+    }
+    const declared = this.csharpHx4DeclaredLocalType(declaration);
+    if (!this.csharpHx4GuardedNullableNegation(node, declared)) {
+      return void 0;
+    }
+    return `(${leftSide} = -${leftSide})`;
   }
 };
 
