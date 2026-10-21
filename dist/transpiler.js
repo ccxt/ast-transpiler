@@ -7164,6 +7164,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return this.csharpNullGuardAdmitsRead(node, node.operand);
   }
+  // the C# type the local's printed declaration finally carries; an embedding build layer that
+  // retypes `object x = ...` after printing overrides this with its own (final) answer
+  csharpHx4DeclaredLocalType(declaration) {
+    return this.getCSharpLocalType(declaration);
+  }
   csharpHx4NativeNegatedNullableLocal(node, leftSide) {
     const operand = node.operand;
     if (!isIdentifier(operand)) {
@@ -7173,7 +7178,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (!declaration || !isVariableDeclaration(declaration) || declaration.parent?.declarations?.length !== 1) {
       return void 0;
     }
-    const declared = this.getCSharpLocalType(declaration);
+    const declared = this.csharpHx4DeclaredLocalType(declaration);
     if (!this.csharpHx4GuardedNullableNegation(node, declared)) {
       return void 0;
     }
