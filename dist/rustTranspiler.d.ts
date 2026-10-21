@@ -596,7 +596,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -898,5 +898,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     r25MethodFieldStrOrNull(call: any, key: string, depth: number): boolean;
     private static readonly R26_PARAMS_SLOT_ARG;
     r26ParamsSlot(rhs: Node, selfName: string | undefined, depth: number): boolean;
+    r30LooseI64(expr: string): string;
+    r30SliceArm(variant: string, len: string, take: string, empty: string): string;
+    r30Slice(name: string, start: string, end: string): string;
+    r30IndexOf(name: string, needle: string): string;
+    r30Case(name: string, method: string): string;
 }
 export {};

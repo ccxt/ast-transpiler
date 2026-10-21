@@ -12,7 +12,7 @@ import {
   symbolValueDeclaration,
   typeParts,
   typeTarget
-} from "./chunk-WD722H3U.js";
+} from "./chunk-PU4W7OZB.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -25523,7 +25523,7 @@ ${this.getIden(identation)}})`;
     return `Value::Bool(contains(&${name}, &${parsedArg}))`;
   }
   printIndexOfCall(node, identation, name = void 0, parsedArg = void 0) {
-    return this.printNativeStringIndexOf(node, name) ?? this.printNativeStringIndexOfString(node, name) ?? `get_index_of(&${name}, &${parsedArg})`;
+    return this.printNativeStringIndexOf(node, name) ?? this.printNativeStringIndexOfString(node, name) ?? this.r30IndexOf(name, parsedArg);
   }
   printStartsWithCall(node, identation, name = void 0, parsedArg = void 0) {
     const native = this.printNativeStringAffixTest(node, name, "starts_with") ?? this.r17PrintAffixTest(node, name, "starts_with");
@@ -25556,10 +25556,10 @@ ${this.getIden(identation)}})`;
     return this.printRustNativeToString(node, name) ?? this.printRustR13ToString(node, name) ?? `to_string_val(&${name})`;
   }
   printToUpperCaseCall(node, identation, name = void 0) {
-    return this.printNativeStringCase(node, name, "to_uppercase") ?? this.printRustR13Case(node, name, "to_uppercase") ?? `to_upper(&${name})`;
+    return this.printNativeStringCase(node, name, "to_uppercase") ?? this.printRustR13Case(node, name, "to_uppercase") ?? this.r30Case(name, "to_uppercase");
   }
   printToLowerCaseCall(node, identation, name = void 0) {
-    return this.printNativeStringCase(node, name, "to_lowercase") ?? this.printRustR13Case(node, name, "to_lowercase") ?? `to_lower(&${name})`;
+    return this.printNativeStringCase(node, name, "to_lowercase") ?? this.printRustR13Case(node, name, "to_lowercase") ?? this.r30Case(name, "to_lowercase");
   }
   printShiftCall(node, identation, name = void 0) {
     return `shift(${name}.clone())`;
@@ -25571,7 +25571,7 @@ ${this.getIden(identation)}})`;
     return `pop(${name}.clone())`;
   }
   printSliceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
-    return this.printNativeStringSlice(node, name) ?? `slice(&${name}, &${parsedArg}, &${parsedArg2 ?? "Value::Null"})`;
+    return this.printNativeStringSlice(node, name) ?? this.r30Slice(name, parsedArg, parsedArg2 ?? "Value::Null");
   }
   printReplaceCall(node, identation, name = void 0, parsedArg = void 0, parsedArg2 = void 0) {
     return this.printNativeStringReplace(node, name) ?? this.printRustR13Replace(node, name) ?? this.r17PrintReplace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
@@ -27734,6 +27734,38 @@ ${iden}}`;
     } catch (e) {
       return false;
     }
+  }
+  // hx4 R30 — `slice` / `indexOf` / `toUpperCase` / `toLowerCase` on unproven `Value`s print the
+  // runtime helper's own dispatch inline (`runtime.rs` slice/get_index_of/to_upper/to_lower);
+  // every operand is evaluated once, in the helper's argument order.
+  r30LooseI64(expr) {
+    return `(match &(${expr}) { Value::Int(__n) => Some(*__n), Value::Float(__f) => Some(*__f as i64), Value::Str(__s) => __s.parse::<i64>().ok(), Value::Bool(__b) => Some(if *__b { 1 } else { 0 }), _ => None })`;
+  }
+  r30SliceArm(variant, len, take, empty) {
+    const bound = (b) => `if ${b} < 0 { (__l + ${b}).max(0) } else { ${b}.min(__l) }`;
+    return `(${variant}, __b, __e) => match (${len}) { __l => match (${bound("__b")}, match __e { None => __l, Some(__k) => ${bound("__k")} }) { (__i, __j) => if __i <= __j { ${take} } else { ${empty} } } }`;
+  }
+  r30Slice(name, start, end) {
+    const str = this.r30SliceArm(
+      "Value::Str(__sv)",
+      "__sv.chars().count() as i64",
+      "Value::Str(__sv.chars().skip(__i as usize).take((__j - __i) as usize).collect::<String>().into())",
+      "Value::Str(String::new().into())"
+    );
+    const arr = this.r30SliceArm(
+      "Value::Arr(__a)",
+      "__a.len() as i64",
+      "Value::Array(__a[__i as usize..__j as usize].to_vec())",
+      "Value::Array(vec![])"
+    );
+    return `(match (&(${name}), ${this.r30LooseI64(start)}.unwrap_or(0), ${this.r30LooseI64(end)}) { ${str}, ${arr}, _ => Value::Null })`;
+  }
+  r30IndexOf(name, needle) {
+    const eq = `match (__it, __nd) { (Value::Null, Value::Null) => true, (Value::Bool(__x), Value::Bool(__y)) => __x == __y, (Value::Str(__x), Value::Str(__y)) => __x == __y, (Value::Int(__x), Value::Int(__y)) => __x == __y, (Value::Float(__x), Value::Float(__y)) => __x == __y, (__p, __q) => match (${this.r25LooseF64("__p")}, ${this.r25LooseF64("__q")}) { (Some(__x), Some(__y)) => __x == __y, _ => false } }`;
+    return `(match (&(${name}), &(${needle})) { (Value::Arr(__a), __nd) => Value::Int(__a.iter().position(|__it| ${eq}).map(|__i| __i as i64).unwrap_or(-1)), (Value::Str(__s), Value::Str(__nd)) => Value::Int(__s.find(&**__nd).map(|__i| __i as i64).unwrap_or(-1)), _ => Value::Int(-1) })`;
+  }
+  r30Case(name, method) {
+    return `(match &(${name}) { Value::Str(__s) => Value::Str(__s.${method}().into()), _ => Value::Null })`;
   }
 };
 // node kinds the printer types that the core per-file prefetch leaves to single round trips

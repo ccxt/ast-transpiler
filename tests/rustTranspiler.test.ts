@@ -419,7 +419,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_index_of(&s, &Value::Str("a".into())).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
+        expect(output).toContain('_ => Value::Int(-1) }).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
         expect(output).not.toContain('is_greater_than_or_equal(');
     });
 
@@ -904,7 +904,7 @@ describe('rust transpiling tests', () => {
     test('indexOf call', () => {
         const ts = 'const i = arr.indexOf(x);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_index_of(&arr, &x)');
+        expect(output).toContain('(match (&(arr), &(x))');
     });
 
     test('startsWith call', () => {
@@ -952,13 +952,13 @@ describe('rust transpiling tests', () => {
     test('toUpperCase call', () => {
         const ts = 'const r = s.toUpperCase();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('to_upper(&s)');
+        expect(output).toContain('(match &(s) { Value::Str(__s) => Value::Str(__s.to_uppercase().into())');
     });
 
     test('toLowerCase call', () => {
         const ts = 'const r = s.toLowerCase();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('to_lower(&s)');
+        expect(output).toContain('(match &(s) { Value::Str(__s) => Value::Str(__s.to_lowercase().into())');
     });
 
     test('shift call', () => {
@@ -976,7 +976,7 @@ describe('rust transpiling tests', () => {
     test('slice call', () => {
         const ts = 'const r = arr.slice(1, 3);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('slice(&arr,');
+        expect(output).toContain('(match (&(arr), ');
     });
 
     test('replace call', () => {
@@ -2472,17 +2472,17 @@ describe('rust native string search and slicing', () => {
 
     test('an unproven receiver keeps the helper', () => {
         const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: any')).content;
-        expect(output).toContain('get_index_of(&a, &Value::Str("/".into()))');
+        expect(output).toContain('(match (&(a), &(Value::Str("/".into())))');
     });
 
     test('an array receiver keeps the helper (the helper scans it)', () => {
         const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: string[]')).content;
-        expect(output).toContain('get_index_of(&a, &Value::Str("/".into()))');
+        expect(output).toContain('(match (&(a), &(Value::Str("/".into())))');
     });
 
     test('a non-literal needle keeps the helper', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: any')).content;
-        expect(output).toContain('get_index_of(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b))');
     });
 
     test('an escaped literal needle keeps its escapes', () => {
@@ -2509,12 +2509,12 @@ describe('rust native string search and slicing', () => {
 
     test('slice keeps the helper for an expression bound', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.slice(0, b);', 'a: string, b: number')).content;
-        expect(output).toContain('slice(&a, &Value::Int(0), &b)');
+        expect(output).toContain('(match (&(a), (match &(Value::Int(0)) {');
     });
 
     test('slice keeps the helper for an unproven receiver', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.slice(0, 2);', 'a: any')).content;
-        expect(output).toContain('slice(&a, &Value::Int(0), &Value::Int(2))');
+        expect(output).toContain('(match (&(a), (match &(Value::Int(0)) {');
     });
 
     test('length on a nullable array or string is native', () => {
@@ -4125,7 +4125,7 @@ describe('hx4 R06 native string methods on proven strings', () => {
     });
     test('unproven receivers keep the helpers', () => {
         const o = out("        const u = a.toUpperCase();\n        const p = a.split(',');\n        const j = xs.join(',');\n        const r = a.replace('x', 'y');\n        return [u, p, j, r, a.startsWith('x')];", 'a: any, xs: any[]');
-        expect(o).toContain('to_upper(&a)');
+        expect(o).toContain('(match &(a) { Value::Str(__s) => Value::Str(__s.to_uppercase().into())');
         expect(o).toContain('split(&a, &Value::Str(",".into()))');
         expect(o).toContain('join(&xs, &Value::Str(",".into()))');
         expect(o).toContain('replace_str(&a,');
