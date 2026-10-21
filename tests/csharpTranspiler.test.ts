@@ -5972,3 +5972,41 @@ describe('U59 list index reads bounded by the enclosing for', () => {
     });
 });
 
+
+// hx4 L44
+describe('hx4 L44 guarded nullable negation', () => {
+    const transpiler = new Transpiler({});
+    const cls = (body: string) =>
+        "class Exchange {\n" +
+        "    safeNumberN(a, b) { return a; }\n" +
+        "    main(item) {\n" + body + "    }\n" +
+        "}";
+    test('if-guarded double? local keeps its type and negates in place', () => {
+        const output = transpiler.transpileCSharp(cls(
+            "        const amount = this.safeNumberN(item, ['amount']);\n" +
+            "        let r = amount;\n" +
+            "        if (amount !== undefined) {\n" +
+            "            r = -amount;\n" +
+            "        }\n" +
+            "        return r;\n")).content;
+        expect(output).toContain('double? amount = this.safeNumberN(');
+        expect(output).toContain('r = (amount = -amount);');
+        expect(output).not.toContain('prefixUnaryNeg');
+    });
+    test('&&-guarded double? local negates in place', () => {
+        const output = transpiler.transpileCSharp(cls(
+            "        const amount = this.safeNumberN(item, ['amount']);\n" +
+            "        const x = (amount !== undefined) && this.safeNumberN(-amount, []);\n" +
+            "        return x;\n")).content;
+        expect(output).toContain('double? amount = this.safeNumberN(');
+        expect(output).toContain('(amount = -amount)');
+        expect(output).not.toContain('prefixUnaryNeg');
+    });
+    test('unguarded negation keeps object + helper', () => {
+        const output = transpiler.transpileCSharp(cls(
+            "        const amount = this.safeNumberN(item, ['amount']);\n" +
+            "        return -amount;\n")).content;
+        expect(output).toContain('object amount = this.safeNumberN(');
+        expect(output).toContain('prefixUnaryNeg(ref amount)');
+    });
+});

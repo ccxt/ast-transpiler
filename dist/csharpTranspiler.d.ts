@@ -254,7 +254,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeSliceCall(node: any, name: any): string;
     csharpSliceLiteralBound(node: any): any;
     csharpSliceBoundExpression(value: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "string" | "list";
+    csharpSliceReceiverKind(expression: any): "list" | "string";
     csharpSliceStringType(type: any): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     printReplaceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
@@ -294,4 +294,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpHx4IdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
     csharpHx4IsPlainRead(node: any): boolean;
     csharpHx4DeclaredKeyType(key: any): string | undefined;
+    csharpHx4GuardedNullableNegation(node: any, csharpType: string): boolean;
+    csharpHx4NativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
 }
