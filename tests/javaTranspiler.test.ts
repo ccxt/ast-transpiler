@@ -6733,3 +6733,617 @@ describe('java element write after a hand-back destructuring', () => {
         expect(output).toContain('Helpers.addElementToObject(request, "b", null)');
     });
 });
+
+// hx4 J01: `m[k] = v` on a declared Map<String, Object> local whose every write is a
+// provably non-concurrent map prints `m.put(k, v)`, null value included
+describe('hx4 J01: declared-map element write prints native put', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j01');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const MAP_TYPE = 'Map<String, Object>';
+    const source =
+    "class T {\n" +
+    "    options: any = {};\n" +
+    "    safeDict(d: any, k: any, def: any = undefined): any { return def; }\n" +
+    "    extend(...args: any[]): any { return {}; }\n" +
+    "    omit(x: any, ...args: any[]): any { return x; }\n" +
+    "    safeString(d: any, k: any): string | undefined { return undefined; }\n" +
+    "    p1(response: any): void {\n" +
+    "        const data = this.safeDict(response, 'data', {});\n" +
+    "        data['ts'] = this.safeString(response, 'ts');\n" +
+    "    }\n" +
+    "    p2(params: any, code: string): void {\n" +
+    "        let request = this.extend({ 'a': 1 }, params);\n" +
+    "        request = this.omit(request, 'a');\n" +
+    "        request[code] = this.safeString(params, 'x');\n" +
+    "    }\n" +
+    "    safeList(d: any, k: any, def: any = undefined): any { return def; }\n" +
+    "    p3(response: any): void {\n" +
+    "        const rows = this.safeList(response, 'data', []);\n" +
+    "        const first = this.safeDict(rows, 0, {});\n" +
+    "        first['ts'] = this.safeString(response, 'ts');\n" +
+    "    }\n" +
+    "    n1(): void {\n" +
+    "        const o = this.safeDict(this.options, 'ws', {});\n" +
+    "        o['x'] = this.safeString(o, 'y');\n" +
+    "    }\n" +
+    "    n5(client: any, h: string): void {\n" +
+    "        const subs = client.subscriptions;\n" +
+    "        const s = this.safeDict(subs, h, {});\n" +
+    "        s['x'] = this.safeString(s, 'y');\n" +
+    "    }\n" +
+    "    n2(params: any): void {\n" +
+    "        params['x'] = this.safeString(params, 'y');\n" +
+    "    }\n" +
+    "    n3(response: any, other: any): void {\n" +
+    "        let data = this.safeDict(response, 'data', {});\n" +
+    "        data = other;\n" +
+    "        data['x'] = this.safeString(response, 'y');\n" +
+    "    }\n" +
+    "    n4(response: any, key: any): void {\n" +
+    "        const data = this.safeDict(response, 'data', {});\n" +
+    "        data[key] = 1;\n" +
+    "    }\n" +
+    "}";
+
+    let withMaps: string;
+    let noResolver: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, source);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        noResolver = byPath.transpileJavaByPath(BASE_FIXTURE).content;
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
+            (declaration?.kind !== undefined && ['data', 'request', 'o', 'params', 'first', 's'].includes(declaration.name?.text)) ? MAP_TYPE : undefined;
+        withMaps = byPath.transpileJavaByPath(BASE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('safeDict of a parameter with a literal default: native put of a nullable value', () => {
+        expect(withMaps).toContain('data.put("ts", this.safeString(response, "ts"))');
+    });
+
+    test('safeDict of a safeList local: native put', () => {
+        expect(withMaps).toContain('first.put("ts", this.safeString(response, "ts"))');
+    });
+
+    test('extend/omit local with a string key: native put', () => {
+        expect(withMaps).toMatch(/request\.put\(\(String\)code, this\.safeString\(parameters, "x"\)\)/);
+    });
+
+    test('safeDict of a field map keeps the helper (ConcurrentHashMap null removal)', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(o, "x"/);
+    });
+
+    test('safeDict of ws client subscriptions keeps the helper', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(s, "x"/);
+    });
+
+    test('a parameter receiver keeps the helper', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(parameters, "x"/);
+    });
+
+    test('a local reassigned from an unproven value keeps the helper', () => {
+        expect(withMaps).toMatch(/Helpers\.addElementToObject\(data, "x"/);
+    });
+
+    test('a non-string key keeps the helper', () => {
+        expect(withMaps).toContain('Helpers.addElementToObject(data, key, 1)');
+    });
+
+    test('no declared-type consumer: every write keeps the helper', () => {
+        expect(noResolver).not.toMatch(/data\.put\(/);
+        expect(noResolver).not.toMatch(/request\.put\(/);
+    });
+});
+
+describe('hx4 J02: more hand-written base map fields read natively', () => {
+    // tickers / bidsasks / trades / fees / urls / markets_by_id are BaseExchange.java map fields that
+    // can be null; a non-literal key can be null too (ConcurrentHashMap.get(null) throws): both guarded
+    const fields =
+        "type D = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    tickers: D = {};\n" +
+        "    bidsasks: D = {};\n" +
+        "    trades: D = {};\n" +
+        "    fees: any = {};\n" +
+        "    urls: any = {};\n" +
+        "    markets_by_id: D | undefined = undefined;\n" +
+        "    tradez: any = {};\n";
+
+    test('string-keyed reads print the guarded accessor', () => {
+        const input = fields +
+        "    test(symbol: string, k: any): void {\n" +
+        "        const a = this.tickers[symbol];\n" +
+        "        const b = this.trades[symbol];\n" +
+        "        const c = this.fees['trading'];\n" +
+        "        const d = this.markets_by_id[k];\n" +
+        "        const e = this.bidsasks[symbol];\n" +
+        "        this.something(a, b, c, d, e);\n" +
+        "    }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("(symbol == null || this.tickers == null ? null : ((java.util.Map<?, ?>)this.tickers).get(symbol))");
+        expect(output).toContain("(symbol == null || this.trades == null ? null : ((java.util.Map<?, ?>)this.trades).get(symbol))");
+        expect(output).toContain("(symbol == null || this.bidsasks == null ? null : ((java.util.Map<?, ?>)this.bidsasks).get(symbol))");
+        expect(output).toContain("(this.fees == null ? null : ((java.util.Map<?, ?>)this.fees).get(\"trading\"))");
+        expect(output).toContain("(k == null || this.markets_by_id == null ? null : ((java.util.Map<?, ?>)this.markets_by_id).get(k))");
+        expect(output).not.toContain("Helpers.GetValue(this.");
+    });
+
+    test('nested read: only the field step goes native; a write target and other fields keep the helper', () => {
+        const input = fields +
+        "    test(api: string, symbol: string, v: any): void {\n" +
+        "        const a = this.urls['api'][api];\n" +
+        "        const b = this.tradez[symbol];\n" +
+        "        this.tickers[symbol] = v;\n" +
+        "        const c = this.fees[this.key()];\n" +
+        "        this.something(a, b, c);\n" +
+        "    }\n" +
+        "    key(): any { return 'k'; }\n" +
+        "    something(...args: any[]): void {}\n" +
+        "}";
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.GetValue((this.urls == null ? null : ((java.util.Map<?, ?>)this.urls).get(\"api\")), api)");
+        expect(output).toContain("Helpers.GetValue(this.tradez, symbol)");
+        expect(output).toContain("Helpers.addElementToObject(this.tickers, symbol, v)");
+        expect(output).toContain("Helpers.GetValue(this.fees, this.key())");
+    });
+});
+
+describe('hx4 J05: integral mod compared with an int literal', () => {
+    const java = (src: string) => transpiler.transpileJava(src).content;
+    test('`(s.length % 2) !== 0` goes native', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        return (s.length % 2) !== 0;
+    }
+}`);
+        expect(out).toContain("((((double) ((String)s).length()) % ((double) 2))) != 0)");
+        expect(out).not.toContain("Helpers.isEqual");
+    });
+    test('negative: a box-declared dividend keeps the helper', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        const n = s.length;
+        return (n % 2) !== 0;
+    }
+}`);
+        expect(out).toContain("!Helpers.isEqual(");
+    });
+    test('for-counter `(i % 2) < 1` goes native', () => {
+        const out = java(`class T {
+    f(xs: string[]): void {
+        for (let i = 0; i < xs.length; i++) {
+            if ((i % 2) < 1) {
+                return;
+            }
+        }
+    }
+}`);
+        expect(out).toContain("(((double) i) % ((double) 2))) < 1)");
+        expect(out).not.toContain("Helpers.isLessThan");
+    });
+    test('negative: mod by a fractional literal keeps the helper', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        const n = s.length;
+        return (n % 1.5) === 0;
+    }
+}`);
+        expect(out).toContain("Helpers.isEqual(");
+    });
+    test('negative: compared with a fractional literal keeps the helper', () => {
+        const out = java(`class T {
+    f(s: string): boolean {
+        const n = s.length;
+        return (n % 2) < 0.5;
+    }
+}`);
+        expect(out).toContain("Helpers.isLessThan(");
+    });
+    test('negative: an `any` dividend keeps the helper', () => {
+        const out = java(`class T {
+    f(i: any): boolean {
+        return (i % 2) === 0;
+    }
+}`);
+        expect(out).toContain("Helpers.isEqual(");
+    });
+});
+
+// hx4 J06
+describe('java native indexOf on an ===-narrowed string-literal union (hx4 J06)', () => {
+    test('a plain string narrowed by === literals prints String.indexOf', () => {
+        const input =
+        "class T {\n" +
+        "    test(path: string): void {\n" +
+        "        if (path === 'a/algo' || path === 'b') {\n" +
+        "            const i = path.indexOf('algo');\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)path).indexOf(\"algo\")");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    test('a declared literal union (may hold null) keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(path: 'a' | 'b'): void {\n" +
+        "        const i = path.indexOf('a');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(path, \"a\")");
+    });
+
+    test('a narrowed Str (string | undefined) local keeps the helper unless the target is a provable String', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    test(p: Str, t: any): void {\n" +
+        "        if (p === 'x' || p === 'y') {\n" +
+        "            const i = p.indexOf(t);\n" +
+        "        }\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(p, t)");
+    });
+
+    test('a Str local narrowed by === literals prints String.indexOf for a literal target', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    test(): void {\n" +
+        "        let payload: Str = undefined;\n" +
+        "        payload = this.f();\n" +
+        "        if ((payload === '/v4/order') || (payload === '/future/x')) {\n" +
+        "            const i = payload.indexOf('future');\n" +
+        "        }\n" +
+        "    }\n" +
+        "    f(): Str { return 'a'; }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("((String)payload).indexOf(\"future\")");
+        expect(output).not.toContain("Helpers.getIndexOf");
+    });
+
+    test('an any receiver keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(p: any): void {\n" +
+        "        const i = p.indexOf('x');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.getIndexOf(p, \"x\")");
+    });
+});
+
+// hx4 J09: the proofs anchor on base-tier declarations, so the fixture mirrors the repo layout
+describe('hx4 J09: isTrue / isInstance / core-argument residual', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j09');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej09.ts');
+    let out: string;
+    let byPath: Transpiler;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n" +
+            "export type Int = number | undefined;\n" +
+            "export type Bool = boolean | undefined;\n");
+        fs.writeFileSync(ERRORS_FIXTURE,
+            "class BaseError extends Error {\n}\n" +
+            "class BadSymbol extends BaseError {\n}\n" +
+            "export { BaseError, BadSymbol };\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict, Str, Int, Bool } from './types';\n" +
+            "export default class Exchange {\n" +
+            "    safeBool (d: any, k: any, defaultValue: Bool = undefined): boolean | undefined {\n" +
+            "        return defaultValue;\n" +
+            "    }\n" +
+            "    safeString (d: any, k: any, defaultValue: Str = undefined): Str {\n" +
+            "        return defaultValue;\n" +
+            "    }\n" +
+            "    handlePostOnly (isMarketOrder: boolean, option: boolean, params: Dict = {}): [boolean, Dict] {\n" +
+            "        if (isMarketOrder) {\n" +
+            "            return [ true, params ];\n" +
+            "        }\n" +
+            "        return [ false, params ];\n" +
+            "    }\n" +
+            "    handleOptionAndParams (params: Dict, m: string, o: string, d: any = undefined): [any, Dict] {\n" +
+            "        return [ d, params ];\n" +
+            "    }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str, Int } from './base/types';\n" +
+            "import Exchange from './base/Exchange';\n" +
+            "import { BadSymbol } from './base/errors';\n" +
+            "class Venue extends Exchange {\n" +
+            "    fetchRows (symbol: Str = undefined, limit: Int = undefined, params: Dict = {}): void {\n" +
+            "    }\n" +
+            "    other (x: any): any {\n" +
+            "        return x;\n" +
+            "    }\n" +
+            "    async later (x: any): Promise<any> {\n" +
+            "        return x;\n" +
+            "    }\n" +
+            "    boolDefault (params: Dict): void {\n" +
+            "        const d = this.safeBool (params, 'a', false);\n" +
+            "        const x1 = this.safeBool (params, 'b', d);\n" +
+            "        if (x1) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        const x2 = this.safeBool (params, 'b', this.other (1));\n" +
+            "        if (x2) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    boolChain (params: Dict, flag: boolean): void {\n" +
+            "        const raw = this.safeBool (params, 'a');\n" +
+            "        let y1: boolean = false;\n" +
+            "        if (raw !== undefined) {\n" +
+            "            y1 = raw;\n" +
+            "        }\n" +
+            "        if (y1) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        let y2: boolean = false;\n" +
+            "        if (raw !== undefined) {\n" +
+            "            y2 = this.other (raw);\n" +
+            "        }\n" +
+            "        if (y2) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        if (flag) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    postOnly (params: Dict): void {\n" +
+            "        const [ p1, rest ] = this.handlePostOnly (false, false, params);\n" +
+            "        if (p1) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        const [ p2, rest2 ] = this.handleOptionAndParams (params, 'm', 'p2');\n" +
+            "        if (p2) {\n" +
+            "            return;\n" +
+            "        }\n" +
+            "    }\n" +
+            "    caught (params: Dict): void {\n" +
+            "        try {\n" +
+            "            this.safeString (params, 'a');\n" +
+            "        } catch (e1) {\n" +
+            "            if (e1 instanceof BadSymbol) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "            if (e1 instanceof Error) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "        try {\n" +
+            "            this.other (params);\n" +
+            "        } catch (e2) {\n" +
+            "            if (e2 instanceof BadSymbol) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "    async caughtAsync (params: Dict) {\n" +
+            "        try {\n" +
+            "            await this.later (params);\n" +
+            "        } catch (e3) {\n" +
+            "            if (e3 instanceof BadSymbol) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "    cores (rows: any[], other: any): void {\n" +
+            "        const s = undefined;\n" +
+            "        const n = rows.length;\n" +
+            "        this.fetchRows (s, n);\n" +
+            "        let t = undefined;\n" +
+            "        t = other;\n" +
+            "        this.fetchRows (t, other);\n" +
+            "    }\n" +
+            "}\n");
+        byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'n' ? 'Integer' : undefined);
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a safeBool local with a proven Boolean default prints Boolean.TRUE.equals', () => {
+        expect(out).toContain('if (Boolean.TRUE.equals(x1))');
+        expect(out).toContain('if (Helpers.isTrue(x2))');
+    });
+
+    test('a boolean local written from a proven local prints Boolean.TRUE.equals', () => {
+        expect(out).toContain('if (Boolean.TRUE.equals(y1))');
+        expect(out).toContain('if (Helpers.isTrue(y2))');
+        expect(out).not.toContain('Boolean.TRUE.equals(flag)');
+    });
+
+    test('a base tuple method returning boolean literals binds a Boolean element', () => {
+        expect(out).toContain('if (Boolean.TRUE.equals(p1))');
+        expect(out).toContain('if (Helpers.isTrue(p2))');
+    });
+
+    test('instanceof on a catch variable of a synchronous base-call try is native', () => {
+        expect(out).toContain('(e1 instanceof BadSymbol)');
+        expect(out).toContain('Helpers.isInstance(e1, Error.class)');
+        expect(out).toContain('Helpers.isInstance(e2, BadSymbol.class)');
+        expect(out).toContain('Helpers.isInstance(e3, BadSymbol.class)');
+    });
+
+    test('typed core slots: const undefined prints a typed null, Integer length widens', () => {
+        expect(out).toContain('this.fetchRows((String) null, ((long) n)');
+        expect(out).toContain('Helpers.toStringArg(t)');
+        expect(out).toContain('Helpers.toLongOrNull(other)');
+    });
+});
+
+describe('hx4 J15: equality on two declared numeric boxes compares values', () => {
+    const withTypes = (types: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (d: any) => types[String(d?.name?.text)];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const src = (expr: string) =>
+        "class T {\\n" +
+        "    f(p: any, q: any): boolean {\\n" +
+        "        const a = p;\\n" +
+        "        const b = q;\\n" +
+        "        return " + expr + ";\\n" +
+        "    }\\n" +
+        "}";
+
+    test('two Longs: Objects.equals, never a reference ==/!=', () => {
+        withTypes({ a: 'Long', b: 'Long' }, () => {
+            const eq = transpiler.transpileJava(src("a === b")).content;
+            const ne = transpiler.transpileJava(src("a !== b")).content;
+            expect(eq).toContain("java.util.Objects.equals(a, b)");
+            expect(ne).toContain("!java.util.Objects.equals(a, b)");
+            expect(eq + ne).not.toMatch(/a [!=]= b/);
+        });
+    });
+
+    test('a Double box compares doubleValue with the helper null table', () => {
+        withTypes({ a: 'Double', b: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a === b")).content)
+                .toContain("(a == null ? b == null : (b != null && a.doubleValue() == b.doubleValue()))");
+        });
+        withTypes({ a: 'Double', b: 'Double' }, () => {
+            expect(transpiler.transpileJava(src("a !== b")).content)
+                .toContain("!(a == null ? b == null : (b != null && a.doubleValue() == b.doubleValue()))");
+        });
+    });
+
+    test('mixed integral boxes compare longValue', () => {
+        withTypes({ a: 'Integer', b: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a === b")).content)
+                .toContain("(a == null ? b == null : (b != null && a.longValue() == b.longValue()))");
+        });
+    });
+
+    test('a declared Boolean compares with Objects.equals', () => {
+        withTypes({ a: 'Boolean' }, () => {
+            expect(transpiler.transpileJava(src("a === b")).content).toContain("java.util.Objects.equals(a, b)");
+            expect(transpiler.transpileJava(src("a !== true")).content).toContain("!java.util.Objects.equals(a, true)");
+        });
+    });
+
+    test('a box against a literal keeps the J05 guarded operator', () => {
+        withTypes({ a: 'Long' }, () => {
+            expect(transpiler.transpileJava(src("a === 5")).content).toContain("(a != null && a == 5)");
+        });
+    });
+});
+
+// hx4 J16: an awaited implicit-API call (ts/src/abstract/<id>.ts, body `this.request(..)`) is a fresh
+// parse: a safeDict of its response takes the native put even when the call's arguments read a field
+describe('hx4 J16: implicit-API response is a non-shared put source', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-hx4-j16');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const ABSTRACT = path.join(TMP, 'ts', 'src', 'abstract', 'x.ts');
+    const VENUE = path.join(TMP, 'ts', 'src', 'v.ts');
+    let out: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.mkdirSync(path.dirname(ABSTRACT), { recursive: true });
+        fs.writeFileSync(BASE, "export class T {\n" +
+            "    options: any = {};\n" +
+            "    request(path: any, api: any, method: any, params: any, config: any): Promise<any> { return undefined as any; }\n" +
+            "    safeDict(d: any, k: any, def: any = undefined): any { return def; }\n" +
+            "    safeInteger(d: any, k: any): number | undefined { return undefined; }\n" +
+            "    extend(...args: any[]): any { return {}; }\n" +
+            "}\n");
+        fs.writeFileSync(ABSTRACT, "import { T } from '../base/Exchange.js';\n" +
+            "export abstract class X extends T {\n" +
+            "    privatePostA (params = {}): Promise<any> { return this.request ('a', 'private', 'POST', params, {}); }\n" +
+            "    privatePostB (params = {}): Promise<any> { return this.request ('b', 'private', 'POST', params, {}); }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE, "import { X } from './abstract/x.js';\n" +
+            "export class V extends X {\n" +
+            "    other (params = {}): Promise<any> { return this.request ('c', 'private', 'POST', params, {}); }\n" +
+            "    async p1 (params: any): Promise<any> {\n" +
+            "        const response = await this.privatePostA (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['p1'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    async p2 (params: any): Promise<any> {\n" +
+            "        let response = undefined;\n" +
+            "        if (params['uta'] === true) {\n" +
+            "            response = await this.privatePostA (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        } else {\n" +
+            "            response = await this.privatePostB (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        }\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['p2'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    async n1 (params: any): Promise<any> {\n" +
+            "        const response = await this.other (this.extend ({ 'a': this.options['x'] }, params));\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['n1'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "    async n2 (params: any): Promise<any> {\n" +
+            "        let response = await this.privatePostA (params);\n" +
+            "        response = this.options;\n" +
+            "        const data = this.safeDict (response, 'data', {});\n" +
+            "        data['n2'] = this.safeInteger (response, 'requestTime');\n" +
+            "        return data;\n" +
+            "    }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) =>
+            (declaration?.kind !== undefined && declaration.name?.text === 'data') ? 'Map<String, Object>' : undefined;
+        out = byPath.transpileJavaByPath(VENUE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('awaited implicit-API response read off a field-reading argument: native put', () => {
+        expect(out).toContain('data.put("p1", this.safeInteger(response, "requestTime"))');
+    });
+
+    test('null-initialised local written only by awaited implicit-API calls: native put', () => {
+        expect(out).toContain('data.put("p2", this.safeInteger(response, "requestTime"))');
+    });
+
+    test('an awaited venue method (not in ts/src/abstract) keeps the helper', () => {
+        expect(out).toContain('Helpers.addElementToObject(data, "n1"');
+    });
+
+    test('a response later reassigned from a field keeps the helper', () => {
+        expect(out).toContain('Helpers.addElementToObject(data, "n2"');
+    });
+});

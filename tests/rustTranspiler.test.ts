@@ -301,7 +301,7 @@ describe('rust transpiling tests', () => {
         expect(output).not.toContain('Value::Bool(a.as_f64()');
     });
 
-    test('string comparison keeps the helper', () => {
+    test('string comparison replicates the helper natively (hx4 R22)', () => {
         const ts =
         "let a = 'x';\n" +
         "let b = 'y';\n" +
@@ -309,7 +309,7 @@ describe('rust transpiling tests', () => {
         "    const x = 1;\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than(&a, &b)');
+        expect(output).toContain('(match (a.as_str(), b.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }), _ => false })');
     });
 
     test('any-typed comparison keeps the helper', () => {
@@ -320,7 +320,7 @@ describe('rust transpiling tests', () => {
         "    const x = 1;\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
     });
 
     // One number at runtime already pins `<`/`>` to the helper's f64 compare
@@ -359,7 +359,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&x, &y)');
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
     });
 
     test('less or equal with a single typed number operand keeps the helper', () => {
@@ -370,7 +370,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than_or_equal(&x, &y)');
+        expect(output).toContain('(match (&(x), &(y)) { (__a, __b) =>'); // hx4 R25
     });
 
     // A numeric literal / `.length` / `indexOf` is Int or Float at runtime,
@@ -419,7 +419,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_index_of(&s, &Value::Str("a".into())).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
+        expect(output).toContain('_ => Value::Int(-1) }).as_f64().unwrap_or(f64::NAN) >= n.as_f64().unwrap_or(f64::NAN)');
         expect(output).not.toContain('is_greater_than_or_equal(');
     });
 
@@ -438,7 +438,7 @@ describe('rust transpiling tests', () => {
 
     // Two strings are the helper's lexical branch — a numeric-string literal
     // goes through the same path, so it must keep the helper.
-    test('string against a numeric-string literal keeps the helper', () => {
+    test('string against a numeric-string literal keeps the f64 parse (hx4 R22)', () => {
         const ts =
         "function f(hex: string) {\n" +
         "    if (hex >= '80') {\n" +
@@ -446,7 +446,7 @@ describe('rust transpiling tests', () => {
         "    }\n" +
         "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&hex, &Value::Str("80".into()))');
+        expect(output).toContain('(match (hex.as_str(), Some("80")) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p > __q, _ => __x > __y }) || __x == __y, (None, None) => true, _ => false })');
     });
 
     test('object keys', () => {
@@ -503,19 +503,19 @@ describe('rust transpiling tests', () => {
     test('subtraction wrapping', () => {
         const ts = 'const c = a - b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('subtract(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
     });
 
     test('multiplication wrapping', () => {
         const ts = 'const c = a * b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('multiply(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y),'); // hx4 R25
     });
 
     test('division wrapping', () => {
         const ts = 'const c = a / b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('divide(&a, &b)');
+        expect(output).toContain('(Some(__x), Some(__y)) if __y != 0.0 => Value::Float(__x / __y)'); // hx4 R25
     });
 
     test('modulo wrapping', () => {
@@ -528,25 +528,26 @@ describe('rust transpiling tests', () => {
     test('less than wrapping', () => {
         const ts = 'const r = a < b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than(&a, &b)');
+        expect(output).toContain('(match (&(a), &(b)) { (__a, __b) =>'); // hx4 R25 inline helper dispatch
     });
 
     test('less than or equal wrapping', () => {
         const ts = 'const r = a <= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_less_than_or_equal(&a, &b)');
+        expect(output).toContain('__x < __y'); // hx4 R25
+        expect(output).toContain('(Value::Null, Value::Null) => true');
     });
 
     test('greater than wrapping', () => {
         const ts = 'const r = a > b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than(&a, &b)');
+        expect(output).toContain('__x > __y'); // hx4 R25
     });
 
     test('greater than or equal wrapping', () => {
         const ts = 'const r = a >= b;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_greater_than_or_equal(&a, &b)');
+        expect(output).toContain('__x > __y'); // hx4 R25
     });
 
     // Compound assignment
@@ -559,7 +560,7 @@ describe('rust transpiling tests', () => {
     test('-= assignment', () => {
         const ts = 'x -= 1;'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('x = subtract(&x, &Value::Int(1))');
+        expect(output).toContain('x = (match (&(x), &(Value::Int(1))) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x - __y),'); // hx4 R25
     });
 
     // Postfix unary
@@ -903,7 +904,7 @@ describe('rust transpiling tests', () => {
     test('indexOf call', () => {
         const ts = 'const i = arr.indexOf(x);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('get_index_of(&arr, &x)');
+        expect(output).toContain('(match (&(arr), &(x))');
     });
 
     test('startsWith call', () => {
@@ -951,13 +952,13 @@ describe('rust transpiling tests', () => {
     test('toUpperCase call', () => {
         const ts = 'const r = s.toUpperCase();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('to_upper(&s)');
+        expect(output).toContain('(match &(s) { Value::Str(__s) => Value::Str(__s.to_uppercase().into())');
     });
 
     test('toLowerCase call', () => {
         const ts = 'const r = s.toLowerCase();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('to_lower(&s)');
+        expect(output).toContain('(match &(s) { Value::Str(__s) => Value::Str(__s.to_lowercase().into())');
     });
 
     test('shift call', () => {
@@ -975,7 +976,7 @@ describe('rust transpiling tests', () => {
     test('slice call', () => {
         const ts = 'const r = arr.slice(1, 3);'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('slice(&arr,');
+        expect(output).toContain('(match (&(arr), ');
     });
 
     test('replace call', () => {
@@ -1089,7 +1090,7 @@ describe('rust transpiling tests', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut ok: bool = starts_with(&s, &Value::Str("x".into()));');
+        expect(output).toContain('let mut ok: bool = s.as_str().is_some_and(|__s| __s.starts_with("x"));');
     });
 
     // Rejected shapes: any sink that takes `&Value` keeps the local boxed.
@@ -1549,13 +1550,15 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    test('number + string keeps the add helper', () => {
+    // hx4 R09: a non-null string side puts `add` on its string branch (stringify_simple == Display).
+    test('number + string emits native concat', () => {
         const ts =
         'const a: number = 1;\n' +
         'const s: string = "q";\n' +
         'const c = a + s;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&a, &s)');
+        expect(output).toContain('let mut c: Value = Value::Str(format!("{}{}", a, s).into());');
+        expect(output).not.toContain('add(&a, &s)');
     });
 
     // phase-2 rust-19: a `Str` (`string | undefined`) operand holds only a
@@ -1633,14 +1636,14 @@ describe('rust checker-typed native container access', () => {
         expect(output).toContain('add(&a, &b)');
     });
 
-    test('string + any keeps the add helper', () => {
+    test('always-Str local + any concatenates natively (hx4 R22)', () => {
         const ts =
         'function h(): any { return 2; }\n' +
         'const a: string = "x";\n' +
         'const b = h();\n' +
         'const c = a + b;';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('add(&a, &b)');
+        expect(output).toContain('Value::Str(format!("{}{}", a, b).into())');
     });
 
     test('x++ / x-- on a number emit native increment', () => {
@@ -2308,11 +2311,11 @@ describe('rust is_true over a proven boolean Value', () => {
         expect(output).not.toContain('is_true(&self.safeBool2');
     });
 
-    test('a boolean-returning method keeps the helper', () => {
+    test('a method returning only bool literals tests as_bool natively (hx4 R12)', () => {
         const ts = boolClass('        if (this.isLinear(this.options)) { return 1; }');
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('is_true(&self.isLinear(self.options))');
-        expect(output).not.toContain('matches!(self.isLinear');
+        expect(output).toContain('if self.isLinear(self.options).as_bool() == Some(true) {');
+        expect(output).not.toContain('is_true(&self.isLinear');
     });
 
     test('a logical stored in a Value local keeps the helper', () => {
@@ -2469,17 +2472,17 @@ describe('rust native string search and slicing', () => {
 
     test('an unproven receiver keeps the helper', () => {
         const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: any')).content;
-        expect(output).toContain('get_index_of(&a, &Value::Str("/".into()))');
+        expect(output).toContain('(match (&(a), &(Value::Str("/".into())))');
     });
 
     test('an array receiver keeps the helper (the helper scans it)', () => {
         const output = transpiler.transpileRust(stringMethod("        return a.indexOf('/');", 'a: string[]')).content;
-        expect(output).toContain('get_index_of(&a, &Value::Str("/".into()))');
+        expect(output).toContain('(match (&(a), &(Value::Str("/".into())))');
     });
 
     test('a non-literal needle keeps the helper', () => {
-        const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: string')).content;
-        expect(output).toContain('get_index_of(&a, &b)');
+        const output = transpiler.transpileRust(stringMethod('        return a.indexOf(b);', 'a: string, b: any')).content;
+        expect(output).toContain('(match (&(a), &(b))');
     });
 
     test('an escaped literal needle keeps its escapes', () => {
@@ -2506,12 +2509,12 @@ describe('rust native string search and slicing', () => {
 
     test('slice keeps the helper for an expression bound', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.slice(0, b);', 'a: string, b: number')).content;
-        expect(output).toContain('slice(&a, &Value::Int(0), &b)');
+        expect(output).toContain('(match (&(a), (match &(Value::Int(0)) {');
     });
 
     test('slice keeps the helper for an unproven receiver', () => {
         const output = transpiler.transpileRust(stringMethod('        return a.slice(0, 2);', 'a: any')).content;
-        expect(output).toContain('slice(&a, &Value::Int(0), &Value::Int(2))');
+        expect(output).toContain('(match (&(a), (match &(Value::Int(0)) {');
     });
 
     test('length on a nullable array or string is native', () => {
@@ -3095,8 +3098,9 @@ describe('rust typed-parameter dict reads', () => {
 
     test('a reassigned Dict parameter keeps the helper (D2)', () => {
         const ts = DICT_DECL +
+            "function g (): any { return []; }\n" +
             "function f (balance: Dict, code: string) {\n" +
-            "    balance = {};\n" +
+            "    balance = g ();\n" +
             "    return balance[code];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
@@ -3672,8 +3676,9 @@ describe('rust typed-receiver native reads (D-28)', () => {
     test('an any-typed local keeps the helper', () => {
         const ts =
             'class T {\n' +
+            '    g(): any { return []; }\n' +
             '    m(code: string) {\n' +
-            '        const currencies: any = {};\n' +
+            '        const currencies: any = this.g ();\n' +
             '        return currencies[code];\n' +
             '    }\n' +
             '}';
@@ -3686,9 +3691,10 @@ describe('rust typed-receiver native reads (D-28)', () => {
         const ts =
             PLAIN +
             'class T {\n' +
+            '    g(): any { return []; }\n' +
             '    m(code: string) {\n' +
             '        let currencies: Plain = {};\n' +
-            '        currencies = {};\n' +
+            '        currencies = this.g ();\n' +
             '        return currencies[code];\n' +
             '    }\n' +
             '}';
@@ -3927,5 +3933,735 @@ describe('rust order book sides keep the runtime helpers', () => {
         expect(output).toContain('get_value(&bids, &i)');
         expect(output).not.toContain('bids.len()');
         expect(output).not.toContain('bids.as_array()');
+    });
+});
+
+describe('hx4 R01 native element writes on plain-dict locals', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r01/ts/src/venue.ts').content;
+    });
+
+    test('a base-tier account () builder local inserts natively (sibling-block bindings)', () => {
+        expect(output).toContain(insert('account', 'free', 'Value::Str("1".into())'));
+        expect(output).toContain(insert('account', 'used', 'Value::Str("0".into())'));
+        expect(output).not.toContain('add_element_to_object(&mut account');
+    });
+
+    test('an undefined-initialised local reassigned only to literals inserts natively', () => {
+        expect(output).toContain(insert('headers', 'Content-Type', 'Value::Str("application/json".into())'));
+    });
+
+    test('element 0 of handleUntilOption on a plain request inserts natively', () => {
+        expect(output).toContain(insert('requestUntil', 'interval', 'Value::Str("1m".into())'));
+    });
+
+    test('a parse* result, a non-plain reassignment and a closure write keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut order, &Value::Str("status".into())');
+        expect(output).toContain('add_element_to_object(&mut mixed, &Value::Str("k".into())');
+        expect(output).toContain('add_element_to_object(&mut captured, &Value::Str("free".into())');
+    });
+
+    test('omit of itself / extend of plain dicts keep the local plain', () => {
+        expect(output).toContain(insert('request', 'b', 'Value::Int(2)'));
+        expect(output).toContain(insert('merged', 'd', 'Value::Int(4)'));
+    });
+
+    test('a local aliased into a let-bound literal keeps the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut aliased, &Value::Str("Content-Type".into())');
+    });
+
+    test('element 0 of a same-file tuple method returning a fresh literal inserts natively', () => {
+        expect(output).toContain(insert('request', 'settle', 'Value::Str("usdt".into())'));
+        expect(output).toContain('add_element_to_object(&mut echoed, &Value::Str("x".into())');
+    });
+
+    test('omit / extend of a foreign dict keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut foreign, &Value::Str("e".into())');
+        expect(output).toContain('add_element_to_object(&mut extended, &Value::Str("f".into())');
+    });
+});
+
+describe('rust this-field dynamic dict reads (hx4 R02)', () => {
+    const DECL = 'interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\nclass C { x: number; }\n';
+
+    test('a dynamic string key on a Dict-declared field reads natively', () => {
+        const ts = DECL + 'class A {\n    balance: Dict = {};\n    f (code: string) {\n        const a = this.balance[code];\n        return a;\n    }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut a: Value = self.balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+        expect(output).not.toContain('get_value(&self.balance');
+    });
+
+    test('a nested read on a Dictionary<Dictionary<T>> field reads natively at both levels', () => {
+        const ts = DECL + 'class A {\n    ohlcvs: Dictionary<Dictionary<C>>;\n    f (symbol: string, tf: string) {\n        const a = this.ohlcvs[symbol][tf];\n        return a;\n    }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('self.ohlcvs.as_map().and_then(|__m| symbol.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null).as_map().and_then(|__m| tf.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).not.toContain('get_value(');
+    });
+
+    test('an any-declared field keeps the helper', () => {
+        const ts = DECL + 'class A {\n    positions: any;\n    f (code: string) {\n        return this.positions[code];\n    }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.positions, &code)');
+    });
+
+    test('a numeric key and write targets keep the helper', () => {
+        const ts = DECL + 'class A {\n    balance: Dict = {};\n    f (code: string, n: number) {\n        this.balance[code] = this.g (this.balance[code]);\n        delete this.balance[code];\n        return this.balance[n];\n    }\n    g (x) { return x; }\n}\n';
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&self.balance, &n)');
+        expect(output).toContain('self.g(get_value(&self.balance, &code))');
+        expect(output).not.toContain('self.balance.as_map()');
+    });
+});
+
+describe('hx4 R04: native Vec push on typed array locals', () => {
+    const wrap = (body: string) => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (items: any[]) {\n${body}\n    }\n}`;
+    test('push-only local returned is a Vec<Value> with native push', () => {
+        const out = transpiler.transpileRust(wrap('        const result = [];\n        result.push (items[0]);\n        result.push (this.parseX (1));\n        return result;')).content;
+        expect(out).toContain('let mut result: Vec<Value> = Vec::new();');
+        expect(out).toContain('result.push(self.parseX(Value::Int(1)));');
+        expect(out).toContain('return Value::from(result);');
+        expect(out).not.toContain('append_to_array');
+    });
+    test('length read and this-call argument in a return box once', () => {
+        const out = transpiler.transpileRust(wrap('        const result = [];\n        const item = items[0];\n        result.push (item);\n        const n = result.length;\n        return this.filterBy (result, n);')).content;
+        expect(out).toContain('result.push(item.clone());');
+        expect(out).toContain('Value::Int(result.len() as i64)');
+        expect(out).toContain('return self.filterBy(Value::from(result), n);');
+    });
+    test('final-use argument / object value outside a loop box once', () => {
+        const out = transpiler.transpileRust(wrap('        const args = [];\n        args.push (items[0]);\n        const request = { \'args\': args };\n        return this.parseX (request);')).content;
+        expect(out).toContain('let mut args: Vec<Value> = Vec::new();');
+        expect(out).toContain('Value::from(args)');
+        const out2 = transpiler.transpileRust(wrap('        const hashes = [];\n        hashes.push (1);\n        const r = this.filterBy (hashes, 1);\n        return r;')).content;
+        expect(out2).toContain('self.filterBy(Value::from(hashes), Value::Int(1))');
+    });
+    test('negative: alias, non-return argument, element read or non-empty init keep the box', () => {
+        for (const body of [
+            '        const out = [];\n        out.push (1);\n        const other = out;\n        return other;',
+            '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
+            '        const out = [];\n        out.push (1);\n        return this.filterBy (out, out);',
+            '        const out = [ 1 ];\n        out.push (2);\n        return out;',
+            '        const out = [];\n        out.push (out.length);\n        return out;',
+            '        let out = [];\n        out.push (1);\n        out = [];\n        return out;',
+        ]) {
+            const out = transpiler.transpileRust(wrap(body)).content;
+            // the box stays (hx4 R18 may spell its Arr push natively)
+            expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
+            expect(out).not.toContain('Vec<Value>');
+        }
+    });
+});
+
+describe('hx4 R05 native IndexMap ops on proven dict receivers', () => {
+    let rest = '';
+    let ws = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r05/ts/src/venue.ts').content;
+        ws = transpiler.transpileRustByPath('./tests/files/input/hx4r05/ts/src/pro/venue.ts').content;
+    });
+
+    test('k in this.<dict field> reads contains_key', () => {
+        expect(rest).toContain('matches!((&self.balance, &code), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))');
+        expect(ws).toContain('matches!((&self.orderbooks, &symbol), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))');
+    });
+
+    test('delete on a dict field / literal-built local is shift_remove', () => {
+        expect(rest).toContain('if let (Value::Dict(__d), Value::Str(__k)) = (&mut self.balance, &code) { std::sync::Arc::make_mut(__d).shift_remove(__k.as_ref()); }');
+        expect(rest).toContain('if let Value::Dict(__d) = &mut request { std::sync::Arc::make_mut(__d).shift_remove("a"); }');
+        expect(ws).toContain('if let Value::Dict(__d) = &mut plain { std::sync::Arc::make_mut(__d).shift_remove("k"); }');
+    });
+
+    test('Object.keys / Object.values on REST dicts and untagged fields are native', () => {
+        expect(rest).toContain('Value::Array(query.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default())');
+        expect(rest).toContain('Value::Array(self.tickers.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default())');
+        expect(ws).toContain('Value::Array(self.orderbooks.as_map().map(|__m| __m.keys()');
+    });
+
+    test('any receivers, ws subscriptions and non-dict operands keep the helpers', () => {
+        expect(rest).toContain('remove(&mut response, &Value::Str("x".into()))');
+        expect(rest).toContain('in_op(&response, &code)');
+        expect(rest).toContain('object_keys(&flag)');
+        expect(ws).toContain('in_op(&client.subscriptions, &messageHash)');
+        expect(ws).toContain('remove(&mut client.subscriptions, &messageHash)');
+        expect(ws).toContain('remove(&mut subs, &messageHash)');
+        expect(ws).toContain('remove(&mut subscription, &symbol)');
+    });
+});
+
+describe('hx4 R06 native string methods on proven strings', () => {
+    const m = (body: string, params = 'a: string') => `class A {\n    run(${params}) {\n${body}\n    }\n}`;
+    const out = (body: string, params?: string) => transpiler.transpileRust(m(body, params)).content;
+
+    test('toUpperCase / toLowerCase', () => {
+        const o = out("        const u = a.toUpperCase();\n        const l = a.toLowerCase();\n        return [u, l];");
+        expect(o).toContain('let mut u: Value = a.as_str().map(|__s| Value::Str(__s.to_uppercase().into())).unwrap_or(Value::Null);');
+        expect(o).toContain('let mut l: Value = a.as_str().map(|__s| Value::Str(__s.to_lowercase().into())).unwrap_or(Value::Null);');
+        expect(o).not.toContain('to_upper(&');
+    });
+    test('split with a literal separator', () => {
+        expect(out("        return a.split('-');")).toContain('return Value::Array(a.as_str().map(|__s| __s.split("-").map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
+    });
+    test('replace keeps the receiver for a non-string box', () => {
+        expect(out("        return a.replace('x', 'y');")).toContain('return a.as_str().map(|__s| Value::Str(__s.replace("x", "y").into())).unwrap_or_else(|| a.clone());');
+    });
+    test('padStart with a one-char pad', () => {
+        expect(out("        return a.padStart(64, '0');")).toContain('return a.as_str().map(|__s| Value::Str(format!("{:0>64}", __s).into())).unwrap_or(Value::Null);');
+        expect(out("        return a.padStart(8, '00');")).toContain('pad_start(&a,');
+    });
+    test('startsWith / endsWith in a condition', () => {
+        const o = out("        if (a.startsWith('0x') || a.endsWith('%')) {\n            return 1;\n        }\n        return 0;");
+        expect(o).toContain('a.as_str().is_some_and(|__s| __s.starts_with("0x"))');
+        expect(o).toContain('a.as_str().is_some_and(|__s| __s.ends_with("%"))');
+        expect(o).not.toContain('starts_with(&a');
+    });
+    test('indexOf with a proven-string identifier needle', () => {
+        expect(out('        return a.indexOf(b);', 'a: string, b: string')).toContain('Value::Int(a.as_str().zip(b.as_str()).and_then(|(__s, __n)| __s.find(__n)).map(|__i| __i as i64).unwrap_or(-1))');
+    });
+    test('join on a string[]', () => {
+        expect(out("        return xs.join(',');", 'xs: string[]')).toContain('Value::Str(xs.as_array().map(|__a| __a.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join(",")).unwrap_or_default().into())');
+    });
+    test('unproven receivers keep the helpers', () => {
+        const o = out("        const u = a.toUpperCase();\n        const p = a.split(',');\n        const j = xs.join(',');\n        const r = a.replace('x', 'y');\n        return [u, p, j, r, a.startsWith('x')];", 'a: any, xs: any[]');
+        expect(o).toContain('(match &(a) { Value::Str(__s) => Value::Str(__s.to_uppercase().into())');
+        expect(o).toContain('split(&a, &Value::Str(",".into()))');
+        expect(o).toContain('join(&xs, &Value::Str(",".into()))');
+        expect(o).toContain('replace_str(&a,');
+        expect(o).toContain('starts_with(&a,');
+    });
+    test('non-literal operands keep the helpers', () => {
+        const o = out("        return [a.split(s), a.startsWith(s), a.replace(s, 'y')];", 'a: string, s: string');
+        // hx4 R13: a string-variable split delimiter / replace pattern goes native
+        expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __d)| __s.split(__d)');
+        // hx4 R17: a string-variable affix goes native too
+        expect(o).toContain('a.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
+        expect(o).toContain('a.as_str().zip(s.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, \"y\").into()))');
+    });
+});
+
+// hx4 R07 — numeric/string helpers go native on checker-proven operands
+describe('rust R07 native numeric/string helpers', () => {
+    const rust = (ts: string) => transpiler.transpileRust(ts).content;
+    test('number toString prints Display format', () => {
+        const out = rust('function f(n: number) { const r = n.toString(); return r; }');
+        expect(out).toContain('Value::Str(format!("{}", n).into())');
+        expect(out).not.toContain('to_string_val(');
+    });
+    test('string toString prints Display format', () => {
+        const out = rust('function f(s: string) { const r = s.toString(); return r; }');
+        expect(out).toContain('Value::Str(format!("{}", s).into())');
+    });
+    test('any toString keeps the helper', () => {
+        expect(rust('function f(n: any) { const r = n.toString(); return r; }')).toContain('to_string_val(&n)');
+    });
+    test('Math.floor/round/ceil of a number go native', () => {
+        const out = rust('function f(n: number) { const a = Math.floor(n); const b = Math.round(n); const c = Math.ceil(n); return [a, b, c]; }');
+        expect(out).toContain('(n).as_f64().map(|__x| Value::Float(__x.floor())).unwrap_or(Value::Null)');
+        expect(out).toContain('__x.round()');
+        expect(out).toContain('__x.ceil()');
+        expect(out).not.toMatch(/math_(floor|round|ceil)\(/);
+    });
+    test('Math.floor of any keeps the helper', () => {
+        expect(rust('function f(n: any) { return Math.floor(n); }')).toContain('math_floor(&n)');
+    });
+    test('negate of a number goes native', () => {
+        const out = rust('function f(n: number) { const x = -n; return x; }');
+        expect(out).toContain('(match &(n) { Value::Int(x) => Value::Int(-x), Value::Float(x) => Value::Float(-x), _ => Value::Null })');
+        expect(out).not.toContain('negate(');
+    });
+    test('negate of any keeps the helper', () => {
+        expect(rust('function f(n: any) { return -n; }')).toContain('negate(&n)');
+    });
+    test('number % number goes native with zero guards', () => {
+        const out = rust('function f(a: number, b: number) { return a % b; }');
+        expect(out).toContain('(Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y)');
+        expect(out).not.toContain('mod_val(');
+    });
+    test('any % number keeps the helper', () => {
+        expect(rust('function f(a: any, b: number) { return a % b; }')).toContain('mod_val(&a, &b)');
+    });
+});
+
+describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
+    const r09 = (code: string) => transpiler.transpileRust(code).content;
+
+    test('string + number and Str + number', () => {
+        const out = r09('function f (n: number, s: string, t: string | undefined) {\n    const a = s + n;\n    const b = t + n;\n    return [ a, b ];\n}\n');
+        expect(out).toContain('let mut a: Value = Value::Str(format!("{}{}", s, n).into());');
+        expect(out).toContain('add(&t, &n)');
+    });
+
+    test('number + any keeps the helper', () => {
+        const out = r09('function f (n: number, s: string, x: any) {\n    const a = s + x;\n    const b = x + n;\n    return [ a, b ];\n}\n');
+        expect(out).toContain('add(&s, &x)');
+        expect(out).toContain('add(&x, &n)');
+    });
+
+    test('.length on an any receiver minus/plus a number goes native', () => {
+        const out = r09('function f (x: any, n: number) {\n    const a = x.length - 1;\n    const b = x.length + n;\n    return [ a, b ];\n}\n');
+        expect(out).not.toContain('subtract(');
+        expect(out).not.toContain('add(');
+        expect(out).toContain('(match (&(get_array_length(&x)), &(Value::Int(1))) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
+    });
+
+    test('const length local of an any receiver compares natively', () => {
+        const out = r09('function f (x: any, y: any) {\n    const length = x.length;\n    const other = y.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (length === other) {\n        return 2;\n    }\n    return 3;\n}\n');
+        expect(out).toContain('if (length.as_f64() == Some(0.0))');
+        expect(out).toContain('if (length.as_f64() == other.as_f64())');
+        expect(out).not.toContain('is_equal(');
+    });
+
+    test('let length local, and any vs const length, keep the helpers', () => {
+        const out = r09('function f (x: any, y: any) {\n    let length = x.length;\n    length = y;\n    const l2 = x.length;\n    if (length === 0) {\n        return 1;\n    }\n    if (l2 === y) {\n        return 2;\n    }\n    return l2 - y;\n}\n');
+        expect(out).toContain('is_equal(&length, &Value::Int(0))');
+        expect(out).toContain('is_equal(&l2, &y)');
+        expect(out).toContain('(match (&(l2), &(y)) {'); // hx4 R25
+    });
+});
+
+describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => {
+    const dyn = (receiver: string, key: string) =>
+        `${receiver}.as_map().and_then(|__m| ${key}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r10/ts/src/venue.ts').content;
+    });
+
+    test('a Dict parameter read with an any-typed key reads natively', () => {
+        expect(output).toContain(`let mut value: Value = ${dyn('params', 'key')};`);
+        expect(output).not.toContain('get_value(&params, &key);\n            out');
+    });
+
+    test('a literal-built local and an account () local read an untyped key natively', () => {
+        expect(output).toContain(`let mut viaCode: Value = ${dyn('result', 'code')};`);
+        expect(output).toContain(dyn('account', 'code'));
+    });
+
+    test('a reassigned param, a parse* local and a numeric key keep the helper', () => {
+        expect(output).toContain('return get_value(&params, &key);');
+        expect(output).toContain('return get_value(&order, &key);');
+        expect(output).toContain('return get_value(&params, &n);');
+    });
+});
+
+describe('hx4 R11: relaxed Vec locals and native list length', () => {
+    const wrap = (body: string, params = 'items: any[]') => `class T {\n    parseX (x) { return x; }\n    filterBy (a, b) { return a; }\n    f (${params}) {\n${body}\n    }\n}`;
+    const rs = (body: string, params?: string) => transpiler.transpileRust(wrap(body, params)).content;
+    test('a non-final this-call argument clones into its box', () => {
+        const out = rs('        const out = [];\n        out.push (1);\n        this.parseX (out);\n        return out;');
+        expect(out).toContain('let mut out: Vec<Value> = Vec::new();');
+        expect(out).toContain('self.parseX(Value::from(out.clone()));');
+        expect(out).toContain('return Value::from(out);');
+        expect(out).not.toContain('append_to_array');
+    });
+    test('index reads on a Vec local use Vec::get', () => {
+        const out = rs('        const out = [];\n        out.push (1);\n        for (let i = 0; i < out.length; i++) {\n            const v = out[i];\n            this.parseX (v);\n        }\n        return out[0];');
+        expect(out).toContain('let mut out: Vec<Value> = Vec::new();');
+        expect(out).toContain('let mut v: Value = out.get((i).as_i64().map_or(usize::MAX, |__n| __n as usize)).cloned().unwrap_or(Value::Null);');
+        expect(out).toContain('return out.get(0).cloned().unwrap_or(Value::Null);');
+    });
+    test('negative: in-loop this-call arg, element write, chained read, &mut self callee keep the box', () => {
+        for (const body of [
+            '        const out = [];\n        for (let i = 0; i < 2; i++) {\n            out.push (i);\n            this.parseX (out);\n        }\n        return 1;',
+            '        const out = [];\n        out.push (1);\n        out[0] = 2;\n        return out;',
+            '        const out = [];\n        out.push (items);\n        return out[0][1];',
+            '        const out = [];\n        out.push (1);\n        this.extend (out);\n        return out;',
+            '        const out = [];\n        out.push (1);\n        const k = \'a\';\n        return out[k];',
+        ]) {
+            const out = rs(body);
+            // the box stays (hx4 R18 may spell its Arr push natively)
+            expect(out).toMatch(/append_to_array\(&mut out|if let Value::Arr\(__a\) = &mut out \{/);
+            expect(out).not.toContain('Vec<Value>');
+        }
+    });
+    test('length of a split / array-literal-returning call local is native', () => {
+        const out = rs('        const parts = s.split (\'-\');\n        const n = parts.length;\n        return n;', 's');
+        expect(out).toContain('parts.as_array().map_or(Value::Int(0), |__a| Value::Int(__a.len() as i64))');
+        expect(out).not.toContain('get_array_length');
+    });
+    test('negative: any-typed and reassigned locals keep get_array_length', () => {
+        expect(rs('        const n = items2.length;\n        return n;', 'items2')).toContain('get_array_length(&items2)');
+        expect(rs('        let parts = s.split (\'-\');\n        parts = s;\n        return parts.length;', 's')).toContain('get_array_length(&parts)');
+    });
+});
+
+describe('hx4 R12 safeDict / builder plain dicts and bool-value truthiness', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r12/ts/src/venue.ts').content;
+    });
+
+    test('a base safeDict read of caller data with no default inserts natively', () => {
+        expect(output).toContain(insert('bare', 'a', 'Value::Int(1)'));
+    });
+
+    test('a same-file sync builder returning literals / extend of them inserts natively', () => {
+        expect(output).toContain(insert('request', 'clientOid', 'Value::Str("1".into())'));
+    });
+
+    test('a non-plain default and a pass-through method keep the helper', () => {
+        expect(output).toContain('add_element_to_object(&mut nonPlainDefault, &Value::Str("b".into())');
+        expect(output).toContain('add_element_to_object(&mut parsed, &Value::Str("x".into())');
+    });
+
+    test('bool tuple elements compare natively against true', () => {
+        expect(output).toContain('(enableUnifiedMargin.as_bool() == Some(true)) || (enableUnifiedAccount.as_bool() == Some(true))');
+    });
+
+    test('bool tuple elements and bool-returning methods test truthiness natively', () => {
+        expect(output).toContain('if paginate.as_bool() == Some(true) {');
+        expect(output).toContain('if isTrigger.as_bool() == Some(true) {');
+        expect(output).toContain('if !(self.isConditionalOrder(&[params]).as_bool() == Some(true)) {');
+    });
+
+    test('an any-valued method / tuple element keeps is_true', () => {
+        expect(output).toContain('if is_true(&self.looseFlag(&[params])) {');
+        expect(output).toContain('if is_true(&loose) {');
+    });
+});
+
+describe('hx4 R13 proven-Str safeString locals: native equality / replace / split / toString / case', () => {
+    let replaceOut = '';
+    let eqOut = '';
+    beforeAll(() => {
+        replaceOut = transpiler.transpileRust("class X {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return undefined; }\n    f (o: any, timeframe: string) {\n        const subscription = this.safeString (o, 'n', '');\n        const prefix = timeframe + '_';\n        const marketId = subscription.replace (prefix, '');\n        const net = this.safeString (o, 'network');\n        let code: string = this.safeString (o, 'code', '');\n        code = code.replace (net, '');\n        const id = this.safeString (o, 'id');\n        const parts = (code as string).split (id as string);\n        const s = (id as string).toString ();\n        const h = code.replace ('.' + o['x'], '');\n        return [ marketId, code, parts, s, h ];\n    }\n}\n").content;
+        eqOut = transpiler.transpileRust("class X {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return undefined; }\n    safeString2 (o: any, k: any, k2: any, d: any = undefined): string | undefined { return undefined; }\n    safeValue (o: any, k: any, d: any = undefined): any { return undefined; }\n    f (o: any, net: any) {\n        const a: any = this.safeString (o, 'a');\n        const b: any = this.safeString2 (o, 'b', 'c');\n        if (a === b) { return 1; }\n        const c: any = this.safeString (o, 'c', net);\n        if (a === c) { return 2; }\n        let d: any = this.safeString (o, 'd');\n        d = this.safeValue (o, 'x');\n        if (a !== d) { return 3; }\n        let e: any = this.safeString (o, 'e');\n        [ e ] = o;\n        if (a === e) { return 4; }\n        const g: any = this.safeString (o, 'g', 'z');\n        const u = g.toUpperCase ();\n        const t = a.toString ();\n        const v = d.toString ();\n        return [ u, t, v ];\n    }\n}\n").content;
+    });
+
+    test('replace / split with a string-variable operand print native str ops', () => {
+        expect(replaceOut).toContain('let mut marketId: Value = subscription.as_str().zip(prefix.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| subscription.clone());');
+        expect(replaceOut).toContain('code = code.as_str().zip(net.as_str()).map(|(__s, __p)| Value::Str(__s.replace(__p, "").into())).unwrap_or_else(|| code.clone());');
+        expect(replaceOut).toContain('let mut parts: Value = Value::Array(code.as_str().zip(id.as_str()).map(|(__s, __d)| __s.split(__d).map(|__p| Value::Str(__p.to_string().into())).collect()).unwrap_or_default());');
+        expect(replaceOut).toContain('.as_str().zip((Value::Str(format!("{}{}", Value::Str(".".into()), crate::value::get_value_k(&o, "x")).into())).as_str())');
+        expect(replaceOut).toContain('let mut s: Value = Value::Str(format!("{}", id).into());');
+        expect(replaceOut).not.toContain('replace_str(');
+    });
+
+    test('two proven-Str `any` locals compare with PartialEq', () => {
+        expect(eqOut).toContain('if (a == b) {');
+        expect(eqOut).toContain('if (a == c) {');
+        expect(eqOut).toContain('let mut u: Value = g.as_str().map(|__s| Value::Str(__s.to_uppercase().into())).unwrap_or(Value::Null);');
+        expect(eqOut).toContain('let mut t: Value = Value::Str(format!("{}", a).into());');
+    });
+
+    test('a non-string write or destructuring write keeps the helpers', () => {
+        expect(eqOut).toContain('if !is_equal(&a, &d) {');
+        expect(eqOut).toContain('if is_equal(&a, &e) {');
+        expect(eqOut).toContain('let mut v: Value = to_string_val(&d);');
+    });
+});
+
+describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict and list proofs', () => {
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r14/ts/src/venue.ts').content;
+    });
+
+    test('a dynamic-key read on an overloaded safeDict local with a {} default is native', () => {
+        expect(output).toContain('let mut found: Value = byAlt.as_map().and_then(|__m| id.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+    });
+
+    test('a non-plain default and a write-back bind keep get_value', () => {
+        expect(output).toContain('return get_value(&loose, &id);');
+        expect(output).toContain('let mut value: Value = get_value(&ledger, &key);');
+    });
+
+    test('an overloaded safeBool with a bool default tests truthiness natively', () => {
+        expect(output).toContain('if flag.as_bool() == Some(true) {');
+    });
+
+    test('list reads at counter/length arithmetic indices are native; an any-typed operand keeps get_value', () => {
+        expect(output).toContain('last = trades.as_array().and_then(|__arr| match &((match (&(numTrades), &(Value::Int(1)))');
+        expect(output).toContain('let mut prev: Value = trades.as_array().and_then(|__arr| match &((match (&(i), &(Value::Int(1)))');
+        expect(output).toContain('Value::Int(__n) if *__n >= 0 => __arr.get(*__n as usize), _ => None }).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('get_value(&trades, &(match (&(k), &(Value::Int(1))) {'); // hx4 R25
+    });
+});
+
+describe('hx4 R15 Vec<Value> object-literal / join uses and negated bool tuple locals', () => {
+    let output = '';
+    beforeAll(() => {
+        output = transpiler.transpileRustByPath('./tests/files/input/hx4r15/ts/src/venue.ts').content;
+    });
+
+    test('a string[] local joined with a literal is a Vec with a native join', () => {
+        expect(output).toContain('let mut out: Vec<Value> = Vec::new();');
+        expect(output).toContain('Value::Str(out.iter().map(|__v| __v.to_string()).collect::<Vec<String>>().join(",").into())');
+    });
+
+    test('object-literal values are boxed clones, the last one a move', () => {
+        expect(output).toContain('m.insert("ids".to_string(), Value::from(out.clone()));');
+        expect(output).toContain('m.insert("more".to_string(), Value::from(out));');
+    });
+
+    test('a value pushed after the literal, an any[] join and an in-loop literal keep the helper', () => {
+        expect(output).toContain('append_to_array(&mut late, Value::Str("x".into()));');
+        expect(output).toContain('return join(&loose, &Value::Str(",".into()));');
+        expect(output).toContain('append_to_array(&mut looped, Value::Str("a".into()));');
+    });
+
+    test('a negated bool tuple local tests as_bool natively', () => {
+        expect(output).toContain('else if !(stock.as_bool() == Some(true)) {');
+    });
+});
+
+describe('hx4 R16 rust math/comparison on structurally numeric operands', () => {
+    const r16 = (code: string) => transpiler.transpileRust(code).content;
+    const src = 'class X {\n' +
+        '    sum (...xs: any[]): any { return xs[0]; }\n' +
+        '    readU (s: string, n: number): any { let result = 0; result = this.sum (result, n * 2); return result; }\n' +
+        '    f (ids: string[], chunkSize: number, bits0: string, limit: number | undefined, a: any, bid: number | undefined) {\n' +
+        '        const idsLength = ids.length;\n' +
+        '        const c = this.sum (idsLength, chunkSize - 1) / chunkSize;\n' +
+        '        const m = this.sum (bid, 1) / 2;\n' +
+        '        let bits = this.readU (bits0, 1);\n' +
+        '        const bit = bits % 2;\n' +
+        '        bits = (bits - bit) / 2;\n' +
+        '        const neg = -(this.readU (bits0, 2));\n' +
+        '        let errors = 0;\n' +
+        '        while (errors <= limit) { errors += 1; }\n' +
+        '        const q = -1 * ids.length;\n' +
+        '        const anyCmp = a <= bid;\n' +
+        '        const anySub = a - 1;\n' +
+        '        const anySum = this.sum (a, 1) / 2;\n' +
+        '        const nullCmp = bid <= limit;\n' +
+        '        return [ c, m, bit, neg, q, anyCmp, anySub, anySum, nullCmp, bits ];\n' +
+        '    }\n' +
+        '}\n';
+    let out = '';
+    beforeAll(() => { out = r16(src); });
+
+    test('this.sum of numbers, numeric method returns and inductive locals go native', () => {
+        expect(out).toContain('let mut bit: Value = (match (&(bits), &(Value::Int(2))) { (Value::Int(x), Value::Int(y)) if *y != 0 => Value::Int(x % y)');
+        expect(out).toContain('bits = (match ((((match (&(bits), &(bit)) { (Value::Int(x), Value::Int(y)) => Value::Int(x - y)');
+        expect(out).toContain('let mut neg: Value = (match &((self.readU(bits0, Value::Int(2)))) { Value::Int(x) => Value::Int(-x)');
+        expect(out).toContain('let mut q: Value = (match (&(Value::Int(-1)), &(Value::Int(ids.len() as i64))) {');
+        expect(out).not.toContain('divide(&self.sum(&[idsLength');
+        expect(out).not.toContain('mod_val(&bits');
+        expect(out).not.toContain('negate(');
+    });
+
+    test('<= with a literal-initialised numeric local against a nullable number is native', () => {
+        expect(out).toContain('while errors.as_f64().unwrap_or(f64::NAN) <= limit.as_f64().unwrap_or(f64::NAN) {');
+    });
+
+    test('any operands and two nullable sides of <= keep the helpers', () => {
+        expect(out).toContain('(match (&(a), &(bid)) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('(match (&(a), &(Value::Int(1))) {'); // hx4 R25
+        expect(out).toContain('(match (&(self.sum(a, Value::Int(1))), &(Value::Int(2))) { (__a, __b) =>'); // hx4 R25
+        expect(out).toContain('let mut m: Value = (match ((self.sum(bid, Value::Int(1))).as_f64(), (Value::Int(2)).as_f64())');
+        expect(out).toContain('(match (&(bid), &(limit)) { (__a, __b) =>'); // hx4 R25
+    });
+});
+
+describe('hx4 R17 string helpers and anchored concat', () => {
+    const src = "type Str = string | undefined;\nclass Precise { constructor (s: string) {} }\nclass A {\n    id: string = 'a';\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    run (x: any, code: string, s: Str, n: number) {\n        const h = this.safeString (x, 'h', '');\n        let qs = '';\n        qs = qs.replaceAll ('%2C', ',');\n        const r = code.replace (s, h);\n        const p = new Precise ('1');\n        return [ h.trim (), code.startsWith (s), code.endsWith (h), qs, r, this.id + ' x ' + x, 'n' + n, 'p' + p, x + 'y', x.trim (), x.replaceAll ('a', 'b'), x.startsWith (s) ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('trim / startsWith / endsWith / replaceAll / replace on proven strings go native', () => {
+        expect(o).toContain('h.as_str().map(|__s| Value::Str(__s.trim().to_string().into())).unwrap_or(Value::Null)');
+        expect(o).toContain('code.as_str().zip(s.as_str()).is_some_and(|(__s, __p)| __s.starts_with(__p))');
+        expect(o).toContain('code.as_str().zip(h.as_str()).is_some_and(|(__s, __p)| __s.ends_with(__p))');
+        expect(o).toContain('qs = qs.as_str().map(|__s| Value::Str(__s.replace("%2C", ",").into())).unwrap_or_else(|| qs.clone());');
+        expect(o).toContain('match (code.as_str(), s.as_str(), h.as_str()) { (Some(__s), Some(__p), Some(__r)) => Value::Str(__s.replace(__p, __r).into()), _ => code.clone() }');
+    });
+    test('concat anchored on an always-Str side goes native for any non-Precise box', () => {
+        expect(o).toContain('Value::Str(format!("{}{}", Value::Str(format!("{}{}", self.id, Value::Str(" x ".into())).into()), x).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", Value::Str("n".into()), n).into())');
+        expect(o).toContain('Value::Str(format!("{}{}", x, Value::Str("y".into())).into())');
+    });
+    test('Precise operands and any receivers keep the helpers', () => {
+        expect(o).toContain('add(&Value::Str("p".into()), &p)');
+        expect(o).toContain('trim(&x)');
+        expect(o).toContain('replace_all_str(&x,');
+        expect(o).toContain('starts_with(&x, &s)');
+    });
+});
+
+describe('hx4 R18 collection helpers on proven plain-dict / Arr-only locals', () => {
+    let rest = '';
+    let prediction = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r18/ts/src/venue.ts').content;
+        prediction = transpiler.transpileRustByPath('./tests/files/input/hx4r18/ts/src/prediction/venue.ts').content;
+    });
+
+    test('push on a [] local / length on a toArray local are native', () => {
+        expect(rest).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(rows.as_array()');
+        expect(rest).toContain('return Value::from(vec![out, count, Value::Int(parsed.len() as i64)]);');
+    });
+
+    test('literal-key in on an R10 plain local is contains_key', () => {
+        expect(rest).toContain('if (matches!(&account, Value::Dict(__d) if __d.contains_key("free"))) {');
+        expect(rest).toContain('in_op(&response, &Value::Str("code".into()))');
+    });
+
+    test('rebound, nullable-push, dict-aliased and closure-captured locals keep the helpers', () => {
+        expect(rest).toContain('append_to_array(&mut list, Value::Int(2));');
+        expect(rest).toContain('return get_array_length(&list);');
+        expect(rest).toContain('append_to_array(&mut maybe, Value::Int(3));');
+        expect(rest).toContain('append_to_array(&mut ids, args);');
+        expect(rest).toContain('append_to_array(&mut items, Value::Int(4));');
+        expect(rest).toContain('append_to_array(&mut seq, Value::Int(seq.len() as i64));');
+    });
+
+    test('Object.keys / Object.values on a prediction plain local are native; any keeps the helper', () => {
+        expect(prediction).toContain('let mut queryKeys: Value = Value::Array(query.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default());');
+        expect(prediction).toContain('let mut queryValues: Value = Value::Array(query.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default());');
+        expect(prediction).toContain('let mut loose: Value = object_keys(&response);');
+    });
+});
+
+describe('hx4 R20 bool-call equality and numeric add', () => {
+    const src = "class A {\n    sbeReadUint (h: string, o: number, l: number): number { return o + l; }\n    sum (...a: any[]): any { return a[0]; }\n    run (requestPath: any, frameHex: string, frameLength: number, x: any, flag: any) {\n        const blockLength = this.sbeReadUint (frameHex, 0, 2);\n        const position = this.sum (blockLength, 8);\n        if (requestPath.endsWith ('login') === true) { return 1; }\n        if (position + 4 > frameLength) { return 0; }\n        const k = x + 1;\n        return [ x.startsWith ('z') !== true, k, flag === true ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('startsWith/endsWith compared to a bool literal is the bare bool', () => {
+        expect(o).toContain('if (ends_with(&requestPath, &Value::Str("login".into()))) {');
+        expect(o).toContain('Value::Bool(!starts_with(&x, &Value::Str("z".into())))');
+    });
+    test('+ on numeric-kind operands is the native match', () => {
+        expect(o).toContain('if (match (&(position), &(Value::Int(4))) { (Value::Int(x), Value::Int(y)) => Value::Int(x + y),');
+    });
+    test('any operands keep the helpers', () => {
+        expect(o).toContain('add(&x, &Value::Int(1))');
+        expect(o).toContain('is_equal(&flag, &Value::Bool(true))');
+    });
+});
+
+describe('hx4 R21 base-tier enumeration, Arr-only sources and string-method receivers', () => {
+    let base = '';
+    let rest = '';
+    beforeAll(() => {
+        base = transpiler.transpileRustByPath('./tests/files/input/hx4r21/ts/src/base/Exchange.ts').content;
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r21/ts/src/venue.ts').content;
+    });
+
+    test('Object.keys / Object.values on a base-tier plain local are native; any keeps the helper', () => {
+        expect(base).toContain('let mut keys: Value = Value::Array(built.as_map().map(|__m| __m.keys().map(|__k| Value::Str(__k.clone().into())).collect()).unwrap_or_default());');
+        expect(base).toContain('let mut values: Value = Value::Array(built.as_map().map(|__m| __m.values().cloned().collect()).unwrap_or_default());');
+        expect(base).toContain('object_keys(&response)');
+    });
+
+    test('push on a local re-sorted by sortBy / built by arrayConcat is native; an any alias keeps the helper', () => {
+        expect(base).toContain('if let Value::Arr(__a) = &mut out { std::sync::Arc::make_mut(__a).push(Value::Int(1)); }');
+        expect(base).toContain('if let Value::Arr(__a) = &mut joined { std::sync::Arc::make_mut(__a).push(Value::Int(2)); }');
+        expect(base).toContain('append_to_array(&mut loose, Value::Int(3));');
+    });
+
+    test('a string-typed map read receiving toUpperCase reads natively; an any read keeps get_value', () => {
+        expect(rest).toContain('(currency.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))');
+        expect(rest).toMatch(/get_value\(&raw, &Value::Str\("id"\.into\(\)\)\)|get_value_k\(&raw, "id"\)/);
+    });
+});
+
+describe('hx4 R22 self-referential numeric writes, always-Str locals, Str ordering', () => {
+    const src = "type Str = string | undefined;\nclass A {\n    sum (...a: any[]): any { return a[0]; }\n    safeString (o: any, k: any, d: any = undefined): Str { return undefined; }\n    json (x: any): string { return ''; }\n    run (blockLength: number, raw: any, snap: any, method: string, path: string, params: any, x: any) {\n        let position = this.sum (blockLength, 8);\n        position = position + 4;\n        let earliest: Str = undefined;\n        const gameTime = this.safeString (raw, 'gameTime');\n        if ((gameTime !== undefined) && ((earliest === undefined) || (gameTime < earliest))) {\n            earliest = gameTime;\n        }\n        const version = this.safeString (snap, 'v', '');\n        const held = this.safeString (snap, 'h', '');\n        const newer = (held !== '') && (version <= held);\n        let body: any = undefined;\n        if (method === 'POST') { body = this.json (params); }\n        let auth = '/' + path;\n        if (body !== undefined) { auth = auth + body; }\n        let maybe = this.safeString (x, 'k');\n        const bad = maybe + body;\n        const loose = x < raw;\n        const anyLe = x <= 'b';\n        return [ position, earliest, newer, auth, bad, loose, anyLe ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('a numeric local re-read in its own write goes native', () => {
+        expect(o).toContain('position = (match (&(position), &(Value::Int(4))) {');
+        expect(o).not.toContain('add(&position');
+    });
+    test('Str|Null ordering replicates the helper natively', () => {
+        expect(o).toContain('(match (gameTime.as_str(), earliest.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }), _ => false })');
+        expect(o).toContain('(held.as_str() != Some("")) && ((match (version.as_str(), held.as_str()) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }) || __x == __y, (None, None) => true, _ => false })));');
+    });
+    test('a local whose every write is always-Str anchors a native concat', () => {
+        expect(o).toContain('auth = Value::Str(format!("{}{}", auth, body).into());');
+    });
+    test('unproven operands keep the helpers', () => {
+        expect(o).toContain('add(&maybe, &body)');
+        expect(o).toContain('(match (&(x), &(raw)) { (__a, __b) =>'); // hx4 R25
+        expect(o).toContain('(match (&(x), &(Value::Str("b".into()))) { (__a, __b) =>'); // hx4 R25
+    });
+});
+
+describe('hx4 R23 plain-dict sources in the base tier and pro files', () => {
+    let base = '';
+    let pro = '';
+    beforeAll(() => {
+        base = transpiler.transpileRustByPath('./tests/files/input/hx4r23/ts/src/base/Exchange.ts').content;
+        pro = transpiler.transpileRustByPath('./tests/files/input/hx4r23/ts/src/pro/venue.ts').content;
+    });
+
+    test('base extend copies of locals / typed Dict params insert natively', () => {
+        expect(base).toContain('if let Value::Dict(__d) = &mut itemWithKey { std::sync::Arc::make_mut(__d).insert(crate::runtime::stringify_param(&keyName), key.clone()); }');
+        expect(base).toContain('if let Value::Dict(__d) = &mut result { std::sync::Arc::make_mut(__d).insert("swap".into(), Value::Bool(false)); }');
+    });
+
+    test('base safeDict(this.options, k, {}) local reads natively', () => {
+        expect(base).toContain('accountsByType.as_map().and_then(|__m| account.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('base extend of an any parameter keeps the helper', () => {
+        expect(base).toContain('add_element_to_object(&mut r, &Value::Str("x".into()), Value::Int(1));');
+    });
+
+    test('pro extend of a proven local inserts natively; extend of a handler parameter keeps the helper', () => {
+        expect(pro).toContain('if let Value::Dict(__d) = &mut request { std::sync::Arc::make_mut(__d).insert("id".into(), Value::Int(1)); }');
+        expect(pro).toContain('add_element_to_object(&mut loose, &Value::Str("id".into()), Value::Int(2));');
+    });
+
+    test('pro safeDict(this.options, k, {}) local reads natively', () => {
+        expect(pro).toContain('subs.as_map().and_then(|__m| __m.get("a")).cloned().unwrap_or(Value::Null)');
+    });
+});
+
+describe('hx4 R25 inline math/comparison dispatch and Str|Null field concat', () => {
+    const src = "class A {\n    convertToBigIntCustom (x: any) {\n        return parseInt (x);\n    }\n    signHash (hash: any, privateKey: any) {\n        const signature = ecdsa (hash, privateKey);\n        const r = signature['r'];\n        const s = signature['s'];\n        return {\n            'r': r.padStart (64, '0'),\n            's': s.padStart (64, '0'),\n            'v': 27,\n        };\n    }\n    signMessage (message: any, privateKey: any) {\n        return this.signHash (message, privateKey.slice (-64));\n    }\n    signOnboardingAction (): object {\n        const signature = this.signMessage ('x', 'y');\n        return signature;\n    }\n    run (request: any, params: any, config: any, cache: any[], h: any) {\n        const amountMultiplier = this.convertToBigIntCustom ('1000000');\n        const amountInt = request['num_tokens'] * amountMultiplier;\n        const z = this.parseToInt (request['num_tokens'] * amountMultiplier);\n        const limit = params['limit'];\n        const entry = config[0];\n        if (limit <= entry[0]) { return 1; }\n        const signature: any = this.signOnboardingAction ();\n        const pk = this.hashMessage (signature['r'] + signature['s']);\n        const cacheLength = cache.length;\n        const snapshotDelay = this.handleOption ('a', 'b', 25);\n        if (cacheLength === snapshotDelay) { return 2; }\n        if (h === 1) { return 3; }\n        return [ amountInt, z, pk ];\n    }\n}\n";
+    let o = '';
+    beforeAll(() => { o = transpiler.transpileRust(src).content; });
+    test('any * numeric-call operand prints the multiply dispatch inline', () => {
+        expect(o).toContain('let mut amountInt: Value = (match (&(crate::value::get_value_k(&request, "num_tokens")), &(amountMultiplier)) { (Value::Int(__x), Value::Int(__y)) => Value::Int(__x * __y), (__a, __b) =>');
+        expect(o).not.toContain('multiply(');
+    });
+    test('any <= any prints the coercing order plus is_equal inline', () => {
+        expect(o).toContain('if (match (&(limit), &(get_value(&entry, &Value::Int(0)))) { (__a, __b) =>');
+        expect(o).toContain('(Value::Null, Value::Null) => true');
+        expect(o).not.toContain('is_less_than_or_equal(');
+    });
+    test('Str|Null fields of a same-file returned literal concatenate natively', () => {
+        expect(o).toContain('self.hashMessage((match (&(crate::value::get_value_k(&signature, "r")), &(crate::value::get_value_k(&signature, "s"))) { (Value::Null, Value::Null) => Value::Null, (__a, __b) => Value::Str(format!("{}{}", __a, __b).into()) }))');
+        expect(o).not.toContain('add(');
+    });
+    test('a non-literal field source keeps the add helper', () => {
+        const n = transpiler.transpileRust('class B {\n    run (x: any) {\n        const s = x[0];\n        return s[\'r\'] + s[\'s\'];\n    }\n}\n').content;
+        expect(n).toContain('add(&');
+    });
+});
+
+describe('hx4 R26 tuple slot-1 params of base handle*AndParams helpers', () => {
+    const insert = (receiver: string, key: string, value: string) =>
+        `if let Value::Dict(__d) = &mut ${receiver} { std::sync::Arc::make_mut(__d).insert("${key}".into(), ${value}); }`;
+    let rest = '';
+    let pro = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx4r26/ts/src/venue.ts').content;
+        pro = transpiler.transpileRustByPath('./tests/files/input/hx4r26/ts/src/pro/venue.ts').content;
+    });
+
+    test('const [ a, p ] = handleOptionBoolAndParams (params, …) inserts natively on p', () => {
+        expect(rest).toContain(insert('paramsStock', 'stock', 'Value::Bool(true)'));
+        expect(rest).not.toContain('add_element_to_object(&mut paramsStock');
+    });
+
+    test('[ a, p ] = handleMarketTypeAndParams (…, params) write: native insert and read', () => {
+        expect(rest).not.toContain('add_element_to_object(&mut paramsType');
+        expect(rest).toContain('paramsType.as_map().and_then(|__m| __m.get("other")).cloned().unwrap_or(Value::Null)');
+    });
+
+    test('an unproven params argument or a non-listed handler keeps the helper', () => {
+        expect(rest).toContain('add_element_to_object(&mut paramsLoose');
+        expect(rest).toContain('add_element_to_object(&mut paramsOther');
+    });
+
+    test('pro: a parameter source keeps the helper, a plain local source goes native', () => {
+        expect(pro).toContain('add_element_to_object(&mut paramsStock');
+        expect(pro).not.toContain('add_element_to_object(&mut paramsLocal');
     });
 });

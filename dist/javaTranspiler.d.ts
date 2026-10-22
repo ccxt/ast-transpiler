@@ -373,4 +373,23 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printForStatement(node: any, identation: any): string;
     printReturnStatement(node: any, identation: any): string;
     private allBranchesTerminate;
+    javaHx4MapPutIsNative(baseExpr: any, keys: any[]): boolean;
+    javaHx4PlainMapSource(container: any, value: any): boolean;
+    javaHx4DefaultIsPlain(value: any): boolean;
+    javaHx4NonSharedSource(value: any, depth: number): boolean;
+    javaHx4SourceVerdicts: WeakMap<any, boolean>;
+    javaHx4InProgress: Set<any>;
+    javaHx4NonSharedValue(value: any, depth: number): boolean;
+    javaJ02FieldMapReadText(receiver: any, key: any): string | undefined;
+    javaHx4J05IntegralModOperand(node: any): boolean;
+    printHx4J05ModComparison(left: any, right: any, op: any): string | undefined;
+    javaHx4J06NarrowedIndexOf(node: any, name: any, parsedArg: any): string;
+}
+export interface JavaTranspiler {
+    hx4J09BoxIdentifier(node: any, seen: Set<any>, depth: number): boolean;
+    hx4J09BoxValue(node: any, seen: Set<any>, depth: number): boolean;
+    hx4J09LiteralTupleElement(node: any, index: number): boolean;
+    hx4J09CatchCannotWrap(node: any): boolean;
+    hx4J09CoreArgument(type: string, printed: string, node: any): string | undefined;
+    hx4J09CcxtErrorClass(node: any): boolean;
 }

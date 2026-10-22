@@ -1586,7 +1586,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // text for a proven string, or the deref goNativeBinaryText adds for a derefable
     // `*string` leaf. undefined keeps the helper call.
     goStringConcatOperandType(node, printedText: string): string | undefined {
-        if (this.goDerefableStringOperand(node)) {
+        if (this.goConcatDerefableStringOperand(node)) {
             return 'string';
         }
         return (this.goOperandStaticType(node, printedText) === 'string') ? 'string' : undefined;
@@ -1883,6 +1883,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             }
             return { 'goType': 'string', 'text': this.goNativeBinaryText(node, '+', leftText, rightText) };
         }
+        const widened = this.goNativeIntWideningArithmetic(node, leftType, rightType, leftText, rightText);
+        if (widened !== undefined) {
+            return widened;
+        }
         const goType = this.goNativeNumericResultType(op, leftType, rightType, node);
         if (goType === undefined) {
             return undefined;
@@ -2044,7 +2048,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const text = isBinary ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(operand, 0)) : printed;
             // a derefable `*string` leaf is the only operand that prints in a different
             // shape than the printer produced: the operator needs its pointee
-            const leaf = this.goDerefableStringOperand(operand) ? ('*' + text.trim()) : text;
+            const leaf = this.goConcatDerefableStringOperand(operand) ? ('*' + text.trim()) : text;
             return this.goNativeOperandText(operand, leaf);
         };
         const left = operandText(node.left, leftText);
@@ -3375,7 +3379,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
 
             if (ORDERED_COMPARISON_OPERATORS[op] !== undefined) {
-                const inlined = this.printInlineOrderedComparison(left, right, leftText, rightText, op);
+                const inlined = this.printInlineOrderedComparison(left, right, leftText, rightText, op) ?? this.printG09WideningComparison(left, right, leftText, rightText, op);
                 if (inlined !== undefined) {
                     return inlined;
                 }
@@ -3660,6 +3664,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (expr === undefined) {
             return true; // `var x any` never written holds nil
         }
+        if (this.goG02NonPointerAccessorSource(expr)) {
+            return true;
+        }
         switch (expr.kind) {
         case SyntaxKind.NullKeyword:
             return true;
@@ -3933,7 +3940,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const goType = this.goRequiredStringParameterType(param);
             return ((goType !== undefined) && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType)
                 && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType)
-                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) ? goType : undefined;
+                && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) ? goType : this.g11NativeParameterType(fn, param, index);
         }
         if (this.isAsyncFunction(fn)) {
             return undefined;
@@ -3945,7 +3952,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return goType;
             }
         }
-        return undefined;
+        return handlerParam ? undefined : this.g11NativeParameterType(fn, param, index);
     }
 
     goIsUnifiedStringParameter(methodName: string, index: number): boolean {
@@ -6023,7 +6030,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const type = (this.getChecker() as Checker).getTypeAtLocation(expression); // eslint-disable-line
             // this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
-            rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
+            rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? this.goHx4G06DerefLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
             rawExpression = `((IList<object>)${leftSide}).Add`;
@@ -7165,7 +7172,7 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printIndexOfCall(node, identation, name = undefined, parsedArg = undefined) {
-        const native = this.goNativeIndexOf(node, name, parsedArg);
+        const native = this.goHx4G06DerefIndexOf(node, name, parsedArg) ?? this.goNativeIndexOf(node, name, parsedArg);
         if (native !== undefined) {
             return native;
         }
@@ -7184,7 +7191,7 @@ ${this.getIden(identation)}${returnStatement}`;
             }
             if (this.goOperandStaticType(operand, texts[i]) === expected[i]) {
                 result.push(texts[i]);
-            } else if ((expected[i] === 'string') && !texts[i].includes('\n') && this.goDerefableStringOperand(operand)) {
+            } else if ((expected[i] === 'string') && !texts[i].includes('\n') && (this.goDerefableStringOperand(operand) || this.goLiteralUnionNarrowedStringDeref(operand))) {
                 result.push('*' + texts[i].trim());
             } else {
                 return undefined;
@@ -7268,7 +7275,7 @@ ${this.getIden(identation)}${returnStatement}`;
                 return name;
             }
             // a non-nil `*string`: derefScalar hands ToString the pointee, returned unchanged
-            if ((receiver !== undefined) && this.goDerefableStringOperand(receiver)) {
+            if ((receiver !== undefined) && (this.goDerefableStringOperand(receiver) || this.goLiteralUnionNarrowedStringDeref(receiver))) {
                 return '*' + name.trim();
             }
             // an int64 prints its decimal digits in both: the helper's Sprintf("%d") and FormatInt
@@ -7993,7 +8000,7 @@ ${tryBodyBlock}
         case SyntaxKind.CallExpression:
             return this.goTypeOfInitializer(node, printed);
         case SyntaxKind.Identifier:
-            return this.goDeclaredTypeOfIdentifier(node);
+            return this.goDeclaredTypeOfIdentifier(node) ?? this.g01MapParamType(node);
         }
         return undefined;
     }
@@ -8290,6 +8297,335 @@ ${tryBodyBlock}
         return (isIfStatement(lastStatement) || isTryStatement(lastStatement)) && this.hasReturnInBlock(lastStatement);
     }
 
+    // hx4 G01
+    // a defaulted parameter bound through GetArgMap is a Go map[string]any; an element read of it
+    // indexes natively only where g01ReadOk proves the deref-free read answers what GetValue did
+    g01MapParamType(node): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        let decl: any;
+        try {
+            decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return undefined;
+        }
+        if ((decl?.kind !== SyntaxKind.Parameter) || (this.goGetArgParameterType(decl) !== 'map[string]any')) {
+            return undefined;
+        }
+        const access: any = node.parent;
+        if ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === node)
+            && (this.g01ReadOk(node, access) !== 'map[string]any')) {
+            return undefined;
+        }
+        return 'map[string]any';
+    }
+
+    // `receiver[k]` may replace GetValue(receiver, k) on a declared map[string]any: literal key, not a
+    // compared operand, not an element-write value (the ccxt write pass proves those from the helper
+    // spelling), and a market row or a consumer that derefScalars the value as GetValue did
+    g01ReadOk(receiver, access): string | undefined {
+        if (this.goIsComparedOperand(access) || this.g01IsWriteValue(access) || !this.g01LiteralKey(access.argumentExpression)) {
+            return undefined;
+        }
+        return (this.g01MarketRow(receiver) || this.x02CurrencyRow(receiver) || this.g01DerefConsumer(access)) ? 'map[string]any' : undefined;
+    }
+
+    // a string literal or a non-negative integer literal key
+    g01LiteralKey(key): boolean {
+        return (key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+            || ((key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${key.text ?? ''}`));
+    }
+
+    // `y[k] = x["lit"]`
+    g01IsWriteValue(access): boolean {
+        let operand: any = access;
+        while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            operand = operand.parent;
+        }
+        const parent: any = operand.parent;
+        return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === operand)
+            && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left?.kind === SyntaxKind.ElementAccessExpression);
+    }
+
+    // a Market-typed local written only by `this.market (…)` (or undefined): that accessor returns
+    // MarketTyped rows, whose values derefScalar leaves unchanged. Currency rows can hold *string values.
+    g01MarketRow(node): boolean {
+        let type: any;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        const names = [ type?.aliasSymbol?.name, type?.symbol?.name ];
+        if (!names.some((n) => [ 'Market', 'MarketInterface' ].includes(n))) {
+            return false;
+        }
+        const declaration = this.goDeclarationOfIdentifier(node);
+        const scope: any = (declaration === undefined) ? undefined : this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const isRow = (v: any) => (v === undefined) || ((v.kind === SyntaxKind.Identifier) && (v.text === 'undefined'))
+            || ((v.kind === SyntaxKind.CallExpression) && (v.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (v.expression.expression?.kind === SyntaxKind.ThisKeyword) && (v.expression.name?.text === 'market'));
+        let ok = isRow(declaration.initializer);
+        const name = declaration.name?.text;
+        const visit = (n: any) => {
+            if (!ok) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.BinaryExpression) && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)
+                && (n.operatorToken?.kind === SyntaxKind.EqualsToken) && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
+                ok = isRow(n.right);
+            } else if ((n.kind === SyntaxKind.ArrayLiteralExpression) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+                && n.elements.some((e: any) => (e.kind === SyntaxKind.Identifier) && (e.text === name))) {
+                ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return ok;
+    }
+
+    // the read is the container of an enclosing element read, an operand of `in`, or an argument of a
+    // SafeValueN-backed accessor (or safeCurrencyCode): each derefScalars it, so GetValue's deref is redundant
+    g01DerefConsumer(access): boolean {
+        let operand: any = access;
+        while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            operand = operand.parent;
+        }
+        const parent: any = operand.parent;
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === operand)) {
+            return !this.isGoElementAccessAssignmentTarget(parent);
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.InKeyword)) {
+            return true;
+        }
+        const callee: any = parent?.expression;
+        return (parent?.kind === SyntaxKind.CallExpression) && (parent.arguments.indexOf(operand) >= 0)
+            && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+            && /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|IntegerProduct|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|safeCurrencyCode)$/.test(`${callee.name?.text ?? ''}`);
+    }
+    // hx4 G02
+    // base safeValue/safeValue2/safeValueN (SafeValueN derefScalars every hit and its default) and
+    // ws cache constructors (non-nil, outside the derefScalar set): never a nil pointer IsEqual folds
+    goG02NonPointerAccessorSource(expr): boolean {
+        if (expr?.kind === SyntaxKind.ConditionalExpression) {
+            return this.goIsNonPointerValueSource(expr.whenTrue) && this.goIsNonPointerValueSource(expr.whenFalse);
+        }
+        if (expr?.kind === SyntaxKind.NewExpression) {
+            const name = (expr.expression?.kind === SyntaxKind.Identifier) ? expr.expression.text : undefined;
+            return GO_G02_CACHE_CLASSES.indexOf(name) >= 0;
+        }
+        if (expr?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = expr.expression;
+        if (callee?.kind !== SyntaxKind.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind.ThisKeyword
+            || callee.name?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const keys = GO_G02_SAFE_VALUE_KEYS[callee.name.text];
+        if (keys === undefined || expr.arguments.length > keys + 1) {
+            return false;
+        }
+        // a default is returned as given (after derefScalar): only a literal is provably not a nil *sync.Map
+        if (expr.arguments.length === keys + 1 && !this.goG02LiteralDefault(expr.arguments[keys])) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const declarations = checker?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve());
+        if (!declarations || declarations.length === 0) {
+            return false;
+        }
+        // an exchange override would print its own Go body: only the base property qualifies
+        return declarations.every((d) => /(^|\/)ts\/src\/base\/Exchange\.ts$/.test(String(d.getSourceFile()?.fileName ?? '').replace(/\\/g, '/')));
+    }
+
+    goG02LiteralDefault(node): boolean {
+        node = this.goUnwrapParenthesizedNode(node);
+        switch (node?.kind) {
+        case SyntaxKind.NullKeyword:
+        case SyntaxKind.StringLiteral:
+        case SyntaxKind.NoSubstitutionTemplateLiteral:
+        case SyntaxKind.NumericLiteral:
+        case SyntaxKind.TrueKeyword:
+        case SyntaxKind.FalseKeyword:
+        case SyntaxKind.ObjectLiteralExpression:
+        case SyntaxKind.ArrayLiteralExpression:
+            return true;
+        case SyntaxKind.Identifier:
+            return node.text === 'undefined';
+        }
+        return false;
+    }
+
+
+
+    // hx4 G06
+    // a `*string` the checker narrows to string (or whose every write is a defaulted SafeString)
+    // is non-nil, so GetLength/GetArrayLength's deref + byte count is `len(*x)`
+    goHx4G06DerefLength(expression, printedText: string, lengthNode): string | undefined {
+        if ((expression?.kind !== SyntaxKind.Identifier) || (printedText !== expression.text)) {
+            return undefined;
+        }
+        if (this.goLengthFeedsArithmeticClassifier(lengthNode) || !this.goDerefableStringOperand(expression)) {
+            return undefined;
+        }
+        return `len(*${printedText})`;
+    }
+
+    // GetIndexOf on two operands that are Go strings once a proven-non-nil `*string` is deref'd:
+    // both sides reach the helper's `case string` arm, which is strings.Index
+    goHx4G06DerefIndexOf(node, name, parsedArg): string | undefined {
+        if ((typeof name !== 'string') || (typeof parsedArg !== 'string') || name.includes('\n') || parsedArg.includes('\n')) {
+            return undefined;
+        }
+        if (!this.goFileKeepsFileLevelImports() || !this.goStdlibImportIsPlaceable()) {
+            return undefined;
+        }
+        const operands = [ this.goUnwrapPrintedAssertions(node?.expression?.expression), this.goUnwrapPrintedAssertions(node?.arguments?.[0]) ];
+        const texts = [ name, parsedArg ];
+        if (!operands.some((o) => this.goDerefableStringOperand(o))) {
+            return undefined; // plain string pairs and nilable receivers stay with goNativeIndexOf
+        }
+        const out: string[] = [];
+        for (let i = 0; i < 2; i++) {
+            const o = operands[i];
+            if ((o?.kind === SyntaxKind.Identifier) && (texts[i] === o.text) && this.goDerefableStringOperand(o)) {
+                out.push('*' + texts[i]);
+            } else if (this.goIndexOfOperandType(o, texts[i]) === 'string') {
+                out.push(texts[i]);
+            } else {
+                return undefined;
+            }
+        }
+        this.goFileStdlibImports.add('strings');
+        return `strings.Index(${out[0]}, ${out[1]})`;
+    }
+
+
+    // hx4 G08
+    // a `*string` local the checker narrowed to a union of string literals (`x === 'A' || x === 'B'`):
+    // every member is a string, so the Go pointer is non-nil at this read and may be dereferenced
+    goLiteralUnionNarrowedStringDeref(node): boolean {
+        if ((node?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(node) !== '*string')) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const type = checker?.getTypeAtLocation(node);
+        if ((type === undefined) || ((type.flags & TypeFlags.Union) === 0)) {
+            return false;
+        }
+        const members = type.getTypes?.() ?? [];
+        return (members.length > 0) && members.every((member) => (member.flags & TypeFlags.StringLiteral) !== 0);
+    }
+    // hx4 G09
+    // hand-written BaseExchange value fields (go/v4/exchange.go) read as `this.<Field>`
+    GO_G09_NUMERIC_FIELDS: { [tsName: string]: string } = {
+        'rateLimit': 'float64',
+        'fetchHistoryCacheSize': 'int',
+        'minFundingAddressLength': 'int',
+    };
+
+    // `this.rateLimit` & co.: only when the checker resolves the property to the base
+    // `class Exchange` declaration (a venue redeclaring it prints its own field)
+    goG09FieldKind(node): string | undefined {
+        node = this.goUnwrapParenthesizedNode(node);
+        if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        const kind = this.GO_G09_NUMERIC_FIELDS[node.name?.escapedText ?? node.name?.text];
+        if (kind === undefined) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const declaration: any = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        if ((declaration?.kind !== SyntaxKind.PropertyDeclaration) || (declaration.parent?.kind !== SyntaxKind.ClassDeclaration)) {
+            return undefined;
+        }
+        const className = declaration.parent.name?.escapedText ?? declaration.parent.name?.text;
+        return (className === 'Exchange') ? kind : undefined;
+    }
+
+    // [kind, pointer] of one ordered-comparison operand, undefined when unprovable
+    goG09OperandKind(node, text: string): [string, boolean] | undefined {
+        const pointee = this.goOrderedComparisonPointerKind(node);
+        if (pointee !== undefined) {
+            return [ pointee, true ];
+        }
+        const field = this.goG09FieldKind(node);
+        if (field !== undefined) {
+            return [ field, false ];
+        }
+        const kind = this.goOperandNumericKind(node, text);
+        return (kind === undefined) ? undefined : [ kind, false ];
+    }
+
+    // Ordered comparisons the phase-1 rule refuses only because the two concrete kinds differ
+    // (int vs int64, int/int64 vs float64) or an operand is a typed base field. The helper
+    // converts the narrower side exactly like `int64(x)` / `float64(x)`; nil and NaN rules stay.
+    printG09WideningComparison(left, right, leftText: string, rightText: string, op): string | undefined {
+        const operator = ORDERED_COMPARISON_OPERATORS[op];
+        if (operator === undefined) {
+            return undefined;
+        }
+        if (this.goIsNumericConstant(left) && this.goIsNumericConstant(right)) {
+            return undefined;
+        }
+        const l = this.goG09OperandKind(left, leftText);
+        const r = this.goG09OperandKind(right, rightText);
+        if ((l === undefined) || (r === undefined)) {
+            return undefined;
+        }
+        let kind = this.goComparisonKind(left, l[0], right, r[0]);
+        let lv = l[1] ? `*${leftText}` : leftText;
+        let rv = r[1] ? `*${rightText}` : rightText;
+        if (kind === undefined) {
+            if (this.goIsNumericConstant(left) || this.goIsNumericConstant(right)) {
+                return undefined;
+            }
+            kind = ((l[0] === 'float64') || (r[0] === 'float64')) ? 'float64' : 'int64';
+            if (l[0] !== kind) {
+                lv = `${kind}(${lv})`;
+            }
+            if (r[0] !== kind) {
+                rv = `${kind}(${rv})`;
+            }
+        }
+        if ((kind === 'float64') && ((operator === '<') || (operator === '<='))) {
+            return undefined;
+        }
+        const leftNil = l[1] && !this.goHasEnclosingNilGuard(left);
+        const rightNil = r[1] && !this.goHasEnclosingNilGuard(right);
+        if ((leftNil && !r[1] && !this.goIsPureComparisonOperand(right))
+            || (rightNil && !l[1] && !this.goIsPureComparisonOperand(left))) {
+            return undefined;
+        }
+        const greater = (operator === '>') || (operator === '>=');
+        const cmp = `${lv} ${operator} ${rv}`;
+        if (!leftNil && !rightNil) {
+            return `(${cmp})`;
+        }
+        if (leftNil && !rightNil) {
+            return greater ? `(${leftText} != nil && ${cmp})` : `(${leftText} == nil || ${cmp})`;
+        }
+        if (!leftNil && rightNil) {
+            return greater ? `(${rightText} == nil || ${cmp})` : `(${rightText} != nil && ${cmp})`;
+        }
+        if (operator === '>') {
+            return `(${leftText} != nil && (${rightText} == nil || ${cmp}))`;
+        }
+        if (operator === '>=') {
+            return `(${rightText} == nil || (${leftText} != nil && ${cmp}))`;
+        }
+        if (operator === '<') {
+            return `(${rightText} != nil && (${leftText} == nil || ${cmp}))`;
+        }
+        return `(${leftText} == nil || (${rightText} != nil && ${cmp}))`;
+    }
 
 }
 
@@ -8309,3 +8645,175 @@ ${tryBodyBlock}
 
 // console.log(baseClassDeclaration);
 
+// hx4 G02: key-argument count of the base safeValue family; ws cache classes (Go constructors return a non-nil *T)
+const GO_G02_SAFE_VALUE_KEYS: { [name: string]: number } = { 'safeValue': 2, 'safeValue2': 3, 'safeValueN': 2 };
+const GO_G02_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide' ];
+
+// hx4 G04
+export interface GoTranspiler {
+    goNativeIntWideningArithmetic(node, leftType: string, rightType: string, leftText: string, rightText: string): { goType: string, text: string } | undefined;
+}
+// `a - b` / `a * b` / `a + b` with one int64 and one int operand (or an int `- * %N` in a `var` initializer):
+// the helper boxes int64 (Add/Subtract/Mod via the float path, Multiply via reflect Int()); Go refuses
+// the mixed operator, so the int side converts. Exact under the helper's own 2^53 float bound.
+GoTranspiler.prototype.goNativeIntWideningArithmetic = function (node, leftType: string, rightType: string, leftText: string, rightText: string) {
+    const op = node.operatorToken.kind;
+    const isMod = (op === SyntaxKind.PercentToken) && this.isNonZeroIntegerLiteral(node.right);
+    if ((op !== SyntaxKind.MinusToken) && (op !== SyntaxKind.AsteriskToken) && (op !== SyntaxKind.PlusToken) && !isMod) {
+        return undefined;
+    }
+    const mixed = ((leftType === 'int64') && (rightType === 'int')) || ((leftType === 'int') && (rightType === 'int64'));
+    // `var x int64 = n - 1` over an `int` local: Subtract/Multiply box int64, so the int side converts
+    const intKinds = [ 'int', 'const-int' ];
+    const declaredInt64 = (op !== SyntaxKind.PlusToken) && intKinds.includes(leftType) && intKinds.includes(rightType)
+        && ((leftType === 'int') || (rightType === 'int')) && this.goInsideTypedDeclarationInitializer(node);
+    if ((!mixed || isMod) && !declaredInt64) {
+        return undefined;
+    }
+    const operand = (operandNode, operandType: string, printed: string) => (operandType === 'int')
+        ? 'int64(' + this.goUnwrapPrintedParens(printed.trim()) + ')'
+        : this.goNativeOperandText(operandNode, printed);
+    const left = operand(node.left, leftType, leftText);
+    const right = operand(node.right, rightType, rightText);
+    const symbol = this.SupportedKindNames[op];
+    const separator = this.goBinarySeparator(symbol, right, node.left, node.right);
+    return { 'goType': 'int64', 'text': left + separator + symbol + separator + right };
+};
+
+export interface GoTranspiler {
+    goStringLiteralUnionType(type): boolean;
+}
+// `if (x === 'a' || x === 'b')` narrows a `Str` local to a union of string literals: every member
+// is a non-nilable string, so the deref is as safe as for a plain narrowed `string`
+GoTranspiler.prototype.goStringLiteralUnionType = function (type) {
+    if ((type === undefined) || ((type.flags & TypeFlags.Union) === 0)) {
+        return false;
+    }
+    const members = type.getTypes();
+    return (members.length > 0) && members.every((member) => (member.flags & TypeFlags.StringLike) !== 0);
+};
+
+export interface GoTranspiler {
+    goConcatDerefableStringOperand(node): boolean;
+}
+// the concat rule's `*string` leaf proof: goDerefableStringOperand, or a declared `*string`
+// identifier the checker narrowed to a union of string literals at this use
+GoTranspiler.prototype.goConcatDerefableStringOperand = function (node) {
+    if (this.goDerefableStringOperand(node)) {
+        return true;
+    }
+    if ((node?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(node) !== '*string')) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    return (checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};
+
+// hx4 X02
+export interface GoTranspiler {
+    x02CurrencyRow(node): boolean;
+}
+// a Currency-typed local written only by `this.currency (…)` / `this.safeCurrency (…)` (or undefined):
+// the ccxt Go runtime returns those through CurrencyTyped, whose values derefScalar leaves unchanged
+GoTranspiler.prototype.x02CurrencyRow = function (node) {
+    let type: any;
+    try {
+        type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+        return false;
+    }
+    const named = (t: any) => [ t?.getAliasSymbol?.()?.name, t?.getSymbol?.()?.name ].some((n) => [ 'Currency', 'CurrencyInterface' ].includes(n));
+    const members = ((typeof type?.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [ type ];
+    if (!named(type) && !members.some((t: any) => named(t))) {
+        return false;
+    }
+    const declaration = this.goDeclarationOfIdentifier(node);
+    const scope: any = (declaration === undefined) ? undefined : this.goEnclosingFunction(declaration);
+    if (scope === undefined) {
+        return false;
+    }
+    const isRow = (v: any) => (v === undefined) || ((v.kind === SyntaxKind.Identifier) && (v.text === 'undefined'))
+        || ((v.kind === SyntaxKind.CallExpression) && (v.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (v.expression.expression?.kind === SyntaxKind.ThisKeyword) && [ 'currency', 'safeCurrency' ].includes(v.expression.name?.text));
+    let ok = isRow(declaration.initializer);
+    const name = declaration.name?.text;
+    const visit = (n: any) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)
+            && (n.operatorToken?.kind === SyntaxKind.EqualsToken) && this.goIdentifierRefersToDeclaration(n.left, declaration)) {
+            ok = isRow(n.right);
+        } else if ((n.kind === SyntaxKind.ArrayLiteralExpression) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+            && n.elements.some((e: any) => (e.kind === SyntaxKind.Identifier) && (e.text === name))) {
+            ok = false;
+        }
+        n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    return ok;
+};
+
+// hx4 G11
+export interface GoTranspiler {
+    g11NativeParameterType(fn, param, index: number): string | undefined;
+    g11ParameterHasNullishDefault(body, param): boolean;
+}
+// A required parameter of a sync exchange-local method whose TS type is `Str`/`string`, `Dict`-shaped or
+// `List`: the Go type every call site passes (`string` first, then *string / map / []any), when the body
+// never writes another type, never nil-tests it and never `??`-defaults it (D2, D5)
+GoTranspiler.prototype.g11NativeParameterType = function (fn, param, index: number) {
+    if (this.isAsyncFunction(fn) || !this.goHasTreeCallSite(fn)) {
+        return undefined;
+    }
+    const candidates: string[] = [];
+    const type = this.checkerOrUndefined()?.getTypeAtLocation(param);
+    if (type !== undefined) {
+        const all = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
+        const parts = all.filter(p => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        if ((parts.length > 0) && parts.every(p => (p.flags & (TypeFlags.String | TypeFlags.StringLiteral)) !== 0)) {
+            candidates.push('string');
+        }
+    }
+    for (const goType of this.goNativeParameterTypeCandidates(param).concat(this.g13NumericParameterCandidates(param))) {
+        if (!candidates.includes(goType)) {
+            candidates.push(goType);
+        }
+    }
+    for (const goType of candidates) {
+        if (this.goParameterCallSitesPassType(fn, index, goType)
+            && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType)
+            && (goType.startsWith('*') || this.goParameterKeepsNilCompareNative(fn.body, param, goType))
+            && (goType.startsWith('*') || !this.g11ParameterHasNullishDefault(fn.body, param))) {
+            return goType;
+        }
+    }
+    return undefined;
+};
+
+// `x ?? d` / `x || d` reads the parameter's absent state, which a non-nilable Go type cannot hold
+GoTranspiler.prototype.g11ParameterHasNullishDefault = function (body, param) {
+    const name = param.name.text;
+    return this.hasNodeWhere(body, (n: any) => {
+        const parent: any = n.parent;
+        return (n.kind === SyntaxKind.Identifier) && (n.text === name) && (parent?.kind === SyntaxKind.BinaryExpression)
+            && (parent.left === n) && ((parent.operatorToken.kind === SyntaxKind.QuestionQuestionToken)
+            || (parent.operatorToken.kind === SyntaxKind.QuestionQuestionEqualsToken));
+    });
+};
+
+// hx4 G13
+export interface GoTranspiler {
+    g13NumericParameterCandidates(param): string[];
+}
+// a required `Int` / `Num` / `number` parameter: the pointer Go type the GetArg twins already use
+// for `Int` / `Num` (nil is the absent state); a non-nullable `number` takes the plain value type its callers pass
+GoTranspiler.prototype.g13NumericParameterCandidates = function (param) {
+    const declared = (param?.type !== undefined) ? String(param.type.getText()).trim() : undefined;
+    switch (declared) {
+    case 'Int': return ['*int64'];
+    case 'Num': return ['*float64'];
+    case 'number': return ['int64', 'float64'];
+    }
+    return [];
+};

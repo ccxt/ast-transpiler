@@ -290,4 +290,11 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printNewExpression(node: any, identation: any): string;
     printThrowStatement(node: any, identation: any): string;
     printPropertyAccessModifiers(node: any): string;
+    csharpHx4DeclaredReceiverReadable(node: any, expression: any): boolean;
+    csharpHx4IdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
+    csharpHx4IsPlainRead(node: any): boolean;
+    csharpHx4DeclaredKeyType(key: any): string | undefined;
+    csharpHx4GuardedNullableNegation(node: any, csharpType: string): boolean;
+    csharpHx4DeclaredLocalType(declaration: any): string | undefined;
+    csharpHx4NativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
 }

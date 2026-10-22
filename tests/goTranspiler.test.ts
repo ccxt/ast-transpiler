@@ -2435,7 +2435,8 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("IsGreaterThan(x, since)");
-        expect(output).toContain("IsGreaterThan(x, n)");
+        // hx4 G09: the int side widens to int64 the way the helper converts it
+        expect(output).toContain("(x != nil && *x > int64(n))");
     });
     test('an unguarded call operand keeps the helper', () => {
         // the nil test would short-circuit the call the helper evaluates once
@@ -2460,6 +2461,67 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("return (GetLength(arr) > -1)");
         expect(output).not.toContain("IsGreaterThan(GetLength(arr), -1)");
+    });
+    // hx4 G09
+    const g09Stubs =
+        "    rateLimit: number = 2000;\n" +
+        "    fetchHistoryCacheSize: number = 0;\n" +
+        "    safeInteger(a, b, c = undefined) { return a; }\n" +
+        "    safeFloat(a, b, c = undefined) { return a; }\n";
+    test('hx4 G09: mixed int/int64/float64 kinds widen the narrower side', () => {
+        const input =
+        "class Exchange {\n" +
+        g09Stubs +
+        "    f (arr, item) {\n" +
+        "        const n = arr.length;\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        const g = this.safeFloat (item, 'g');\n" +
+        "        return [ n >= x, x !== undefined && n < x, g !== undefined && g > n ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(x == nil || int64(n) >= *x)");
+        expect(output).toContain("(int64(n) < *x)");
+        expect(output).toContain("(*g > float64(n))");
+        expect(output).not.toContain("IsGreaterThanOrEqual(n, x)");
+    });
+    test('hx4 G09: float64 `<` against another kind keeps the helper; a length read widens', () => {
+        const input =
+        "class Exchange {\n" +
+        g09Stubs +
+        "    f (arr, item) {\n" +
+        "        const n = arr.length;\n" +
+        "        const g = this.safeFloat (item, 'g');\n" +
+        "        const x = this.safeInteger (item, 'x');\n" +
+        "        return [ g !== undefined && g < n, arr.length > x ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsLessThan(g, n)");
+        expect(output).toContain("(x == nil || int64(GetArrayLength(arr)) > *x)");
+    });
+    test('hx4 G09: base value fields compare natively', () => {
+        const input =
+        "class Exchange {\n" +
+        g09Stubs +
+        "    f () {\n" +
+        "        return [ this.rateLimit > 0, this.fetchHistoryCacheSize > 0 ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(this.RateLimit > 0)");
+        expect(output).toContain("(this.FetchHistoryCacheSize > 0)");
+    });
+    test('hx4 G09: a same-named field outside the base class keeps the helper', () => {
+        const input =
+        "class Venue {\n" +
+        "    rateLimit: number = 2000;\n" +
+        "    f () {\n" +
+        "        return this.rateLimit > 0;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("IsGreaterThan(this.RateLimit, 0)");
     });
 });
 
@@ -3142,7 +3204,7 @@ describe('go native element assignment', () => {
         expect(output).toContain("var z any = Mod(this.Milliseconds(), 0)");
         expect(output).toContain("var float2 any = Mod(MathFloor(value), 2.5)");
     });
-    test('Subtract on an int-typed helper result keeps the helper (it returns int64)', () => {
+    test('Subtract on an int-typed helper result widens to int64 (the helper returns int64)', () => {
         const input =
         "class T {\n" +
         "    f (a: string[]) {\n" +
@@ -3151,7 +3213,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("var n any = Subtract(GetArrayLength(a), 1)");
+        expect(output).toContain("var n any = int64(GetArrayLength(a)) - 1");
+        expect(output).not.toContain("Subtract(");
     });
     test('Add on an int-typed helper result is native (the helper returns int too)', () => {
         const input =
@@ -3189,7 +3252,7 @@ describe('go native element assignment', () => {
         expect(output).toContain("var index any = i + 1");
         expect(output).not.toContain("Add(i, 1)");
     });
-    test('an inferred counter keeps Subtract and Multiply (both helpers return int64)', () => {
+    test('an inferred counter widens Subtract and Multiply to int64 (both helpers return int64)', () => {
         const input =
         "class T {\n" +
         "    f (n: number) {\n" +
@@ -3201,8 +3264,9 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Subtract(i, 1)");
-        expect(output).toContain("Multiply(i, 2)");
+        expect(output).toContain("int64(i) - 1");
+        expect(output).toContain("int64(i) * 2");
+        expect(output).not.toContain("var a any = i - 1");
     });
     test('an inferred counter keeps Add when its literal would not fit a Go int', () => {
         const input =
@@ -3257,7 +3321,7 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain("callDynamically(\"log\", i+1, a)");
     });
-    test('an int64 call plus an int counter keeps the helper (mixed kinds)', () => {
+    test('an int64 call plus an int counter widens the int side (Add boxes int64 for the mix)', () => {
         const input =
         "class T {\n" +
         "    milliseconds (): number { return 1; }\n" +
@@ -3269,7 +3333,8 @@ describe('go native element assignment', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("Add(this.Milliseconds(), i)");
+        expect(output).toContain("this.Milliseconds() + int64(i)");
+        expect(output).not.toContain("Add(");
     });
     test('concatenating into a typed string field is a compound assignment', () => {
         const input =
@@ -5298,7 +5363,7 @@ describe('go native arithmetic result rows (Divide/Multiply/Subtract/Mod)', () =
     });
     test('a declaration position keeps the call for the declared-local table', () => {
         expect(body(main("        const last = arr.length - 1;\n        const rest = arr.length % 7;\n        return [last, rest];\n")))
-            .toContain("var last any = Subtract(GetArrayLength(arr), 1) var rest any = Mod(GetArrayLength(arr), 7)");
+            .toContain("var last any = int64(GetArrayLength(arr)) - 1 var rest any = int64(GetArrayLength(arr)) % 7");
         expect(body(main("        const scaled = 10 * 1000;\n        return scaled;\n")))
             .toContain("var scaled any = 10 * 1000");
     });
@@ -5655,7 +5720,7 @@ describe('native parameter types (B-02)', () => {
         expect(output).toContain('func (this *Test) ParseStatus(status any) <-chan any {');
     });
 
-    test('a method outside the parse* family keeps the box', () => {
+    test('a method outside the parse* family with a proven caller prints *string (hx4 G11)', () => {
         const input = baseWithAccessors +
             "class Test extends Base {\n" +
             "    statusOf (status: string | undefined) {\n" +
@@ -5666,7 +5731,7 @@ describe('native parameter types (B-02)', () => {
             "    }\n" +
             "}\n";
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain('func (this *Test) StatusOf(status any) any {');
+        expect(output).toContain('func (this *Test) StatusOf(status *string) any {');
     });
 });
 
@@ -5714,9 +5779,118 @@ describe('required string parameters of exchange-local methods', () => {
             "}\n";
         const output = transpiler.transpileGo(input).content;
         expect(output).toContain('func (this *Test) CreateOrder(symbol any, typeVar any) any {');
-        expect(output).toContain('func (this *Test) A(x any) any {');
+        // hx4 G11: a Str parameter every caller passes a literal is a Go string
+        expect(output).toContain('func (this *Test) A(x string) any {');
+        expect(output).toContain('func (this *Test) B(x any) any {');
+        // hx4 G11: a SafeString caller proves the nil-guarded *string, never a bare string
+        expect(output).toContain('func (this *Test) C(x *string) any {');
+    });
+});
+
+describe('hx4 G11: required params of exchange-local methods typed from every caller', () => {
+    const base =
+        "type Dict = { [key: string]: any };\n" +
+        "type List = any[];\n" +
+        "type Str = string | undefined;\n" +
+        "class Base {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    safeDict (a, b, c?): Dict { return {}; }\n" +
+        "}\n";
+
+    test('Str / Dict / List parameters proven by every caller go native, and so do their reads', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    orderRequest (type: Str, side: string, market: Dict, items: List) {\n" +
+            "        const isLimit = type === 'limit';\n" +
+            "        const id = market['id'];\n" +
+            "        return [ isLimit, side + '-x', id, items.length ];\n" +
+            "    }\n" +
+            "    use (o) {\n" +
+            "        return this.orderRequest ('limit', 'buy', { 'id': o }, [ 1 ]);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) OrderRequest(typeVar string, side string, market map[string]any, items []any) any {');
+        expect(output).not.toContain('IsEqual(typeVar, \"limit\")');
+        expect(output).not.toContain('GetValue(market, \"id\")');
+        expect(output).not.toContain('GetArrayLength(items)');
+    });
+
+    test('an async method, a ?? default, a nil test, a mixed caller or a GetArg-bound optional keeps the box', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    async a (x: Str) { return x === 'y'; }\n" +
+            "    b (x: Str) { const v = x ?? 'd'; return v; }\n" +
+            "    c (x: Str) { return x === undefined; }\n" +
+            "    d (x: Str) { return x === 'y'; }\n" +
+            "    e (x: Str = undefined) { return x === 'y'; }\n" +
+            "    async use (o) {\n" +
+            "        await this.a ('y');\n" +
+            "        this.b ('y'); this.c ('y'); this.e ('y');\n" +
+            "        this.d ('y'); this.d (this.safeValue (o, 'k'));\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) aBody(ch chan any, x any) any {');
         expect(output).toContain('func (this *Test) B(x any) any {');
         expect(output).toContain('func (this *Test) C(x any) any {');
+        expect(output).toContain('func (this *Test) D(x any) any {');
+        expect(output).toContain('func (this *Test) E(optionalArgs ...any) any {');
+    });
+});
+
+describe('hx4 G13: numeric required params typed from every caller', () => {
+    const base =
+        "type Dict = { [key: string]: any };\n" +
+        "type Int = number | undefined;\n" +
+        "type Num = number | undefined;\n" +
+        "class Base {\n" +
+        "    safeInteger (a, b, c?): Int { return undefined; }\n" +
+        "    safeNumber (a, b, c?): Num { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "    milliseconds (): number { return 0; }\n" +
+        "}\n";
+
+    test('Int / Num parameters every caller passes as the same pointer go native', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    closest (limit: Int, step: number) {\n" +
+            "        if (limit === undefined) { return step; }\n" +
+            "        return [ limit, step ];\n" +
+            "    }\n" +
+            "    use (o) {\n" +
+            "        const l = this.safeInteger (o, 'l');\n" +
+            "        const s = this.milliseconds ();\n" +
+            "        return this.closest (l, s);\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) Closest(limit *int64, step int64) any {');
+    });
+
+    test('a mixed or any caller, an async method or a ?? default keeps the box', () => {
+        const input = base +
+            "class Test extends Base {\n" +
+            "    a (limit: Int) { return limit; }\n" +
+            "    b (limit: Int) { return limit; }\n" +
+            "    async c (limit: Int) { return limit; }\n" +
+            "    d (n: number) { const v = n ?? 1; return v; }\n" +
+            "    async use (o) {\n" +
+            "        const l = this.safeInteger (o, 'l');\n" +
+            "        this.a (l); this.a (this.safeValue (o, 'x'));\n" +
+            "        this.b (this.safeValue (o, 'x'));\n" +
+            "        await this.c (l);\n" +
+            "        this.d (this.safeValue (o, 'x'));\n" +
+            "        return 1;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('func (this *Test) A(limit any) any {');
+        expect(output).toContain('func (this *Test) B(limit any) any {');
+        expect(output).toContain('func (this *Test) cBody(ch chan any, limit any) any {');
+        expect(output).toContain('func (this *Test) D(n any) any {');
     });
 });
 
@@ -6510,5 +6684,292 @@ describe('go string locals rewritten by self-concatenation', () => {
         const output = run("        let c = '';\n        c = c + 'x';\n        c = this.safeString (o, 'k', 'd');\n        let d = '';\n        d += this.safeString (o, 'k', 'd');\n        return c + d;\n");
         expect(output).toContain('var c any = ""');
         expect(output).toContain('var d any = ""');
+    });
+});
+
+describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
+    const run = (body: string) => {
+        const inst = new Transpiler({ verbose: false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
+        return inst.transpileGo(
+            'type Dict = { [key: string]: any };\nclass T {\n    safeString (a, b) { return a; }\n    f (d: any, params: Dict = {}) {\n' + body + '    }\n}\n').content;
+    };
+    test('a literal-key read handed to a safe* accessor indexes the map', () => {
+        const output = run("        return this.safeString (params['x'], 'z');\n");
+        expect(output).toContain('var params map[string]any = GetArgMap(optionalArgs, 0, map[string]any{})');
+        expect(output).toContain('this.SafeString(params["x"], "z")');
+    });
+    test('a nested element read indexes the first step', () => {
+        const output = run("        return params['x']['y'];\n");
+        expect(output).toContain('GetValue(params["x"], "y")');
+    });
+    test('a bare read keeps GetValue (a *T value would lose its deref)', () => {
+        const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
+        expect(output).toContain('GetValue(params, "x")');
+    });
+    test('a compared element keeps the helper deref', () => {
+        const output = run("        if (this.safeString (params['y'], 'k') === undefined) { return 1; }\n        if (params['y'] === undefined) { return 1; }\n        return 0;\n");
+        expect(output).toContain('IsEqual(GetValue(params, "y"), nil)');
+        expect(output).toContain('this.SafeString(params["y"], "k")');
+    });
+    test('a non-literal key keeps GetValue', () => {
+        const output = run("        return this.safeString (params[d], 'z');\n");
+        expect(output).toContain('GetValue(params, d)');
+    });
+    test('a parameter without a map binding keeps GetValue', () => {
+        const output = new Transpiler({ verbose: false }).transpileGo(
+            'class T {\n    safeString (a, b) { return a; }\n    f (d: any, params = undefined) {\n        return this.safeString (params[\'x\'], \'z\');\n    }\n}\n').content;
+        expect(output).toContain('GetValue(params, "x")');
+    });
+});
+describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G01)', () => {
+    test('the value of an element write keeps GetValue for the write pass', () => {
+        const inst = new Transpiler({ verbose: false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
+        const output = inst.transpileGo('type Dict = { [key: string]: any };\nclass T {\n    f (d: any, params: Dict = {}) {\n        const r = {};\n        r[d] = params[\'x\'];\n        return r;\n    }\n}\n').content;
+        expect(output).toContain('GetValue(params, "x")');
+    });
+});
+
+describe('hx4 G02: IsEqual(x, nil) on any locals fed by base safeValue / ws caches', () => {
+    const root = nodepath.join(__dirname, 'files', 'tmp-hx4-g02', 'ts', 'src');
+    const BASE = "export class Exchange {\n" +
+        "    options: any = {};\n" +
+        "    safeValue (o: any, k: any, d: any = undefined): any { return d; }\n" +
+        "    safeValue2 (o: any, k1: any, k2: any, d: any = undefined): any { return d; }\n" +
+        "    safeString (o: any, k: any, d: any = undefined): string { return d; }\n" +
+        "}\n";
+    const write = (body: string, extra = ''): string => {
+        nodefs.mkdirSync(nodepath.join(root, 'base'), { recursive: true });
+        nodefs.writeFileSync(nodepath.join(root, 'base', 'Exchange.ts'), BASE);
+        const file = nodepath.join(root, 'ex.ts');
+        nodefs.writeFileSync(file, "import { Exchange } from './base/Exchange';\n" +
+            "class ArrayCache { constructor (n: any) {} }\n" +
+            "export class ex extends Exchange {\n" + extra +
+            "    f (p: any) {\n" + body + "        return 0;\n    }\n}\n");
+        return new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+    };
+    afterAll(() => nodefs.rmSync(nodepath.join(__dirname, 'files', 'tmp-hx4-g02'), { recursive: true, force: true }));
+
+    test('a base safeValue local compares natively', () => {
+        const out = write("        const v = this.safeValue (p, 'a');\n        if (v === undefined) { return 1; }\n        if (v !== undefined) { return 2; }\n");
+        expect(out).toContain('if v == nil {');
+        expect(out).toContain('if v != nil {');
+        expect(out).not.toContain('IsEqual(v, nil)');
+    });
+    test('safeValue2 with a literal default and a ws cache write compare natively', () => {
+        const out = write("        let v = this.safeValue2 (p, 'a', 'b', {});\n        if (v === undefined) { v = new ArrayCache (5); }\n        if (v === undefined) { return 1; }\n");
+        expect(out).not.toContain('IsEqual(v, nil)');
+    });
+    test('a non-literal default keeps the helper', () => {
+        const out = write("        const v = this.safeValue (p, 'a', this.options);\n        if (v === undefined) { return 1; }\n");
+        expect(out).toContain('IsEqual(v, nil)');
+    });
+    test('an exchange override of safeValue keeps the helper', () => {
+        const out = write("        const v = this.safeValue (p, 'a');\n        if (v === undefined) { return 1; }\n",
+            "    safeValue (o: any, k: any, d: any = undefined): any { return this.safeString (o, k); }\n");
+        expect(out).toContain('IsEqual(v, nil)');
+    });
+    test('a later pointer write keeps the helper', () => {
+        const out = write("        let v = this.safeValue (p, 'a');\n        if (p) { v = this.safeString (p, 'b'); }\n        if (v === undefined) { return 1; }\n");
+        expect(out).toContain('IsEqual(v, nil)');
+    });
+});
+
+// hx4 G04: int/int64 widening and string-literal-union concat leaves
+describe('hx4 G04 go arithmetic residual', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('int64 minus an int local widens the int side', () => {
+        const input =
+        "class Exchange {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    main (rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        let now = this.milliseconds ();\n" +
+        "        let x = undefined;\n" +
+        "        x = now - n;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('x = now - int64(n)');
+        expect(output).not.toContain('Subtract(');
+    });
+    test('an int local times an int64 call widens the int side', () => {
+        const input =
+        "class Exchange {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    main (rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        let x = undefined;\n" +
+        "        x = n * this.milliseconds ();\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('x = int64(n) * this.Milliseconds()');
+    });
+    test('mixed-width Divide and Mod keep the helper (nil / NaN on a zero divisor)', () => {
+        const input =
+        "class Exchange {\n" +
+        "    milliseconds (): number { return 1; }\n" +
+        "    main (rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        const now = this.milliseconds ();\n" +
+        "        let x = undefined;\n" +
+        "        x = now / n;\n" +
+        "        let y = undefined;\n" +
+        "        y = now % n;\n" +
+        "        return [x, y];\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('Divide(now, n)');
+        expect(output).toContain('Mod(now, n)');
+    });
+    test('an any operand keeps Subtract', () => {
+        const input =
+        "class Exchange {\n" +
+        "    main (a: any, rows: string[]) {\n" +
+        "        const n = rows.length;\n" +
+        "        let x = undefined;\n" +
+        "        x = a - n;\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('Subtract(a, n)');
+    });
+    test('a *string narrowed to a string-literal union is a concat leaf', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeStringUpper (a: any, b: string): string | undefined { return a; }\n" +
+        "    main (order: any) {\n" +
+        "        const type = this.safeStringUpper (order, 'type');\n" +
+        "        if (type === 'STOP_MARKET' || type === 'STOP_LIMIT') {\n" +
+        "            throw new Error ('Invalid order type: ' + type + '.');\n" +
+        "        }\n" +
+        "        return 'x' + type;\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('Error(\"Invalid order type: \" + *typeVar + \".\")');
+        // outside the guard the local may be nil: the helper stays
+        expect(output).toContain('Add(\"x\", typeVar)');
+    });
+});
+
+describe('hx4 G06 length / indexOf on proven non-nil *string', () => {
+    const sq = (s: string) => s.replace(/\s+/g, ' ');
+    test('a narrowed *string length and indexOf deref natively', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b, c = undefined): string | undefined { return a; }\n" +
+        "    main (item) {\n" +
+        "        const side = this.safeString (item, 'side');\n" +
+        "        if (side !== undefined) {\n" +
+        "            if (side.length < 1) { return 'a'; }\n" +
+        "            if (side.indexOf ('-') >= 0) { return 'b'; }\n" +
+        "        }\n" +
+        "        return 'c';\n" +
+        "    }\n" +
+        "}\n";
+        const output = sq(transpiler.transpileGo(input).content);
+        expect(output).toContain('len(*side) < 1');
+        expect(output).toContain('strings.Index(*side, "-")');
+        expect(output).not.toContain('GetLength(side)');
+        expect(output).not.toContain('GetIndexOf(side');
+    });
+    test('a defaulted SafeString local derefs; an un-narrowed nilable one keeps the helpers', () => {
+        const input =
+        "class Exchange {\n" +
+        "    safeString (a, b, c = undefined): string | undefined { return a; }\n" +
+        "    main (item) {\n" +
+        "        const tag = this.safeString (item, 'tag', '');\n" +
+        "        const raw = this.safeString (item, 'raw');\n" +
+        "        const n = tag.length;\n" +
+        "        return [ n, raw.length, raw.indexOf ('x'), tag.indexOf (raw) ];\n" +
+        "    }\n" +
+        "}\n";
+        const output = sq(transpiler.transpileGo(input).content);
+        expect(output).toContain('len(*tag)');
+        expect(output).toMatch(/Get(Array)?Length\(raw\)/);
+        expect(output).not.toContain('len(*raw)');
+        expect(output).toContain('if raw == nil { return -1 }'); // pre-existing guarded literal
+        expect(output).not.toContain('strings.Index(*tag, raw');
+    });
+});
+
+// hx4 G08
+describe('go string helpers on a *string narrowed to string literals', () => {
+    test('a literal-union narrowed *string is dereferenced, a nilable or mixed one keeps the helper', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class Base { safeString (a, b, c?): Str { return undefined; } }\n" +
+        "class Test extends Base {\n" +
+        "    main (d, n: number) {\n" +
+        "        const x = this.safeString (d, 'a');\n" +
+        "        const y = this.safeString (d, 'b');\n" +
+        "        const z = this.safeString (d, 'c');\n" +
+        "        const r = [];\n" +
+        "        if ((x === 'TAKER') || (x === 'MAKER')) {\n" +
+        "            r.push (x.toLowerCase ());\n" +
+        "            r.push (x.split ('A'));\n" +
+        "            r.push (x.toString ());\n" +
+        "        }\n" +
+        "        if ((y === 'Q') || (n === 1)) {\n" +
+        "            r.push (y.toUpperCase ());\n" +
+        "        }\n" +
+        "        r.push (z.toLowerCase ());\n" +
+        "        return r;\n" +
+        "    }\n" +
+        "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('strings.ToLower(*x)');
+        expect(output).toContain('strings.Split(*x, "A")');
+        expect(output).toContain('r = append(r, *x)');
+        // `y` is not narrowed when `n === 1` holds: helper kept
+        expect(output).toContain('ToUpper(y)');
+        expect(output).not.toContain('strings.ToUpper(*y)');
+        // `z` is never tested: nil reaches the helper's "" branch
+        expect(output).toContain('ToLower(z)');
+        expect(output).not.toContain('strings.ToLower(*z)');
+    });
+});
+
+// hx4 X02: currency rows (Currency()/SafeCurrency() return CurrencyTyped rows) read bare
+describe('go GetValue on currency rows (hx4 X02)', () => {
+    const run = (body: string) => {
+        const inst: any = new Transpiler({ verbose: false });
+        const g = inst.goTranspiler;
+        const upstream = g.goIndexableTypeOf;
+        // stands in for the ccxt printed-declaration table: `c` is declared map[string]any
+        g.goIndexableTypeOf = function (node, printed) {
+            const known = upstream.call(this, node, printed);
+            if ((known !== undefined) || (node?.text !== 'c')) {
+                return known;
+            }
+            const access = node.parent;
+            return ((access?.expression === node) && (this['g01' + 'ReadOk'](node, access) !== 'map[string]any')) ? undefined : 'map[string]any';
+        };
+        return inst.transpileGo("interface CurrencyInterface { id: string; code: string; }\ntype Currency = CurrencyInterface | undefined;\n" +
+            "class T {\n    currency (code: string): CurrencyInterface { return undefined; }\n    safeCurrency (id: string): CurrencyInterface { return undefined; }\n" +
+            "    safeDict (a, b) { return a; }\n    f (code: string) {\n        let c: Currency = undefined;\n" + body + "    }\n}\n").content;
+    };
+    test('a local written only by this.currency reads bare', () => {
+        const out = run("        if (code) { c = this.currency (code); }\n        const b = c['id'];\n        return b;\n");
+        expect(out).toContain('var b any = c["id"]');
+    });
+    test('a local written by this.safeCurrency reads bare', () => {
+        const out = run("        c = this.safeCurrency (code);\n        return c['code'];\n");
+        expect(out).toContain('return c["code"]');
+    });
+    test('another write keeps GetValue', () => {
+        const out = run("        c = this.currency (code);\n        c = this.safeDict (code, 'x');\n        return c['id'];\n");
+        expect(out).toContain('GetValue(c, "id")');
+    });
+    test('a compared read keeps GetValue', () => {
+        const out = run("        c = this.currency (code);\n        if (c['id'] === 'x') { return 1; }\n        return 0;\n");
+        expect(out).not.toContain('c["id"] ==');
     });
 });

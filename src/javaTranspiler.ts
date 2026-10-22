@@ -3532,6 +3532,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 && this.javaPrintsNonNullValue(right)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
+            if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
+                return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
+            }
 
             return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -3571,6 +3574,10 @@ export class JavaTranspiler extends BaseTranspiler {
             return `Helpers.inOp(${objText}, ${keyText})`;
         }
 
+        const hx4J05 = this.printHx4J05ModComparison(left, right, op);
+        if (hx4J05 !== undefined) {
+            return hx4J05;
+        }
         // native comparison when both operands provably print as Java numbers. `>` is exact for every
         // numeric pair (isGreaterThan is a toDouble compare, NaN included); `>=` / `<` / `<=` also go
         // through the helper's isEqual, so they need operands isEqual reproduces exactly.
@@ -3876,7 +3883,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return undefined;
+            return this.javaJ02FieldMapReadText(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
@@ -6466,7 +6473,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printIndexOfCall(node, _identation, name = undefined, parsedArg = undefined) {
-        return this.javaNativeIndexOfCall(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
+        return this.javaNativeIndexOfCall(node, name, parsedArg) ?? this.javaHx4J06NarrowedIndexOf(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
     printSearchCall(_node, _identation, name = undefined, parsedArg = undefined) {
@@ -7635,4 +7642,587 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return false;
     }
+    // hx4 J01: `m[k] = v` on a local the printer declared `Map<String, Object>` whose every write is a
+    // provably non-concurrent map (fresh literal/extend/omit, or a base safeDict* of non-field data):
+    // the helper's map branch is then `m.put(k, v)` (null value included; its CHM removal never applies)
+    javaHx4MapPutIsNative(baseExpr, keys: any[]): boolean {
+        if (keys.length !== 1 || baseExpr === undefined || !isIdentifier(baseExpr) || !this.javaDeclaredMapReceiver(baseExpr)) {
+            return false;
+        }
+        const key = keys[0];
+        if (!isStringLiteralLikeNode(key) && !this.javaDeclaredStringType(key)
+            && !this.isJavaStringType(this.getChecker().getTypeAtLocation(key))) {
+            return false; // Map<String, Object>.put needs a String key (the helper takes any box)
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(baseExpr);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration || !declaration.initializer) {
+            return false; // parameters may carry a caller's ConcurrentHashMap
+        }
+        const admits = (rhs) => this.javaHx4PlainMapSource(baseExpr, rhs);
+        return admits(declaration.initializer) && !this.javaLocalIsReassigned(baseExpr, admits);
+    }
+
+    javaHx4PlainMapSource(container, value): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        if (node === undefined) {
+            return false;
+        }
+        if (this.javaFreshHashMapValue(container, node)) {
+            return true;
+        }
+        if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = node.expression.name.text;
+        const fileName = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+        if (typeof fileName !== 'string' || !JAVA_FRESH_EXTEND_FILE.test(fileName)) {
+            return false; // a venue override may return anything
+        }
+        if (name === 'extend' || name === 'deepExtend' || name === 'omit') {
+            return true; // Generic.Extend / deepExtend / Functions.omitMap build a fresh LinkedHashMap (or null)
+        }
+        if (name === 'safeDict' || name === 'safeDict2' || name === 'safeDictN') {
+            // hands back an element of the source or the default: never a field map or a ws client map
+            return node.arguments.length > 0 && this.javaHx4NonSharedSource(node.arguments[0], 0)
+                && (node.arguments.length < (name === 'safeDict2' ? 4 : 3)
+                    || this.javaHx4DefaultIsPlain(node.arguments[node.arguments.length - 1]));
+        }
+        return false;
+    }
+
+    javaHx4DefaultIsPlain(value): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        return node !== undefined && (isObjectLiteralExpression(node) || node.kind === SyntaxKind.UndefinedKeyword
+            || (isIdentifier(node) && node.text === 'undefined') || node.kind === SyntaxKind.NullKeyword);
+    }
+
+    // data that can not hold one of the runtime's ConcurrentHashMaps (this.<field> top level, ws client
+    // futures/subscriptions/rejections and their entries): a local/param/element chain not rooted at them
+    javaHx4NonSharedSource(value, depth: number): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        if (node === undefined || depth > 40) {
+            return false;
+        }
+        if (isElementAccessExpression(node)) {
+            return this.javaHx4NonSharedSource(node.expression, depth + 1);
+        }
+        if (!isIdentifier(node)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined) {
+            return false;
+        }
+        if (declaration.kind === SyntaxKind.Parameter) {
+            const type = this.getChecker().getTypeAtLocation(node);
+            const text = (type?.getSymbol?.()?.escapedName ?? '') + '';
+            return !/Client/.test(text) && !/^(client|subscriptions|futures|rejections)$/.test(node.text);
+        }
+        const known = this.javaHx4SourceVerdicts.get(declaration);
+        if (known !== undefined) {
+            return known; // `true` while in progress: a self-referencing write adds no new source
+        }
+        this.javaHx4SourceVerdicts.set(declaration, true);
+        this.javaHx4InProgress.add(declaration);
+        const writes: any[] = declaration.initializer ? [declaration.initializer] : [];
+        const verdict = !this.javaLocalIsReassigned(node, (rhs) => { writes.push(rhs); return true; })
+            && writes.every((w) => this.javaHx4NonSharedValue(w, depth + 1));
+        this.javaHx4InProgress.delete(declaration);
+        if (verdict && this.javaHx4InProgress.size > 0) {
+            this.javaHx4SourceVerdicts.delete(declaration); // leaned on an unfinished verdict: recompute later
+        } else {
+            this.javaHx4SourceVerdicts.set(declaration, verdict);
+        }
+        return verdict;
+    }
+
+    javaHx4SourceVerdicts = new WeakMap<any, boolean>();
+    javaHx4InProgress = new Set<any>();
+
+    // a value expression that never reads a field map or a ws client's maps
+    javaHx4NonSharedValue(value, depth: number): boolean {
+        let shared = false;
+        const walk = (n) => {
+            if (shared || n === undefined) {
+                return;
+            }
+            if (isPropertyAccessExpression(n)) {
+                const called = n.parent !== undefined && isCallExpression(n.parent) && n.parent.expression === n;
+                if ((!called && (n.expression.kind === SyntaxKind.ThisKeyword
+                    || /^(subscriptions|futures|rejections|hashmap)$/.test(n.name.text)))
+                    || (called && n.name.text === 'createSafeDictionary')) {
+                    shared = true;
+                    return;
+                }
+            }
+            if (n.kind === SyntaxKind.ThisKeyword && !(n.parent !== undefined && isPropertyAccessExpression(n.parent))) {
+                shared = true; // `this` handed to a call
+                return;
+            }
+            if (isIdentifier(n) && n !== value && !(n.parent !== undefined && isPropertyAccessExpression(n.parent) && n.parent.name === n)) {
+                const declaration: any = this.javaDeclarationOfIdentifier(n);
+                if (declaration !== undefined && !this.javaHx4NonSharedSource(n, depth + 1)) {
+                    shared = true;
+                    return;
+                }
+            }
+            n.forEachChild(walk);
+        };
+        walk(value);
+        return !shared;
+    }
+
+    // hx4 J02: `this.<field>[k]` on the J02 base map fields. ConcurrentHashMap.get(null) throws
+    // where the helper answers null, so a non-literal key is always null-tested; the receiver can
+    // be null too. Key and receiver print twice, so both must be side-effect free.
+    javaJ02FieldMapReadText(receiver, key): string | undefined {
+        const name = receiver?.name?.text;
+        if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
+            return undefined;
+        }
+        const literal = isStringLiteralLikeNode(key);
+        if (!literal && !this.javaRepeatableOperand(key)) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const keyText = this.printNode(key, 0);
+        const keyGuard = literal ? '' : `${keyText} == null || `;
+        return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+    }
+
+    // hx4 J05
+    // `(a % N) <op> M` (N a non-zero integer literal, a an int/long operand, M an int literal): the
+    // native mod prints a finite integral double |v| < |N|, where isEqual (IsInteger -> toLong) and
+    // isGreaterThan (toDouble) both reduce to the plain double comparison against M.
+    javaHx4J05IntegralModOperand(node): boolean {
+        while (node !== undefined && node.kind === SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if (node === undefined || !isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.PercentToken) {
+            return false;
+        }
+        if (this.javaScalarFamily(node.left) !== 'number' || this.javaScalarFamily(node.right) !== 'number') {
+            return false;
+        }
+        const leftKind = this.javaProvableNumericKind(node.left);
+        if (leftKind !== 'int' && leftKind !== 'long' && !this.javaProvableCounterInt(node.left)) {
+            return false;
+        }
+        const divisor = node.right;
+        if (this.javaIntegerLiteralKind(divisor) !== 'int' || Number(divisor.text) === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    printHx4J05ModComparison(left, right, op): string | undefined {
+        const javaOps = {
+            [SyntaxKind.EqualsEqualsToken]: '==', [SyntaxKind.EqualsEqualsEqualsToken]: '==',
+            [SyntaxKind.ExclamationEqualsToken]: '!=', [SyntaxKind.ExclamationEqualsEqualsToken]: '!=',
+            [SyntaxKind.LessThanToken]: '<', [SyntaxKind.LessThanEqualsToken]: '<=',
+            [SyntaxKind.GreaterThanToken]: '>', [SyntaxKind.GreaterThanEqualsToken]: '>=',
+        };
+        const javaOp = javaOps[op];
+        if (javaOp === undefined) {
+            return undefined;
+        }
+        const modLeft = this.javaHx4J05IntegralModOperand(left);
+        const modRight = !modLeft && this.javaHx4J05IntegralModOperand(right);
+        if (!modLeft && !modRight) {
+            return undefined;
+        }
+        if (this.javaEqualityLiteralKind(modLeft ? right : left) !== 'int') {
+            return undefined;
+        }
+        const leftText = this.printNode(left, 0);
+        const rightText = this.printNode(right, 0);
+        // only when the mod side printed the native double remainder
+        if (!/^\(+double\) /.test(modLeft ? leftText : rightText)) {
+            return undefined;
+        }
+        return `(${leftText} ${javaOp} ${rightText})`;
+    }
+
+    // hx4 J06
+    // `x.indexOf(t)` where a string/Str-declared x is narrowed to a union of string literals
+    // (`===` tests): x is a non-null String, so String.indexOf is the helper's String arm
+    javaHx4J06NarrowedIndexOf(node, name, parsedArg) {
+        const receiver = node?.expression?.expression;
+        const arg = node?.arguments?.[0];
+        if (receiver === undefined || arg === undefined || name === undefined || parsedArg === undefined
+            || !isIdentifier(receiver) || this.isVarargsArrayReference(receiver)) {
+            return undefined;
+        }
+        let receiverType: any;
+        try {
+            receiverType = this.getChecker().getTypeAtLocation(receiver);
+        } catch (e) {
+            return undefined;
+        }
+        if (receiverType === undefined || (receiverType.flags & TypeFlags.Union) === 0
+            || !receiverType.getTypes().every((member) => this.isStringType(member.flags))) {
+            return undefined;
+        }
+        // a DECLARED literal union is no runtime proof: the declaration must carry plain `string`
+        const symbol = this.getChecker().getSymbolAtLocation(receiver);
+        const declaration: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.valueDeclaration;
+        let declared: any;
+        try {
+            declared = declaration?.name === undefined ? undefined : this.getChecker().getTypeAtLocation(declaration.name);
+        } catch (e) {
+            declared = undefined;
+        }
+        const declaredMembers: any[] = declared === undefined ? [] : ((declared.flags & TypeFlags.Union) !== 0 ? declared.getTypes() : [declared]);
+        if (!declaredMembers.some((member) => member.flags === TypeFlags.String)) {
+            return undefined;
+        }
+        if (this.javaProvableString(arg)) {
+            return `((String)${name}).indexOf(${parsedArg})`;
+        }
+        return undefined;
+    }
+}
+
+// hx4 J02
+// more hand-written BaseExchange map fields: every write in BaseExchange.java and ts/src is a
+// HashMap / ConcurrentHashMap / Map-cast or null (markets_by_id = null, urls/fees from describe())
+const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
+    'tickers': true,
+    'bidsasks': true,
+    'trades': true,
+    'fees': true,
+    'urls': true,
+    'markets_by_id': true,
+};
+
+// hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands
+const HX4_J09_SYNC_BASE_CALLS = new Set<string>([
+    'safeString', 'safeString2', 'safeStringN', 'safeValue', 'safeDict', 'safeInteger', 'json',
+    'throwExactlyMatchedException', 'throwBroadlyMatchedException',
+]);
+
+export interface JavaTranspiler {
+    hx4J09BoxIdentifier(node, seen: Set<any>, depth: number): boolean;
+    hx4J09BoxValue(node, seen: Set<any>, depth: number): boolean;
+    hx4J09LiteralTupleElement(node, index: number): boolean;
+    hx4J09CatchCannotWrap(node): boolean;
+    hx4J09CoreArgument(type: string, printed: string, node): string | undefined;
+    hx4J09CcxtErrorClass(node): boolean;
+}
+
+// a class declared in ts/src/base/errors.ts: its Java twin extends RuntimeException, so
+// `catchVar instanceof X` compiles against the `Exception` catch parameter
+JavaTranspiler.prototype.hx4J09CcxtErrorClass = function (node): boolean {
+    const checker: any = this.checkerOrUndefined();
+    let symbol: any;
+    try {
+        symbol = checker?.getSymbolAtLocation(node);
+        if (symbol !== undefined && (symbol.flags & SymbolFlags.Alias)) {
+            symbol = checker.getAliasedSymbol(symbol);
+        }
+    } catch (e) {
+        return false;
+    }
+    const declaration: any = symbol?.declarations?.[0]?.resolve();
+    return declaration?.kind === SyntaxKind.ClassDeclaration
+        && /(^|[\\/])ts[\\/]src[\\/]base[\\/]errors\.ts$/.test(declaration.getSourceFile?.()?.fileName ?? '');
+};
+
+// a local whose declared TS type is boolean-family and whose every write (D2 scan, tuples
+// included) is a Boolean-or-null box; a write cycle back to a local under proof is accepted
+JavaTranspiler.prototype.hx4J09BoxIdentifier = function (node, seen: Set<any>, depth: number): boolean {
+    const checker: any = this.checkerOrUndefined();
+    if (checker === undefined || node?.kind !== SyntaxKind.Identifier || depth > 6) {
+        return false;
+    }
+    const symbol = checker.getSymbolAtLocation(node);
+    const decl: any = symbol?.valueDeclaration?.resolve();
+    if (decl === undefined || decl.name?.text !== node.text) {
+        return false;
+    }
+    if (seen.has(decl)) {
+        return true;
+    }
+    const next = new Set(seen);
+    next.add(decl);
+    const accepts = (value) => this.hx4J09BoxValue(value, next, depth + 1);
+    if (decl.kind === SyntaxKind.BindingElement) {
+        const pattern = decl.parent;
+        const declaration = pattern?.parent;
+        if (decl.initializer !== undefined || decl.dotDotDotToken !== undefined
+            || pattern?.kind !== SyntaxKind.ArrayBindingPattern || declaration?.kind !== SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        const index = pattern.elements.indexOf(decl);
+        if (!this.javaBooleanBoxTupleElement(declaration.initializer, index)
+            && !this.hx4J09LiteralTupleElement(declaration.initializer, index)) {
+            return false;
+        }
+        return this.javaWritesAreBoxed(symbol, { initializer: undefined, parent: declaration }, next, accepts, true);
+    }
+    if (decl.kind !== SyntaxKind.VariableDeclaration) {
+        return false; // parameters are boxes their callers fill
+    }
+    let type;
+    try {
+        type = this.javaTypeOfDeclaration(decl);
+    } catch (e) {
+        return false;
+    }
+    if (!this.javaBooleanBoxType(type) && !this.javaNullableBooleanDeclaration(decl)) {
+        return false;
+    }
+    return this.javaWritesAreBoxed(symbol, decl, next, accepts, true);
+};
+
+// a value whose printed Java is a Boolean, boolean or null
+JavaTranspiler.prototype.hx4J09BoxValue = function (node, seen: Set<any>, depth: number): boolean {
+    if (node === undefined) {
+        return false;
+    }
+    if (node.kind === SyntaxKind.ParenthesizedExpression || node.kind === SyntaxKind.AsExpression
+        || node.kind === SyntaxKind.NonNullExpression) {
+        return this.hx4J09BoxValue(node.expression, seen, depth);
+    }
+    if (node.kind === SyntaxKind.NullKeyword || (node.kind === SyntaxKind.Identifier && node.text === 'undefined')) {
+        return true;
+    }
+    if (node.kind === SyntaxKind.ConditionalExpression) {
+        return this.hx4J09BoxValue(node.whenTrue, seen, depth) && this.hx4J09BoxValue(node.whenFalse, seen, depth);
+    }
+    if (node.kind === SyntaxKind.Identifier) {
+        return this.hx4J09BoxIdentifier(node, seen, depth);
+    }
+    if (this.javaPrintsBooleanValue(node, new Set<any>())) {
+        return true;
+    }
+    if (node.kind !== SyntaxKind.CallExpression) {
+        return false;
+    }
+    if (this.javaCallBooleanKind(node) !== undefined) {
+        return true;
+    }
+    // safeBool* with a non-literal default: the accessor returns a Boolean member or the default
+    const callee = node.expression;
+    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) {
+        return false;
+    }
+    const at = JAVA_THIS_BOOLEAN_BOX_METHODS[String(callee.name.text)];
+    if (at === undefined || this.javaBooleanValueKind(node) === undefined || !this.javaCalleeResolves(node)) {
+        return false;
+    }
+    const declaration: any = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+    if (declaration?.name?.text !== callee.name.text
+        || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+        return false;
+    }
+    const fallback = node.arguments?.[at];
+    return fallback !== undefined && this.hx4J09BoxValue(fallback, seen, depth);
+};
+
+// element `index` of a base-tier `this.m(..)` whose every return is an array literal with a
+// Java boolean at that position (`handlePostOnly`: `[ true, p ]` / `[ false, p ]`)
+JavaTranspiler.prototype.hx4J09LiteralTupleElement = function (node, index: number): boolean {
+    if (node?.kind !== SyntaxKind.CallExpression || index < 0) {
+        return false;
+    }
+    const callee = node.expression;
+    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) {
+        return false;
+    }
+    let declaration: any;
+    try {
+        declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
+    } catch (e) {
+        return false;
+    }
+    if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined
+        || declaration.name?.text !== callee.name.text
+        || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+        return false;
+    }
+    let returns = 0;
+    let ok = true;
+    const scan = (current: Node) => {
+        if (!ok || (current !== declaration && isFunctionLike(current))) {
+            return;
+        }
+        if (isReturnStatement(current)) {
+            returns++;
+            const value: any = current.expression;
+            if (value === undefined || !isArrayLiteralExpression(value)
+                || !this.javaPrintsBooleanValue(value.elements[index], new Set<any>())) {
+                ok = false;
+                return;
+            }
+        }
+        current.forEachChild(scan);
+    };
+    scan(declaration.body);
+    return ok && returns > 0;
+};
+
+// `e instanceof X` on a catch variable equals Helpers.isInstance (which first unwraps a
+// CompletionException/ExecutionException) when the try block cannot raise a wrapped one:
+// no await, every call a synchronous base-tier accessor/thrower
+JavaTranspiler.prototype.hx4J09CatchCannotWrap = function (node): boolean {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const decl: any = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const clause = decl?.parent;
+    const tryStatement = clause?.parent;
+    if (decl?.kind !== SyntaxKind.VariableDeclaration || clause?.kind !== SyntaxKind.CatchClause
+        || tryStatement?.kind !== SyntaxKind.TryStatement || tryStatement.catchClause !== clause) {
+        return false;
+    }
+    let ok = true;
+    const scan = (current: any) => {
+        if (!ok) {
+            return;
+        }
+        if (isFunctionLike(current) || current.kind === SyntaxKind.AwaitExpression || current.kind === SyntaxKind.TryStatement) {
+            ok = false;
+            return;
+        }
+        if (current.kind === SyntaxKind.CallExpression) {
+            const callee = current.expression;
+            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+                || !HX4_J09_SYNC_BASE_CALLS.has(String(callee.name.text))) {
+                ok = false;
+                return;
+            }
+            const declaration: any = checker.getResolvedSignature(current)?.declaration?.resolve();
+            if (declaration === undefined
+                || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+                ok = false;
+                return;
+            }
+        }
+        current.forEachChild(scan);
+    };
+    scan(tryStatement.tryBlock);
+    return ok;
+};
+
+// core-argument conversions a declaration already proves: a const `= undefined` local is
+// null; a const `x.length` local the build layer declares Integer widens to the Long slot
+JavaTranspiler.prototype.hx4J09CoreArgument = function (type: string, printed: string, node): string | undefined {
+    if (node === undefined || !isIdentifier(node) || printed !== node.text || (type !== 'Long' && type !== 'String')) {
+        return undefined;
+    }
+    const declaration: any = this.javaDeclarationOfIdentifier(node);
+    if (declaration === undefined || !isVariableDeclaration(declaration) || (declaration.name as any)?.text !== node.text
+        || (getCombinedNodeFlags(declaration) & NodeFlags.Const) === 0) {
+        return undefined;
+    }
+    const initializer = declaration.initializer;
+    if (initializer !== undefined && isIdentifier(initializer) && initializer.text === 'undefined') {
+        return `(${type}) null`;
+    }
+    if (type === 'Long' && initializer !== undefined && isPropertyAccessExpression(initializer)
+        && initializer.name.text === 'length' && this.javaDeclaredTypeOf(node) === 'Integer') {
+        return `((long) ${printed})`;
+    }
+    return undefined;
+};
+
+{
+    const proto: any = JavaTranspiler.prototype;
+    const printCondition = proto.printCondition;
+    proto.printCondition = function (node, identation) {
+        const printed: string = printCondition.call(this, node, identation);
+        let inner = node;
+        while (inner?.kind === SyntaxKind.ParenthesizedExpression) {
+            inner = inner.expression;
+        }
+        if (inner?.kind === SyntaxKind.Identifier && printed.trimStart().startsWith(this.FALSY_WRAPPER_OPEN)
+            && this.hx4J09BoxIdentifier(inner, new Set<any>(), 0)) {
+            return this.getIden(identation) + `Boolean.TRUE.equals(${this.printNode(inner, 0)})`;
+        }
+        return printed;
+    };
+    const printInstanceOfExpression = proto.printInstanceOfExpression;
+    proto.printInstanceOfExpression = function (node, identation) {
+        if (node.right?.kind === SyntaxKind.Identifier && this.hx4J09CcxtErrorClass(node.right)
+            && this.hx4J09CatchCannotWrap(node.left)) {
+            return this.getIden(identation) + `(${this.printNode(node.left, 0)} instanceof ${node.right.text})`;
+        }
+        return printInstanceOfExpression.call(this, node, identation);
+    };
+    const javaConvertToCoreType = proto.javaConvertToCoreType;
+    proto.javaConvertToCoreType = function (type: string, printed: string, node) {
+        return this.hx4J09CoreArgument(type, printed, node) ?? javaConvertToCoreType.call(this, type, printed, node);
+    };
+}
+
+// hx4 J15: two declared numeric boxes compare by value, never by reference. Same-class integral
+// boxes take Objects.equals (Helpers.isEqual's null table + toLong compare); a Double on either side
+// compares doubleValue() (isEqual's toDouble: 0.0 == -0.0, NaN != NaN), other integral pairs longValue().
+{
+    const proto: any = JavaTranspiler.prototype;
+    const printNativeEquality = proto.printNativeEqualityIfProvable;
+    proto.printNativeEqualityIfProvable = function (node, leftText: string, rightText: string): string | undefined {
+        const op = node?.operatorToken?.kind;
+        const negated = op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken;
+        if (negated || op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) {
+            const left = this.javaDeclaredNumericFamily(node.left);
+            const right = this.javaDeclaredNumericFamily(node.right);
+            // a declared Boolean: isEqual answers false across classes and by value within Boolean
+            const isBool = (n) => String(this.javaDeclaredTypeOf(n) ?? '').trim() === 'Boolean';
+            if (isBool(node.left) || isBool(node.right)) {
+                return `${negated ? '!' : ''}java.util.Objects.equals(${leftText}, ${rightText})`;
+            }
+            if (JAVA_BOXED_NUMERIC_TYPES.has(left) && JAVA_BOXED_NUMERIC_TYPES.has(right)) {
+                let equal: string;
+                if (left === right && left !== 'Double') {
+                    equal = `java.util.Objects.equals(${leftText}, ${rightText})`;
+                } else {
+                    const unbox = (left === 'Double' || right === 'Double') ? 'doubleValue' : 'longValue';
+                    equal = `(${leftText} == null ? ${rightText} == null : (${rightText} != null && ${leftText}.${unbox}() == ${rightText}.${unbox}()))`;
+                }
+                return negated ? `!${equal}` : equal;
+            }
+        }
+        return printNativeEquality.call(this, node, leftText, rightText);
+    };
+}
+
+// hx4 J16: an awaited implicit-API call (declared in ts/src/abstract/<id>.ts, body `this.request(..)`)
+// hands back a fresh Jackson parse of the HTTP body: never a field map or a ws client map, whatever
+// its arguments read, so J01's non-shared proof admits it as a put source.
+const JAVA_J16_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9_]+\.ts$/;
+{
+    const proto: any = JavaTranspiler.prototype;
+    const nonSharedValue = proto.javaHx4NonSharedValue;
+    proto.javaHx4NonSharedValue = function (value, depth: number): boolean {
+        return this.javaJ16ImplicitApiResponse(value) || nonSharedValue.call(this, value, depth);
+    };
+    proto.javaJ16ImplicitApiResponse = function (value): boolean {
+        let node = this.unwrapPrintTransparentExpression(value);
+        if (node?.kind !== SyntaxKind.AwaitExpression) {
+            return false;
+        }
+        node = this.unwrapPrintTransparentExpression(node.expression);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        let declaration: any;
+        try {
+            declaration = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        const fileName = declaration?.getSourceFile?.()?.fileName;
+        if (typeof fileName !== 'string' || !JAVA_J16_IMPLICIT_API_FILE.test(fileName) || !declaration.body) {
+            return false;
+        }
+        const statements = declaration.body.statements ?? [];
+        const ret = statements.length === 1 && isReturnStatement(statements[0]) ? statements[0].expression : undefined;
+        return ret !== undefined && isCallExpression(ret) && isPropertyAccessExpression(ret.expression)
+            && ret.expression.expression.kind === SyntaxKind.ThisKeyword && ret.expression.name.text === 'request';
+    };
 }

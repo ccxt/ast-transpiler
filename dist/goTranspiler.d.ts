@@ -556,4 +556,43 @@ export declare class GoTranspiler extends BaseTranspiler {
      * Check if the last statement in a block is a conditional with returns in all branches
      */
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
+    g01MapParamType(node: any): string | undefined;
+    g01ReadOk(receiver: any, access: any): string | undefined;
+    g01LiteralKey(key: any): boolean;
+    g01IsWriteValue(access: any): boolean;
+    g01MarketRow(node: any): boolean;
+    g01DerefConsumer(access: any): boolean;
+    goG02NonPointerAccessorSource(expr: any): boolean;
+    goG02LiteralDefault(node: any): boolean;
+    goHx4G06DerefLength(expression: any, printedText: string, lengthNode: any): string | undefined;
+    goHx4G06DerefIndexOf(node: any, name: any, parsedArg: any): string | undefined;
+    goLiteralUnionNarrowedStringDeref(node: any): boolean;
+    GO_G09_NUMERIC_FIELDS: {
+        [tsName: string]: string;
+    };
+    goG09FieldKind(node: any): string | undefined;
+    goG09OperandKind(node: any, text: string): [string, boolean] | undefined;
+    printG09WideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+}
+export interface GoTranspiler {
+    goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {
+        goType: string;
+        text: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    goStringLiteralUnionType(type: any): boolean;
+}
+export interface GoTranspiler {
+    goConcatDerefableStringOperand(node: any): boolean;
+}
+export interface GoTranspiler {
+    x02CurrencyRow(node: any): boolean;
+}
+export interface GoTranspiler {
+    g11NativeParameterType(fn: any, param: any, index: number): string | undefined;
+    g11ParameterHasNullishDefault(body: any, param: any): boolean;
+}
+export interface GoTranspiler {
+    g13NumericParameterCandidates(param: any): string[];
 }

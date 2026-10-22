@@ -647,5 +647,261 @@ export declare class RustTranspiler extends BaseTranspiler {
     printContinueStatement(node: any, identation: any): string;
     printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
+    /** Base-tier methods whose every return is a fresh tag-free object
+     *  literal (no venue override, no hand-written stub replaces them). */
+    private static readonly RUST_R01_PLAIN_DICT_BUILDERS;
+    /** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
+    private static readonly RUST_R01_REQUEST_TUPLE_HELPERS;
+    rustR01NativeDictInsert(baseExpr: any, keyNode: any, keyText: string, valueText: string): string | undefined;
+    /** A local (single binding in its function, no closure capture of a write)
+     *  whose declaration and every write is a plain-dict source or nullish. A
+     *  nullish value leaves a non-Dict, which `if let Value::Dict` no-ops on
+     *  exactly like the helper's `_ => {}` arm. */
+    rustR01LocalStaysPlain(ident: Identifier, depth?: number): boolean;
+    /** `const [ x, p ] = this.handleUntilOption (k, r, …)` with `r` itself a
+     *  plain local: element 0 is `r` handed back, and `x` is never re-written. */
+    private rustR01TupleBindingStaysPlain;
+    /** The shipped construction proof (literal-built local / handler tuple), read-only. */
+    private rustR01ShippedPlain;
+    /** A use of the local: reads and element writes keep the box; a direct
+     *  assignment must store a plain source; any other write shape rejects. */
+    private rustR01UseKeepsPlain;
+    /** `[ x, … ] = this.handleUntilOption (k, x, …)` — element 0 is the request
+     *  argument handed back (base-tier implementation, no override). */
+    private rustR01RequestTupleWrite;
+    /** Element 0 of `this.m (…)` is a plain dict: `m` is the base-tier
+     *  `handleUntilOption` (returns its `request` argument), or a method of the
+     *  calling file (Rust calls it statically) whose every `return [ X, … ]`
+     *  has X a plain literal / plain local, or a parameter whose argument here is. */
+    private rustR01TupleHeadIsPlain;
+    /** A pass-through parameter: never assigned in the method body. */
+    private rustR01ParamUnassigned;
+    /** A value that is a fresh plain dict, nullish, or the local itself. */
+    rustR01PlainSource(node: Node, name: string): boolean;
+    /** The checker resolves the call to the base-tier implementation (a venue
+     *  override could return anything). */
+    private rustR01CalleeIsBase;
+    /** The class property declaration behind `this.<name>` when its annotation proves a plain dict. */
+    rustProvenDictThisField(node: Node): Declaration | undefined;
+    /** `this.<field>[a]` whose declared field type's element type is itself a plain dict
+     *  (`Dictionary<Dictionary<T>>`). */
+    rustProvenDictThisFieldElement(node: Node): boolean;
+    /** `this.<field>[k]` with a proven-dict field and a proven string key place. */
+    printNativeThisFieldDynamicMapAccess(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    private rustVecLocalDecisions;
+    rustVecLocalIsTyped(declaration: any): boolean;
+    rustVecLocalIsTypedUncached(declaration: any): boolean;
+    rustVecPushShape(call: any, name: string): boolean;
+    rustVecValueUse(n: any, name: string): boolean;
+    rustVecIsFinalUse(n: any, name: string): boolean;
+    rustVecBoxingCallee(callee: any): boolean;
+    rustVecLocalDeclarationOf(node: any): any;
+    printRustVecPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
+    transformIdentifier(node: any, identifier: any): string;
+    /** Source path of a node (forward slashes). */
+    r05Path(node: Node): string;
+    /** Test sources keep the helpers: tests-pipeline post-passes match `in_op(` text. */
+    r05IsTest(node: Node): boolean;
+    /** `k in X` with a non-literal key on a dict-shaped receiver: `in_op`'s Dict arm.
+     *  The Arr arm is the only other `true` path; the dict proof excludes it. */
+    r05InOp(key: any, obj: any): string | undefined;
+    /** `delete X[k]` on a receiver the native-insert proof admits (never a ws
+     *  subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`. */
+    r05Delete(node: any): string | undefined;
+    /** `this.<field>` with a declared plain-dict type that is no ws container: the
+     *  hand-written base builds these maps itself and never tags them. */
+    r05UntaggedField(node: any): boolean;
+    rustProvenDictThisFieldR05(node: any): boolean;
+    /** `Object.keys/values(X)` in REST-tier sources (`ts/src/<id>.ts`): no ws client
+     *  there, so X never carries the `__ws_subs_url`/`__ws_sub_ref` tags the helper filters. */
+    r05Enum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** Printed receiver usable as a method receiver, else undefined. */
+    rustNativeStringReceiver(node: any, receiverText: string, kind?: string): string | undefined;
+    /** Escaped text of a string-literal argument, else undefined. */
+    rustNativeStringLiteralArg(node: any): string | undefined;
+    printNativeStringCase(node: any, receiverText: string, method: string): string | undefined;
+    printNativeStringAffixTest(node: any, receiverText: string, method: string): string | undefined;
+    printNativeStringSplit(node: any, receiverText: string): string | undefined;
+    printNativeStringReplace(node: any, receiverText: string): string | undefined;
+    printNativeStringPadStart(node: any, receiverText: string): string | undefined;
+    printNativeStringIndexOfString(node: any, receiverText: string): string | undefined;
+    printNativeStringJoin(node: any, receiverText: string): string | undefined;
+    rustOperandKind(node: any): string | undefined;
+    printRustNativeToString(node: any, name: string): string | undefined;
+    printRustNativeMathCall(node: any, op: string, parsedArg: string): string | undefined;
+    printRustNativeNegate(operand: any, operandText: string): string | undefined;
+    printRustNativeMod(left: any, right: any, leftText: string, rightText: string): string | undefined;
+    rustR09IsDefiniteInt(node: any): boolean;
+    rustR09NumericOperand(node: any): string | undefined;
+    rustR09LengthEquality(left: any, right: any, op: any): string | undefined;
+    rustR09NativeAddSubtract(op: any, left: any, right: any, leftType: any, rightType: any, leftText: string, rightText: string): string | undefined;
+    /** 'local' for an R01-proven plain-dict local, 'param' for a plain-kept dict parameter. */
+    rustR10PlainReceiver(node: Node): 'local' | 'param' | undefined;
+    /** A literal-key read (`x['k']` / `x.k`) on a proven plain receiver. */
+    rustR10LiteralReadOk(receiverNode: Node, keyText: string): boolean;
+    /** `x[k]` on a proven plain receiver with a `Value` key place (`string` or `any` typed). */
+    rustR10DynamicRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    r11VecUse(n: any): boolean;
+    r11LoopBetween(n: any): boolean;
+    r11VecReadShape(access: any): boolean;
+    printElementAccessExpressionExceptionIfAny(node: any): any;
+    r11ProvenListValue(node: any, depth?: number): boolean;
+    /** Base-tier bool readers whose Rust form returns `Value::Bool` or `Value::Null`
+     *  (`safe_bool*` keep only `Value::Bool` or the default; the `check_option_bool` stub). */
+    private static readonly RUST_R12_BOOL_READERS;
+    private static readonly RUST_R12_DICT_READERS;
+    /** A REST venue file (`ts/src/<id>.ts`): no base / pro / prediction tier. */
+    private static readonly RUST_R12_REST_FILE;
+    /** Extra plain-dict write sources (R01 write-history proof), REST venue files only: no
+     *  runtime tagged handle (book, ws subscription, cache bucket) is reachable there. */
+    private rustR12Visiting;
+    rustR12PlainSource(node: any, depth?: number): boolean;
+    /** `this.options`, a parameter, or a const local whose initializer reads no `this` field
+     *  but `options` and no tagged container (`hashmap`, `subscriptions`, `futures`). */
+    rustR12UnsharedDict(arg: any): boolean;
+    /** `this.m (…)` on a sync method of the calling file whose every `return` is a plain
+     *  literal, a plain local, or `this.extend|omit|keysort (plain, …unshared)`. */
+    rustR12PlainBuilder(call: any, depth: number): boolean;
+    rustR12PlainReturn(expr: any, depth: number): boolean;
+    /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
+     *  overload set), in the calling file or the base tier. */
+    rustR12MethodImpl(call: any): any;
+    /** The expression's Rust value is always `Value::Bool(_)` or `Value::Null`. */
+    rustR12BoolValue(expr: any, depth?: number): boolean;
+    /** A base `safeBool*` with a bool default, `checkOptionBool`, or a method (calling file or
+     *  base tier) whose every `return` is such a value. */
+    rustR12BoolCall(call: any, depth: number): boolean;
+    rustR12EveryReturn(call: any, depth: number, ok: (e: any) => boolean): boolean;
+    /** Element `index` of `this.m (…)`'s tuple is a bool value on every return path. */
+    rustR12BoolTupleElement(expr: any, index: number, depth: number): boolean;
+    /** A local whose declaration and every write store a bool value. Locals the printer or
+     *  ccxt's narrowBoolLocals may declare `bool` (bool-expression initializer) are left out. */
+    rustR12BoolLocal(ident: any, depth: number): boolean;
+    /** `if (x)` on a local or `this.m (…)` proven a bool value: `x.as_bool() == Some(true)`
+     *  is `is_true` on `Value::Bool`/`Value::Null`; bool slots only (leading-token boxing). */
+    rustR12NativeTruthiness(node: any): string | undefined;
+    /** `x === true|false` with `x` proven a bool value: `is_equal` against a `Value::Bool` is
+     *  the payload compare there (Null matches neither). */
+    rustR12NativeBoolEquality(left: any, right: any, op: any): string | undefined;
+    rustR13ProvenStrSource(node: any): boolean;
+    rustR13ProvenStrIdentifier(node: any): boolean;
+    /** A destructuring / for-in-of target: a write the direct-assignment check cannot see. */
+    rustR13WriteTarget(node: any): boolean;
+    /** `x` / `(x as string)` → the identifier under parens / `as`. */
+    rustR13PeelCast(node: any): any;
+    /** Printed text of an operand that is always `Value::Str` / `Value::Null`, else undefined:
+     *  a proven-`Str` local, a checker-`string` declared local/param (the R06 needle rule), or
+     *  `"lit" + e` / `e + "lit"` (the `add` helper's string branch always yields `Value::Str`). */
+    rustR13StrOperand(node: any, allowChecker: boolean): string | undefined;
+    printRustR13ProvenStrEquality(left: any, right: any, op: any): string | undefined;
+    /** Receiver text when the call's receiver is a proven-`Str` local (R06 covers checker strings). */
+    rustR13Receiver(node: any, receiverText: string): string | undefined;
+    /** R06's checker-string receiver, when it prints as a bare name (it is read twice). */
+    rustR13PlainReceiver(node: any, receiverText: string): string | undefined;
+    printRustR13Replace(node: any, receiverText: string): string | undefined;
+    printRustR13Split(node: any, receiverText: string): string | undefined;
+    printRustR13ToString(node: any, receiverText: string): string | undefined;
+    printRustR13Case(node: any, receiverText: string, method: string): string | undefined;
+    /** A bodiless overload signature whose class also holds the bodied implementation. */
+    r14BaseOverload(declaration: any): boolean;
+    /** `x[a ± b]` on a checker-proven list, each operand a numeric literal, a `Value` loop
+     *  counter or a `const n = y.length` local: the key prints as a `Value` number, so the
+     *  list arm of `get_value` (Int index, else miss) is spelled natively. */
+    r14ListArithIndex(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    r14ValueNumberOperand(node: any): boolean;
+    r15VecJoinUse(access: any): boolean;
+    r15PrintVecJoin(node: any): string | undefined;
+    r15VecPropertyUse(n: any): boolean;
+    private rustR16InProgress;
+    private rustR16Assumed;
+    rustR16NumericKind(node: any, depth?: number): string | undefined;
+    rustR16Combine(kinds: (string | undefined)[]): string | undefined;
+    rustR16StructuralKind(inner: any, depth: number): string | undefined;
+    rustR16CallKind(call: any, depth: number): string | undefined;
+    rustR16IdentifierKind(ident: any, depth: number): string | undefined;
+    rustR16WrittenKind(declaration: any, depth: number): string | undefined;
+    rustR16HasWrites(declaration: any): boolean;
+    rustR16OrderedProven(op: any, left: any, right: any): boolean;
+    rustR16NativeArithmetic(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    r17AlwaysStr(node: any): boolean;
+    r17ConcatOperandSafe(node: any, type: any): boolean;
+    r17ConcatIsAnchored(left: any, right: any, leftType: any, rightType: any): boolean;
+    /** R06 checker-string or R13 proven-`Str` receiver printed as a plain name / parenthesised. */
+    r17Receiver(node: any, receiverText: string): string | undefined;
+    r17PrintTrim(node: any, receiverText: string): string | undefined;
+    r17PrintAffixTest(node: any, receiverText: string, method: string): string | undefined;
+    r17PrintReplace(node: any, receiverText: string): string | undefined;
+    /** `"lit" in x` where x is an R10-proven plain local / plain-kept Dict parameter. */
+    r18LiteralInOp(key: any, obj: any): string | undefined;
+    /** `Object.keys/values(x)` in `ts/src/prediction/<id>.ts` on an R10-proven plain local. */
+    r18PredictionEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** Base-tier array readers whose result is the stored `Value::Arr` or the default argument. */
+    private static readonly RUST_R18_LIST_READERS;
+    /** A source that is a `Value::Arr` or `Value::Null` (both helpers agree with `len()` / a no-op
+     *  push there): `[...]`, nullish, a runtime `split`, base `toArray`, or a base `safeList*`
+     *  read whose default is absent, nullish or `[...]`. */
+    r18ArrSource(node: any, allowNull: boolean): boolean;
+    /** A local whose every write (declaration included) is an `r18ArrSource`, never captured by
+     *  a closure: its `Value` is a plain `Value::Arr` (the runtime never tags an array). */
+    r18ArrLocal(ident: any, allowNull: boolean): boolean;
+    /** `x.length` on an Arr-only local: `get_array_length`'s marker arms need a Dict. */
+    r18ArrLength(node: any, receiver: string): string | undefined;
+    /** `x.push(v)` statement on an Arr-only local: `append_to_array`'s cache-push arm needs a Dict. */
+    r18ArrPush(node: any, name: string | undefined, parsedArg: string | undefined): string | undefined;
+    r20BoolCallEquality(left: any, right: any, op: any): string | undefined;
+    /** `fn(...)` whose first `(` closes at the very end (string literals skipped). */
+    r20Balanced(text: string): boolean;
+    r20NativeNumericAdd(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    /** Base-tier (`ts/src/base/**`) `Object.keys/values(x)` on an R10-proven plain local. */
+    r21BaseEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    private static readonly RUST_R21_PURE_STRING_METHODS;
+    /** `x['k'].m (…)` with `m` a non-mutating string method on a checker-`string` read: no
+     *  ccxt pass rewrites that target (only `.push` / calls of the read itself). */
+    r21PureStringMethodReceiver(node: any): boolean;
+    /** Locals whose Arr-only proof is in progress (a self-referencing write proves nothing new). */
+    private r21ArrVisiting;
+    /** More always-`Value::Arr` sources for the R18 proof: base `arrayConcat` (Array on every
+     *  arm), base `sortBy`/`sortBy2` of an Arr-only local (returns its input's variant), and a
+     *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
+    r21ArrSource(n: any): boolean;
+    r21ArrAlias(ident: any): boolean;
+    r22AssumedNumericSelf(inner: any): string | undefined;
+    private r22StrVisiting;
+    /** Always `Value::Str`: R17 shapes, a `+` chain with such an operand, or an always-Str local. */
+    r22AlwaysStr(node: any): boolean;
+    /** A plain `Value` local, never captured by a closure, whose every write is always-Str (`x += e`
+     *  keeps it), or Str|Null (R13 source / nullish) when the checker narrows this read to `string`. */
+    r22AlwaysStrLocal(ident: any, allowNull?: boolean): boolean;
+    r22ConcatAnchor(node: any): boolean;
+    r22ConcatIsAnchored(left: any, right: any, leftType: any, rightType: any): boolean;
+    /** `Option<&str>` text of an operand that is always `Value::Str` / `Value::Null`, else undefined. */
+    r22StrOrNullOperand(node: any): string | undefined;
+    r22StrOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    r23Tier(node: Node): 'rest' | 'base' | 'pro' | undefined;
+    r23PlainSourceTier(node: Node): boolean;
+    /** A copied/read dict argument outside REST: in pro only `this.options` or a proven plain
+     *  local; in base also a parameter annotated with a plain-dict type (no `any` caller handle). */
+    r23TierSourceOk(arg: any): boolean;
+    /** `this.extend (plain, …unshared)` / `this.omit|keysort (plain, …)` called directly
+     *  (not only as a builder's return): the same fresh-copy proof as `rustR12PlainReturn`. */
+    private r23CopyVisiting;
+    r23FreshCopy(node: any, depth: number): boolean;
+    r25LooseF64(binding: string): string;
+    r25PlainValueOperand(node: any): boolean;
+    r25NativeCoercingArithmetic(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
+    r25NativeLooseOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
+    r25NativeStrOrNullConcat(left: any, right: any, leftText: string, rightText: string): string | undefined;
+    r25StrOrNull(node: any, depth: number): boolean;
+    /** Every dict `node` can evaluate to holds `key` as Str/Null or lacks it (a read of a missing key / non-dict is Null). */
+    r25DictFieldStrOrNull(node: any, key: string, depth: number): boolean;
+    /** `this.m(..)` resolved to a same-file method with a body whose every return holds `key` as Str/Null. */
+    r25MethodFieldStrOrNull(call: any, key: string, depth: number): boolean;
+    private static readonly R26_PARAMS_SLOT_ARG;
+    r26ParamsSlot(rhs: Node, selfName: string | undefined, depth: number): boolean;
+    r30LooseI64(expr: string): string;
+    r30SliceArm(variant: string, len: string, take: string, empty: string): string;
+    r30Slice(name: string, start: string, end: string): string;
+    r30IndexOf(name: string, needle: string): string;
+    r30Case(name: string, method: string): string;
 }
 export {};

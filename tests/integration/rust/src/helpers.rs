@@ -39,6 +39,11 @@ impl Value {
         Value::Dict(std::sync::Arc::new(m))
     }
 
+    #[allow(non_snake_case)]
+    pub fn Array(l: Vec<Value>) -> Value {
+        Value::Arr(l)
+    }
+
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -86,6 +91,16 @@ impl Value {
 impl From<Vec<Value>> for Value {
     fn from(l: Vec<Value>) -> Value {
         Value::Arr(l)
+    }
+}
+
+pub trait ShiftRemoveExt {
+    fn shift_remove(&mut self, k: &str) -> Option<Value>;
+}
+
+impl ShiftRemoveExt for HashMap<String, Value> {
+    fn shift_remove(&mut self, k: &str) -> Option<Value> {
+        self.remove(k)
     }
 }
 

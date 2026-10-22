@@ -1768,6 +1768,64 @@ describe('csharp typed body locals', () => {
         expect(output).toContain('object code = (currency != null && currency.ContainsKey("code") ? currency["code"] : null);');
         expect(output).not.toContain('getValue(currency, "code")');
     });
+    test('hx4 C01: a null-tested declared collection still reads natively', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'row') ? 'Dictionary<string, object>' : ((declaration?.name?.text === 'items') ? 'List<object>' : undefined);
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    main(row: any, items: any, other: any) {\n" +
+        "        if (row === undefined || items === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        const code = row['code'];\n" +
+        "        const first = items[0];\n" +
+        "        const last = items[-1];\n" +
+        "        const id = other['id'];\n" +
+        "        return [ code, first, last, id ];\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        expect(output).toContain('object code = (row != null && row.ContainsKey("code") ? row["code"] : null);');
+        expect(output).toContain('object first = (items != null && 0 < items.Count ? items[0] : null);');
+        expect(output).toContain('object last = getValue(items, -1);');
+        expect(output).toContain('object id = getValue(other, "id");');
+    });
+    test('hx4 C11: identifier keys on declared collections and base dict fields read natively', () => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previous = printer.csharpDeclaredLocalTypeResolver;
+        const previousLocal = printer.csharpLocalTypeOf;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'row') ? 'Dictionary<string, object>' : ((declaration?.name?.text === 'items') ? 'List<object>' : undefined);
+        printer.csharpLocalTypeOf = (node: any) => (node?.text === 'key') ? 'string?' : ((node?.text === 'big') ? 'Int64' : ((node?.text === 'i') ? 'int' : undefined));
+        const output = transpiler.transpileCSharp(
+        "class Exchange {\n" +
+        "    has: any; urls: any; timeframes: any;\n" +
+        "    main(row: any, items: any, other: any, key: any, big: any, k2: any) {\n" +
+        "        const out = [];\n" +
+        "        for (let i = 0; i < 3; i++) {\n" +
+        "            out.push (items[i]);\n" +
+        "        }\n" +
+        "        const a = row[key];\n" +
+        "        const b = this.has[key];\n" +
+        "        const c = this.urls[key];\n" +
+        "        const d = other[key];\n" +
+        "        const e = items[big];\n" +
+        "        const f = row[k2];\n" +
+        "        const g = this.timeframes[k2];\n" +
+        "        return [ out, a, b, c, d, e, f, g ];\n" +
+        "    }\n" +
+        "}").content;
+        printer.csharpDeclaredLocalTypeResolver = previous;
+        printer.csharpLocalTypeOf = previousLocal;
+        expect(output).toContain('(items != null && i < items.Count ? items[i] : null)');
+        expect(output).toContain('object a = (row != null && key != null && row.ContainsKey(key) ? row[key] : null);');
+        expect(output).toContain('object b = (this.has != null && key != null && this.has.ContainsKey(key) ? this.has[key] : null);');
+        expect(output).toContain('object c = (this.urls != null && key != null && ((IDictionary<string, object>)this.urls).ContainsKey(key) ? ((IDictionary<string, object>)this.urls)[key] : null);');
+        expect(output).toContain('object d = getValue(other, key);');
+        expect(output).toContain('object e = getValue(items, big);');
+        expect(output).toContain('object f = getValue(row, k2);');
+        expect(output).toContain('object g = getValue(this.timeframes, k2);');
+    });
     test('a non-dictionary declared-local resolver answer keeps getValue', () => {
         const printer: any = (transpiler as any).csharpTranspiler;
         const previous = printer.csharpDeclaredLocalTypeResolver;
@@ -5914,3 +5972,41 @@ describe('U59 list index reads bounded by the enclosing for', () => {
     });
 });
 
+
+// hx4 L44
+describe('hx4 L44 guarded nullable negation', () => {
+    const transpiler = new Transpiler({});
+    const cls = (body: string) =>
+        "class Exchange {\n" +
+        "    safeNumberN(a, b) { return a; }\n" +
+        "    main(item) {\n" + body + "    }\n" +
+        "}";
+    test('if-guarded double? local keeps its type and negates in place', () => {
+        const output = transpiler.transpileCSharp(cls(
+            "        const amount = this.safeNumberN(item, ['amount']);\n" +
+            "        let r = amount;\n" +
+            "        if (amount !== undefined) {\n" +
+            "            r = -amount;\n" +
+            "        }\n" +
+            "        return r;\n")).content;
+        expect(output).toContain('double? amount = this.safeNumberN(');
+        expect(output).toContain('r = (amount = -amount);');
+        expect(output).not.toContain('prefixUnaryNeg');
+    });
+    test('&&-guarded double? local negates in place', () => {
+        const output = transpiler.transpileCSharp(cls(
+            "        const amount = this.safeNumberN(item, ['amount']);\n" +
+            "        const x = (amount !== undefined) && this.safeNumberN(-amount, []);\n" +
+            "        return x;\n")).content;
+        expect(output).toContain('double? amount = this.safeNumberN(');
+        expect(output).toContain('(amount = -amount)');
+        expect(output).not.toContain('prefixUnaryNeg');
+    });
+    test('unguarded negation keeps object + helper', () => {
+        const output = transpiler.transpileCSharp(cls(
+            "        const amount = this.safeNumberN(item, ['amount']);\n" +
+            "        return -amount;\n")).content;
+        expect(output).toContain('object amount = this.safeNumberN(');
+        expect(output).toContain('prefixUnaryNeg(ref amount)');
+    });
+});
