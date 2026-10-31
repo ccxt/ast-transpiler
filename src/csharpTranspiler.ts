@@ -1234,10 +1234,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (baseField !== undefined) {
             return baseField;
         }
-        const viewRead = (this.ELEMENT_ACCESS_WRAPPER_OPEN && keyRead === undefined && this.printElementAccessExpressionExceptionIfAny(node) === undefined)
+        const baseViewRead = (this.ELEMENT_ACCESS_WRAPPER_OPEN && keyRead === undefined && this.printElementAccessExpressionExceptionIfAny(node) === undefined)
             ? this.csharpBaseDictionaryViewRead(node.expression, node.argumentExpression) : undefined;
-        if (viewRead !== undefined) {
-            return viewRead;
+        if (baseViewRead !== undefined) {
+            return baseViewRead;
         }
         return super.printElementAccessExpression(node, identation);
     }

@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-O5MZOAMZ.js";
+} from "./chunk-MEKZ6QY3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -3600,9 +3600,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (baseField !== void 0) {
       return baseField;
     }
-    const viewRead = this.ELEMENT_ACCESS_WRAPPER_OPEN && keyRead === void 0 && this.printElementAccessExpressionExceptionIfAny(node) === void 0 ? this.csharpBaseDictionaryViewRead(node.expression, node.argumentExpression) : void 0;
-    if (viewRead !== void 0) {
-      return viewRead;
+    const baseViewRead = this.ELEMENT_ACCESS_WRAPPER_OPEN && keyRead === void 0 && this.printElementAccessExpressionExceptionIfAny(node) === void 0 ? this.csharpBaseDictionaryViewRead(node.expression, node.argumentExpression) : void 0;
+    if (baseViewRead !== void 0) {
+      return baseViewRead;
     }
     return super.printElementAccessExpression(node, identation);
   }
@@ -8921,15 +8921,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (node?.arguments?.length === 1 && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
       return `new List<object>(${parsedArg}.Keys)`;
     }
-<<<<<<< HEAD
-    const view = node?.arguments?.length === 1 ? this.csharpBaseDictionaryView(node.arguments[0]) : void 0;
-    if (view !== void 0) {
-      return `new List<object>(${view}.Keys)`;
-=======
+    const baseView = node?.arguments?.length === 1 ? this.csharpBaseDictionaryView(node.arguments[0]) : void 0;
+    if (baseView !== void 0) {
+      return `new List<object>(${baseView}.Keys)`;
+    }
     const view = node?.arguments?.length === 1 ? this.csharpMemberReceiver(node.arguments[0]) : void 0;
     if (view !== void 0 && view.kind === "dict" && view.text.startsWith("this.") && view.text !== parsedArg) {
       return `new List<object>(${view.text}.Keys)`;
->>>>>>> cb4da7b2
     }
     return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
   }
