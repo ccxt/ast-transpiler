@@ -526,6 +526,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHx4J06NarrowedIndexOf(node: any, name: any, parsedArg: any): string;
 }
 export interface JavaTranspiler {
+    javaCounterPlan(statements: any, identation: number): Map<any, any> | undefined;
+    javaPrintBodyStatements(statements: any, identation: number): string[];
     hx4J09BoxIdentifier(node: any, seen: Set<any>, depth: number): boolean;
     hx4J09BoxValue(node: any, seen: Set<any>, depth: number): boolean;
     hx4J09LiteralTupleElement(node: any, index: number): boolean;
