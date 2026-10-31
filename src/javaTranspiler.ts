@@ -481,6 +481,13 @@ function javaVenueCalleeNativeType(printed: unknown): string | undefined {
 // hand-written `toArray` (BaseExchange.java) and Object.keys/values (Helpers.objectKeys/Values).
 const JAVA_LIST_RETURN_BASE_METHODS: Set<string> = new Set<string>(['toArray']);
 const JAVA_OBJECT_LIST_CALL_NAMES: Set<string> = new Set<string>(['keys', 'values']);
+// `this.<name> (...)` calls that print a java.util.List the hand-written runtime declares (toArray/aggregate:
+// `List<Object>`; sortBy/sortBy2/filterBy: `<T> List<T>`, inferred Object in a List<Object> slot), resolved to
+// the base Exchange tier or base/functions/generic.ts. Argument position only: a return site keeps its own set.
+const JAVA_LIST_ARGUMENT_BASE_METHODS: Set<string> = new Set<string>(['toArray', 'aggregate', 'sortBy', 'sortBy2', 'filterBy']);
+// the Exchange tier only: PredictionExchange.ts keeps its own boxed slots
+const JAVA_BASE_LIST_PARAMETER_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads[^/]*)?\.ts$/;
+const JAVA_LIST_ARGUMENT_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](?:functions[\\/]generic\.ts|Exchange(\.nooverloads[^/]*)?\.ts)$/;
 
 // the hand-written `public String` producers of the base tier a `this.<name> (...)` return
 // may print: the safeString* family, decimalToPrecision / numberToString (BaseExchange.java)
@@ -1231,6 +1238,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 && this.javaNativeParameterType(declaration) === type) {
                 return true;
             }
+        }
+        if (type === JAVA_NATIVE_RETURN_LIST_TYPE && this.javaPrintsListArgument(arg)) {
+            return true;
         }
         if (type !== 'String') {
             return false;
@@ -4550,6 +4560,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (excluded !== undefined && excluded.includes(method.parameters.indexOf(node))) {
             return undefined;
         }
+        const baseList = testTier ? undefined : this.javaBaseListParameterTypeOf(node, method, type, checker);
+        if (baseList !== undefined) {
+            return baseList;
+        }
         const symbol = this.javaParameterAliasSymbol(node, type, checker);
         const name = symbol?.name;
         if (testTier && (name === 'Strings' || this.javaIsStringArrayType(checker, type))) {
@@ -4571,6 +4585,124 @@ export class JavaTranspiler extends BaseTranspiler {
         const declaration = symbol?.declarations?.[0]?.resolve();
         const fileName = declaration?.getSourceFile?.()?.fileName;
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? aliasType : this.javaPlainParameterTypeOf(node, type, checker);
+    }
+
+    // Whole-repo facts about a method name that one program cannot show (the base-tier program holds Exchange.ts
+    // and its imports, not the venues). The embedding build layer answers with plain data: how many ts/src
+    // declarations carry the name, how many non-call `.name` references / string literals mention it, whether
+    // the hand-written Java above the transpile delimiters mentions it, and the argument nodes of every
+    // `this.name (..)` call outside `ownFile`. All judgement stays here. With no consumer installed nothing changes.
+    javaRepoMethodUses: ((name: string, ownFile: string) => { declared: number, mentions: number, handWritten: boolean, calls: Node[][] } | undefined) | undefined;
+
+    // A fixed `any[]` / `number[]` parameter of a method the printer emits from the base tier prints
+    // `java.util.List<Object>` when (a) the checker types it a plain array (not a tuple, not `string[]`),
+    // (b) the body never writes it and no ancestor declares the method, (c) the name is declared once in the
+    // repo, never referenced other than as `this.name (..)` and never mentioned by hand-written Java, and
+    // (d) there is a caller and every caller hands a value that prints as a bare List (array literal, base list
+    // producer, a local the build layer declared `List<Object>`), so no call gains a checkcast and none can throw.
+    // A caller whose local is not published yet answers undefined; the embedding layer's re-print asks again.
+    javaBaseListParameterTypeOf(node, method, type, checker): string | undefined {
+        if (typeof this.javaRepoMethodUses !== 'function'
+            || !JAVA_BASE_LIST_PARAMETER_FILES.test(node.getSourceFile().fileName)
+            || !isIdentifier(method.name) || !this.javaIsPrintedMethod(method)
+            || !checker.isArrayType(type) || checker.isTupleType(type)) {
+            return undefined;
+        }
+        const element = checker.getTypeArguments(type)?.[0];
+        if (element === undefined || (element.flags & (TypeFlags.Any | TypeFlags.Number)) === 0) {
+            return undefined;
+        }
+        if (this.getMethodOverride(method) !== undefined || this.javaParameterIsWritten(node)) {
+            return undefined;
+        }
+        const position = method.parameters.indexOf(node);
+        const name = String(method.name.text);
+        const ownFile = node.getSourceFile().fileName;
+        const uses = this.javaRepoMethodUses(name, ownFile);
+        if (uses === undefined || uses.declared !== 1 || uses.mentions > 0 || uses.handWritten) {
+            return undefined;
+        }
+        const internal = this.javaThisCallsInFile(node.getSourceFile(), name);
+        if (internal.length + uses.calls.length === 0) {
+            return undefined;
+        }
+        const producerDeclared = (producer: string) => this.javaRepoMethodUses?.(producer, ownFile)?.declared === 1;
+        const listOutside = uses.calls.every((args) => args.length > position && !isSpreadElement(args[position])
+            && this.javaSyntacticListArgument(args[position], producerDeclared));
+        const listInside = internal.every((call) => {
+            const arg = call.arguments?.[position];
+            return arg !== undefined && !isSpreadElement(arg) && this.javaPrintsListArgument(arg);
+        });
+        return listOutside && listInside ? JAVA_NATIVE_RETURN_LIST_TYPE : undefined;
+    }
+
+    // every `this.<name> (..)` call expression of a source file, collected once per file
+    private javaThisCallIndex = new WeakMap<object, Map<string, any[]>>();
+    javaThisCallsInFile(file, name: string): any[] {
+        let index = this.javaThisCallIndex.get(file);
+        if (index === undefined) {
+            index = new Map<string, any[]>();
+            const collect = (n: Node) => {
+                if (isCallExpression(n) && isPropertyAccessExpression(n.expression)
+                    && n.expression.expression.kind === SyntaxKind.ThisKeyword) {
+                    const key = String(n.expression.name.text);
+                    index!.set(key, (index!.get(key) ?? []).concat([n]));
+                }
+                n.forEachChild(collect);
+            };
+            collect(file);
+            this.javaThisCallIndex.set(file, index);
+        }
+        return index.get(name) ?? [];
+    }
+
+    // an argument node that needs no program to show it prints a bare List: an array literal without spread
+    // or hole, or a `this.<producer> (..)` call of a hand-written list producer the repo declares once
+    javaSyntacticListArgument(arg, producerDeclared: (name: string) => boolean): boolean {
+        let node = arg;
+        while (node !== undefined && isParenthesizedExpression(node)) {
+            node = node.expression;
+        }
+        if (isArrayLiteralExpression(node)) {
+            return !node.elements.some((e) => isSpreadElement(e) || e.kind === SyntaxKind.OmittedExpression);
+        }
+        return isCallExpression(node) && isPropertyAccessExpression(node.expression)
+            && node.expression.expression.kind === SyntaxKind.ThisKeyword
+            && JAVA_LIST_ARGUMENT_BASE_METHODS.has(String(node.expression.name.text))
+            && producerDeclared(String(node.expression.name.text));
+    }
+
+    // an argument whose printed Java is already a `java.util.List<Object>`-compatible value: an array literal
+    // without spread (always `new ArrayList<Object>(Arrays.asList(..))`), a base `this.toArray/aggregate/sortBy/
+    // sortBy2/filterBy (..)` call (hand-written, resolved by signature), or a local the build layer declared
+    // `List<Object>`. Such an argument needs no checkcast into a List slot.
+    javaPrintsListArgument(arg): boolean {
+        let node = arg;
+        while (node !== undefined && isParenthesizedExpression(node)) {
+            node = node.expression;
+        }
+        if (isArrayLiteralExpression(node)) {
+            return !node.elements.some((e) => isSpreadElement(e) || e.kind === SyntaxKind.OmittedExpression);
+        }
+        if (isCallExpression(node)) {
+            const callee = node.expression;
+            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+                || !JAVA_LIST_ARGUMENT_BASE_METHODS.has(String(callee.name.text))) {
+                return false;
+            }
+            try {
+                const fileName = this.getChecker().getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+                return fileName !== undefined && JAVA_LIST_ARGUMENT_BASE_FILES.test(fileName.replace(/\\/g, '/'));
+            } catch (e) {
+                return false;
+            }
+        }
+        if (isIdentifier(node) && this.printNode(node, 0) === node.text) {
+            const declared = this.javaDeclaredTypeOf(node);
+            return declared !== undefined
+                && declared.replace(/^final\s+/, '').replace(/\s+/g, '').replace(/^java\.util\./, '') === 'List<Object>';
+        }
+        return false;
     }
 
     // the Java class a class-typed annotation names: only a name in

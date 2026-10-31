@@ -1,4 +1,5 @@
 import { Transpiler } from '../src/transpiler';
+import { SyntaxKind } from 'typescript/unstable/ast';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -8594,5 +8595,117 @@ describe('java plain map field writes from owner-executor members', () => {
 
     test('an asserted key that is not a proven String keeps the helper', () => {
         expect(java('handleTicker', "this.tickers[k as IndexType] = v;")).toContain("Helpers.addElementToObject(this.tickers, k, v);");
+    });
+});
+
+
+// FJ4-A2: a fixed `any[]` / `number[]` parameter of a base-tier (ts/src/base/Exchange.ts, below the transpile
+// delimiter) method prints `java.util.List<Object>` when the checker types it a plain array, the body never
+// writes it, no ancestor declares the method, the repo declares the name once with no reference other than
+// `this.name (..)` and no hand-written Java caller, and EVERY caller hands a value that already prints a List
+// (so no call gains a checkcast). The whole-repo facts arrive through printer.javaRepoMethodUses (plain data).
+describe('java base-tier list parameters (FJ4-A2)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-fj4a2');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const LITERAL = { kind: SyntaxKind.ArrayLiteralExpression, elements: [] };
+    const OPAQUE = { kind: SyntaxKind.Identifier, text: 'anything' };
+    const CLEAN = { declared: 1, mentions: 0, handWritten: false, calls: [] as any[] };
+
+    const BASE_SOURCE =
+        "export class BaseExchange {\n" +
+        "    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+        "    toArray (x: any): any[] { return x; }\n" +
+        "    pick (array: any[], limit: number): any[] {\n" +
+        "        return array;\n" +
+        "    }\n" +
+        "    ceiling (arr: number[], value: number): number {\n" +
+        "        return arr[0];\n" +
+        "    }\n" +
+        "    rewritten (list: any[]): any[] {\n" +
+        "        list = list.slice ();\n" +
+        "        return list;\n" +
+        "    }\n" +
+        "    names (items: string[]): any[] {\n" +
+        "        return items;\n" +
+        "    }\n" +
+        "    opaqueCaller (list: any[]): any[] {\n" +
+        "        return list;\n" +
+        "    }\n" +
+        "    run (x: any, y: any): any {\n" +
+        "        const local: any[] = this.toArray (x);\n" +
+        "        this.pick (local, 1);\n" +
+        "        this.pick (this.toArray (x), 2);\n" +
+        "        this.ceiling ([ 1, 2, 3 ], 2);\n" +
+        "        this.rewritten ([ 1 ]);\n" +
+        "        this.names ([ 'a' ]);\n" +
+        "        this.opaqueCaller (y);\n" +
+        "    }\n" +
+        "}\n";
+
+    const print = (uses: any) => {
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const printer: any = (byPath as any).javaTranspiler;
+        if (uses !== undefined) {
+            printer.javaRepoMethodUses = (name: string) => uses(name);
+        }
+        // the build layer publishes `local` as a declared List<Object>; here it is a `: any[]` annotation only
+        return byPath.transpileJavaByPath(BASE_FIXTURE).content as string;
+    };
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('literal and list-producer callers type both array parameters', () => {
+        const output = print((name: string) => ({ ...CLEAN, calls: name === 'pick' || name === 'ceiling' ? [] : CLEAN.calls }));
+        expect(output).toContain('ceiling(java.util.List<Object> arr, Object value)');
+        // `pick` is also called with a `: any[]` local that nothing declares List<Object>: that caller is unproven
+        expect(output).toContain('pick(Object array, Object limit)');
+    });
+
+    test('callers handing a base list producer or an array literal leave no checkcast behind', () => {
+        const source = BASE_SOURCE.replace("        const local: any[] = this.toArray (x);\n        this.pick (local, 1);\n", '');
+        fs.writeFileSync(BASE_FIXTURE, source);
+        try {
+            const output = print(() => CLEAN);
+            expect(output).toContain('pick(java.util.List<Object> array, Object limit)');
+            expect(output).toContain('this.pick(this.toArray(x), 2)');
+            expect(output).toContain('this.ceiling(new java.util.ArrayList<Object>(java.util.Arrays.asList(1, 2, 3)), 2)');
+            expect(output).not.toContain('(java.util.List<Object>) (');
+        } finally {
+            fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+        }
+    });
+
+    test('an outside caller proves the parameter only when it hands a List', () => {
+        const withCalls = (calls: any[][]) => print((name: string) => ({ ...CLEAN, calls: name === 'ceiling' ? calls : [] }));
+        expect(withCalls([ [ LITERAL, OPAQUE ] ])).toContain('ceiling(java.util.List<Object> arr, Object value)');
+        expect(withCalls([ [ LITERAL, OPAQUE ], [ OPAQUE, OPAQUE ] ])).toContain('ceiling(Object arr, Object value)');
+        expect(withCalls([ [] ])).toContain('ceiling(Object arr, Object value)');
+    });
+
+    test('a written parameter, a string[] slot and an opaque caller keep Object', () => {
+        const output = print(() => CLEAN);
+        expect(output).toContain('rewritten(Object list)');
+        expect(output).not.toContain('java.util.List<Object> items');
+        expect(output).toContain('opaqueCaller(Object list)');
+    });
+
+    test('a name declared twice, referenced elsewhere or called by hand-written Java keeps Object', () => {
+        for (const uses of [ { ...CLEAN, declared: 2 }, { ...CLEAN, mentions: 1 }, { ...CLEAN, handWritten: true } ]) {
+            const output = print(() => uses);
+            expect(output).toContain('ceiling(Object arr, Object value)');
+        }
+    });
+
+    test('with no repo index installed nothing changes', () => {
+        const output = print(undefined);
+        expect(output).toContain('ceiling(Object arr, Object value)');
+        expect(output).toContain('pick(Object array, Object limit)');
     });
 });
