@@ -303,6 +303,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamSpelling(node: any, anyCell?: boolean): string | undefined;
     csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean> | undefined;
+    csharpListParamBodyReadsAsList(parameter: any): boolean;
+    csharpArgumentMayBeList(type: any): boolean;
     printArgsForCallExpression(node: any, identation: any): any;
     csharpListParamIsWritten(parameter: any): boolean;
     csharpListBindingIsWritten(declaration: any): boolean;

@@ -3134,6 +3134,9 @@ var CSHARP_OVERRIDE_PARAM_TYPES = {
 };
 var csharpListParamCensuses = /* @__PURE__ */ new WeakMap();
 var csharpListParamBaseKeys = /* @__PURE__ */ new WeakMap();
+var CSHARP_BASE_LIST_PARAM_DICT_OVERRIDES = {
+  parseOHLCVs: [0]
+};
 function csharpListParamInTradingTier(node) {
   const owner = findAncestor(node, (n) => isClassDeclaration2(n));
   return owner !== void 0 && owner.name?.text === "Exchange" && owner.heritageClauses !== void 0;
@@ -7367,7 +7370,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
         if (isMethodDeclaration2(node) && node.name !== void 0 && node.parameters !== void 0 && node.parameters.length > 0) {
           const methodName = node.name.getText().trim();
           Array.from(node.parameters).forEach((parameter, index) => {
-            if (parameter.dotDotDotToken === void 0) {
+            if (parameter.dotDotDotToken === void 0 && node.body !== void 0) {
               add(declarations, methodName + ":" + index, parameter);
             }
           });
@@ -7400,9 +7403,12 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
       if (baseTier) {
         baseKeys.add(key);
+        if ((CSHARP_BASE_LIST_PARAM_DICT_OVERRIDES[methodName] ?? []).includes(index)) {
+          admitted = false;
+        }
       }
       for (const parameter of rows) {
-        const followsBase = baseTier && !csharpListParamFileIsPrintedAlone(parameter);
+        const followsBase = baseTier && !csharpListParamFileIsPrintedAlone(parameter) && this.csharpListParamBodyReadsAsList(parameter);
         if (!followsBase && this.csharpListParamSpelling(parameter, baseTier) !== "IList<object>") {
           admitted = false;
           break;
@@ -7435,6 +7441,50 @@ var CSharpTranspiler = class extends BaseTranspiler {
     csharpListParamCensuses.set(program, census);
     return census;
   }
+  // whether every read of a parameter in its method body is a list read (`.length`, a non-string
+  // index, an argument): a string-keyed read means the value is a dictionary at run time
+  csharpListParamBodyReadsAsList(parameter) {
+    const name = parameter.name === void 0 || parameter.name.getText === void 0 ? "" : parameter.name.getText().trim();
+    const method = findAncestor(parameter, (n) => isMethodDeclaration2(n));
+    if (name === "" || method === void 0 || method.body === void 0) {
+      return name !== "";
+    }
+    let list = true;
+    const walk = (node) => {
+      if (!list) {
+        return;
+      }
+      if (isElementAccessExpression(node) && isIdentifier(node.expression) && node.expression.text === name) {
+        const argumentType = this.getChecker().getTypeAtLocation(node.argumentExpression);
+        if (isStringLiteral(node.argumentExpression) || argumentType !== void 0 && this.isStringType(argumentType.flags)) {
+          list = false;
+          return;
+        }
+      }
+      if (isPropertyAccessExpression(node) && isIdentifier(node.expression) && node.expression.text === name && node.name.text !== "length") {
+        list = false;
+        return;
+      }
+      if (isCallExpression3(node) && node.arguments.length >= 2 && isIdentifier(node.arguments[0]) && node.arguments[0].text === name && isStringLiteral(node.arguments[1])) {
+        list = false;
+        return;
+      }
+      node.forEachChild(walk);
+    };
+    method.body.forEachChild(walk);
+    return list;
+  }
+  csharpArgumentMayBeList(type) {
+    if (type === void 0) {
+      return false;
+    }
+    if (type.isUnionType && type.isUnionType()) {
+      const arms = (type.getTypes() ?? []).filter((arm) => (arm.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) === 0);
+      return arms.length > 0 && arms.every((arm) => this.csharpArgumentMayBeList(arm));
+    }
+    const checker = this.getChecker();
+    return (type.flags & (TypeFlags3.Any | TypeFlags3.Unknown)) !== 0 || checker.isArrayType(type) || checker.isTupleType(type);
+  }
   // A call of a base-tier method whose array parameter this rule typed from its declared type: an
   // argument the printer does not hold as a list is converted at the call, as `x.push` does
   printArgsForCallExpression(node, identation) {
@@ -7466,6 +7516,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
         return printed;
       }
       if (!isAsExpression(inner) && this.csharpListParamArgumentPrintsList(inner, decide)) {
+        return printed;
+      }
+      if (!this.csharpArgumentMayBeList(this.getChecker().getTypeAtLocation(inner))) {
         return printed;
       }
       return `((IList<object>)${printed})`;
