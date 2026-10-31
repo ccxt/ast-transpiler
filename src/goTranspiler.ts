@@ -13523,7 +13523,8 @@ ${tryBodyBlock}
         if (this.isGoElementAccessAssignmentTarget(node) || containerStr.includes('\n') || keyStr.includes('\n')) {
             return undefined;
         }
-        if (this.goResolvedLocalGoType(baseExpr) !== GO_STRING_LIST_LOCAL_TYPE) {
+        const listType = this.goResolvedLocalGoType(baseExpr);
+        if ((listType !== GO_STRING_LIST_LOCAL_TYPE) && !((listType === GO_SAFE_LIST_LOCAL_TYPE) && this.goListElementsAreObjects(baseExpr))) {
             return undefined;
         }
         const mutators = [ 'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin' ];
@@ -13552,6 +13553,25 @@ ${tryBodyBlock}
         }
         return undefined;
     }
+    // RF-go-6-C (DerefScalar follow-up): the checker types every element of this list as an object type
+    // (a Trade / Order / Position interface, a Dict, a nested array), never a scalar, `any` or a union with
+    // one. A Go `[]any` holding such elements holds maps or slices, never a *string/*int64/*float64/*bool, so
+    // the DerefScalar the guarded element read carries is the identity and the read is the slice index.
+    goListElementsAreObjects(baseExpr): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const type: any = checker?.getTypeAtLocation(baseExpr);
+        if ((type === undefined) || (typeof checker.isArrayType !== 'function') || !checker.isArrayType(type)) {
+            return false;
+        }
+        const element: any = checker.getIndexTypeOfType(type, IndexKind.Number);
+        if (element === undefined) {
+            return false;
+        }
+        const parts: any[] = ((typeof element.isUnionType === 'function') && element.isUnionType()) ? element.getTypes().slice() : [element];
+        const real = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        return (real.length > 0) && real.every((p) => ((p.flags & TypeFlags.Object) !== 0) && ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0));
+    }
+
     // a same-named identifier that the checker binds to ANOTHER declaration (a sibling block's
     // `let quote`) is not a write of this loop-bounded element local
     goOtherBindingOfLoopBoundedElement(n, declaration): boolean {
@@ -13598,6 +13618,9 @@ ${tryBodyBlock}
             return undefined;
         }
         const index = `${base.text}[${key.text}]`;
+        if (this.goResolvedLocalGoType(base) !== GO_STRING_LIST_LOCAL_TYPE) {
+            return undefined;
+        }
         return (printedValue.trim() === index) && (this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index) ? 'string' : undefined;
     }
     // ===== end RF-go-6-C =====
