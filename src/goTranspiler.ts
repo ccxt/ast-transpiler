@@ -310,7 +310,12 @@ const GO_MARKET_MAP_CALLS = [ 'Market', 'SafeMarket', 'SafeMarketStructure', 'Ex
 // call site the body proof cannot resolve the body-carrying declaration of an overloaded name, so
 // every caller boxed the row and wrapped it in MapTyped; the base-file print proves the body and
 // exchange_generated.go declares the result `map[string]any`, so the call is that dictionary.
-const GO_MARKET_MAP_BASE_CALLS = [ 'getMarketFromSymbols' ];
+const GO_MARKET_MAP_BASE_CALLS = [ 'getMarketFromSymbols',
+    // BaseExchange methods whose Go signature is `map[string]any` on the base, on every venue override
+    // and on IDerivedExchange (go/v4 exchange_generated.go + exchange_interface.go; the ccxt build retypes
+    // the overrides). The Go result is the map itself, so the box a local held was always that map - a
+    // typed nil when the callee answers absent, never an untyped nil: see goMarketUseHandsTheMapOn.
+    'parseBalance', 'parseWsTrade', 'parseWsOrder', 'describe' ];
 
 // the binary operators under which a market/currency local's element read is a pure READ: the
 // element is derefed by the GetValue the element-read printer keeps for these operands
@@ -2736,6 +2741,63 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return `SafeMapTyped(${container}, ${key})`;
     }
 
+    // `name` (TS spelling) is a base method whose generated Go result is `map[string]any`
+    goBaseMapCalleeName(name: string): boolean {
+        return GO_MARKET_MAP_BASE_CALLS.indexOf(name) >= 0;
+    }
+
+    // the source file sits under ts/src/prediction (its base class is exchange_prediction.go)
+    goNodeIsInPredictionTree(node): boolean {
+        const fileName = String(node?.getSourceFile?.()?.fileName ?? '');
+        return /(^|[\\/])ts[\\/]src[\\/](prediction[\\/]|base[\\/]PredictionExchange\.ts$)/.test(fileName);
+    }
+
+    // `this.markets` / `this.currencies` (and the `_by_id` twins): the hand-written book getters of
+    // go/v4/exchange_markets_book.go print `this.Markets()` and answer a `map[string]any` (nil before
+    // the first load). Same box argument as the base callees above.
+    goBookAccessorRead(initializer): boolean {
+        if ((initializer?.kind !== SyntaxKind.PropertyAccessExpression) || (initializer.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const name = String(initializer.name?.text ?? '');
+        if (this.GO_NATIVE_MAP_ACCESSORS.indexOf(name.charAt(0).toUpperCase() + name.slice(1)) < 0) {
+            return false;
+        }
+        // the field is the base Exchange's own (ts/src/base/Exchange.ts), not a same-named member
+        try {
+            const symbol = this.getChecker().getSymbolAtLocation(initializer.name);
+            return (symbol?.declarations ?? []).some((d) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(d.resolve?.()?.getSourceFile?.()?.fileName ?? '')));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // `node` is a local the base-map-result rule typed (see goBaseMapResultLocal)
+    goIsBaseMapResultLocal(node): boolean {
+        if (node?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const declaration = this.goDeclarationOfIdentifier(node);
+        // a local the dict-producer rule already typed keeps the writes that rule printed
+        return (declaration !== undefined) && this.goBaseMapResultLocal(declaration.initializer)
+            && (this.goSafeDictLocalUnbox(declaration) === undefined)
+            && (this.goMarketLocalUnbox(declaration) === GO_MARKET_LOCAL_TYPE);
+    }
+
+    // the callee of a market local is a base map method / book accessor whose Go result is the map
+    // itself (so the use arms of goMarketUseHandsTheMapOn apply); the prediction tree keeps its box
+    goBaseMapResultLocal(initializer): boolean {
+        if (this.goNodeIsInPredictionTree(initializer)) {
+            return false;
+        }
+        if (this.goBookAccessorRead(initializer)) {
+            return true;
+        }
+        const name = initializer?.expression?.name?.text;
+        return (initializer?.kind === SyntaxKind.CallExpression) && (typeof name === 'string')
+            && ((GO_MARKET_MAP_BASE_CALLS.indexOf(name) >= 0) || (GO_MARKET_PRODUCER_METHODS.indexOf(name) >= 0));
+    }
+
     // the TypeScript return type proves the boxed value is the market dictionary: the checker reports
     // the `MarketInterface` interface for `this.Market(...)` / `this.SafeMarket(...)` (the `Market`
     // alias is the same interface unioned with undefined). Read from the checker, never a printed name.
@@ -2758,6 +2820,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             && (receiver.name?.text === 'DerivedExchange');
         if (!onThis && !onDerived) {
             return false;
+        }
+        // a base accessor whose generated Go result is the map itself needs no checker type: the
+        // prediction tree keeps its box (its base is another file)
+        if (this.goBaseMapCalleeName(name) && !this.goNodeIsInPredictionTree(initializer)) {
+            return true;
         }
         const checker: any = this.checkerOrUndefined();
         if (checker === undefined) {
@@ -2999,7 +3066,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // one later use of the market local: the dictionary read shapes SafeDict proves (element read,
     // `in`, read-helper argument), plus — only when the accessor throws rather than answers absent —
     // a plain argument position, since Go re-boxes the map into the callee's `any` as the box did.
-    goMarketUseReadsTheValue(node, throwingAccessor: boolean, keepsMap = false): boolean {
+    goMarketUseReadsTheValue(node, throwingAccessor: boolean, keepsMap = false, handsOn = false): boolean {
         if (this.goSafeDictUseReadsTheMap(node)) {
             return true;
         }
@@ -3007,7 +3074,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node) && this.goIsComparedOperand(parent)) {
             return true;
         }
-        if (keepsMap && this.goMarketUseKeepsMap(node)) {
+        if (keepsMap && this.goMarketUseKeepsMap(node, handsOn)) {
             return true;
         }
         if (!throwingAccessor) {
@@ -3020,8 +3087,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // a use that answers what the boxed local answered even for a nil box: IsEqual derefScalars a
     // typed nil map to an untyped nil, PanicOnError only inspects an error, a GetArg-bound slot folds
     // a nil map to its default, and a map-returning body hands the map on.
-    goMarketUseKeepsMap(node): boolean {
+    goMarketUseKeepsMap(node, handsOn = false): boolean {
         const parent: any = node.parent;
+        if (handsOn && this.goMarketUseHandsTheMapOn(node, parent)) {
+            return true;
+        }
         if (parent?.kind === SyntaxKind.ReturnStatement) {
             if (parent.expression !== node) {
                 return false;
@@ -3059,22 +3129,59 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return this.goGetArgPositionIsDefaulted(callee, argIndex);
     }
 
+    // The callee's Go result is the map itself, so the `any` the local used to hold was already that
+    // map (a nil one stays a typed nil in the box): every use that only hands the value on - a branch
+    // value, a container element, a copy, an element write (a nil map panics in the helper and in the
+    // native store alike) or a call argument - sees the same dynamic value through the narrower static
+    // type. Rebinding, member access, spread and `Array.isArray` keep the box. Prediction keeps its box.
+    goMarketUseHandsTheMapOn(node, parent): boolean {
+        switch (parent?.kind) {
+        case SyntaxKind.ConditionalExpression:
+            return (parent.whenTrue === node) || (parent.whenFalse === node);
+        case SyntaxKind.PropertyAssignment:
+            return parent.initializer === node;
+        case SyntaxKind.ShorthandPropertyAssignment:
+            return parent.name === node;
+        case SyntaxKind.ArrayLiteralExpression:
+            return true;
+        case SyntaxKind.ParenthesizedExpression:
+            return this.goMarketUseHandsTheMapOn(parent, parent.parent);
+        case SyntaxKind.BinaryExpression:
+            return (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node);
+        case SyntaxKind.ElementAccessExpression: {
+            const above: any = parent.parent;
+            return (parent.expression === node) && (above?.kind === SyntaxKind.BinaryExpression)
+                && (above.left === parent) && (above.operatorToken?.kind === SyntaxKind.EqualsToken);
+        }
+        case SyntaxKind.CallExpression: {
+            if ((parent.expression === node) || (parent.arguments.indexOf(node) < 0)) {
+                return false;
+            }
+            const callee: any = parent.expression;
+            return !((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.name?.text === 'isArray'));
+        }
+        }
+        return false;
+    }
+
     goMarketLocalUnboxUncached(declaration): string | undefined {
-        if (!this.goMarketCallReturnsDict(declaration.initializer)) {
+        const bookRead = this.goBookAccessorRead(declaration.initializer) && !this.goNodeIsInPredictionTree(declaration.initializer);
+        if (!bookRead && !this.goMarketCallReturnsDict(declaration.initializer)) {
             return undefined;
         }
         // the throwing accessors (`this.market`, `this.currency`) panic instead of answering absent, so
         // the boxed result is always a dictionary and passing the local re-boxes the same map into the
         // callee's `any`. The Safe* accessors may answer their own optional argument: read shapes only.
         const accessorName = declaration.initializer.expression?.name?.text;
-        const throwingAccessor = (accessorName === 'market') || (accessorName === 'currency');
+        const throwingAccessor = !bookRead && ((accessorName === 'market') || (accessorName === 'currency'));
         // the extra use shapes below only apply when the callee's own Go result is the map: a local
         // that still needs the converter keeps the shipped read-only scan (no new converter calls)
-        const keepsMap = this.goMarketCalleePrintsMap(declaration.initializer);
+        const keepsMap = bookRead || this.goMarketCalleePrintsMap(declaration.initializer);
+        const handsOn = keepsMap && this.goBaseMapResultLocal(declaration.initializer);
         // `this.market(…)` carries the same name as the local: a property/method name is not
         // a reference, and neither is a different binding of the same name
         return this.goDeclaredLocalTypeIfSafe(declaration, GO_MARKET_LOCAL_TYPE,
-            (n) => this.goMarketUseReadsTheValue(n, throwingAccessor, keepsMap),
+            (n) => this.goMarketUseReadsTheValue(n, throwingAccessor, keepsMap, handsOn),
             (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                 || !this.goIdentifierRefersToDeclaration(n, declaration));
     }
@@ -3087,7 +3194,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         // a callee whose generated Go result already IS the dictionary (the base accessors, and the
         // producers this rule retypes) is assigned as it stands: no converter call at the site
-        if (this.goMarketLocalInitializerIsMap(declaration.name, declaration)) {
+        if (this.goMarketLocalInitializerIsMap(declaration.name, declaration) || this.goBookAccessorRead(declaration.initializer)) {
             return parsedValue.trimStart();
         }
         return `MapTyped(${parsedValue.trimStart()})`;
@@ -6983,6 +7090,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // native `container[key] = value` when the receiver's Go type is proved by the
     // printer, otherwise undefined and the caller keeps the runtime helper
     printNativeElementAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, compound = false, valueNode?): string | undefined {
+        // a local typed because its base callee already answers the map: the helper this write printed
+        // derefs a pointer value (a *int64 from Parse8601, a *bool read back out of a parsed row), a
+        // native store would keep the pointer, so only a value the printer proves is not one is native
+        if (this.goIsBaseMapResultLocal(containerNode) && !this.goMapWriteValueIsNotPointer(valueNode)) {
+            return undefined;
+        }
         const containerType = this.goElementAssignmentContainerType(containerNode, containerStr);
         const fieldType = this.goFieldContainerTypeNative(containerNode);
         if ((fieldType !== undefined) || (containerType === 'map[string]any')) {

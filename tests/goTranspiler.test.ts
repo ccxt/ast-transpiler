@@ -1098,7 +1098,7 @@ describe('go pointer-typed Safe* body locals', () => {
         expect(output).toContain("func (this *Exchange) ParseMarket(market any) any {");
         expect(output).toContain("var parsed map[string]any = MapTyped(this.ParseMarket(GetValue(markets, 0)))");
     });
-    test('a producer local appended into a list keeps the box (a nil map would box as present)', () => {
+    test('a producer local appended into a list is typed: the producer prints the map, so the box already held the (typed nil) map', () => {
         const input =
         "type MarketInterface = { id: string };\n" +
         "type Market = MarketInterface | undefined;\n" +
@@ -1112,7 +1112,8 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        expect(output).toContain("var parsed any = this.ParseMarket(GetValue(markets, 0))");
+        expect(output).toContain("var parsed map[string]any = this.ParseMarket(GetValue(markets, 0))");
+        expect(output).toContain("append(result, parsed)");
     });
     test('a producer local nil-tested then read natively is typed and the read is native', () => {
         const input =

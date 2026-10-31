@@ -55,7 +55,7 @@ describe('hx10w8 GP09 redundant MapTyped on an overloaded base producer', () => 
         expect(out).toContain('MapTyped(this.BuildRow(symbols))');
     });
 
-    test('a local written as a map keeps the box and the conversion', () => {
+    test('a local written as a map is typed (the callee prints the map); a literal store is native', () => {
         const ts = PRELUDE +
             'class Test extends Base {\n' +
             '    main (symbols: string[]): any {\n' +
@@ -65,7 +65,22 @@ describe('hx10w8 GP09 redundant MapTyped on an overloaded base producer', () => 
             '    }\n' +
             '}\n';
         const out = go(ts);
-        expect(out).toContain('var market any = this.GetMarketFromSymbols(symbols)');
-        expect(out).toContain('AddElementToObject(market, "id", "x")');
+        expect(out).toContain('var market map[string]any = this.GetMarketFromSymbols(symbols)');
+        expect(out).toContain('market["id"] = "x"');
+    });
+
+    test('a pointer value stored into the typed local keeps the deref helper', () => {
+        const ts = PRELUDE +
+            'class Test extends Base {\n' +
+            '    safeInteger (o: any, k: string): number | undefined { return undefined; }\n' +
+            '    main (symbols: string[], o: any): any {\n' +
+            '        const market = this.getMarketFromSymbols (symbols);\n' +
+            '        market[\'ts\'] = this.safeInteger (o, \'ts\');\n' +
+            '        return market;\n' +
+            '    }\n' +
+            '}\n';
+        const out = go(ts);
+        expect(out).toContain('var market map[string]any = this.GetMarketFromSymbols(symbols)');
+        expect(out).toContain('AddElementToObject(market, "ts", this.SafeInteger(o, "ts"))');
     });
 });
