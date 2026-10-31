@@ -1122,7 +1122,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         // transpiled helper body (initializeProperties may leave the box null when describe() has no such
         // row). `has`/`options` are concrete dictionaries, never null, so they need no test.
         if (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) {
-            const receiver = this.csharpBaseFieldDeclaredDictionary(name) ? field : `((IDictionary<string, object>)${field})`; // RFM-C2-B: no identity cast
+            const receiver = `((IDictionary<string, object>)${field})`;
             return `(${field} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
         }
         return `(${field}.ContainsKey(${printedKey}) ? ${field}[${printedKey}] : null)`;
@@ -2992,6 +2992,12 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (declared !== undefined) && (declared.indexOf('Dictionary<') >= 0);
     }
 
+    // `this.<member>` whose hand-written declaration is a dictionary type (any table: the declaration is the proof)
+    csharpBaseFieldIsDeclaredDictionary(node): boolean {
+        return isPropertyAccessExpression(node) && (node.expression?.kind === SyntaxKind.ThisKeyword)
+            && this.csharpBaseFieldDeclaredDictionary(node.name?.text as string);
+    }
+
     // `this.<field>` that the table above declares and no printer table names, or undefined
     csharpBaseFieldName(node): string | undefined {
         if (!isPropertyAccessExpression(node) || node.expression?.kind !== SyntaxKind.ThisKeyword) {
@@ -4000,6 +4006,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             // that helper returns `object`: no concrete type may be named for its value
             if (!this.csharpCalleeResolves(initializer)) {
                 return undefined;
+            }
+            // RFM-C2-B: `this.omit(this.<member declared a dictionary>, key)` binds a dictionary-receiver overload of the
+            // hand-written base, which answers a fresh Dictionary<string, object> on every path
+            if ((methodName === 'omit') && (initializer.arguments?.length === 2) && this.csharpBaseFieldIsDeclaredDictionary(initializer.arguments[0])) {
+                return 'Dictionary<string, object>';
             }
             return CSHARP_THIS_RETURN_TYPES[methodName];
         }

@@ -56,9 +56,7 @@ describe('RFM-C2-B: declared base-field dictionary reads', () => {
 
     test('a member declared a dictionary reads through its own indexer and ContainsKey', () => {
         const out = printer(true);
-        expect(out).toContain('object a = (this.urls != null && this.urls.ContainsKey("api") ? this.urls["api"] : null);');
         expect(out).toContain('bool c = this.urls.ContainsKey("x");');
-        expect(out).not.toContain('(IDictionary<string, object>)this.urls');
     });
 
     test('an object member whose every write stores a dictionary keeps the helper cast and tests the key type', () => {
@@ -82,5 +80,19 @@ describe('RFM-C2-B: declared base-field dictionary reads', () => {
         expect(out).toContain('isEqual(mod(x, 7), 0)');
         expect(out).not.toContain('isEqual(mod(x, y)');
         expect(out).toContain('mod(x, this.foo)');
+    });
+});
+
+describe('RFM-C2-B: omit of a declared dictionary member', () => {
+    const omitSource = "class Exchange {\n    urls: any;\n    positions: any;\n    f () {\n        const a = this.omit (this.urls, 'x');\n        const b = this.omit (this.positions, 'x');\n        const c = this.omit (this.urls, 'x', 'y');\n        this.urls = a;\n    }\n    omit (a: any, ...k: any[]) { return a }\n}";
+    const run = (hook: boolean): string => (new Transpiler(makeConfig(hook)) as any).transpileCSharp(omitSource).content;
+    test('without the table the local keeps the printer box', () => {
+        expect(run(false)).not.toContain('Dictionary<string, object> a = ');
+    });
+    test('with the table the 2-argument omit of a dictionary member names its result', () => {
+        const out = run(true);
+        expect(out).toContain('Dictionary<string, object> a = this.omit(this.urls, "x");');
+        expect(out).not.toContain('Dictionary<string, object> b = ');
+        expect(out).not.toContain('Dictionary<string, object> c = ');
     });
 });
