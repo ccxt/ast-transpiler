@@ -7838,3 +7838,52 @@ describe('hx11 rfm-X4 OG03: owner-goroutine base field reads (ws client registry
         expect(out).not.toContain('WsClient');
     });
 });
+
+// FM-A9F L1: the ws caches BaseExchange owns (orderbooks / ohlcvs / trades / fundingRates) are plain Go
+// map fields, so a reset through createSafeDictionary prints the map literal, never the sync.Map-backed
+// dictionary a map field cannot hold. Keyed on the checker declaration (a property of the base exchange
+// class), not on the printed field name.
+describe('go ws cache field init (FM-A9F L1)', () => {
+    const squash = (output: string) => output.replace(/[\t ]+/g, ' ');
+    test('the four cache fields reset to a map literal', () => {
+        const input =
+        "class Exchange {\n" +
+        "    orderbooks: any = {};\n" +
+        "    ohlcvs: any;\n" +
+        "    trades: any;\n" +
+        "    fundingRates: any = {};\n" +
+        "    cleanWsData () {\n" +
+        "        this.orderbooks = this.createSafeDictionary (true);\n" +
+        "        this.ohlcvs = this.createSafeDictionary (true);\n" +
+        "        this.trades = this.createSafeDictionary ();\n" +
+        "        this.fundingRates = this.createSafeDictionary (true);\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('this.Orderbooks = map[string]any{}');
+        expect(output).toContain('this.Ohlcvs = map[string]any{}');
+        expect(output).toContain('this.Trades = map[string]any{}');
+        expect(output).toContain('this.FundingRates = map[string]any{}');
+        expect(output).not.toContain('CreateSafeDictionary');
+    });
+    test('a field of another class or another dictionary keeps the call', () => {
+        const input =
+        "class Exchange {\n" +
+        "    balance: any = {};\n" +
+        "    createSafeDictionary (isWs = false) { return {}; }\n" +
+        "    cleanWsData () {\n" +
+        "        this.balance = this.createSafeDictionary (true);\n" +
+        "    }\n" +
+        "}\n" +
+        "class Other {\n" +
+        "    orderbooks: any = {};\n" +
+        "    createSafeDictionary (isWs = false) { return {}; }\n" +
+        "    f () {\n" +
+        "        this.orderbooks = this.createSafeDictionary (true);\n" +
+        "    }\n" +
+        "}\n";
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain('this.Balance = this.CreateSafeDictionary(true)');
+        expect(output).toContain('this.Orderbooks = this.CreateSafeDictionary(true)');
+    });
+});

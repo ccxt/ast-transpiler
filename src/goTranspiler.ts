@@ -11944,6 +11944,10 @@ ${this.getIden(identation)}${returnStatement}`;
         }
 
         if (operatorToken.kind === SyntaxKind.EqualsToken) {
+            const a9fL1Init = this.goA9fL1CacheInitText(node);
+            if (a9fL1Init !== undefined) {
+                return a9fL1Init;
+            }
             const pointerWrite = this.goPointerWriteText(node, identation);
             if (pointerWrite !== undefined) {
                 return pointerWrite;
@@ -13469,4 +13473,58 @@ GoTranspiler.prototype.g13NumericParameterCandidates = function (param) {
     case 'number': return ['int64', 'float64'];
     }
     return [];
+};
+
+// ---- FM-A9F L1: ws cache fields (goA9fL1*) -------------------------------------------------
+export interface GoTranspiler {
+    goA9fL1CacheField(node): string | undefined;
+    goA9fL1CacheInitText(node): string | undefined;
+}
+// the four ws caches BaseExchange owns (go/v4/exchange.go declares each one a Go map/cache the exchange
+// instance alone holds), keyed by the TS field name; the value is the printed Go field name
+const GO_A9F_L1_CACHE_FIELDS: { [name: string]: string } = {
+    'orderbooks': 'Orderbooks', 'ohlcvs': 'Ohlcvs', 'trades': 'Trades', 'fundingRates': 'FundingRates',
+};
+// `this.<field>` whose checker declaration is a property of the base exchange class (a local, a
+// parameter or a field of another class with the same name is a different declaration)
+GoTranspiler.prototype.goA9fL1CacheField = function (node) {
+    if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    const name = node.name?.text;
+    if ((typeof name !== 'string') || !Object.prototype.hasOwnProperty.call(GO_A9F_L1_CACHE_FIELDS, name)) {
+        return undefined;
+    }
+    let declaration: any;
+    try {
+        declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+    } catch (e) {
+        declaration = undefined;
+    }
+    const owner: any = declaration?.parent;
+    const ownerName = owner?.name?.text;
+    if ((declaration?.kind !== SyntaxKind.PropertyDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration)
+        || ((ownerName !== 'BaseExchange') && (ownerName !== 'Exchange'))) {
+        return undefined;
+    }
+    return GO_A9F_L1_CACHE_FIELDS[name];
+};
+// `this.<cache> = this.createSafeDictionary ([true])` as a statement: the cache is a plain Go map owned by
+// the exchange, so the reset is the map literal (a sync.Map-backed dictionary cannot be assigned to it)
+GoTranspiler.prototype.goA9fL1CacheInitText = function (node) {
+    const field = this.goA9fL1CacheField(node.left);
+    const right = node.right;
+    if ((field === undefined) || (node.parent?.kind !== SyntaxKind.ExpressionStatement) || (right?.kind !== SyntaxKind.CallExpression)) {
+        return undefined;
+    }
+    const callee: any = right.expression;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'createSafeDictionary')) {
+        return undefined;
+    }
+    const args: any[] = right.arguments ?? [];
+    if ((args.length > 1) || ((args.length === 1) && (args[0].kind !== SyntaxKind.TrueKeyword))) {
+        return undefined;
+    }
+    return `${this.printNode(node.left, 0)} = map[string]any{}`;
 };
