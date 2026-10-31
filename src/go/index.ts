@@ -14,6 +14,7 @@ import { installFmGo5G01 } from './hx11fmgo5-G01.js';
 import { installFmGo5OG02 } from './hx11fmgo5-OG02.js';
 import { installFmGo5GP08 } from './hx11fmgo5-GP08.js';
 import { installFmGo5G04 } from './hx11fmgo5-G04.js';
+import { installRdGo2WsCache } from './hx11rdgo2-wscache.js';
 
 export function installCcxtGoHooks (goTranspiler: any, unifiedInt64Params?: any): void {
     installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params);
@@ -30,11 +31,12 @@ export function installCcxtGoHooks (goTranspiler: any, unifiedInt64Params?: any)
     installFmGo5GP08 (goTranspiler);
     installFmGo5G04 (goTranspiler);
     installCcxtGoTupleSlotReads (goTranspiler);
+    installRdGo2WsCache (goTranspiler);
 }
 
 export {
     installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams,
-    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5G04, installFmGo5GP08, installFmGo5OG02, installCcxtGoTupleSlotReads,
+    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5G04, installFmGo5GP08, installFmGo5OG02, installCcxtGoTupleSlotReads, installRdGo2WsCache,
 };
 export { CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES } from './go-local-types.js';
 export { hx10G06Check } from './hx10w3-G06.js';
