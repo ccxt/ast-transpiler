@@ -10947,6 +10947,27 @@ var GoTranspiler = class extends BaseTranspiler {
     this.generatedListCallees = new Set(config["generatedListCallees"] ?? []);
     this.goTupleSlotTypes = config["goTupleSlotTypes"] ?? {};
     this.goTupleValueDefaultArg = config["goTupleValueDefaultArg"] ?? {};
+    const caches = config["ownedCaches"];
+    this.goOwnedCaches = caches === void 0 ? void 0 : {
+      declaredIn: caches["declaredIn"],
+      maps: caches["maps"] ?? {},
+      objects: caches["objects"] ?? {},
+      mapLiteral: caches["mapLiteral"],
+      asyncUserPath: new RegExp(caches["asyncUserPath"]),
+      syncUserPath: new RegExp(caches["syncUserPath"]),
+      ops: caches["ops"]
+    };
+    const balance = config["ownedBalance"];
+    this.goOwnedBalance = balance === void 0 ? void 0 : {
+      field: balance["field"],
+      declaredIn: balance["declaredIn"],
+      entryRead: balance["entryRead"],
+      entryWrite: balance["entryWrite"],
+      replace: balance["replace"],
+      asyncUserPath: new RegExp(balance["asyncUserPath"]),
+      userPath: new RegExp(balance["userPath"]),
+      boxedKeys: balance["boxedKeys"]
+    };
   }
   goDescendantsOf(scope) {
     let list = this.goScopeDescendants.get(scope);
@@ -14962,6 +14983,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
   }
   printOutOfOrderCallExpressionIfAny(node, identation) {
+    const ownedCache = this.goOwnedCacheRead(node);
+    if (ownedCache !== void 0) {
+      return ownedCache;
+    }
     const nonceSum = this.goNonceSumText(node);
     if (nonceSum !== void 0) {
       return nonceSum;
@@ -15068,7 +15093,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       const nativeRhs = right.kind === SyntaxKind5.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs;
-      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation) : void 0;
+      const native = (keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation) : void 0) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);
       return native !== void 0 ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (left.kind === SyntaxKind5.TypeOfExpression) {
@@ -20860,6 +20885,10 @@ ${this.getIden(level)}}()`;
     return this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
+    const ownedMap = this.goOwnedCaches === void 0 ? void 0 : this.goOwnedCacheUser(node.arguments?.[0], "map");
+    if (ownedMap !== void 0) {
+      return this.goOwnedCacheOp(node.arguments[0], "keys", ownedMap.name, []);
+    }
     return `ObjectKeys(${parsedArg})`;
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
@@ -21489,7 +21518,153 @@ ${this.getIden(level)}}()`;
     }
     return parent?.kind === SyntaxKind5.ElementAccessExpression && parent.expression === node && (isAssignment(parent.parent, parent) || parent.parent?.kind === SyntaxKind5.DeleteExpression);
   }
+  // ===== FOLD-1F hx10w6-G01 =====
+  // BaseExchange.balance is the Go map[string]any field BaseExchange.Balance, owned by the ws dispatch
+  // loop. Code on that loop (every method but the tabled user-path ones) reads and writes it as a plain
+  // map and reaches an account entry through the owner's views; user-path code keeps the helper calls.
+  // A Go value is stored natively only when it is a dictionary or list (the helper would not unbox it).
+  goOwnedBalanceField(node) {
+    const owned = this.goOwnedBalance;
+    if (owned === void 0 || node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword || node.name?.text !== owned.field) {
+      return false;
+    }
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+    return declaration?.kind === SyntaxKind5.PropertyDeclaration && declaration.parent?.name?.text === owned.declaredIn;
+  }
+  goOwnedBalanceOwnerSide(node) {
+    for (let current = node?.parent; current; current = current.parent) {
+      if (current.kind === SyntaxKind5.MethodDeclaration) {
+        const name = `${current.name?.text ?? ""}`;
+        return !this.goOwnedBalance.userPath.test(name) && !(this.isAsyncFunction(current) && this.goOwnedBalance.asyncUserPath.test(name));
+      }
+      if (current.kind === SyntaxKind5.FunctionDeclaration) {
+        return false;
+      }
+    }
+    return false;
+  }
+  // the printed key of an access: a string literal (bookkeeping slots only when `boxedOk`), a `string`
+  // local, or a `*string` local a nil guard or the checker proves non-nil (printed dereferenced)
+  goOwnedBalanceKey(node, boxedOk = false) {
+    node = this.goUnwrapPrintedAssertions(node);
+    if (node?.kind === SyntaxKind5.StringLiteral || node?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral) {
+      return boxedOk || !this.goOwnedBalance.boxedKeys.includes(node.text) ? this.printNode(node, 0) : void 0;
+    }
+    if (node?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    const declared = this.goDeclaredTypeOfIdentifier(node);
+    if (declared === "string") {
+      return this.printNode(node, 0);
+    }
+    return declared === "*string" && (this.goHasEnclosingNilGuard(node) || this.goDerefableStringOperand(node) && !this.goInitializedByAssertion(node)) ? "*" + this.printNode(node, 0) : void 0;
+  }
+  // a local whose initializer is a `x as T` / `x!` assertion: the cast says nothing about the Go nil
+  goInitializedByAssertion(node) {
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const initializer = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    return initializer?.kind === SyntaxKind5.AsExpression || initializer?.kind === SyntaxKind5.NonNullExpression;
+  }
+  // the stored value is never a boxed scalar pointer, so the helper's derefScalar leaves it alone and the
+  // native store keeps the same value: a literal, or a local or call the checker types as an object
+  // (Dict, Balances). An element read is excluded: its declared type is the index signature, which can
+  // hold a boxed scalar at run time.
+  goOwnedBalancePlainValue(valueNode) {
+    const checker = this.checkerOrUndefined();
+    const value = this.goUnwrapPrintedAssertions(valueNode);
+    if (checker === void 0 || value === void 0) {
+      return false;
+    }
+    if (value.kind === SyntaxKind5.ObjectLiteralExpression || value.kind === SyntaxKind5.ArrayLiteralExpression) {
+      return true;
+    }
+    if (value.kind !== SyntaxKind5.Identifier && value.kind !== SyntaxKind5.CallExpression) {
+      return false;
+    }
+    const type = checker.getTypeAtLocation(value);
+    const parts = typeof type.isUnionType === "function" && type.isUnionType() ? type.getTypes() : [type];
+    const present = parts.filter((t) => (t.flags & (TypeFlags4.Undefined | TypeFlags4.Null)) === 0);
+    return present.length > 0 && present.every((t) => (t.flags & TypeFlags4.Object) !== 0);
+  }
+  // `this.balance = v` on the loop moves v's entries into the one map handlers hold
+  goOwnedBalanceReplace(node, identation) {
+    if (this.goOwnedBalance === void 0 || node.parent?.kind !== SyntaxKind5.ExpressionStatement || !this.goOwnedBalanceField(node.left) || !this.goOwnedBalanceOwnerSide(node) || this.goUnwrapParenthesizedNode(node.right)?.kind === SyntaxKind5.ObjectLiteralExpression) {
+      return void 0;
+    }
+    const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(node.right, identation)).trim();
+    return value.includes("\n") || value.startsWith("map[string]any{") ? void 0 : `this.${this.goOwnedBalance.replace}(${value})`;
+  }
+  // `this.balance[k]` is the map's own index, `this.balance[k1][k2]` the owner view's entry index
+  goOwnedBalanceRead(node, baseExpr, keys, keyStrs) {
+    if (this.goOwnedBalance === void 0 || !this.goOwnedBalanceField(baseExpr) || !this.goOwnedBalanceOwnerSide(node) || this.isGoElementAccessAssignmentTarget(node) || node.parent?.kind === SyntaxKind5.DeleteExpression) {
+      return void 0;
+    }
+    const first = this.goOwnedBalanceKey(keys[0]);
+    if (first === void 0) {
+      return void 0;
+    }
+    const second = keys.length > 1 ? this.goOwnedBalanceKey(keys[1]) : void 0;
+    if (second !== void 0) {
+      return this.goElementAccessChain(`this.${this.goOwnedBalance.entryRead}(${first})[${second}]`, keyStrs.slice(1));
+    }
+    return this.goElementAccessChain(`${this.printNode(baseExpr, 0)}[${first}]`, keyStrs);
+  }
+  // `this.balance[k] = v` and `this.balance[k1][k2] = v` as a statement on the loop
+  goOwnedBalanceWrite(node, baseExpr, keys, rhs, valueNode) {
+    if (this.goOwnedBalance === void 0 || keys.length > 2 || node.parent?.kind !== SyntaxKind5.ExpressionStatement || rhs.includes("\n") || !this.goOwnedBalanceField(baseExpr) || !this.goOwnedBalanceOwnerSide(node)) {
+      return void 0;
+    }
+    const owned = this.goOwnedBalance;
+    const first = this.goOwnedBalanceKey(keys[0]);
+    if (first === void 0) {
+      return void 0;
+    }
+    if (keys.length === 1) {
+      return this.goOwnedBalancePlainValue(valueNode) ? `${this.printNode(baseExpr, 0)}[${first}] = ${rhs}` : void 0;
+    }
+    const second = this.goOwnedBalanceKey(keys[1], true);
+    return second !== void 0 && this.goOwnedBalancePlainValue(valueNode) ? `this.${owned.entryWrite}(${first})[${second}] = ${rhs}` : void 0;
+  }
+  // `delete this.balance[k]` and `delete this.balance[k1][k2]` as a statement on the loop
+  goOwnedBalanceDelete(node) {
+    const access = node.expression;
+    if (this.goOwnedBalance === void 0 || node.parent?.kind !== SyntaxKind5.ExpressionStatement || access?.kind !== SyntaxKind5.ElementAccessExpression || !this.goOwnedBalanceOwnerSide(node)) {
+      return void 0;
+    }
+    if (this.goOwnedBalanceField(access.expression)) {
+      const key = this.goOwnedBalanceKey(access.argumentExpression);
+      return key === void 0 ? void 0 : `delete(${this.printNode(access.expression, 0)}, ${key})`;
+    }
+    const entry = access.expression;
+    if (entry?.kind !== SyntaxKind5.ElementAccessExpression || !this.goOwnedBalanceField(entry.expression)) {
+      return void 0;
+    }
+    const first = this.goOwnedBalanceKey(entry.argumentExpression);
+    const second = this.goOwnedBalanceKey(access.argumentExpression, true);
+    return first === void 0 || second === void 0 ? void 0 : `delete(this.${this.goOwnedBalance.entryRead}(${first}), ${second})`;
+  }
+  // the container of a nested `this.balance[k1][k2] = v` / `this.balance[k1][k2][k3] = v` write: the map's
+  // own index, or the owner view's entry index, for keys the printer proves
+  goOwnedBalanceWriteContainer(baseExpr, containerStr, keyNodes) {
+    if (this.goOwnedBalance === void 0 || keyNodes.length < 2 || keyNodes.length > 3 || !this.goOwnedBalanceField(baseExpr) || !this.goOwnedBalanceOwnerSide(baseExpr)) {
+      return void 0;
+    }
+    const first = this.goOwnedBalanceKey(keyNodes[0]);
+    if (first === void 0) {
+      return void 0;
+    }
+    if (keyNodes.length === 2) {
+      return `${containerStr}[${first}]`;
+    }
+    const second = this.goOwnedBalanceKey(keyNodes[1]);
+    return second === void 0 ? void 0 : `this.${this.goOwnedBalance.entryRead}(${first})[${second}]`;
+  }
+  // ===== end FOLD-1F hx10w6-G01 =====
   printPropertyAccessExpression(node, identation) {
+    const ownedCache = this.goOwnedCacheValue(node);
+    if (ownedCache !== void 0) {
+      return ownedCache;
+    }
     if (this.goOwnedFieldAccess(node) && !this.goOwnedFieldIsWrite(node) && this.goOwnedFieldUserPath(node)) {
       return `${this.printNode(node.expression, 0)}.${this.goOwnedField.snapshot}()`;
     }
@@ -21503,10 +21678,150 @@ ${this.getIden(level)}}()`;
     }
     return `${this.printNode(access.expression.expression, 0)}.${this.goOwnedField.remove}(${this.printNode(access.argumentExpression, 0).trim()})`;
   }
+  // ---- hx11 1F hx10w4-OG03: ws caches owned by the dispatch loop (ticker/bidask maps, positions) ----------
+  // `this.<field>` that resolves to the `declaredIn` class's own property. Handlers run on the loop and
+  // keep the field; the user path (async watch/load/subscribe methods and the listed sync ones) hands
+  // every operation to the owner: set/get/has/delete/reset on the maps, a snapshot for a whole-map read,
+  // objGet/objSet on the object field. Absent config = unchanged output.
+  goOwnedCacheRef(node) {
+    const caches = this.goOwnedCaches;
+    if (caches === void 0 || node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
+      return void 0;
+    }
+    const field = node.name?.text;
+    const kind = Object.prototype.hasOwnProperty.call(caches.maps, field) ? "map" : Object.prototype.hasOwnProperty.call(caches.objects, field) ? "object" : void 0;
+    if (kind === void 0) {
+      return void 0;
+    }
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+    if (declaration?.kind !== SyntaxKind5.PropertyDeclaration || declaration.parent?.name?.text !== caches.declaredIn) {
+      return void 0;
+    }
+    return { kind, name: kind === "map" ? caches.maps[field] : caches.objects[field] };
+  }
+  goOwnedCacheUserPath(node) {
+    for (let current = node?.parent; current; current = current.parent) {
+      if (current.kind === SyntaxKind5.MethodDeclaration || current.kind === SyntaxKind5.FunctionDeclaration) {
+        const name = current.name?.text;
+        return typeof name === "string" && (this.isAsyncFunction(current) ? this.goOwnedCaches.asyncUserPath.test(name) : this.goOwnedCaches.syncUserPath.test(name));
+      }
+    }
+    return false;
+  }
+  // the owned cache the node names on the user path (kind 'map' or 'object'), else undefined
+  goOwnedCacheUser(node, kind) {
+    const ref = this.goOwnedCacheRef(node);
+    return ref !== void 0 && ref.kind === kind && this.goOwnedCacheUserPath(node) ? ref : void 0;
+  }
+  goOwnedCacheOp(receiver, op, name, args) {
+    return `${this.printNode(receiver.expression, 0)}.${this.goOwnedCaches.ops[op]}(${[`"${name}"`].concat(args).join(", ")})`;
+  }
+  // the base files are package ccxt itself; every other file names the type through its package
+  goOwnedCacheLiteral(node) {
+    const file = node.getSourceFile?.()?.fileName ?? "";
+    const inBase = this.goBaseFileStdlibImportSeamPaths !== void 0 && this.goBaseFileStdlibImportSeamPaths.test(file);
+    return (inBase ? "" : "ccxt.") + this.goOwnedCaches.mapLiteral;
+  }
+  goIsCreateSafeDictionary(node) {
+    return node?.kind === SyntaxKind5.CallExpression && node.expression?.kind === SyntaxKind5.PropertyAccessExpression && node.expression.expression?.kind === SyntaxKind5.ThisKeyword && node.expression.name?.text === "createSafeDictionary" && (node.arguments?.length ?? 0) <= 1 && ((node.arguments?.length ?? 0) === 0 || node.arguments[0].kind === SyntaxKind5.TrueKeyword);
+  }
+  // assignments to the field, an element of the map, and `key in map`
+  goOwnedCacheBinary(node, identation) {
+    if (this.goOwnedCaches === void 0) {
+      return void 0;
+    }
+    const { left, right, operatorToken } = node;
+    if (operatorToken.kind === SyntaxKind5.InKeyword) {
+      const map2 = this.goOwnedCacheUser(right, "map");
+      return map2 === void 0 ? void 0 : this.goOwnedCacheOp(right, "has", map2.name, [this.printNode(left, 0).trim()]);
+    }
+    if (operatorToken.kind !== SyntaxKind5.EqualsToken || right?.kind === SyntaxKind5.AwaitExpression) {
+      return void 0;
+    }
+    const depth = this.goExprDepth + 1;
+    const printedRight = () => this.goWithExprDepth(depth, () => this.printNode(right, identation)).trim();
+    if (this.goOwnedCacheRef(left)?.kind === "map") {
+      if (!this.goIsCreateSafeDictionary(right)) {
+        return void 0;
+      }
+      return this.goOwnedCacheUserPath(left) ? this.goOwnedCacheOp(left, "reset", this.goOwnedCacheRef(left).name, []) : `${this.printNode(left, 0)} = ${this.goOwnedCacheLiteral(node)}`;
+    }
+    const object = this.goOwnedCacheUser(left, "object");
+    if (object !== void 0) {
+      return this.goOwnedCacheOp(left, "objSet", object.name, [printedRight()]);
+    }
+    const map = left?.kind === SyntaxKind5.ElementAccessExpression ? this.goOwnedCacheUser(left.expression, "map") : void 0;
+    return map === void 0 ? void 0 : this.goOwnedCacheOp(left.expression, "set", map.name, [this.printNode(left.argumentExpression, 0).trim(), printedRight()]);
+  }
+  // `m[k]` read, and `this.safeValue(m, k)` / `this.safeDict(m, k)`
+  goOwnedCacheRead(node) {
+    if (this.goOwnedCaches === void 0) {
+      return void 0;
+    }
+    if (node.kind === SyntaxKind5.ElementAccessExpression) {
+      const map2 = this.goOwnedCacheUser(node.expression, "map");
+      const p = node.parent;
+      const isTarget = p?.kind === SyntaxKind5.BinaryExpression && p.left === node && p.operatorToken.kind >= SyntaxKind5.FirstAssignment && p.operatorToken.kind <= SyntaxKind5.LastAssignment || p?.kind === SyntaxKind5.DeleteExpression;
+      return map2 === void 0 || isTarget ? void 0 : this.goOwnedCacheOp(node.expression, "get", map2.name, [this.printNode(node.argumentExpression, 0).trim()]);
+    }
+    const callee = node.expression;
+    if (callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || !["safeValue", "safeDict"].includes(callee.name?.text) || node.arguments?.length !== 2) {
+      return void 0;
+    }
+    const map = this.goOwnedCacheUser(node.arguments[0], "map");
+    return map === void 0 ? void 0 : this.goOwnedCacheOp(node.arguments[0], "get", map.name, [this.printNode(node.arguments[1], 0).trim()]);
+  }
+  // `delete m[k]`
+  goOwnedCacheDelete(node) {
+    const access = node.expression;
+    const map = access?.kind === SyntaxKind5.ElementAccessExpression ? this.goOwnedCacheUser(access.expression, "map") : void 0;
+    return map === void 0 ? void 0 : this.goOwnedCacheOp(access.expression, "delete", map.name, [this.printNode(access.argumentExpression, 0).trim()]);
+  }
+  // any other read: the map as a snapshot copy, the object field through the owner
+  goOwnedCacheValue(node) {
+    const ref = this.goOwnedCacheRef(node);
+    if (ref === void 0 || !this.goOwnedCacheUserPath(node)) {
+      return void 0;
+    }
+    const p = node.parent;
+    const isAssignmentTarget = (parent, child) => parent?.kind === SyntaxKind5.BinaryExpression && parent.left === child && parent.operatorToken.kind >= SyntaxKind5.FirstAssignment && parent.operatorToken.kind <= SyntaxKind5.LastAssignment;
+    if (ref.kind === "object") {
+      return isAssignmentTarget(p, node) ? void 0 : this.goOwnedCacheOp(node, "objGet", ref.name, []);
+    }
+    const writesElement = p?.kind === SyntaxKind5.ElementAccessExpression && p.expression === node && (isAssignmentTarget(p.parent, p) || p.parent?.kind === SyntaxKind5.DeleteExpression);
+    if (isAssignmentTarget(p, node) || writesElement) {
+      return void 0;
+    }
+    if (p?.kind === SyntaxKind5.ReturnStatement && this.goReturnsTickerMap(node)) {
+      return `any(${this.goOwnedCacheOp(node, "snapshot", ref.name, [])})`;
+    }
+    return this.goOwnedCacheOp(node, "snapshot", ref.name, []);
+  }
+  goReturnsTickerMap(node) {
+    for (let current = node?.parent; current; current = current.parent) {
+      if (current.kind === SyntaxKind5.MethodDeclaration) {
+        const checker = this.checkerOrUndefined();
+        const signature = checker?.getSignatureFromDeclaration(current);
+        const returned = signature && checker.getReturnTypeOfSignature(signature);
+        const text = returned && checker.typeToString(returned);
+        return typeof text === "string" && /^Promise<Tickers>$/.test(text);
+      }
+    }
+    return false;
+  }
+  // ---- end hx10w4-OG03 ----------------------------------------------------------------------------------
   printDeleteExpression(node, identation) {
+    const ownedCache = this.goOwnedCacheDelete(node);
+    if (ownedCache !== void 0) {
+      return ownedCache;
+    }
     const owned = this.goOwnedFieldRemove(node);
     if (owned !== void 0) {
       return owned;
+    }
+    const ownedBalance = this.goOwnedBalanceDelete(node);
+    if (ownedBalance !== void 0) {
+      return ownedBalance;
     }
     const native = this.goNativeDelete(node);
     if (native !== void 0) {
@@ -21690,6 +22005,10 @@ ${this.getIden(identation)}return nil`;
   }
   printBinaryExpression(node, identation) {
     const { left, right, operatorToken } = node;
+    const ownedCache = this.goOwnedCacheBinary(node, identation);
+    if (ownedCache !== void 0) {
+      return ownedCache;
+    }
     const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
     if (customBinaryExp) {
       return customBinaryExp;
@@ -21705,6 +22024,10 @@ ${this.getIden(identation)}return nil`;
       const pointerWrite = this.goPointerWriteText(node, identation);
       if (pointerWrite !== void 0) {
         return pointerWrite;
+      }
+      const balanceReplace = this.goOwnedBalanceReplace(node, identation);
+      if (balanceReplace !== void 0) {
+        return balanceReplace;
       }
       const elementAccess = left;
       const rightSide = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, 0));
@@ -22021,6 +22344,10 @@ ${tryBodyBlock}
   // plain read, so a receiver typed as a map indexes natively and only `any` steps keep the helper.
   // A missing key or nil map reads nil in both forms; a non-map container is a no-op either way.
   goElementWriteChain(baseExpr, containerStr, keyNodes, keyStrs) {
+    const balanceContainer = this.goOwnedBalanceWriteContainer(baseExpr, containerStr, keyNodes);
+    if (balanceContainer !== void 0) {
+      return balanceContainer;
+    }
     let acc = containerStr;
     let first = 0;
     if (keyStrs.length > 1 && this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any" && this.goKeyIsString(keyNodes[0], keyStrs[0])) {
@@ -22461,6 +22788,10 @@ ${this.getIden(level)}}()`;
     }
   }
   printElementAccessExpression(node, identation) {
+    const ownedCache = this.goOwnedCacheRead(node);
+    if (ownedCache !== void 0) {
+      return ownedCache;
+    }
     const bookSide = this.goOrderBookSideRead(node);
     if (bookSide !== void 0) {
       return bookSide;
@@ -22503,6 +22834,10 @@ ${this.getIden(level)}}()`;
       if (this.goIsDerefStringKeyExpression(keys[0]) && !containerStr.includes("\n") && !this.isGoElementAccessAssignmentTarget(node)) {
         return this.goElementAccessChain(this.printNilGuardedMapIndex(containerStr, keyStrs[0]), keyStrs);
       }
+    }
+    const ownedBalance = this.goOwnedBalanceRead(node, baseExpr, keys, keyStrs);
+    if (ownedBalance !== void 0) {
+      return ownedBalance;
     }
     if (this.rf6aNativeMapRead(node, baseExpr, keys[0], keyStrs[0])) {
       return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
