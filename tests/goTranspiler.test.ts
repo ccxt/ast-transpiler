@@ -8155,7 +8155,10 @@ describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book
     });
     test('a literal-default *string book index is a plain string at the read', () => {
         const output = go("    k (o: any) {\n        const symbol = this.safeString (o, 's', '');\n        const timeframe = this.safeString (o, 'tf');\n        if (timeframe === undefined) {\n            return 0;\n        }\n        if (timeframe in this.ohlcvs[symbol]) {\n            return 1;\n        }\n        return 0;\n    }\n");
-        expect(output).toContain('if _, ok := this.Ohlcvs[*symbol][*timeframe]; ok {');
+        // queue r5 union with the safestring-default-local rule: a literal-defaulted safeString local is a plain Go string,
+        // so the book index reads `symbol` without the deref the *string typing of the A9F-L3 branch needed
+        expect(output).toContain('if _, ok := this.Ohlcvs[symbol][*timeframe]; ok {');
+        expect(output).not.toContain('this.Ohlcvs[*symbol]');
     });
     test('a ws client registry lookup is a comma-ok read', () => {
         const output = go("    n (o: any) {\n        const url = this.safeString (o, 'url');\n        if (url === undefined) {\n            return;\n        }\n        if ((this.clients !== undefined) && (url in this.clients)) {\n            return;\n        }\n    }\n");

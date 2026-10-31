@@ -244,6 +244,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeDictLocalUnbox(declaration: any): string | undefined;
     goDeclaredLocalTypeIfSafe(declaration: any, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined;
     goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
+    goSafeDictLocalUnboxStandard(declaration: any): string | undefined;
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
     goBaseMapCalleeName(name: string): boolean;
     goNodeIsInPredictionTree(node: any): boolean;
@@ -354,6 +355,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAnnotatedStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
+    goLiteralDefaultStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
+    goLiteralDefaultStringLocalCache: WeakMap<object, boolean>;
+    goLiteralDefaultStringCall(node: any, name: string | undefined): boolean;
+    goLiteralDefaultStringLocalUsesAreSafe(scope: any, declaration: any, name: string): boolean;
+    goLiteralDefaultStringLocalReadIsSafe(node: any): boolean;
+    goLiteralDefaultStringCallArgument(call: any, argument: any): boolean;
+    goLiteralDefaultStringWrite(left: any, right: any): boolean;
     goAnnotatedStringLocalHasNilShapedRead(scope: any, declaration: any, name: string): boolean;
     goDefaultedSafeStringCallOrTypedDefault(call: any): boolean;
     goAwaitReceiveUnbox(awaitNode: any, printedInitializer: string): {
@@ -592,6 +600,21 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStripControlClauseParens(text: string): string;
     goPrintTernaryBranch(node: any, levels: number): string;
     printInlineInOp(dictNode: any, keyNode: any, dictText: string, keyText: string): string | undefined;
+    goL3BookReceiver(node: any): boolean;
+    goL3BookEntryText(node: any): string | undefined;
+    goL3UnderNegation(inNode: any): boolean;
+    goL3MapReceiver(node: any): boolean;
+    goL3DefaultedDictLocal(node: any): boolean;
+    goL3DefaultedDictDeclaration(declaration: any): boolean;
+    goL3DictLocalBacksHoist(declaration: any): boolean;
+    goL3PlainDictContainer(node: any): boolean;
+    goL3DictUseKeepsMap(node: any): boolean;
+    goL3PureLeaf(node: any): boolean;
+    goL3OrHoistTerms(node: any, reads: any[]): boolean;
+    goL3NameIsUsed(scope: any, name: string): boolean;
+    goL3NilMapTermIsRedundant(condition: any, read: any): boolean;
+    goL3HoistShape(node: any): any;
+    goL3OrHoistIf(node: any, identation: any): string | undefined;
     goInOpSubstitution: any;
     GO_IN_OP_SENTINEL: string;
     goInOpSubstitutedText(node: any): string | undefined;
