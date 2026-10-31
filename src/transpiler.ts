@@ -13,7 +13,7 @@ import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler, RUST_DECLARED_DICT_LOCALS } from './rustTranspiler.js';
 import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
-import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, hx10G06Check, g08w3Check, hx10w8GB01Check, hx10w8GB05Check, hx10w9GB11Check } from './go/index.js';
+import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5G04, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, hx10G06Check, g08w3Check, hx10w8GB01Check, hx10w8GB05Check, hx10w9GB11Check } from './go/index.js';
 
 const __dirname_mock = currentPath;
 
@@ -837,7 +837,7 @@ export {
     RUST_DECLARED_DICT_LOCALS,
     // ccxt's Go printer hooks (moved from ccxt build/, hx11 ast-move)
     installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams,
-    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01,
+    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installHx11w8NumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5G04,
     CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES,
     hx10G06Check, g08w3Check, hx10w8GB01Check, hx10w8GB05Check, hx10w9GB11Check,
 };
