@@ -51490,8 +51490,12 @@ function ccxtGoProducerUnboxValue(goTranspiler, declaration, identation, family)
   if (ccxtGoProducerDeclarationType(goTranspiler, declaration, family) === void 0) {
     return void 0;
   }
-  const printed = goTranspiler.printNode(declaration.initializer, identation);
-  return (family === "map" ? "MapTyped(" : "ArrayTyped(") + printed.trimStart() + ")";
+  const printed = goTranspiler.printNode(declaration.initializer, identation).trimStart();
+  const callee = declaration.initializer.expression;
+  if (family === "map" && CCXT_GO_HELPER_RETURN_TYPES["this." + callee.name.text.charAt(0).toUpperCase() + callee.name.text.slice(1)] === "map[string]any") {
+    return printed;
+  }
+  return (family === "map" ? "MapTyped(" : "ArrayTyped(") + printed + ")";
 }
 function installCcxtGoProducerDeclarations(goTranspiler) {
   if (goTranspiler === void 0 || goTranspiler.__ccxtGoProducerDeclarationsInstalled) {
@@ -52800,6 +52804,41 @@ function ccxtGoTupleResultUntypedElementsAreSafe(goTranspiler, declaration) {
   visit(scope);
   return !unsafe;
 }
+function ccxtGoJoinedParamsLocal(goTranspiler, node) {
+  if (node?.kind !== ts.SyntaxKind.Identifier) {
+    return false;
+  }
+  const declaration = goTranspiler.goDeclarationOfIdentifier?.(node);
+  let element = void 0;
+  try {
+    const symbol = goTranspiler.getChecker().getSymbolAtLocation(node);
+    element = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+  } catch (e) {
+    return false;
+  }
+  if (declaration !== void 0 || element?.kind !== ts.SyntaxKind.BindingElement || !goTranspiler.ccxtGoTupleJoinedParams?.has(element)) {
+    return false;
+  }
+  const name = element.name.text;
+  const scope = goTranspiler.goEnclosingFunction(element);
+  let rebound2 = false;
+  const visit = (n) => {
+    if (rebound2) {
+      return;
+    }
+    if (n !== element && n.kind === ts.SyntaxKind.BindingElement && bindingMentionsName(n.name, name)) {
+      rebound2 = true;
+      return;
+    }
+    if (isIdentifierNamed(n, name) && n !== element.name && (isDestructuringTarget(n) || ccxtGoProducerUseRebinds(n))) {
+      rebound2 = true;
+      return;
+    }
+    n?.forEachChild(visit);
+  };
+  scope?.forEachChild(visit);
+  return !rebound2 && scope !== void 0;
+}
 function installCcxtGoTupleResults(goTranspiler) {
   if (goTranspiler === void 0 || goTranspiler.__ccxtGoTupleResultsInstalled) {
     return;
@@ -52824,7 +52863,15 @@ function installCcxtGoTupleResults(goTranspiler) {
       return printed;
     }
     const untypedOk = ccxtGoTupleResultUntypedElementsAreSafe(this, declaration);
-    return ccxtGoTupleResultJoin(printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst(declaration.initializer)) ?? printed;
+    const joined = ccxtGoTupleResultJoin(printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst(declaration.initializer));
+    if (joined !== void 0) {
+      const params = declaration.name.elements[1];
+      if (params !== void 0) {
+        goTranspiler.ccxtGoTupleJoinedParams ??= /* @__PURE__ */ new WeakSet();
+        goTranspiler.ccxtGoTupleJoinedParams.add(params);
+      }
+    }
+    return joined ?? printed;
   };
   const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
   goTranspiler.printCustomBinaryExpressionIfAny = function(node, identation) {
@@ -52856,7 +52903,8 @@ function installCcxtGoTupleResults(goTranspiler) {
     }
     const first = CCXT_GO_TUPLE_RESULT_ELEMENT_0[name] ?? "SafeStringPtr";
     const [a, b] = expr.elements.map((e) => this.printNode(e, 0).trim());
-    return m[1] + first + "(" + a + "), MapTyped(" + b + ")" + m[3];
+    const bare = ccxtGoJoinedParamsLocal(this, expr.elements[1]);
+    return m[1] + first + "(" + a + "), " + (bare ? b : "MapTyped(" + b + ")") + m[3];
   };
   goTranspiler.__ccxtGoTupleResultsInstalled = true;
 }
