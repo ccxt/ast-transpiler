@@ -3134,6 +3134,10 @@ var CSHARP_OVERRIDE_PARAM_TYPES = {
 };
 var csharpListParamCensuses = /* @__PURE__ */ new WeakMap();
 var csharpListParamBaseKeys = /* @__PURE__ */ new WeakMap();
+function csharpListParamInTradingTier(node) {
+  const owner = findAncestor(node, (n) => isClassDeclaration2(n));
+  return owner !== void 0 && owner.name?.text === "Exchange" && owner.heritageClauses !== void 0;
+}
 function csharpListParamFileIsPrintedAlone(node) {
   const file = typeof node.getSourceFile === "function" ? node.getSourceFile() : void 0;
   const fileName = String(file?.fileName ?? "");
@@ -7391,6 +7395,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
       let admitted = !(typeof this.csharpListParamExclusions === "function" && this.csharpListParamExclusions(methodName, index));
       const rows = declarations.get(key) ?? [];
       const baseTier = rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter));
+      if (rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter) && csharpListParamInTradingTier(parameter))) {
+        admitted = false;
+      }
       if (baseTier) {
         baseKeys.add(key);
       }

@@ -668,6 +668,13 @@ const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string }
 const csharpListParamCensuses = new WeakMap<object, Map<string, boolean>>();
 const csharpListParamBaseKeys = new WeakMap<object, Set<string>>();
 
+// the unified trading tier (`class Exchange extends BaseExchange`): public typed wrappers whose callers,
+// generated tests and user code included, pass `object`, so its parameters keep their box
+function csharpListParamInTradingTier (node): boolean {
+    const owner: any = findAncestor(node, (n) => isClassDeclaration(n));
+    return (owner !== undefined) && (owner.name?.text === 'Exchange') && (owner.heritageClauses !== undefined);
+}
+
 // the base tier is printed by the driver one source file at a time (`transpileCSharpByPath`), so
 // a program rooted in `ts/src/base/*.ts` holds no caller of the methods it declares: its array
 // parameters are typed from the declared TS type alone, and every override follows them
@@ -5580,6 +5587,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             const rows = declarations.get(key) ?? [];
             // a base-tier declaration fixes the spelling (declared type alone); overrides must follow it
             const baseTier = rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter));
+            if (rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter) && csharpListParamInTradingTier(parameter))) {
+                admitted = false;
+            }
             if (baseTier) {
                 baseKeys.add(key);
             }
