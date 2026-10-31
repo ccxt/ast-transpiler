@@ -10199,6 +10199,7 @@ var GO_FIELD_CONTAINER_TYPES_NATIVE = Object.fromEntries([
   ...GO_SYNC_MAP_FIELDS.filter((name) => name !== "Options").map((name) => [name, "*sync.Map"])
 ]);
 var GO_PLAIN_VALUED_MAP_FIELDS = ["Options"];
+var GO_OPTION_DICT_FIELDS = ["Options", "Has", "Features", "Fees", "Limits"];
 var GO_ARITHMETIC_KINDS = [
   SyntaxKind5.PlusToken,
   SyntaxKind5.MinusToken,
@@ -10758,8 +10759,11 @@ var GoTranspiler = class extends BaseTranspiler {
     // Orderbooks is absent on purpose: the go book-local pass proves a stored book from the
     // `!InOp(this.Orderbooks, key)` guard, so that guard must reach it as the helper call.
     this.GO_NATIVE_MAP_FIELDS = {
+      "Options": "map[string]any",
       "Has": "map[string]any",
       "Features": "map[string]any",
+      "Fees": "map[string]any",
+      "Limits": "map[string]any",
       "Trades": "map[string]any",
       "Ohlcvs": "map[string]map[string]any",
       // hx10w8-GP03: declared `map[string]any` in go/v4/exchange.go
@@ -14922,7 +14926,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       }
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       const nativeRhs = right.kind === SyntaxKind5.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs;
-      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) : void 0;
+      const native = keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation) : void 0;
       return native !== void 0 ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (left.kind === SyntaxKind5.TypeOfExpression) {
@@ -17543,6 +17547,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const iden = this.getIden(identation);
     return `if ${keyStr} != nil {
 ${iden}	${containerStr}[*${keyStr}] = ${valueStr}
+${iden}}`;
+  }
+  // `this.<option dict>[k] = v` with a string-typed or nil-guarded *string key: the helper's map store
+  // behind the nil checks it applies; a pointer value is stored dereferenced, any other `any` keeps it
+  printOptionDictFieldWrite(containerNode, containerStr, keyNode, keyStr, valueNode, identation) {
+    const name = containerNode?.kind === SyntaxKind5.PropertyAccessExpression && containerNode.expression?.kind === SyntaxKind5.ThisKeyword ? this.transformPropertyAccessExpressionName(containerNode.name.text, containerNode.name) : void 0;
+    if (name === void 0 || !GO_OPTION_DICT_FIELDS.includes(name) || valueNode === void 0) {
+      return void 0;
+    }
+    let keyType = this.goDeclaredTypeOfIdentifier(keyNode);
+    if (keyType === void 0 && keyNode?.kind === SyntaxKind5.Identifier) {
+      const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode)?.valueDeclaration?.resolve();
+      keyType = this.goGetArgParameterType(declaration);
+    }
+    if (keyType !== "string" && keyType !== "*string") {
+      return void 0;
+    }
+    const inner = this.goUnwrapParenthesizedNode(valueNode);
+    let storeValue;
+    if (this.goMapWriteValueIsNotPointer(valueNode)) {
+      storeValue = (text) => text;
+    } else if (inner?.kind === SyntaxKind5.Identifier && this.goWritePrintsPointerBox(inner)) {
+      storeValue = (text) => `DerefScalar(${text})`;
+    } else {
+      return void 0;
+    }
+    const value = storeValue(this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart());
+    const pointerKey = keyType === "*string";
+    const guard = pointerKey ? `${containerStr} != nil && ${keyStr} != nil` : `${containerStr} != nil`;
+    const iden = this.getIden(identation);
+    return `if ${guard} {
+${iden}	${containerStr}[${pointerKey ? "*" : ""}${keyStr}] = ${value}
 ${iden}}`;
   }
   // the helper stores derefScalar(value): a numeric literal is already the value it stores
@@ -21953,6 +21989,34 @@ ${this.getIden(level)}}()`;
     const fromJson = listDecl.kind === SyntaxKind5.VariableDeclaration && (this.goSafeListUnboxIdentifier(base) || init?.kind === SyntaxKind5.ArrayLiteralExpression && init.elements.length === 0);
     return fromJson && dictOnly ? "native" : "deref";
   }
+  // RFM-G4 G21 (folded from build/hx10w5-G21.ts): `const xs = await this.m (..)` whose receive the printer
+  // declares `[]any` (goAwaitReceiveUnbox) and whose awaited TS type is an array of objects (Dict[], a
+  // Prediction* interface array). The carrier lists (MapSliceToList, Prediction*ToList, ListTyped of a
+  // Dict[] endpoint) hold maps, never derefScalar's pointers, so a read the GB08 proof bounds is the bare
+  // element. goNativeListElementRead only fires for locals the declared-type table calls []any; the
+  // awaited receive is declared by printVariableDeclarationList, so it is answered here.
+  goG21AwaitedObjectListRead(node, keyNode) {
+    const checker = this.checkerOrUndefined();
+    const base = node?.expression;
+    if (checker === void 0 || base?.kind !== SyntaxKind5.Identifier || keyNode?.kind !== SyntaxKind5.Identifier) {
+      return false;
+    }
+    const listDecl = checker.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+    const awaited = listDecl?.initializer;
+    if (listDecl?.kind !== SyntaxKind5.VariableDeclaration || listDecl.name?.kind !== SyntaxKind5.Identifier || awaited?.kind !== SyntaxKind5.AwaitExpression || this.goDeclaredTypeInProgress.has(listDecl) || this.goGb08BoundedListRead(node, keyNode) === void 0) {
+      return false;
+    }
+    const type = checker.getTypeAtLocation(awaited);
+    if (type === void 0 || !(type.flags & TypeFlags4.Object) || !checker.isArrayType(type) || !this.goGb08IsDictExpression(node)) {
+      return false;
+    }
+    this.goDeclaredTypeInProgress.add(listDecl);
+    try {
+      return this.goAwaitReceiveUnbox(awaited, this.printNode(awaited, 0))?.goType === GO_SAFE_LIST_LOCAL_TYPE;
+    } finally {
+      this.goDeclaredTypeInProgress.delete(listDecl);
+    }
+  }
   printElementAccessExpression(node, identation) {
     const bookSide = this.goOrderBookSideRead(node);
     if (bookSide !== void 0) {
@@ -22009,6 +22073,9 @@ ${this.getIden(level)}}()`;
       if (nativeRead !== void 0) {
         return this.goElementAccessChain(nativeRead, keyStrs);
       }
+    }
+    if (baseExpr?.kind === SyntaxKind5.Identifier && keys.length === 1 && !containerStr.includes("\n") && !keyStrs[0].includes("\n") && !this.isGoElementAccessAssignmentTarget(node) && this.goIntIndexExpression(keys[0]) && this.goG21AwaitedObjectListRead(node, keys[0])) {
+      return `${containerStr}[${keyStrs[0]}]`;
     }
     return acc;
   }
