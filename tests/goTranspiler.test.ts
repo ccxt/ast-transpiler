@@ -1756,7 +1756,7 @@ describe('go inline equality', () => {
         const input =
         "function f (symbols: any) {\n" +
         "    const keys = Object.keys (symbols);\n" +
-        "    for (let i = 0; i < keys.length; i++) {\n" +
+        "    for (let i = 0; i < symbols.length; i++) {\n" + // RF-go-6-C: a loop bounded by keys.length reads keys[i] natively
         "        const hash = 'myTrades:' + keys[i];\n" +
         "        const key = keys[i];\n" +
         "    }\n" +
