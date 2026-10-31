@@ -172,6 +172,17 @@ const JAVA_MAP_WRITE_FIELDS: Set<string> = new Set([
     'userAgents',
 ]);
 
+// public map fields of the hand-written WsClient.java (ts/src/base/ws/Client.ts): OwnerMap
+// hand-off views over owner-thread LinkedHashMaps, so a read is the plain map get and a null
+// receiver or key answers null in both spellings
+// value = the Java value type the field declares (a local bound to one of its reads prints it)
+const JAVA_WS_CLIENT_MAP_FIELDS: { [field: string]: string } = {
+    'futures': 'io.github.ccxt.ws.Future',
+    'subscriptions': 'Object',
+    'rejections': 'Object',
+};
+const JAVA_WS_CLIENT_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]ws[\\/]Client\.ts$/;
+
 // hand-written base fields (BaseExchange.java) whose Java declaration is exactly
 // `Map<String, Object>`: a local bound to one prints that type, so its element reads bind the
 // accessor with no cast. Fields the base declares `Object` (currencies, fees, timeframes) are
@@ -1941,6 +1952,10 @@ export class JavaTranspiler extends BaseTranspiler {
             }
         }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
+            const handoff = this.printOptionsHandoffRead(node);
+            if (handoff !== undefined) {
+                return handoff;
+            }
             const expressionText = node.expression.getText().trim();
             const args = node.arguments;
             if (args.length === 1) {
@@ -4672,7 +4687,10 @@ export class JavaTranspiler extends BaseTranspiler {
             } else if (keyStrs.length > 1) {
                 // `this.<field>[k1][k2] = v`: the bottom step reads the hand-written base map
                 // field natively (JAVA_FIELD_TYPES), every step above it keeps the helper
-                const fieldRead = this.javaFieldMapReadText(baseExpr, keys[0]);
+                const fieldRead = this.javaFieldMapReadText(baseExpr, keys[0])
+                    ?? (isStringLiteralLikeNode(keys[0]) && this.javaWsClientMapField(baseExpr) !== undefined
+                        ? `(${containerStr} == null ? null : ${containerStr}.get(${keyStrs[0]}))`
+                        : this.javaWsClientMapReadText(baseExpr, keys[0]));
                 if (fieldRead !== undefined) {
                     acc = fieldRead;
                     firstKey = 1;
@@ -4708,6 +4726,13 @@ export class JavaTranspiler extends BaseTranspiler {
             if (keys.length === 1 && this.javaMapWriteFieldReceiver(baseExpr)
                 && (isStringLiteralLikeNode(keys[0]) || this.javaDeclaredStringType(keys[0]))
                 && !this.elementWriteValueMayBeNull(right)) {
+                return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+            }
+            // `this.<owner store>[lit] = v`: the store's `put(key, null)` removes the key like the
+            // helper's null write does, so any value but a bare null/undefined literal (which the
+            // base tier turns into `remove`) is the same write
+            if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr)
+                && isStringLiteralLikeNode(keys[0]) && !this.isNullishLiteral(this.unwrapPrintTransparentExpression(right))) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
             if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
@@ -4964,6 +4989,122 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_MAP_WRITE_FIELDS.has(expression.name.text);
     }
 
+    // hand-written BaseExchange.java fields declared `Map<String, Object>` over a single-owner store
+    // (`options = new SynchronizedOptions ()`): the map lives on the state-owner thread and its
+    // `put(key, null)` removes the key, which is exactly the contract of the helper's element write.
+    // The embedding build layer names them (it reads the hand-written header); empty = every site
+    // keeps the helper.
+    javaOwnerStoreFields: ReadonlySet<string> = new Set<string>();
+
+    // `this.<owner store>` keys the hand-written base hands over through an owner field instead
+    // of a store entry (loadMarketsHelper sets it, the same chain clears it). Value = [accessor with a
+    // null default, accessor with an empty-map default]; filled by the build layer from the header.
+    javaOwnerStoreHandoffs: { [key: string]: [string, string] } = {};
+
+    // `this.<field>` for a BaseExchange.java field declared over a single-owner store
+    javaOwnerStoreFieldReceiver(expression): boolean {
+        if (expression === undefined || !isPropertyAccessExpression(expression)) {
+            return false;
+        }
+        return expression.expression.kind === SyntaxKind.ThisKeyword
+            && this.javaOwnerStoreFields.has(expression.name.text);
+    }
+
+    // `<client>.<futures|subscriptions|rejections>` where the property is declared by the ws Client
+    // class (ts/src/base/ws/Client.ts, the twin of the hand-written WsClient.java)
+    javaWsClientMapField(expression): string | undefined {
+        if (expression === undefined || !isPropertyAccessExpression(expression)
+            || !Object.prototype.hasOwnProperty.call(JAVA_WS_CLIENT_MAP_FIELDS, expression.name.text)
+            || !this.javaSideEffectFreeReference(expression.expression)) {
+            return undefined; // the guard prints the receiver twice
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        const symbol = checker.getSymbolAtLocation(expression.name);
+        const declaration = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.[0]?.resolve();
+        const fileName = declaration?.getSourceFile?.()?.fileName;
+        return typeof fileName === 'string' && JAVA_WS_CLIENT_FILE.test(fileName)
+            ? JAVA_WS_CLIENT_MAP_FIELDS[expression.name.text] : undefined;
+    }
+
+    // `client.<map>[k]` with a non-literal key: Helpers.GetValue answers null for a null receiver or
+    // key and the map get is the helper's Map branch, so the guarded native get is exact. The key
+    // prints twice, so it must be a repeatable non-primitive identifier; a literal key already prints
+    // through the checker-typed read below.
+    javaWsClientMapReadText(receiver, key): string | undefined {
+        if (this.javaWsClientMapField(receiver) === undefined || !isIdentifier(key)
+            || !this.javaRepeatableOperand(key) || this.javaOperandPrintsPrimitiveNumber(key)) {
+            return undefined;
+        }
+        const declared = this.javaDeclaredTypeOf(key);
+        if (declared !== undefined && JAVA_PRIMITIVE_DECLARED_TYPES.has(declared.trim())) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const keyText = this.printNode(key, 0);
+        return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+    }
+
+    javaWsClientMapRead(node): string | undefined {
+        if (node.parent?.kind === SyntaxKind.ExpressionStatement
+            || this.printElementAccessExpressionExceptionIfAny(node) !== undefined || this.isLeftSideOfAssignment(node)) {
+            return undefined;
+        }
+        return this.javaWsClientMapReadText(node.expression, node.argumentExpression);
+    }
+
+    // `const f = client.futures[k]`: the local holds the field's declared value type, so its uses
+    // (`f.resolve(..)`) bind with no checkcast
+    javaWsClientLocalType(declaration): string | undefined {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || !declaration.initializer) {
+            return undefined;
+        }
+        const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
+        if (initializer === undefined || !isElementAccessExpression(initializer)
+            || this.javaWsClientMapRead(initializer) === undefined) {
+            return undefined;
+        }
+        const type = this.javaWsClientMapField(initializer.expression);
+        if (type === undefined || type === 'Object' || this.javaLocalHasWriteAtAll(declaration.name)) {
+            return undefined;
+        }
+        return type;
+    }
+
+    // `this.safeDict(this.options, "<handoff key>"[, null | {}])`: the key is not a store entry,
+    // the base hands it over through an owner field accessor (javaOwnerStoreHandoffs)
+    printOptionsHandoffRead(node): string | undefined {
+        const callee = node.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
+            || callee.name.text !== 'safeDict' || node.arguments.length < 2 || node.arguments.length > 3) {
+            return undefined;
+        }
+        const [ source, key, fallback ] = node.arguments;
+        if (!isPropertyAccessExpression(source) || source.expression.kind !== SyntaxKind.ThisKeyword
+            || !this.javaOwnerStoreFields.has(source.name.text) || !isStringLiteralLikeNode(key)) {
+            return undefined;
+        }
+        const accessors = Object.prototype.hasOwnProperty.call(this.javaOwnerStoreHandoffs, key.text)
+            ? this.javaOwnerStoreHandoffs[key.text] : undefined;
+        if (accessors === undefined) {
+            return undefined;
+        }
+        const fileName = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+        if (typeof fileName !== 'string' || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(fileName)) {
+            return undefined; // a venue override may read the key itself
+        }
+        if (fallback === undefined || this.isNullishLiteral(fallback)) {
+            return `this.${accessors[0]}()`;
+        }
+        const literal = this.unwrapPrintTransparentExpression(fallback);
+        if (isObjectLiteralExpression(literal) && literal.properties.length === 0) {
+            return `this.${accessors[1]}()`;
+        }
+        return undefined;
+    }
+
     // `x[i]` where x is a declared java List and i is the int counter of `for (var i = <int literal>`:
     // GetValue answers null for a null receiver or index outside [0, size) while List.get throws, so
     // the emission carries the same tests. `||` short-circuits over identifiers, so nothing runs twice.
@@ -5207,6 +5348,10 @@ export class JavaTranspiler extends BaseTranspiler {
     // `x[k]` reads: emit the native container accessor when the checker proves the Java
     // representation of `x`, otherwise return undefined so the base prints Helpers.GetValue.
     printCheckerTypedElementAccessRead(node) {
+        const wsClientRead = this.javaWsClientMapRead(node);
+        if (wsClientRead !== undefined) {
+            return wsClientRead;
+        }
         const key = node.argumentExpression;
         const isStringKey = isStringLiteralLikeNode(key);
         const isNumberKey = isNumericLiteral(key);
@@ -7035,6 +7180,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const valuesType = this.javaObjectValuesLocalType(declaration);
             if (valuesType !== undefined) {
                 varToken = valuesType + " ";
+            }
+            const wsClientType = this.javaWsClientLocalType(declaration);
+            if (wsClientType !== undefined) {
+                varToken = wsClientType + " ";
             }
             // the ws handler table and the local bound to one of its reads name their type,
             // so the dispatch is a plain virtual call
