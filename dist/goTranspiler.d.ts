@@ -54,6 +54,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         ops: {
             [op: string]: string;
         };
+        typedMapRead: string | undefined;
     } | undefined;
     goOwnedBalance: {
         field: string;
@@ -764,6 +765,7 @@ export declare class GoTranspiler extends BaseTranspiler {
      * owns the single `return ch`, emitted by printFunctionBody.
      */
     getAsyncReturnStatement(node: any): string;
+    goTickerCacheTypedRead(node: any): string | undefined;
     printReturnStatement(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;

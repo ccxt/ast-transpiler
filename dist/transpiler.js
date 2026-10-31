@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-O5MZOAMZ.js";
+} from "./chunk-MEKZ6QY3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -10955,7 +10955,9 @@ var GoTranspiler = class extends BaseTranspiler {
       mapLiteral: caches["mapLiteral"],
       asyncUserPath: new RegExp(caches["asyncUserPath"]),
       syncUserPath: new RegExp(caches["syncUserPath"]),
-      ops: caches["ops"]
+      ops: caches["ops"],
+      typedMapRead: caches["typedMapRead"]
+      // RD-GO-5
     };
     const balance = config["ownedBalance"];
     this.goOwnedBalance = balance === void 0 ? void 0 : {
@@ -20643,6 +20645,69 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
   getAsyncReturnStatement(node) {
     return "return nil";
   }
+  // `return this.tickers` / `return this.filterByArray (this.tickers, 'symbol', symbols)` in an async method
+  // that answers `Promise<Tickers>`: both read the owned ticker cache (`ownedCaches.maps`, declared
+  // `Dictionary<Ticker>`) and answer its rows, so the send is the owner's typed read
+  // `this.<ownedCaches.typedMapRead>(name[, symbols])`, boxed back to the map shape the carrier pass unwraps.
+  goTickerCacheTypedRead(node) {
+    const checker = this.checkerOrUndefined();
+    const caches = this.goOwnedCaches;
+    const SK = SyntaxKind5;
+    if (caches === void 0 || caches.typedMapRead === void 0) {
+      return void 0;
+    }
+    const unparen2 = (n) => {
+      while (n?.kind === SK.ParenthesizedExpression) {
+        n = n.expression;
+      }
+      return n;
+    };
+    const exp = unparen2(node.expression);
+    if (checker === void 0 || exp === void 0) {
+      return void 0;
+    }
+    const baseMember = (n, kind) => {
+      if (n?.kind !== SK.PropertyAccessExpression || n.expression?.kind !== SK.ThisKeyword) {
+        return void 0;
+      }
+      const declaration = checker.getSymbolAtLocation(n.name)?.valueDeclaration?.resolve();
+      return declaration?.kind === kind && declaration.parent?.name?.text === caches.declaredIn ? n.name.text : void 0;
+    };
+    const cacheField = (n) => {
+      const name = baseMember(n, SK.PropertyDeclaration);
+      if (name === void 0 || !Object.prototype.hasOwnProperty.call(caches.maps, name)) {
+        return void 0;
+      }
+      const declared = checker.getSymbolAtLocation(n.name)?.valueDeclaration?.resolve()?.type;
+      return declared?.typeName?.text === "Dictionary" && declared.typeArguments?.length === 1 && declared.typeArguments[0]?.typeName?.text === "Ticker" ? name : void 0;
+    };
+    let field;
+    let symbols = "";
+    if (exp.kind === SK.CallExpression) {
+      const args = exp.arguments ?? [];
+      if (baseMember(exp.expression, SK.MethodDeclaration) !== "filterByArray" || args.length !== 3 || args[1]?.kind !== SK.StringLiteral || args[1].text !== "symbol" || args[2]?.kind !== SK.Identifier) {
+        return void 0;
+      }
+      field = cacheField(unparen2(args[0]));
+      symbols = ", " + this.printNode(args[2], 0).trim();
+    } else {
+      field = cacheField(exp);
+    }
+    if (field === void 0 || !this.goOwnedCacheUserPath(node)) {
+      return void 0;
+    }
+    let method = node.parent;
+    while (method !== void 0 && method.kind !== SK.MethodDeclaration && method.kind !== SK.FunctionDeclaration) {
+      method = method.parent;
+    }
+    const returned = method?.type;
+    const element = returned?.typeName?.text === "Promise" ? returned.typeArguments?.[0] : void 0;
+    const answersTickers = element?.typeName?.text === "Tickers" || element?.typeName?.text === "Dictionary" && element.typeArguments?.[0]?.typeName?.text === "Ticker";
+    if (!answersTickers) {
+      return void 0;
+    }
+    return `TickerMapToMap(this.${caches.typedMapRead}("${caches.maps[field]}"${symbols}))`;
+  }
   printReturnStatement(node, identation) {
     const isAsyncFunction = this.isInsideAsyncFunction(node);
     if (!isAsyncFunction) {
@@ -20652,7 +20717,7 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     let trailingComment = this.printTraillingComment(node, identation);
     trailingComment = trailingComment ? " " + trailingComment : trailingComment;
     const exp = node.expression;
-    let rightPart = exp ? " " + this.printNode(exp, identation) : "";
+    let rightPart = exp ? " " + (this.goTickerCacheTypedRead(node) ?? this.printNode(exp, identation)) : "";
     rightPart = rightPart.trim();
     const returnStatement = this.getAsyncReturnStatement(node);
     if (node?.expression?.kind === SyntaxKind5.AsExpression) {
