@@ -68,6 +68,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalResolverType(node: any): string | undefined;
     csharpDeclaredLocalResolverRowRead(expression: any, argumentExpression: any): string | undefined;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
+    csharpBaseDictionaryView(node: any): string | undefined;
+    csharpBaseDictionaryViewKeyKind(key: any): 'string' | 'object' | undefined;
+    csharpBaseDictionaryViewRead(expression: any, argumentExpression: any): string | undefined;
+    csharpBaseDictionaryViewIn(key: any, obj: any): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
     csharpDeclaredStringIndexRead(node: any, expression: any, argumentExpression: any, isNumberKey: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
@@ -483,6 +487,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printPropertyAccessModifiers(node: any): string;
     csharpHx4DeclaredReceiverReadable(node: any, expression: any): boolean;
     csharpHx4IdentifierKeyRead(expression: any, argumentExpression: any): string | undefined;
+    csharpObjectKeyCastable(key: any): boolean;
     csharpHx4IsPlainRead(node: any): boolean;
     csharpHx4DeclaredKeyType(key: any): string | undefined;
     csharpHx4GuardedNullableNegation(node: any, csharpType: string): boolean;
