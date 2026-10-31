@@ -667,6 +667,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // BaseTranspiler.getMethodOverride answered from a per-class ancestor chain of
     // name -> last method maps (the furthest ancestor declaring the name wins, as there)
     private overrideChainCache = new WeakMap<Node, Map<string, Node>[] | null>();
+    private javaFieldAssignmentKindsCache = new WeakMap<object, Map<string, string[]>>();
     private javaMethodOverrideFromIndex(node: Node): Node {
         const classDeclaration = node.parent;
         if (!isClassDeclaration(classDeclaration) || !(classDeclaration as any).heritageClauses) {
@@ -4805,6 +4806,11 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
                 return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
+            }
+            // `this.<field>[k] = v` where the file only ever builds the field as a plain HashMap
+            if (keys.length === 1 && isPropertyAccessExpression(baseExpr)
+                && this.javaFileBuiltMapField(baseExpr, baseExpr.name.text, true)) {
+                return `${prefixes}((java.util.Map<Object, Object>) (java.util.Map<?, ?>) ${acc}).put(${lastKey}, ${rhs})`;
             }
 
             return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
@@ -9962,6 +9968,73 @@ export class JavaTranspiler extends BaseTranspiler {
         return !shared;
     }
 
+    // `this.<field>` of a base field declared Object/Map whose Java type a file cannot change: the
+    // field is a plain map in this class exactly when every `this.<field> =` in the source file builds
+    // one (an object literal, a zero-arg base createSafeDictionary, a local holding a literal) or
+    // nulls it. A read needs no assignment to be any other kind; a put also needs one plain build,
+    // because the helper removes a null value from a ConcurrentHashMap.
+    javaFileBuiltMapField(receiver, name: string, forWrite: boolean): boolean {
+        if (!JAVA_FILE_BUILT_MAP_FIELDS.has(name) || receiver?.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const file = receiver.getSourceFile?.();
+        if (file === undefined) {
+            return false;
+        }
+        let byField = this.javaFieldAssignmentKindsCache.get(file);
+        if (byField === undefined) {
+            const found = new Map<string, string[]>();
+            const visit = (n) => {
+                if (isBinaryExpression(n) && n.operatorToken.kind >= SyntaxKind.FirstAssignment
+                    && n.operatorToken.kind <= SyntaxKind.LastAssignment
+                    && isPropertyAccessExpression(n.left) && n.left.expression.kind === SyntaxKind.ThisKeyword) {
+                    const field = n.left.name.text;
+                    const kind = n.operatorToken.kind === SyntaxKind.EqualsToken ? this.javaAssignedMapKind(n.right, 0) : 'other';
+                    found.set(field, [...(found.get(field) ?? []), kind]);
+                }
+                n.forEachChild(visit);
+            };
+            file.forEachChild(visit);
+            byField = found;
+            this.javaFieldAssignmentKindsCache.set(file, byField);
+        }
+        const kinds = byField.get(name) ?? [];
+        if (kinds.some((k) => k === 'other')) {
+            return false;
+        }
+        return forWrite ? kinds.some((k) => k === 'plain') : kinds.length > 0;
+    }
+
+    // 'plain': a java.util.HashMap the code builds; 'null': a null reset; 'other': anything else
+    javaAssignedMapKind(value, depth: number): string {
+        const node = this.unwrapPrintTransparentExpression(value);
+        if (node === undefined) {
+            return 'other';
+        }
+        if (node.kind === SyntaxKind.NullKeyword || node.kind === SyntaxKind.UndefinedKeyword
+            || (isIdentifier(node) && node.text === 'undefined')) {
+            return 'null';
+        }
+        if (isObjectLiteralExpression(node)) {
+            return 'plain';
+        }
+        if (isCallExpression(node) && node.arguments.length === 0 && isPropertyAccessExpression(node.expression)
+            && node.expression.expression.kind === SyntaxKind.ThisKeyword
+            && node.expression.name.text === 'createSafeDictionary') {
+            const fileName = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+            return typeof fileName === 'string' && JAVA_THIS_RETURN_TYPES_BASE_FILE.test(fileName) ? 'plain' : 'other';
+        }
+        if (isIdentifier(node) && depth < 2) {
+            const declaration: any = this.javaDeclarationOfIdentifier(node);
+            if (declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer
+                && this.javaAssignedMapKind(declaration.initializer, depth + 1) === 'plain'
+                && !this.javaLocalIsReassigned(node, (rhs) => this.javaAssignedMapKind(rhs, depth + 1) === 'plain')) {
+                return 'plain';
+            }
+        }
+        return 'other';
+    }
+
     // hx4 J02: `this.<field>[k]` on the J02 base map fields. ConcurrentHashMap.get(null) throws
     // where the helper answers null, so a non-literal key is always null-tested; the receiver can
     // be null too. Key and receiver print twice, so both must be side-effect free.
@@ -9970,7 +10043,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(JAVA_BASE_MAP_READ_FIELDS, name)) {
             return this.javaBaseMapFieldReadText(receiver, key, JAVA_BASE_MAP_READ_FIELDS[name]);
         }
-        if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
+        if (typeof name !== 'string'
+            || (!Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name) && !this.javaFileBuiltMapField(receiver, name, false))) {
             return undefined;
         }
         const literal = isStringLiteralLikeNode(key);
@@ -10097,6 +10171,9 @@ export class JavaTranspiler extends BaseTranspiler {
 // hx4 J02
 // more hand-written BaseExchange map fields: every write in BaseExchange.java and ts/src is a
 // HashMap / ConcurrentHashMap / Map-cast or null (markets_by_id = null, urls/fees from describe())
+// base fields declared Object/Map whose plain-map type is proven per source file (javaFileBuiltMapField)
+const JAVA_FILE_BUILT_MAP_FIELDS: Set<string> = new Set(['markets', 'positions']);
+
 const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
     'tickers': true,
     'bidsasks': true,
