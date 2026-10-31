@@ -5901,7 +5901,7 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const receiver = callee.expression;
         const separator = node.arguments[0];
-        if (receiver === undefined || !JAVA_SPLIT_RECEIVER_KINDS.has(receiver.kind)) {
+        if (receiver === undefined) {
             return undefined;
         }
         // a conditional receiver keeps the helper: the campaign's diff audit flags every
@@ -5909,13 +5909,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaSplitTernaryReceiver(receiver)) {
             return undefined;
         }
-        // the separator is a literal: Helpers.split String.valueOf()s it and quotes it as
-        // a regex, and a literal is the only separator whose printed Java is a String
-        if (separator.kind !== SyntaxKind.StringLiteral
-            && separator.kind !== SyntaxKind.NoSubstitutionTemplateLiteral) {
-            return undefined;
-        }
-        if (this.javaScalarFamily(receiver) !== 'string') {
+        // the receiver and the separator are plain TS `string`s (no alias, no union): the helper's
+        // String.valueOf/null branches are unreachable and Pattern.quote takes the separator as is
+        if (this.javaScalarFamily(receiver) !== 'string' || this.javaScalarFamily(separator) !== 'string') {
             return undefined;
         }
         return `${this.ARRAY_OPENING_TOKEN}((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))${this.ARRAY_CLOSING_TOKEN}`;
@@ -7831,7 +7827,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        const nativeCall = this.nativeSliceCallIfProvable(node, name);
+        const nativeCall = this.nativeSliceCallIfProvable(node, name) ?? this.javaTypedStringSliceCall(node, name, parsedArg, parsedArg2, _identation);
         if (nativeCall !== undefined) {
             return nativeCall;
         }
@@ -7941,7 +7937,195 @@ export class JavaTranspiler extends BaseTranspiler {
         if (pattern !== undefined && replacement !== undefined && receiver) {
             return `(${name} == null ? null : ((String)${name}).replace(${pattern}, ${replacement}))`;
         }
+        const typed = this.javaTypedStringReplaceAllCall(node, name, parsedArg, parsedArg2);
+        if (typed !== undefined) {
+            return typed;
+        }
         return `Helpers.replaceAll((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
+    }
+
+    // ---- RF-java-1: typed String slice / replaceAll (folded from build/hx10w2-J04.js) ----
+    // integral printed types only: the helper's toInt truncation has no native analogue for a double
+    javaIntegralDeclaredTypes: Set<string> = new Set(['long', 'int', 'short', 'byte', 'Long', 'Integer', 'Short', 'Byte']);
+
+    // the native slice reads a bound up to three times: a longer line would pass the 400-char audit
+    javaTypedSliceMaxLength = 300;
+
+    javaUnwrapParens(node) {
+        let current = node;
+        while (current !== undefined && isParenthesizedExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
+    javaIsAtomOperand(node): boolean {
+        const n = this.javaUnwrapParens(node);
+        return n !== undefined && (n.kind === SyntaxKind.Identifier || n.kind === SyntaxKind.PropertyAccessExpression
+            || n.kind === SyntaxKind.ThisKeyword || n.kind === SyntaxKind.NumericLiteral);
+    }
+
+    // the printed text of this operand may appear more than once in the native form
+    javaIsRepeatableBound(node): boolean {
+        const n = this.javaUnwrapParens(node);
+        if (n === undefined) {
+            return false;
+        }
+        switch (n.kind) {
+        case SyntaxKind.Identifier:
+        case SyntaxKind.PropertyAccessExpression:
+        case SyntaxKind.ThisKeyword:
+        case SyntaxKind.NumericLiteral:
+            return true;
+        case SyntaxKind.PrefixUnaryExpression:
+            return n.operator === SyntaxKind.MinusToken && this.javaIsRepeatableBound(n.operand);
+        case SyntaxKind.BinaryExpression: {
+            const op = n.operatorToken.kind;
+            return (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken || op === SyntaxKind.AsteriskToken)
+                && this.javaIsRepeatableBound(n.left) && this.javaIsRepeatableBound(n.right);
+        }
+        default:
+            return false;
+        }
+    }
+
+    // the operand prints as an integral Java number: `+ - Math.min Math.max` and `(int)` compile on it
+    javaPrintsIntegralNumber(node): boolean {
+        const n = this.javaUnwrapParens(node);
+        if (n === undefined) {
+            return false;
+        }
+        switch (n.kind) {
+        case SyntaxKind.NumericLiteral:
+            return !/[.eE]/.test(n.text);
+        case SyntaxKind.PrefixUnaryExpression:
+            return n.operator === SyntaxKind.MinusToken && this.javaPrintsIntegralNumber(n.operand);
+        case SyntaxKind.PropertyAccessExpression:
+            // `x.length` prints the primitive int of the native length read
+            return n.name?.text === 'length' && this.javaScalarFamily(n) === 'number';
+        case SyntaxKind.BinaryExpression: {
+            const op = n.operatorToken.kind;
+            return (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken || op === SyntaxKind.AsteriskToken)
+                && this.javaPrintsIntegralNumber(n.left) && this.javaPrintsIntegralNumber(n.right);
+        }
+        }
+        if (n.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const type = this.javaDeclaredTypeOf(n);
+        return type !== undefined && this.javaIntegralDeclaredTypes.has(type.replace(/^final\s+/, '').trim());
+    }
+
+    // a slice bound as the integer the helper's toInt answers: an integral print is its own text, a
+    // boxed number (an `Object` from indexOf, a Double) takes the helper's own intValue truncation
+    javaSliceBoundOperand(node, printed): { text: string } | undefined {
+        if (this.javaPrintsIntegralNumber(node)) {
+            return { text: this.javaIsAtomOperand(node) ? printed : `(${printed})` };
+        }
+        const n = this.javaUnwrapParens(node);
+        if (n === undefined || n.kind !== SyntaxKind.Identifier || this.javaScalarFamily(n) !== 'number') {
+            return undefined;
+        }
+        const type = this.javaDeclaredTypeOf(n);
+        if (type === undefined || !['Object', 'Double', 'Float', 'Number'].includes(type.replace(/^final\s+/, '').trim())) {
+            return undefined;
+        }
+        return { text: `((Number)${printed}).intValue()` };
+    }
+
+    // the receiver prints as a Java String: a plain TS `string`, a String-declared local, a literal
+    javaPrintsAsString(node): boolean {
+        if (node === undefined) {
+            return false;
+        }
+        return this.javaScalarFamily(node) === 'string' || this.javaProvableString(node) || this.javaDeclaredStringType(node) === true;
+    }
+
+    // `x.slice (a, b)` -> String.substring when the receiver prints String and every bound prints a
+    // number; non-literal bounds are clamped like the helper (negative counts from the end)
+    javaTypedStringSliceCall(node, name, parsedArg, parsedArg2, identation): string | undefined {
+        const callee = node?.expression;
+        if (name === undefined || callee === undefined || !isPropertyAccessExpression(callee) || callee.name?.text !== 'slice') {
+            return undefined;
+        }
+        const args = node.arguments ?? [];
+        if (args.length < 1 || args.length > 2) {
+            return undefined;
+        }
+        const receiver = callee.expression;
+        // the null guard reads the receiver twice
+        if (receiver === undefined || !this.sideEffectFreeReceiver(receiver) || !this.javaPrintsAsString(receiver)) {
+            return undefined;
+        }
+        const printedBounds = [parsedArg, parsedArg2];
+        const bounds: { text: string }[] = [];
+        for (let i = 0; i < args.length; i++) {
+            if (!this.javaIsRepeatableBound(args[i])) {
+                return undefined;
+            }
+            const bound = this.javaSliceBoundOperand(args[i], printedBounds[i]);
+            if (bound === undefined) {
+                return undefined;
+            }
+            bounds.push(bound);
+        }
+        // a declared String receiver needs no checkcast for its own length
+        const recv = this.javaDeclaredStringType(receiver) === true ? name : `((String)${name})`;
+        const length = `${recv}.length()`;
+        // JS slice: a negative start counts from the end and never lands below 0
+        const startText = () => {
+            const value = this.javaSliceLiteralBound(args[0]);
+            if (value === 0) {
+                return '0';
+            }
+            const t = bounds[0].text;
+            if (value !== undefined && value > 0) {
+                return `Math.min(${value}, ${length})`;
+            }
+            if (value !== undefined) {
+                return `Math.max(${length} - ${-value}, 0)`;
+            }
+            return `Math.min(Math.max(${t} < 0 ? ${length} + ${t} : ${t}, 0), ${length})`;
+        };
+        // the end clamps to the length but, like the helper, may land below 0 (both forms then throw)
+        const endText = () => {
+            const value = this.javaSliceLiteralBound(args[1]);
+            if (value !== undefined && value >= 0) {
+                return `Math.min(${value}, ${length})`;
+            }
+            if (value !== undefined) {
+                return `${length} - ${-value}`;
+            }
+            const t = bounds[1].text;
+            return `Math.min(${t} < 0 ? ${length} + ${t} : ${t}, ${length})`;
+        };
+        const open = args.length === 1;
+        const to = open ? length : endText();
+        // a literal 0 start never exceeds a clamped end, so the pair needs no ordering min
+        const from = open ? startText() : (this.javaSliceLiteralBound(args[0]) === 0 ? '0' : `Math.min(${startText()}, ${to})`);
+        const cast = (text) => (text === '0' ? '0' : `(int) ${text}`);
+        const full = open
+            ? `(${name} == null ? null : ${recv}.substring(${cast(from)}))`
+            : `(${name} == null ? null : ${recv}.substring(${cast(from)}, (int) ${to}))`;
+        // an open-end form shares its line with the surrounding expression: keep it short
+        const budget = open ? 200 : Math.max(220, 392 - identation * 4 - 50);
+        return full.length > budget ? undefined : full;
+    }
+
+    // `x.replaceAll (literal, replacement)` -> String.replace for a plain-string replacement
+    javaTypedStringReplaceAllCall(node, name, parsedArg, parsedArg2): string | undefined {
+        const args = node?.arguments;
+        if (name === undefined || args === undefined || args.length !== 2) {
+            return undefined;
+        }
+        // the all-literal pair is printed natively above; a literal pattern is required here
+        if (!isStringLiteral(args[0]) || args[0].text === '') {
+            return undefined;
+        }
+        if (isStringLiteralLikeNode(args[1]) || this.javaScalarFamily(args[1]) !== 'string') {
+            return undefined;
+        }
+        return `(String)${name}.replace(${parsedArg}, ${parsedArg2})`;
     }
 
     // Printed form of a non-empty string-literal argument with no escapes, or undefined when the

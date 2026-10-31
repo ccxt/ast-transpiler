@@ -4820,15 +4820,17 @@ describe('java native split (Helpers.split -> Arrays.asList(String.split(Pattern
         expect(output).toContain("Helpers.split(s, \",\")");
     });
 
-    test('a non-literal separator keeps the helper', () => {
+    test('a string-typed separator prints native, an untyped one keeps the helper', () => {
         const input =
         "class T {\n" +
-        "    test(s: string, sep: string): void {\n" +
+        "    test(s: string, sep: string, o: any): void {\n" +
         "        const parts = s.split(sep);\n" +
+        "        const rest = s.split(o);\n" +
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.split(s, sep)");
+        expect(output).toContain("((String)s).split(java.util.regex.Pattern.quote(sep))");
+        expect(output).toContain("Helpers.split(s, o)");
     });
 
     test('a two-argument split keeps the helper (the printed call drops no limit)', () => {
@@ -5102,7 +5104,7 @@ describe('java slice native emission (Helpers.slice -> substring / subList)', ()
         expect(output).toContain("Helpers.slice(s, 0.5, 2)");
     });
 
-    test('a bound outside the Java int range keeps the helper', () => {
+    test('a long-literal bound is clamped in long before the (int) cast (typed String slice)', () => {
         const input =
         "class T {\n" +
         "    f(s: string): void {\n" +
@@ -5110,7 +5112,8 @@ describe('java slice native emission (Helpers.slice -> substring / subList)', ()
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.slice(s, 0, 9007199254740992L)");
+        expect(output).toContain("(int) Math.min(9007199254740992L < 0 ?");
+        expect(output).not.toContain("Helpers.slice");
     });
 });
 
@@ -8209,5 +8212,30 @@ describe('java Object.values local (RF-java-2)', () => {
     test('a rewritten Object.values local keeps Object', () => {
         const out = transpiler.transpileJava(wrap("let v = Object.values(d);\n        v = d;\n        return v;")).content;
         expect(out).toContain('Object v = Helpers.objectValues(d)');
+    });
+});
+
+describe('java typed String slice / split / replaceAll (RF-java-1)', () => {
+    const run = (body: string) => transpiler.transpileJava(
+        "class T {\n    test(s: string, sep: string, repl: string, o: any): any {\n" + body + "\n    }\n}").content;
+
+    test('an untyped receiver keeps the slice helper', () => {
+        expect(run("        return o.slice(1, 3);")).toContain("Helpers.slice(o, 1, 3)");
+    });
+
+    test('a fractional bound keeps the slice helper', () => {
+        expect(run("        return s.slice(1.5, 3);")).toContain("Helpers.slice(s,");
+    });
+
+    test('a string separator prints the native split, an untyped one keeps the helper', () => {
+        const output = run("        return [ s.split(sep), s.split(o) ];");
+        expect(output).toContain("((String)s).split(java.util.regex.Pattern.quote(sep))");
+        expect(output).toContain("Helpers.split(s, o)");
+    });
+
+    test('a literal pattern with a typed string replacement prints String.replace', () => {
+        const output = run("        return s.replaceAll('ab', repl);");
+        expect(output).toContain(".replace(\"ab\", ");
+        expect(output).not.toContain("Helpers.replaceAll");
     });
 });
