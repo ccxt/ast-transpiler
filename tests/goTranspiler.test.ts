@@ -7838,3 +7838,126 @@ describe('hx11 rfm-X4 OG03: owner-goroutine base field reads (ws client registry
         expect(out).not.toContain('WsClient');
     });
 });
+
+describe('RFM-G4 G09: PredictionExchange cache fields declared map[string]any print natively', () => {
+    const FIELDS = ['Outcomes', 'Outcomes_by_id', 'Events', 'Events_by_slug'];
+    const HEAD =
+        "type Dictionary<T> = { [key: string]: T };\n" +
+        "type Dict = Dictionary<any>;\n" +
+        "class BaseExchange {\n" +
+        "    events: any = undefined;\n" +
+        "    safeString (a: any, k: any, d: any = undefined): string { return d; }\n" +
+        "    safeValue (a: any, k: any, d: any = undefined): any { return d; }\n" +
+        "    safeString2 (a: any, k1: any, k2: any, d: any = undefined): string { return d; }\n" +
+        "}\n" +
+        "class PredictionExchange extends BaseExchange {\n" +
+        "    outcomes: Dictionary<any> | undefined = undefined;\n" +
+        "    outcomes_by_id: Dictionary<any> | undefined = undefined;\n" +
+        "    events: Dictionary<any> | undefined = undefined;\n" +
+        "    events_by_slug: Dictionary<any> | undefined = undefined;\n";
+    const run = (body: string, fields: string[] = FIELDS) => new Transpiler({ verbose: false, go: { predictionMapFields: fields } }).transpileGo(
+        HEAD + body + "}\n").content;
+    const SET =
+        "    setEvents (events: any[]): Dictionary<any> {\n" +
+        "        if (this.events === undefined) {\n" +
+        "            this.events = {};\n" +
+        "        }\n" +
+        "        for (let i = 0; i < events.length; i++) {\n" +
+        "            const event = this.safeValue (events, i);\n" +
+        "            const id = this.safeString (event, 'id');\n" +
+        "            if (id !== undefined) {\n" +
+        "                this.events[id] = event;\n" +
+        "            }\n" +
+        "        }\n" +
+        "        return this.events;\n" +
+        "    }\n";
+    test('nil tests, the nil-guarded pointer-key write and the map return print natively', () => {
+        const out = run(SET);
+        expect(out).toContain('if this.Events == nil {');
+        expect(out).toContain('this.Events[*id] = event');
+        expect(out).not.toContain('AddElementToObject(this.Events');
+        expect(out).not.toContain('IsEqual(this.Events');
+    });
+    test('a field the table does not declare a map keeps the helper calls', () => {
+        const out = run(SET, ['Outcomes']);
+        expect(out).toContain('IsEqual(this.Events, nil)');
+        expect(out).toContain('AddElementToObject(this.Events, id, event)');
+    });
+    test('a write with no initialising store before it, or under no key guard, keeps AddElementToObject', () => {
+        const bare = run(
+            "    put (id: Str, event: any): void {\n" +
+            "        if (id !== undefined) {\n" +
+            "            this.events[id] = event;\n" +
+            "        }\n" +
+            "    }\n");
+        expect(bare).toContain('AddElementToObject(this.Events, id, event)');
+        const unguarded = run(
+            "    put (event: any): void {\n" +
+            "        if (this.events === undefined) {\n" +
+            "            this.events = {};\n" +
+            "        }\n" +
+            "        const id = this.safeString (event, 'id');\n" +
+            "        this.events[id] = event;\n" +
+            "    }\n");
+        expect(unguarded).toContain('AddElementToObject(this.Events, id, event)');
+    });
+    test('a value that can hold a pointer box keeps AddElementToObject (it derefs)', () => {
+        const out = run(
+            "    put (event: any): void {\n" +
+            "        if (this.events === undefined) {\n" +
+            "            this.events = {};\n" +
+            "        }\n" +
+            "        const id = this.safeString (event, 'id');\n" +
+            "        const name = this.safeString (event, 'name');\n" +
+            "        if (id !== undefined) {\n" +
+            "            this.events[id] = name;\n" +
+            "        }\n" +
+            "    }\n");
+        expect(out).toContain('AddElementToObject(this.Events, id, name)');
+    });
+    test('string-key reads and the key range go native; an any key keeps GetValue', () => {
+        const out = run(
+            "    each (k: any): any[] {\n" +
+            "        const result: Dict[] = [];\n" +
+            "        const keys = Object.keys (this.events);\n" +
+            "        for (let i = 0; i < keys.length; i++) {\n" +
+            "            const event: Dict = this.events[keys[i]];\n" +
+            "            const identity = this.safeString2 (event, 'id', 'event', keys[i]);\n" +
+            "            result.push (event);\n" +
+            "        }\n" +
+            "        const lit = this.events['lit'];\n" +
+            "        const dyn = this.events[k];\n" +
+            "        return result;\n" +
+            "    }\n");
+        expect(out).toContain('var keys []string = nil');
+        expect(out).toContain('for objectKey := range this.Events {');
+        expect(out).not.toContain('ObjectKeys(this.Events)');
+        expect(out).toContain('this.Events[keys[i]]');
+        expect(out).toContain('"event", keys[i])');
+        expect(out).toContain('this.Events["lit"]');
+        expect(out).toContain('GetValue(this.Events, k)');
+    });
+    test('a duplicated nil test collapses to one and loses its parentheses under &&', () => {
+        const out = run(
+            "    cached (): any {\n" +
+            "        const reload = false;\n" +
+            "        if (!reload && (this.events !== undefined && this.events !== null)) {\n" +
+            "            return this.events;\n" +
+            "        }\n" +
+            "        return undefined;\n" +
+            "    }\n");
+        expect(out).toContain('!reload && this.Events != nil {');
+        expect(out).not.toContain('this.Events != nil && this.Events != nil');
+    });
+    test('a local or parameter named like a cache field is not the cache', () => {
+        const out = run(
+            "    other (events: any): any {\n" +
+            "        if (events === undefined) {\n" +
+            "            return undefined;\n" +
+            "        }\n" +
+            "        return events['a'];\n" +
+            "    }\n");
+        expect(out).not.toContain('events == nil');
+        expect(out).not.toContain('events["a"]');
+    });
+});
