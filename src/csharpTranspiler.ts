@@ -345,6 +345,16 @@ function csharpStripOuterParens(text: string): string {
 // that always hold one. The native read tests the key, so a missing key still reads null.
 const CSHARP_MISSING_KEY_FIELDS_NATIVE = [ 'has', 'options', 'urls', 'markets', 'exceptions' ];
 
+// Hand-written BaseExchange collection fields that stay null until initializeProperties stores
+// the describe() row (`this.fees = SafeValue(extendedProperties, "fees") as dict;`, the same for
+// requiredCredentials / accounts in cs/ccxt/base/Exchange.Options.cs: `IDictionary<string, object>`
+// and `List<object>`). A native member read of one carries the helper's own null-receiver test.
+const CSHARP_NULLABLE_STATE_FIELDS: { [name: string]: string } = {
+    'fees': 'IDictionary<string, object>',
+    'requiredCredentials': 'IDictionary<string, object>',
+    'accounts': 'List<object>',
+};
+
 // C# collection types this printer can name whose members replace the helpers
 const CSHARP_NATIVE_COLLECTION_TYPES = [ 'List<object>', 'IList<object>', 'Dictionary<string, object>', 'IDictionary<string, object>' ];
 
@@ -1084,6 +1094,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // test plus the indexer print what the helper computes, so a missing key still reads null
     // (a bare indexer would throw). Any other receiver or a numeric key keeps the helper
     csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey): string | undefined {
+        const state = this.csharpNullableStateField(expression);
+        if (state !== undefined) {
+            return this.csharpNullableStateRead(state, argumentExpression, isStringKey, isNumericLiteral(argumentExpression));
+        }
         if (!isStringKey) {
             return undefined;
         }
@@ -1104,6 +1118,46 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `(${field} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
         }
         return `(${field}.ContainsKey(${printedKey}) ? ${field}[${printedKey}] : null)`;
+    }
+
+    // `this.<field>` for a hand-written collection field that may still be null (CSHARP_NULLABLE_STATE_FIELDS)
+    csharpNullableStateField(node): { text: string, type: string } | undefined {
+        if (!isPropertyAccessExpression(node) || node.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const name = node.name?.text as string;
+        if (!Object.prototype.hasOwnProperty.call(CSHARP_NULLABLE_STATE_FIELDS, name)) {
+            return undefined;
+        }
+        return { text: this.printNode(node, 0), type: CSHARP_NULLABLE_STATE_FIELDS[name] };
+    }
+
+    // GetValue's tests on a nullable state field: null receiver, missing key (dictionary) or
+    // index past the end (list) all read null. `keyKind` is the printed key's C# type for an
+    // identifier ('string' / 'string?' keys a dictionary, 'int' a list); a literal key is its own proof
+    csharpNullableStateRead(state: { text: string, type: string }, argumentExpression, isStringKey: boolean, isNumberKey: boolean): string | undefined {
+        const receiver = state.text;
+        const isDictionary = state.type.indexOf('Dictionary<') >= 0;
+        if (isStringKey || isNumberKey) {
+            const key = this.printNode(argumentExpression, 0);
+            if (isDictionary) {
+                return isStringKey ? `(${receiver} != null && ${receiver}.ContainsKey(${key}) ? ${receiver}[${key}] : null)` : undefined;
+            }
+            const index = Number((argumentExpression as any).text);
+            if (!isNumberKey || !Number.isInteger(index) || (index < 0)) {
+                return undefined; // a string key on a list, or a negative index the helper throws on
+            }
+            return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`;
+        }
+        if (!isIdentifier(argumentExpression)) {
+            return undefined;
+        }
+        const keyType = this.csharpHx4DeclaredKeyType(argumentExpression);
+        const key = this.printNode(argumentExpression, 0);
+        if (isDictionary) {
+            return (keyType === 'string' || keyType === 'string?') ? `(${receiver} != null && ${key} != null && ${receiver}.ContainsKey(${key}) ? ${receiver}[${key}] : null)` : undefined;
+        }
+        return (keyType === 'int') ? `(${receiver} != null && ${key} < ${receiver}.Count ? ${receiver}[${key}] : null)` : undefined;
     }
 
     // A literal-key read on a local whose C# declaration is already a collection: no cast needed, but
@@ -3213,6 +3267,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // build layer's declared-type table, then an `object` parameter proven a dictionary by TS or an
     // emitted `??= new Dictionary<string, object>()`. That case applies the helper's cast + null test.
     csharpNativeDictionaryReceiver(obj): { text: string, nullTest?: string } | undefined {
+        const state = this.csharpNullableStateField(obj);
+        if (state !== undefined) {
+            return (state.type.indexOf('Dictionary<') >= 0) ? { text: state.text, nullTest: state.text } : undefined;
+        }
         const checker = this.getChecker();
         const type = checker.getTypeAtLocation(obj);
         const nullable = this.csharpNullableDictionaryType(type);
@@ -3279,6 +3337,13 @@ export class CSharpTranspiler extends BaseTranspiler {
     // (build/csharp-local-types.js retypes it, answers csharpDeclaredDictReceiverType): inOp's dict
     // branch is exactly `obj?.ContainsKey(key) == true` for a key that is already a C# string.
     csharpDeclaredDictInExpression(key, obj): string | undefined {
+        const state = this.csharpNullableStateField(obj);
+        if (state !== undefined && isIdentifier(key) && state.type.indexOf('Dictionary<') >= 0) {
+            // an identifier key declared `string` / `string?` may hold null: the helper's key test stays
+            const keyType = this.csharpHx4DeclaredKeyType(key);
+            const printed = this.printNode(key, 0);
+            return (keyType === 'string' || keyType === 'string?') ? `(${state.text} != null && ${printed} != null && ${state.text}.ContainsKey(${printed}))` : undefined;
+        }
         if (obj?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
@@ -3316,6 +3381,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
     // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
     csharpNativeLengthExpression(expression): string | undefined {
+        const state = this.csharpNullableStateField(expression);
+        if (state !== undefined) {
+            // a nullable list field: getArrayLength's null -> 0 branch is the null-conditional
+            return (state.type.indexOf('List<') === 0) ? `(${state.text}?.Count ?? 0)` : undefined;
+        }
         if (csharpListParamDeclaration(this, expression)) {
             // a parameter this printer typed as a list: keep getArrayLength's null -> 0 branch
             const declared = this.csharpDeclaredLengthExpression(expression);
@@ -7035,6 +7105,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const fieldTypes = { 'has': 'Dictionary<string, object>', 'features': 'Dictionary<string, object>', 'timeframes': 'Dictionary<string, object>', 'options': 'ConcurrentDictionary<string, object>', 'markets': 'IDictionary<string, object>', 'urls': 'object', 'currencies': 'object' };
         let receiver: string | undefined;
         let csharpType: string | undefined;
+        const state = this.csharpNullableStateField(expression);
+        if (state !== undefined) {
+            return this.csharpNullableStateRead(state, argumentExpression, false, false);
+        }
         if (isPropertyAccessExpression(expression) && expression.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(expression.name)
             && Object.prototype.hasOwnProperty.call(fieldTypes, expression.name.text as string)) {
             const field = this.printNode(expression, 0);
