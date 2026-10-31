@@ -251,6 +251,11 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPlainCacheReadText(receiver: any, key: any): string | undefined;
     javaPlainMapFieldReceiver(expression: any): boolean;
     javaInOwnerMember(node: any): boolean;
+    javaHeaderMapFields: ReadonlySet<string>;
+    javaDescribeTreeCache: WeakMap<object, any>;
+    javaLiteralTree(literal: any): any;
+    javaDescribeTree(node: any): any;
+    javaDescribedDictChainRead(node: any): string | undefined;
     javaOwnerStoreFieldReceiver(expression: any): boolean;
     javaOhlcvsElementRead(node: any): string | undefined;
     javaStringArrayAssertedCounterRead(node: any): string | undefined;
