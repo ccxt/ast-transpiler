@@ -5085,9 +5085,14 @@ export class JavaTranspiler extends BaseTranspiler {
 
             if (this.elementWriteTargetsMap(left.expression, baseExpr, keys, right)) {
                 // a receiver declared as a Map already carries the type the put binds on
-                const target = (keys.length === 1 && this.javaDeclaredMapReceiver(baseExpr))
+                const target = (keys.length === 1 && (this.javaDeclaredMapReceiver(baseExpr) || this.javaWsClientObjectMapReceiver(baseExpr)))
                     ? acc : `((${this.OBJECT_KEYWORD})${acc})`;
                 return `${prefixes}${target}.put(${keyArg}, ${rhs})`;
+            }
+            // a ws Client `Map<String, Object>` takes the put for any value under a String-proven key
+            if (keys.length === 1 && this.javaWsClientObjectMapReceiver(baseExpr)
+                && (isStringLiteralLikeNode(keys[0]) || this.javaDeclaredStringType(keys[0]))) {
+                return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
             // a declared Map local takes a non-null value: the helper's only non-put branch is
             // the ConcurrentHashMap null removal, so the native put is the same write
@@ -5160,6 +5165,16 @@ export class JavaTranspiler extends BaseTranspiler {
                 // the declaration the pass rewrote already carries the map type (and, for a
                 // `this.` field or a retyped local, the surface that names it): no cast needed
                 if (this.javaDeclaredMapReceiver(right)) {
+                    return withGuard(`${objText}.containsKey(${keyText})`);
+                }
+                // a ws Client map (or a local bound to one) is never null and binds containsKey with no cast
+                if (this.javaWsClientMapReceiver(right)) {
+                    // an `any` client (the base tier's `client: any`) is a TS-unchecked receiver: a non-literal key keeps
+                    // its null test there, exactly as the helper's inOp answers false for it
+                    if (guarded === '' && this.javaWsClientReceiverIsAny(right) && !isStringLiteralLikeNode(left)
+                        && this.javaSideEffectFreeReference(left) && !this.javaOperandPrintsPrimitiveNumber(left)) {
+                        return `(${keyText} != null && ${objText}.containsKey(${keyText}))`;
+                    }
                     return withGuard(`${objText}.containsKey(${keyText})`);
                 }
                 if (this.isJavaMapType(objectType)) {
@@ -5798,9 +5813,17 @@ export class JavaTranspiler extends BaseTranspiler {
     // class (ts/src/base/ws/Client.ts, the twin of the hand-written WsClient.java)
     javaWsClientMapField(expression): string | undefined {
         if (expression === undefined || !isPropertyAccessExpression(expression)
-            || !Object.prototype.hasOwnProperty.call(JAVA_WS_CLIENT_MAP_FIELDS, expression.name.text)
             || !this.javaSideEffectFreeReference(expression.expression)) {
             return undefined; // the guard prints the receiver twice
+        }
+        return this.javaWsClientDeclaredMapField(expression);
+    }
+
+    // the field declaration alone: the property is declared by the ws Client class (no receiver proof)
+    javaWsClientDeclaredMapField(expression): string | undefined {
+        if (expression === undefined || !isPropertyAccessExpression(expression)
+            || !Object.prototype.hasOwnProperty.call(JAVA_WS_CLIENT_MAP_FIELDS, expression.name.text)) {
+            return undefined;
         }
         const checker: any = this.checkerOrUndefined();
         if (checker === undefined) {
@@ -5811,6 +5834,106 @@ export class JavaTranspiler extends BaseTranspiler {
         const fileName = declaration?.getSourceFile?.()?.fileName;
         return typeof fileName === 'string' && JAVA_WS_CLIENT_FILE.test(fileName)
             ? JAVA_WS_CLIENT_MAP_FIELDS[expression.name.text] : undefined;
+    }
+
+    // `client.<futures|subscriptions|rejections>` where `client` is the ws Client the generated handlers
+    // receive: a parameter in first position or a local with an initializer, both of which the ws tier
+    // prints as the java `Client` (WsClient.java) with the fields declared `public final Map<String, V>`.
+    // Any other receiver (`okClient`, a later parameter) prints an `Object` box, so no operation binds
+    // on the Map type there. The field is initialised and final, so it is never null.
+    // Returns the Java value type the field declares.
+    javaWsClientTypedMapField(expression): string | undefined {
+        if (expression === undefined || !isPropertyAccessExpression(expression)) {
+            return undefined;
+        }
+        const receiver = expression.expression;
+        if (!isIdentifier(receiver) || receiver.text !== 'client' || this.printNode(receiver, 0) !== 'client') {
+            return undefined;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(receiver);
+        if (declaration === undefined || declaration.name?.text !== 'client') {
+            return undefined;
+        }
+        if (isParameterDeclaration(declaration)) {
+            if ((declaration.parent as any)?.parameters?.[0] !== declaration) {
+                return undefined;
+            }
+        } else if (declaration.initializer === undefined) {
+            return undefined;
+        }
+        return this.javaWsClientDeclaredMapField(expression) ?? this.javaWsClientUntypedMapField(expression);
+    }
+
+    // the same receiver when TS leaves it `any` (`client: any` of the base tier, `const client = this.safeValue (this.clients, url)`):
+    // the build layer prints every such `client` as the java `Client`, so the field table alone names the Map type
+    javaWsClientUntypedMapField(expression): string | undefined {
+        if (!Object.prototype.hasOwnProperty.call(JAVA_WS_CLIENT_MAP_FIELDS, expression.name.text)) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const type = checker?.getTypeAtLocation(expression.expression);
+        return type !== undefined && (type.flags & TypeFlags.Any) !== 0
+            ? JAVA_WS_CLIENT_MAP_FIELDS[expression.name.text] : undefined;
+    }
+
+    // the Java type the ws Client declares for a field (`Map<String, Object>` / `Map<String, Future>`)
+    javaWsClientFieldMapType(field: string): string {
+        return `java.util.Map<String, ${JAVA_WS_CLIENT_MAP_FIELDS[field]}>`;
+    }
+
+    // `const subs = client.subscriptions`: the local holds the field's own Map, so every operation on it
+    // binds on that type with no receiver cast. Only a local nothing writes and nothing consumes as
+    // another Java type may carry it.
+    javaWsClientAliasLocalType(declaration): string | undefined {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || !declaration.initializer) {
+            return undefined;
+        }
+        const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
+        if (this.javaWsClientTypedMapField(initializer) === undefined) {
+            return undefined;
+        }
+        if (this.javaLocalHasWriteAtAll(declaration.name) || !this.javaLocalUsesKeepContainerType(declaration.name)) {
+            return undefined;
+        }
+        return this.javaWsClientFieldMapType(initializer.name.text);
+    }
+
+    // the ws Client field (`subscriptions`, ...) a receiver stands for: the field itself or a local bound to
+    // it. Such a receiver is never null and binds every Map operation with no receiver cast.
+    javaWsClientMapReceiverField(expression): string | undefined {
+        const field = this.javaWsClientTypedMapField(expression);
+        if (field !== undefined) {
+            return expression.name.text;
+        }
+        if (expression !== undefined && isIdentifier(expression)) {
+            const declaration = this.javaDeclarationOfIdentifier(expression);
+            if (declaration !== undefined && expression.text === declaration.name?.text
+                && this.javaWsClientAliasLocalType(declaration) !== undefined) {
+                return this.unwrapPrintTransparentExpression(declaration.initializer).name.text;
+            }
+        }
+        return undefined;
+    }
+
+    // `client` itself is `any` in TS (the property is not checker-declared by the ws Client class)
+    javaWsClientReceiverIsAny(expression): boolean {
+        if (expression === undefined || !isPropertyAccessExpression(expression)) {
+            return false;
+        }
+        const type = this.checkerOrUndefined()?.getTypeAtLocation(expression.expression);
+        return type !== undefined && (type.flags & TypeFlags.Any) !== 0;
+    }
+
+    javaWsClientMapReceiver(expression): boolean {
+        return this.javaWsClientMapReceiverField(expression) !== undefined;
+    }
+
+    // `Object`-valued ws Client map (subscriptions / rejections): `put(String, Object)` binds any value, and
+    // WsClient's OwnerMap.put(key, null) removes the key, which is exactly Helpers.addElementToObject's
+    // null-hostile-map branch, so the native put is the helper's write for every value
+    javaWsClientObjectMapReceiver(expression): boolean {
+        const field = this.javaWsClientMapReceiverField(expression);
+        return field !== undefined && JAVA_WS_CLIENT_MAP_FIELDS[field] === 'Object';
     }
 
     // `client.<map>[k]` with a non-literal key: Helpers.GetValue answers null for a null receiver or
@@ -5846,11 +5969,18 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const initializer = this.unwrapPrintTransparentExpression(declaration.initializer);
-        if (initializer === undefined || !isElementAccessExpression(initializer)
-            || this.javaWsClientMapRead(initializer) === undefined) {
+        if (initializer === undefined || !isElementAccessExpression(initializer)) {
             return undefined;
         }
-        const type = this.javaWsClientMapField(initializer.expression);
+        // a literal key prints through the checker-typed read of a typed ws client receiver
+        const literalRead = isStringLiteralLikeNode(initializer.argumentExpression)
+            && this.javaWsClientMapReceiver(initializer.expression)
+            && this.printElementAccessExpressionExceptionIfAny(initializer) === undefined;
+        if (!literalRead && this.javaWsClientMapRead(initializer) === undefined) {
+            return undefined;
+        }
+        const type = this.javaWsClientMapField(initializer.expression)
+            ?? (literalRead ? JAVA_WS_CLIENT_MAP_FIELDS[(initializer.expression as any).name?.text] : undefined);
         if (type === undefined || type === 'Object' || this.javaLocalHasWriteAtAll(declaration.name)) {
             return undefined;
         }
@@ -6179,7 +6309,7 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             // a receiver the printer itself declared a Map already carries the accessor, so the
             // read binds on the declaration and needs no checkcast in front of it
-            if (this.javaDeclaredMapReceiver(node.expression)) {
+            if (this.javaDeclaredMapReceiver(node.expression) || this.javaWsClientMapReceiver(node.expression)) {
                 return `${this.printNode(node.expression, 0)}.get(${this.printNode(key, 0)})`;
             }
             if (!this.isJavaMapStructureType(type)) {
@@ -8213,6 +8343,11 @@ export class JavaTranspiler extends BaseTranspiler {
             if (wsClientType !== undefined) {
                 varToken = wsClientType + " ";
             }
+            // `const subs = client.subscriptions`: the local holds the field's own Map type
+            const wsClientAliasType = this.javaWsClientAliasLocalType(declaration);
+            if (wsClientAliasType !== undefined) {
+                varToken = wsClientAliasType + " ";
+            }
             // the ws handler table and the local bound to one of its reads name their type,
             // so the dispatch is a plain virtual call
             const handlerType = this.javaHandlerDeclarationType(declaration);
@@ -8925,6 +9060,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (argument === undefined) {
             return undefined;
         }
+        // a ws Client map is initialised and final: the key copy is the helper's map branch
+        if (this.javaWsClientMapReceiver(argument)) {
+            return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.keySet())`;
+        }
         if (isPropertyAccessExpression(argument)) {
             return this.printNativeBaseMapFieldKeys(argument);
         }
@@ -8970,6 +9109,10 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printObjectValuesCall(node, _identation, parsedArg = undefined) {
+        const wsArgument = node?.arguments?.[0];
+        if (wsArgument !== undefined && this.javaWsClientMapReceiver(wsArgument)) {
+            return `new java.util.ArrayList<Object>(${this.printNode(wsArgument, 0)}.values())`;
+        }
         return this.printNativeObjectValuesCall(node) ?? `Helpers.objectValues(${parsedArg})`;
     }
 
@@ -10322,6 +10465,10 @@ export class JavaTranspiler extends BaseTranspiler {
     printDeleteExpression(node, _identation) {
         const object = this.printNode(node.expression.expression, 0);
         const key = this.printNode(node.expression.argumentExpression, 0);
+        // a ws Client map (or a local bound to it) already binds `remove` with no receiver cast
+        if (this.javaWsClientMapReceiver(node.expression.expression)) {
+            return `${object}.remove((String)${key})`;
+        }
         return `((java.util.Map<String,Object>)${object}).remove((String)${key})`;
     }
 

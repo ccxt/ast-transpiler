@@ -8514,7 +8514,7 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
 
     test('client.<owner map>[k] reads natively behind the null guards the helper answers', () => {
         expect(out).toContain('(client.subscriptions == null || key == null ? null : client.subscriptions.get(key))');
-        expect(out).toContain('((java.util.Map<String, Object>)client.subscriptions).get("authenticated")');
+        expect(out).toContain('Object b = client.subscriptions.get("authenticated");');
         expect(out).toContain('Helpers.addElementToObject((client.subscriptions == null ? null : client.subscriptions.get("authenticated")), "expires", 1)');
         expect(out).toContain('(client.rejections == null || messageHash == null ? null : client.rejections.get(messageHash))');
         expect(out).toContain('(client.futures == null || messageHash == null ? null : client.futures.get(messageHash))');
