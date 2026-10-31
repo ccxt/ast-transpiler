@@ -7264,9 +7264,13 @@ describe('go GetValue on GetArgMap-bound parameters (hx4 G01)', () => {
         const output = run("        return params['x']['y'];\n");
         expect(output).toContain('GetValue(params["x"], "y")');
     });
-    test('a bare read keeps GetValue (a *T value would lose its deref)', () => {
-        const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
+    test('a bare read keeps GetValue once a write can store a *T value (it would lose its deref)', () => {
+        const output = run("        params['w'] = this.safeString (params, 'q');\n        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
         expect(output).toContain('GetValue(params, "x")');
+    });
+    test('RF-go-6-A: a bare read of a never-written (pointer-free) map parameter indexes natively', () => {
+        const output = run("        const a = params['x'];\n        return [ a, this.safeString (params, 'z') ];\n");
+        expect(output).toContain('var a any = params["x"]');
     });
     test('a compared element keeps the helper deref', () => {
         const output = run("        if (this.safeString (params['y'], 'k') === undefined) { return 1; }\n        if (params['y'] === undefined) { return 1; }\n        return 0;\n");
@@ -7322,7 +7326,7 @@ describe('go GetValue on GetArgMap-bound parameters: element-write values (hx4 G
     test('the value of an element write keeps GetValue for the write pass', () => {
         const inst = new Transpiler({ verbose: false });
         (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
-        const output = inst.transpileGo('type Dict = { [key: string]: any };\nclass T {\n    f (d: any, params: Dict = {}) {\n        const r = {};\n        r[d] = params[\'x\'];\n        return r;\n    }\n}\n').content;
+        const output = inst.transpileGo('type Dict = { [key: string]: any };\nclass T {\n    safeString (a, b) { return a; }\n    f (d: any, params: Dict = {}) {\n        const r = {};\n        params[\'w\'] = this.safeString (params, \'q\');\n        r[d] = params[\'x\'];\n        return r;\n    }\n}\n').content;
         expect(output).toContain('GetValue(params, "x")');
     });
 });
