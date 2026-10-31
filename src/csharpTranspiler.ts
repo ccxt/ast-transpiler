@@ -1005,6 +1005,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return this.csharpNativeDeclaredDictionaryRead(expression, argumentExpression)
                 ?? this.csharpDeclaredLocalResolverRowRead(expression, argumentExpression)
                 ?? this.csharpDeclaredCollectionRead(node, expression, argumentExpression, isStringKey, isNumberKey)
+                ?? this.csharpDeclaredStringIndexRead(node, expression, argumentExpression, isNumberKey)
                 ?? this.csharpProvenDictionaryRead(node, expression, argumentExpression, isStringKey)
                 ?? this.csharpMissingKeyFieldRead(expression, argumentExpression, isStringKey);
         }
@@ -1193,6 +1194,27 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`;
         }
         return undefined;
+    }
+
+    // A literal-index read on a local whose emitted C# declaration is a `string` / `string?` (the type
+    // csharpStringReceiverType names, build-layer retypes included): the string indexer throws on a null
+    // receiver and past the end where GetValue answers null, so the native form carries both tests and
+    // re-boxes the char as the helper's `.ToString ()` string. Only an Identifier qualifies (read up to
+    // three times) and only a plain read (never a write target, delete or ++/--).
+    csharpDeclaredStringIndexRead(node, expression, argumentExpression, isNumberKey): string | undefined {
+        if (!isNumberKey || !isIdentifier(expression) || !this.csharpHx4IsPlainRead(node)) {
+            return undefined;
+        }
+        const declared = this.csharpStringReceiverType(expression);
+        if (declared !== 'string' && declared !== 'string?') {
+            return undefined;
+        }
+        const index = Number((argumentExpression as any).text);
+        if (!Number.isInteger(index) || (index < 0)) {
+            return undefined; // a negative or fractional literal never binds the indexer the helper reads
+        }
+        const receiver = this.printNode(expression, 0);
+        return `(${receiver} != null && ${index} < ${receiver}.Length ? ${receiver}[${index}].ToString () : null)`;
     }
 
     // The C# collection type a local read was DECLARED with: printed by this printer, or recorded by
