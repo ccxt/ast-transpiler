@@ -34,6 +34,12 @@ export declare class GoTranspiler extends BaseTranspiler {
         ownerSide: RegExp[];
     } | undefined;
     predictionMapFields: Set<string>;
+    goTupleSlotTypes: {
+        [producer: string]: string[];
+    };
+    goTupleValueDefaultArg: {
+        [producer: string]: number;
+    };
     goSliceLiteralTypes: Map<any, string>;
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
@@ -244,6 +250,31 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBookAccessorRead(initializer: any): boolean;
     goIsBaseMapResultLocal(node: any): boolean;
     goBaseMapResultLocal(initializer: any): boolean;
+    rf6aSafeDictMapLocalCache: Map<any, string>;
+    rf6aSafeDictCall(initializer: any): {
+        call: any;
+        family: 'SafeDict' | 'SafeDict2';
+        keys: number;
+        fallback: any;
+    } | undefined;
+    rf6aContainsThis(node: any): boolean;
+    rf6aIsStructTyped(node: any): boolean;
+    rf6aPlainContainer(container: any, ws: boolean, noDefault: boolean): boolean;
+    rf6aNeverNilDict(call: any, ws: boolean): boolean;
+    rf6aSourceKind(node: any): 'rest' | 'ws' | 'skip';
+    rf6aTopFunction(node: any): any;
+    rf6aGuardsNonNil(condition: any, name: string): boolean;
+    rf6aInsideNonNilBlock(use: any, name: string): boolean;
+    rf6aUseKeepsMap(ref: any, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean;
+    rf6aSafeDictMapLocal(declaration: any): string | undefined;
+    rf6aSafeDictMapLocalUncached(declaration: any): string | undefined;
+    rf6aRebindWrites: Map<any, Set<any>>;
+    rf6aSafeDictMapValue(declaration: any, identation: number): string | undefined;
+    rf6aSafeDictRebind(node: any, identation: number): string | undefined;
+    rf6aKeyIsString(key: any, printed: string): boolean;
+    rf6aIsPointerFreeValue(value: any): boolean;
+    rf6aMapWritesArePointerFree(scope: any, name: string): boolean;
+    rf6aNativeMapRead(access: any, baseExpr: any, keyNode: any, keyStr: string): boolean;
     goMarketCallReturnsDict(initializer: any): boolean;
     goMarketProducerMethods: string[];
     goMarketMapCalls: string[];
@@ -654,6 +685,11 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         conv: string;
     } | undefined;
+    goRf6fTupleSlotCache: Map<any, string>;
+    goRf6fTupleSlotPointerType(element: any): string | undefined;
+    goRf6fTupleSlotPointerTypeOf(element: any): string | undefined;
+    goRf6fSlotStoreText(valueNode: any, valueStr: string): string;
+    goRf6fTupleSlotPointerLines(name: string, holder: string, index: number, iden: string): string;
     goTupleSlotNameIsSafe(nameNode: any, declaration: any): boolean;
     goTupleBindingProducerName(declaration: any): string | undefined;
     goTupleBindingIsSliceHolder(declaration: any): boolean;
@@ -822,6 +858,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goHostListCalleeType(callee: string, initializer: any): string | undefined;
     goWritesOrRebindsName(n: any, name: string, mutators: string[]): boolean;
     goLoopBoundedSliceRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
+    goListElementsAreObjects(baseExpr: any): boolean;
     goOtherBindingOfLoopBoundedElement(n: any, declaration: any): boolean;
     goBoundIsLengthOf(bound: any, baseExpr: any, loop: any): boolean;
     goLoopBoundedStringElementType(node: any, printedValue: string): string | undefined;
