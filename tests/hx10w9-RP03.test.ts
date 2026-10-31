@@ -59,7 +59,7 @@ describe('hx10w9 RP03: get_value on proven map locals (ws order book)', () => {
             "        const bids = ob['bids'];\n" +
             '        return bids;\n' +
             '    }\n');
-        expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = self.orderbooks');
+        expect(out).toContain('let mut ob: indexmap::IndexMap<String, Value> = (if let (Some(__m), Some(__k)) = (self.orderbooks.as_map(), sym.as_str())');
         expect(out).toContain(`let mut bids: Value = ${MAP_READ('ob', 'bids')};`);
         expect(out).not.toContain('get_value(&ob');
     });

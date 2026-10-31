@@ -140,7 +140,7 @@ export function r06w3Push (content: string): string {
         if (/^\(if let Some\(__s\) = [A-Za-z_][A-Za-z0-9_.]*\.(?:as_str|as_deref)\(\) \{ Value::Str\(.*\) \} else \{ Value::Null \}\)$/.test (t)) return true;
         // a plain data field, or a read rooted at one
         if (isPlainField (t)) return true;
-        const safeValue = /^self\.safe_value(?:_k)?\(self\.([A-Za-z_][A-Za-z0-9_]*)/.exec (t);
+        const safeValue = /^self\.safe_value(?:_k)?\(\(?(?:if let \(Some\(__m\), Some\(__k\)\) = \()?self\.([A-Za-z_][A-Za-z0-9_]*)/.exec (t);
         if (safeValue !== null && plainFields.has (safeValue[1])) return true;
         // dict-field read through a variant match on a plain local
         const matchRead = /^match\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*Value::Dict\(__m\d+\)\s*=>\s*__m\d+\.get\("/.exec (t);
@@ -160,6 +160,12 @@ export function r06w3Push (content: string): string {
             if (root !== null) return localFree (root, region, seen);
             if (/^[A-Za-z_][A-Za-z0-9_]*$/.test (recv)) return localFree (recv, region, seen);
             return false;
+        }
+        // the closure-free dict read the printer emits: `(if let (Some(__m), Some(__k)) = (R.as_map(), K.as_str()) { .. })`
+        const freeRead = /^\(if let \(Some\(__m\), Some\(__k\)\) = \(([A-Za-z_][A-Za-z0-9_.]*)\.as_map\(\), /.exec (t);
+        if (freeRead !== null) {
+            if (isPlainField (freeRead[1])) return true;
+            return /^[A-Za-z_][A-Za-z0-9_]*$/.test (freeRead[1]) && localFree (freeRead[1], region, seen);
         }
         const clone = /^([A-Za-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec (t);
         if (clone !== null) return localFree (clone[1], region, seen);

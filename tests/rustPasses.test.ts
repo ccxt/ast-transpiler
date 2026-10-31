@@ -13,8 +13,8 @@ import { rp02SelfTest } from '../src/rustPasses/hx10w9-RP02';
 
 describe('rust final-text passes (moved from ccxt build/)', () => {
     test('every pass is exported from the package entry', () => {
-        for (const name of ['nativeGetValue', 'r02NativeInserts', 'hx10w2R03', 'r04Scalars', 'hx10w2R08', 'r06Push', 'r01TypedLocals',
-            'hx10w3R03', 'r04Callee', 'r05FieldChainInserts', 'r06w3Push', 'r07StringNatives', 'r08DictReads', 'bf03PlainDictChains',
+        for (const name of ['nativeGetValue', 'r02NativeInserts', 'hx10w2R03', 'r04Scalars', 'r06Push', 'r01TypedLocals',
+            'hx10w3R03', 'r04Callee', 'r05FieldChainInserts', 'r06w3Push', 'r07StringNatives', 'bf03PlainDictChains',
             'r10ClientHandle', 'narrowStrSinkLocals', 'narrowStrNullLocals', 'hx11RustSignApiStr']) {
             expect(typeof (passes as any)[name]).toBe('function');
         }

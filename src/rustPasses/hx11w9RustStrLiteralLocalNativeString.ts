@@ -139,7 +139,9 @@ export function hx11w9RustStrLiteralLocalNativeString(content: string): string {
         }
         if (!ok) continue;
         // Every edit keeps its line at most 400 chars unless it was already longer.
-        const declText = `${m[1]}let mut ${name}: String = ${lit[1]}.to_string();`;
+        // keep a trailing `// comment` the declaration regex swallowed
+        const tail = content.slice(m.index + lit.index + lit[0].length, stmtEnd);
+        const declText = `${m[1]}let mut ${name}: String = ${lit[1]}.to_string();${tail}`;
         const all: Edit[] = [{ start: m.index, end: stmtEnd, text: declText }, ...edits];
         const lineGrow = new Map<number, number>();
         for (const e of all) {

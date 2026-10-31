@@ -2504,7 +2504,7 @@ describe('rust declared-Dict locals', () => {
         // hx10w9 RP03: the element local is a bare IndexMap, so the read is a map
         // lookup (`market.as_map()` box would only add the `|__m|` closure).
         expect(output).toContain('market.get("id").cloned().unwrap_or(Value::Null)');
-        expect(output).toContain('let mut market: indexmap::IndexMap<String, Value> = self.markets');
+        expect(output).toContain('let mut market: indexmap::IndexMap<String, Value> = (if let (Some(__m), Some(__k)) = (self.markets.as_map(), symbol.as_str())');
         expect(output).not.toContain('get_value_k(&market');
         expect(output).not.toContain(NATIVE('market', 'id'));
     });
@@ -3162,7 +3162,7 @@ describe('rust typed-parameter dict reads', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain(
-            'balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+            '(if let (Some(__m), Some(__k)) = (balance.as_map(), code.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
         expect(output).not.toContain('get_value(&balance');
     });
 
@@ -3173,7 +3173,7 @@ describe('rust typed-parameter dict reads', () => {
             "    return balance[code];\n" +
             "}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('balance.as_map().and_then(|__m| code.as_str()');
+        expect(output).toContain('(if let (Some(__m), Some(__k)) = (balance.as_map(), code.as_str())');
         expect(output).not.toContain('get_value(&balance');
     });
 
@@ -3376,7 +3376,7 @@ describe('rust native container reads (B-28)', () => {
         expect(output).toContain('let mut s: Value = client.subscriptions;');
     });
 
-    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+    test('a bind the next statement mutates is the closure-free read the write-back pass recognises', () => {
         const ts =
             'class T {\n' +
             '    m(data: any[]) {\n' +
@@ -3551,7 +3551,7 @@ describe('rust parameter shadows (D-25)', () => {
             "}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
-        expect(output).toContain('code.as_str().and_then(|__k| data.get(__k)).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('(if let Some(__k) = code.as_str() { data.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
     });
 
     test('a `this.safeString` read inlines the coercion over the shadow', () => {
@@ -3804,7 +3804,7 @@ describe('rust typed-receiver native reads (D-28)', () => {
         expect(output).toContain('get_value(&currencies, &code)');
     });
 
-    test('a bind the next statement mutates keeps the helper (write-back pass)', () => {
+    test('a bind the next statement mutates is the closure-free read the write-back pass recognises', () => {
         const ts =
             PLAIN +
             'class T {\n' +
@@ -3819,7 +3819,8 @@ describe('rust typed-receiver native reads (D-28)', () => {
             '    }\n' +
             '}';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut row: Value = get_value(&result, &key);');
+        // the ccxt write-back pass matches the printer's closure-free bind of the same container/key
+        expect(output).toContain('let mut row: Value = (if let (Some(__m), Some(__k)) = (result.as_map(), key.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
         expect(output).not.toContain('row.as_map()');
     });
 
@@ -4096,14 +4097,14 @@ describe('rust this-field dynamic dict reads (hx4 R02)', () => {
     test('a dynamic string key on a Dict-declared field reads natively', () => {
         const ts = DECL + 'class A {\n    balance: Dict = {};\n    f (code: string) {\n        const a = this.balance[code];\n        return a;\n    }\n}\n';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut a: Value = self.balance.as_map().and_then(|__m| code.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+        expect(output).toContain('let mut a: Value = (if let (Some(__m), Some(__k)) = (self.balance.as_map(), code.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
         expect(output).not.toContain('get_value(&self.balance');
     });
 
     test('a nested read on a Dictionary<Dictionary<T>> field reads natively at both levels', () => {
         const ts = DECL + 'class A {\n    ohlcvs: Dictionary<Dictionary<C>>;\n    f (symbol: string, tf: string) {\n        const a = this.ohlcvs[symbol][tf];\n        return a;\n    }\n}\n';
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('self.ohlcvs.as_map().and_then(|__m| symbol.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null).as_map().and_then(|__m| tf.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
+        expect(output).toContain('(if let (Some(__m), Some(__k)) = (self.ohlcvs.as_map(), symbol.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null }).as_map().and_then(|__m| tf.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('get_value(');
     });
 
@@ -4358,7 +4359,7 @@ describe('hx4 R09 rust typed-operand is_equal/add/subtract', () => {
 
 describe('hx4 R10 native reads on plain-dict locals and Dict parameters', () => {
     const dyn = (receiver: string, key: string) =>
-        `${receiver}.as_map().and_then(|__m| ${key}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+        `(if let (Some(__m), Some(__k)) = (${receiver}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })`;
     let output = '';
     beforeAll(() => {
         output = transpiler.transpileRustByPath('./tests/files/input/hx4r10/ts/src/venue.ts').content;
@@ -4498,7 +4499,7 @@ describe('hx4 R14 overloaded base safeDict/safeList/safeBool feed the plain-dict
     });
 
     test('a dynamic-key read on an overloaded safeDict local with a {} default is native', () => {
-        expect(output).toContain('let mut found: Value = byAlt.as_map().and_then(|__m| id.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null);');
+        expect(output).toContain('let mut found: Value = (if let (Some(__m), Some(__k)) = (byAlt.as_map(), id.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null });');
     });
 
     test('a non-plain default and a write-back bind keep get_value', () => {

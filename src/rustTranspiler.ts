@@ -1820,20 +1820,25 @@ export class RustTranspiler extends BaseTranspiler {
             const keyStrs = keys.map(k => this.printNode(k, 0));
             for (const key of keyStrs.slice(0, -1)) acc = `get_value_mut(${acc}, &${key})`;
             const rhs = this.printNode(right, 0);
-            const helperWrite = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+            const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+            // a nested helper write whose value was read natively binds the value first, like the ccxt hoist did
+            const helperWrite = this.rustDictHoistHosts.has(node)
+                ? `{ let __be_tmp = ${rhs}; add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, __be_tmp); }` : helperCall;
             const nestedInsert = keyStrs.length === 2
                 ? (this.rustNestedBearerInsert(baseExpr, keys[0], keyStrs[0], keys[1], keyStrs[1], rhs)
                     ?? this.rp05NestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite))
                 : (this.rp05NestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite)
                     ?? this.rustNestedBearerBucket(baseExpr, keys[0], keyStrs[0], right));
             if (nestedInsert !== undefined) return nestedInsert;
+            const fieldNested = this.rustFieldNestedInsert(node, baseExpr, keys, keyStrs, rhs);
+            if (fieldNested !== undefined) return fieldNested;
             // hx10w7 R04: `x[k1][k2] = v` on a one-level bearer — the first hop is the
             // map's own `entry`, the write below it keeps its helper.
             const bearerChain = keyStrs.length > 1
                 ? this.rustBearerChainedWrite(baseExpr, keys, keyStrs, rhs) : undefined;
             if (bearerChain !== undefined) return bearerChain;
             const nativeInsert = keyStrs.length === 1 ? (this.rustBearerDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustMapParamDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeBookMetaWrite(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustR01NativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs)) : undefined;
-            return nativeInsert ?? `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+            return nativeInsert ?? helperWrite;
         }
         // hx10w6 R01: rebuilding a typed dict bearer from a plain literal (`x = { .. }`)
         if (isAssign && isIdentifier(left) && this.rustDictBearerDeclaration(left) !== undefined
@@ -1864,7 +1869,7 @@ export class RustTranspiler extends BaseTranspiler {
             const shadow = this.rustParamShadowOf(right);
             return (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
                 ?? this.r04BearerInOp(left, right) ?? this.printNativeInOperator(left, right)
-                ?? this.r18LiteralInOp(left, right) ?? this.r05InOp(left, right)
+                ?? this.r18LiteralInOp(left, right) ?? this.r05InOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
         }
         // `+=` / `-=` on regular variables
@@ -4116,7 +4121,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isStringLiteralLikeNode(keyNode)) {
             const bookField = this.printNativeBookFieldRead(receiverText, receiverNode, keyNode.text);
             if (bookField !== undefined) return bookField;
-            return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text);
+            return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text) ?? this.rustLocalDictLiteralRead(receiverText, receiverNode, keyNode.text);
         }
         if (isNumericLiteral(keyNode)) {
             const index = Number(keyNode.text);
@@ -4129,7 +4134,8 @@ export class RustTranspiler extends BaseTranspiler {
             return this.printNativeListIndex(receiverText, index, receiverNode);
         }
         const dictRead = this.rustBearerDictDynamicRead(receiverText, receiverNode, keyNode) ?? this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode)
-            ?? this.rustR10DynamicRead(receiverText, receiverNode, keyNode);
+            ?? this.rustR10DynamicRead(receiverText, receiverNode, keyNode) ?? this.rustFieldDynamicRead(receiverText, receiverNode, keyNode)
+            ?? this.rustLocalDictRead(receiverText, receiverNode, keyNode);
         if (dictRead !== undefined) return dictRead;
         // A non-literal index (the `for (let i = 0; …)` counter) into a
         // checker-proven list reads natively too.
@@ -4292,7 +4298,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A plain place keeps the borrow local; a call/temporary text does not.
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
         if (this.rustNodeIsKeyUnsafePlace(keyText)) return undefined;
-        return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+        return this.rustDictRead(receiverText, keyText, receiverNode);
     }
 
     /** Keys `get_value` serves from the book store / cache bucket / live
@@ -4546,7 +4552,7 @@ export class RustTranspiler extends BaseTranspiler {
             const k = this.rustShadowMapKey(key);
             if (k === undefined) return undefined;
             return k.literal !== undefined ? `${shadow.name}.get("${k.literal}").cloned().unwrap_or(Value::Null)`
-                : `${k.place}.as_str().and_then(|__k| ${shadow.name}.get(__k)).cloned().unwrap_or(Value::Null)`;
+                : this.rustShadowKeyRead(shadow.name, k.place, keyNode);
         }
         if (isNumericLiteral(key)) {
             const index = Number(key.text);
@@ -4565,7 +4571,7 @@ export class RustTranspiler extends BaseTranspiler {
         const k = this.rustShadowMapKey(keyNode);
         if (k === undefined) return undefined;
         return k.literal !== undefined ? `Value::Bool(${shadow.name}.contains_key("${k.literal}"))`
-            : `Value::Bool(${k.place}.as_str().map(|__k| ${shadow.name}.contains_key(__k)).unwrap_or(false))`;
+            : `Value::Bool(${this.rustShadowKeyHas(shadow.name, k.place, keyNode)})`;
     }
 
     /** A shadow dict key: an inlinable literal, or a proven-string plain place. */
@@ -4790,6 +4796,391 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    // ── FM-RS1 L1: closure-free dict reads / membership (formerly ccxt nativeDictKeyRead + R08) ──
+    // A read keyed by a Str place prints `(if let (Some(__m), Some(__k)) = (M.as_map(), K.as_str()) { .. })`;
+    // `k in D` on a proven Dict prints `D.as_map().is_some_and(..)`. Each site picks its form from the
+    // statement's finished line length (400-char budget): helper call, closure, or closure-free.
+
+    private rustDictPhase: 'normal' | 'probe' | 'final' = 'normal';
+    private rustDictSites: Array<{ guarded: boolean, fc: number, ch: number, free: boolean }> = [];
+    private rustDictDecisions: Array<'free' | 'closure' | 'helper'> = [];
+    private rustDictOwnerDepth = 0;
+    private rustDictHoistHosts = new Set<Node>();
+
+    /** Base `Exchange` fields that hold plain, tag-free runtime state (never a cache/book marker). */
+    static readonly RUST_DICT_FIELDS = new Set([
+        'options', 'urls', 'markets', 'markets_by_id', 'currencies', 'currencies_by_id', 'commonCurrencies',
+        'baseCurrencies', 'quoteCurrencies', 'timeframes', 'precision', 'limits', 'fees', 'has', 'exceptions',
+        'features', 'api', 'accounts', 'accountsById', 'tokenBucket', 'headers', 'requiredCredentials',
+        'networkAliases', 'balance', 'positions', 'ohlcvs', 'tickers', 'bidsasks', 'orderbooks', 'trades',
+        'orders', 'myTrades', 'liquidations', 'myLiquidations', 'fundingRates', 'triggerOrders',
+        'transactions', 'clients',
+    ]);
+    /** Fields whose values are themselves Dicts (cache containers / client handles). */
+    static readonly RUST_DICT_VALUE_FIELDS = new Set([
+        'ohlcvs', 'tickers', 'bidsasks', 'orderbooks', 'trades', 'orders', 'myTrades', 'liquidations',
+        'myLiquidations', 'fundingRates', 'triggerOrders', 'positions', 'clients',
+    ]);
+    static readonly RUST_DICT_TAGGED_ENTRY_FIELDS = new Set([
+        'options', 'urls', 'fees', 'exceptions', 'markets', 'currencies', 'headers', 'has', 'tokenBucket',
+        'markets_by_id', 'currencies_by_id',
+    ]);
+    static readonly RUST_DICT_MARKER_KEYS = /^(?:timestamp|datetime|nonce|symbol|checksum|cache|hashmap|subscriptions|futures|\d+)$/;
+    /** Base callees that only ever return a Dict (the content may still carry a marker). */
+    static readonly RUST_DICT_CALLEES = new Set([
+        'safeDict', 'safeDict2', 'safeDictN', 'safeDictionary', 'createSafeDictionary', 'extend', 'deepExtend',
+        'omit', 'groupBy', 'indexBy', 'filterByArray',
+    ]);
+
+    /** Name of the base-Exchange runtime-state field behind `this.<name>`, else undefined. */
+    rustDictField(node: Node): string | undefined {
+        const n: any = this.rustSkipWrappers(node);
+        if (n === undefined || !isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = String(n.name.text);
+        if (!RustTranspiler.RUST_DICT_FIELDS.has(name)) return undefined;
+        let declaration: any;
+        try {
+            declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
+        } catch (e) {
+            return undefined;
+        }
+        if (declaration === undefined || declaration.kind !== SyntaxKind.PropertyDeclaration) return undefined;
+        return /ts[\\/]src[\\/]base[\\/](?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(String(declaration.getSourceFile().fileName)) ? name : undefined;
+    }
+
+    /** One dict-read site. `free` = closure-free text, `closure` = closure text, `helper` = the helper call;
+     *  `guarded` = the helper form is kept when the closure would push the line over 400 chars. */
+    rustDictSite(site: { free?: string, closure: string, helper?: string, guarded?: boolean }): string {
+        const k = this.rustDictSites.length;
+        const guarded = site.guarded === true && site.helper !== undefined;
+        this.rustDictSites.push({
+            guarded, free: site.free !== undefined,
+            fc: site.free !== undefined ? site.free.length - site.closure.length : 0,
+            ch: guarded ? site.closure.length - (site.helper as string).length : 0,
+        });
+        if (this.rustDictPhase === 'probe') return `\u0001${k}\u0002${guarded ? site.helper : site.closure}\u0003`;
+        if (this.rustDictPhase === 'final') {
+            const d = this.rustDictDecisions[k];
+            if (d === 'helper' && site.helper !== undefined) return site.helper;
+            if (d === 'closure' || site.free === undefined) return site.closure;
+            return site.free;
+        }
+        return site.free ?? site.closure;
+    }
+
+    /** Dict read keyed by a Str place: closure-free when both operands are side-effect-free places. */
+    rustDictRead(recv: string, key: string, node: Node, guarded = false): string {
+        const free = RUST_PLAIN_PLACE.test(recv) && RUST_PLAIN_PLACE.test(key) && !this.r05IsTest(node)
+            ? `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })` : undefined;
+        return this.rustDictSite({
+            free, guarded, helper: `get_value(&${recv}, &${key})`,
+            closure: `${recv}.as_map().and_then(|__m| ${key}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`,
+        });
+    }
+
+    /** `K.as_str().and_then(|__k| D.get(__k))` on a shadowed parameter map. */
+    rustShadowKeyRead(shadow: string, key: string, node: Node): string {
+        const free = RUST_PLAIN_PLACE.test(key) && !this.r05IsTest(node)
+            ? `(if let Some(__k) = ${key}.as_str() { ${shadow}.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })` : undefined;
+        return this.rustDictSite({ free, closure: `${key}.as_str().and_then(|__k| ${shadow}.get(__k)).cloned().unwrap_or(Value::Null)` });
+    }
+
+    /** `K.as_str().map(|__k| D.contains_key(__k)).unwrap_or(false)` on a shadowed parameter map. */
+    rustShadowKeyHas(shadow: string, key: string, node: Node): string {
+        const free = RUST_PLAIN_PLACE.test(key) && !this.r05IsTest(node)
+            ? `matches!(${key}.as_str(), Some(__k) if ${shadow}.contains_key(__k))` : undefined;
+        return this.rustDictSite({ free, closure: `${key}.as_str().map(|__k| ${shadow}.contains_key(__k)).unwrap_or(false)` });
+    }
+
+    /** Key text a dict read can take as `K.as_str()`: any printed place/expression that is not a boxed literal. */
+    rustDictKeyText(keyNode: Node): string | undefined {
+        const keyType = this.getCheckedTypeOf(keyNode);
+        if (keyType === undefined || (keyType.flags & (TypeFlags.NumberLike | TypeFlags.BigIntLike | TypeFlags.BooleanLike)) !== 0) return undefined;
+        const key = this.printNode(keyNode, 0).trim();
+        if (key === '' || /^(?:crate::)?Value::(?:Str|Int|Float|Bool|Null)\b/.test(key) || key.startsWith('&')) return undefined;
+        return key;
+    }
+
+    /** `this.<field>[k]` with a non-literal key: the runtime reads the key as a Str and yields
+     *  Null for anything else, which is `K.as_str()`; the field container is never tagged. */
+    rustFieldDynamicRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined {
+        const field = this.rustDictField(receiverNode);
+        if (field === undefined || field === 'accounts' || this.r05IsTest(receiverNode)) return undefined;
+        const key = this.rustDictKeyText(keyNode);
+        if (key === undefined) return undefined;
+        return this.rustDictRead(receiverText, key, receiverNode);
+    }
+
+    /** A local whose declaration and every write pin a Dict. 'plain': fresh object literals and nullish only
+     *  (never tagged by the runtime); 'dicty': also dict-only base callees (content unproven). */
+    rustDictLocalProof(ident: Node): 'plain' | 'dicty' | undefined {
+        if (!isIdentifier(ident) || this.rustParamShadowOf(ident) !== undefined) return undefined;
+        if (this.rustDictBearerDeclaration(ident) !== undefined || this.rustMapParamDeclaration(ident) !== undefined) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || declaration.initializer === undefined) return undefined;
+        // the printer declares these as typed maps / vectors, not as `let x: Value`
+        if (this.rustReadBearerKindOfDeclaration(declaration) || this.rustDictLocalIsTyped(declaration)
+            || this.rustNestedDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)) return undefined;
+        const scope = this.rustEnclosingFunction(declaration);
+        const symbol = this.rustSymbolOf(declaration.name);
+        if (scope === undefined || isSourceFile(scope) || symbol === undefined) return undefined;
+        let proof = this.rustDictSource(declaration.initializer, false);
+        if (proof === undefined) return undefined;
+        const name = String(ident.text);
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (n === declaration) continue;
+            if (this.rustBindsName(n, name)) {
+                if (this.rustSymbolOf(n.name) === undefined) return undefined;
+                continue;
+            }
+            if (n.kind !== SyntaxKind.Identifier || n === declaration.name || this.rustSymbolOf(n) !== symbol) continue;
+            let target: any = n;
+            while (target.parent !== undefined && (isParenthesizedExpression(target.parent) || isNonNullExpression(target.parent) || isAsExpression(target.parent))) target = target.parent;
+            const parent: any = target.parent;
+            if (parent === undefined) continue;
+            if (isBinaryExpression(parent) && parent.left === target && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+                if (parent.operatorToken.kind !== SyntaxKind.EqualsToken || this.rustEnclosingFunction(n) !== scope) return undefined;
+                const rhs = this.rustDictSource(parent.right, true);
+                if (rhs === undefined) return undefined;
+                if (rhs === 'dicty') proof = 'dicty';
+                continue;
+            }
+            if (parent.kind === SyntaxKind.PrefixUnaryExpression || parent.kind === SyntaxKind.PostfixUnaryExpression
+                || ((isForOfStatement(parent) || isForInStatement(parent)) && parent.initializer === target)) return undefined;
+            // a destructuring write `[x, y] = ..`
+            if (parent.kind === SyntaxKind.ArrayLiteralExpression && isBinaryExpression(parent.parent) && parent.parent.left === parent) return undefined;
+        }
+        return proof;
+    }
+
+    /** 'plain' for a fresh object literal (or nullish when `allowNullish`), 'dicty' for a dict-only base callee. */
+    rustDictSource(node: any, allowNullish: boolean): 'plain' | 'dicty' | undefined {
+        const n: any = this.rustSkipWrappers(node);
+        if (n === undefined) return undefined;
+        if (isObjectLiteralExpression(n)) {
+            return n.properties.some((p: any) => p.kind === SyntaxKind.SpreadAssignment) ? undefined : 'plain';
+        }
+        if (allowNullish && (n.kind === SyntaxKind.NullKeyword || (isIdentifier(n) && String(n.text) === 'undefined'))) return 'plain';
+        if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword
+            && RustTranspiler.RUST_DICT_CALLEES.has(String(n.expression.name.text)) && this.rustR01CalleeIsBase(n)) return 'dicty';
+        return undefined;
+    }
+
+    /** `X[k]` on a proven local with a non-literal key. */
+    rustLocalDictRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined {
+        if (this.rustDictLocalProof(receiverNode) !== 'plain') return undefined;
+        const key = this.rustDictKeyText(keyNode);
+        if (key === undefined) return undefined;
+        return this.rustDictRead(receiverText, key, receiverNode, true);
+    }
+
+    /** `X['k']` on a proven local, for a key the runtime does not route to a marker store. */
+    rustLocalDictLiteralRead(receiverText: string, receiverNode: Node, keyText: string): string | undefined {
+        const proof = this.rustDictLocalProof(receiverNode);
+        if (proof === undefined || RustTranspiler.RUST_DICT_MARKER_KEYS.test(keyText)) return undefined;
+        const literal = `"${this.escapeRustStringLiteral(keyText)}"`;
+        return this.rustDictSite({
+            guarded: true, helper: `get_value(&${receiverText}, &Value::Str(${literal}.into()))`,
+            closure: `${receiverText}.as_map().and_then(|__m| __m.get(${literal})).cloned().unwrap_or(Value::Null)`,
+        });
+    }
+
+    /** `k in D` on a base-field / field-container map or a proven local: `in_op`'s Dict arm. */
+    rustDictInOp(key: Node, obj: Node): string | undefined {
+        const recv: any = this.rustSkipWrappers(obj);
+        if (recv === undefined) return undefined;
+        let guarded = false;
+        if (this.rustDictField(recv) === undefined) {
+            const nested = isElementAccessExpression(recv) && recv.argumentExpression !== undefined
+                && RustTranspiler.RUST_DICT_VALUE_FIELDS.has(String(this.rustDictField(recv.expression)))
+                && !isStringLiteralLikeNode(recv.argumentExpression);
+            if (!nested) {
+                const proof = this.rustDictLocalProof(recv);
+                // a dict-callee local keeps `in_op` for a computed key (content unproven); literal keys only
+                if (proof === undefined || (proof !== 'plain' && !isStringLiteral(key))) return undefined;
+                guarded = true;
+            } else if (this.r05IsTest(obj)) {
+                return undefined;
+            }
+        } else if (this.r05IsTest(obj)) {
+            return undefined;
+        }
+        const recvText = this.printNode(recv, 0).trim();
+        let keyText: string;
+        if (isStringLiteral(key)) {
+            const literal = this.rustStringLiteralOf(this.printStringLiteral(key));
+            if (literal === undefined || (guarded && RustTranspiler.RUST_DICT_MARKER_KEYS.test(String(key.text)))) return undefined;
+            return `Value::Bool(${this.rustDictSite({
+                guarded, helper: `in_op(&${recvText}, &Value::Str(${literal}.into()))`,
+                closure: `${recvText}.as_map().is_some_and(|__m| __m.contains_key(${literal}))`,
+            })})`;
+        }
+        const printed = this.rustDictKeyText(key);
+        if (printed === undefined) return undefined;
+        keyText = printed;
+        return `Value::Bool(${this.rustDictSite({
+            guarded, helper: `in_op(&${recvText}, &${keyText})`,
+            closure: `${recvText}.as_map().is_some_and(|__m| ${keyText}.as_str().is_some_and(|__k| __m.contains_key(__k)))`,
+        })})`;
+    }
+
+    /** `this.F['k1']['k2'] = v` as a statement on a base runtime-state field: the first hop is the map's own
+     *  `entry`, the write below it an `insert`; a value that reads `self` keeps the helper pair. */
+    rustFieldNestedInsert(node: Node, baseExpr: any, keys: any[], keyStrs: string[], rhs: string): string | undefined {
+        const field = this.rustDictField(baseExpr);
+        // fields whose entries may be books / caches keep the tag-aware chain the wave-2 R02 pass prints
+        if (keys.length !== 2 || field === undefined || RustTranspiler.RUST_DICT_TAGGED_ENTRY_FIELDS.has(field) || this.r05IsTest(node)) return undefined;
+        const parent: any = node.parent;
+        if (parent === undefined || parent.kind !== SyntaxKind.ExpressionStatement || /\bself\b/.test(rhs)) return undefined;
+        if (!isStringLiteral(keys[0]) || !isStringLiteral(keys[1])) return undefined;
+        const k1 = this.rustStringLiteralOf(keyStrs[0]);
+        const k2 = this.rustStringLiteralOf(keyStrs[1]);
+        if (k1 === undefined || k2 === undefined) return undefined;
+        const recv = this.printNode(baseExpr, 0).trim();
+        const trimmed = rhs.trim();
+        const value = this.rustPrintedBoolArg(rhs) ? `Value::Bool(${rhs})`
+            : (/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && trimmed !== 'self' && trimmed !== 'true' && trimmed !== 'false' ? `${trimmed}.clone()` : rhs);
+        return `if let Value::Dict(__r08a) = &mut ${recv} { let __r08e = std::sync::Arc::make_mut(__r08a).entry(${k1}.to_string()).or_insert(Value::Null);`
+            + ` if let Value::Dict(__r08b) = __r08e { std::sync::Arc::make_mut(__r08b).insert(${k2}.to_string(), ${value}); } }`;
+    }
+
+    /** `x[k] = f(x[k])`: the read sits in the value of an assignment the printer writes as a native
+     *  insert (which binds the value first, `{ let __be_tmp = ..; insert }`), so the position rule that
+     *  protects the helper-form write passes does not apply to it. */
+    rustDictReadInNativeInsert(acc: string, receiver: Node, key: Node, chain: Node): string | undefined {
+        if (this.isNativeWriteTargetBase(chain) || this.r05IsTest(chain)) return undefined;
+        const root = this.rootPlaceText(chain);
+        if (root === undefined) return undefined;
+        let host: any;
+        for (let current: any = chain.parent; current; current = current.parent) {
+            if (isStatement(current) || isSourceFile(current) || isFunctionLike(current)) break;
+            if (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken
+                && this.isNodeInsideNode(chain, current.right) && this.rootPlaceText(current.left) === root) host = current;
+        }
+        if (host === undefined || !isElementAccessExpression(host.left)
+            || host.parent?.kind !== SyntaxKind.ExpressionStatement || !this.isNativeAccessPositionSafe(chain, host)) return undefined;
+        const base: any = host.left.expression;
+        const keyNode: any = host.left.argumentExpression;
+        const keyText = this.printNode(keyNode, 0);
+        const writesNatively = !isElementAccessExpression(base) && (this.rustBearerDictInsert(base, keyNode, keyText, 'x') ?? this.rustMapParamDictInsert(base, keyNode, keyText, 'x')
+            ?? this.printNativeBookMetaWrite(base, keyNode, keyText, 'x') ?? this.printNativeDictInsert(base, keyNode, keyText, 'x')
+            ?? this.rustR01NativeDictInsert(base, keyNode, keyText, 'x')) !== undefined;
+        if (isStringLiteralLikeNode(key)) return undefined;
+        const read = this.rustFieldDynamicRead(acc, receiver, key) ?? this.rustLocalDictRead(acc, receiver, key);
+        if (read !== undefined && !writesNatively) this.rustDictHoistHosts.add(host);
+        return read;
+    }
+
+    /** Characters the ccxt clone passes add to a printed line afterwards: every bare local passed by value in a
+     *  call or array-literal argument slot gets a `.clone()` (`autoCloneCallArgs` / `cloneInArrayLiterals`). */
+    rustDictCloneGrowth(line: string): number {
+        // a dynamic `throw new E[k](m)` prints `(read)::new(m)`; the ccxt create_error rewrite wraps both operands
+        const thrown = /^\s*panic!\("\{\}", .*::new\(/.test(line)
+            ? 'crate::exchange_errors::create_error(&crate::runtime::stringify_param(&('.length + ')), &crate::runtime::stringify_param(&('.length + ')))'.length - '::new('.length - 1 : 0;
+        const masked = line.replace(/"(?:[^"\\]|\\.)*"/g, (m) => '"' + ' '.repeat(Math.max(0, m.length - 2)) + '"');
+        let n = 0;
+        for (const m of masked.matchAll(/(?<=[(\[,]\s?)([A-Za-z_][A-Za-z0-9_]*)(?=\s*[,)\]])/g)) {
+            const start = m.index as number;
+            const before = masked.slice(Math.max(0, start - 6), start);
+            if (/&\s*(?:mut\s+)?$/.test(before) || /\bmut\s+$/.test(before) || /[:.]$/.test(before.trimEnd())) continue;
+            if (/^(?:self|true|false|None|Some|Ok|Err|Value|i64|f64|String|usize|bool|__\w+)$/.test(m[1])) continue;
+            n += 8;
+        }
+        return n + thrown;
+    }
+
+    /** `this.<field>['k'].length`: a read-only use of a literal-key read off a base runtime-state field. */
+    rustFieldLengthRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined {
+        const parent: any = chain.parent;
+        if (parent === undefined || !isPropertyAccessExpression(parent) || parent.expression !== chain || String(parent.name.text) !== 'length') return undefined;
+        if (this.rustDictField(receiver) === undefined || !isStringLiteralLikeNode(key) || this.r05IsTest(chain) || !RUST_PLAIN_PLACE.test(acc)) return undefined;
+        const text = String((key as any).text);
+        if (text === '' || !/^[A-Za-z0-9_./-]+$/.test(text)) return undefined;
+        const literal = `"${text}"`;
+        return this.rustDictSite({
+            guarded: true, helper: `get_value(&${acc}, &Value::Str(${literal}.into()))`,
+            closure: `${acc}.as_map().and_then(|__m| __m.get(${literal})).cloned().unwrap_or(Value::Null)`,
+        });
+    }
+
+    /** Statement-like nodes whose finished lines the 400-char budget is measured on. */
+    private rustDictIsOwner(node: Node): boolean {
+        switch (node.kind) {
+        case SyntaxKind.ExpressionStatement:
+        case SyntaxKind.VariableStatement:
+        case SyntaxKind.ReturnStatement:
+        case SyntaxKind.ThrowStatement:
+        case SyntaxKind.IfStatement:
+        case SyntaxKind.WhileStatement:
+        case SyntaxKind.ForStatement:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    printNode(node, identation = 0): string {
+        if (this.rustDictOwnerDepth > 0 || !this.rustDictIsOwner(node)) return super.printNode(node, identation);
+        this.rustDictOwnerDepth++;
+        try {
+            return this.rustDictPrintOwner(node, identation);
+        } finally {
+            this.rustDictOwnerDepth--;
+        }
+    }
+
+    /** Print a statement; when a finished line of it passes 400 chars, decide each dict site against the
+     *  line it sits on (the budget the closure-free / closure / helper forms are chosen under). */
+    private rustDictPrintOwner(node: Node, identation: number): string {
+        const loops = this.forLoopCounter;
+        this.rustDictPhase = 'normal';
+        this.rustDictSites = [];
+        const out = super.printNode(node, identation);
+        const sites = this.rustDictSites;
+        this.rustDictSites = [];
+        if (sites.length === 0 || !sites.some((s) => s.fc > 0 || s.ch > 0) || !out.split('\n').some((l) => l.length > 400)) return out;
+        this.rustDictPhase = 'probe';
+        this.forLoopCounter = loops;
+        const probe = super.printNode(node, identation);
+        const probed = this.rustDictSites.length;
+        this.rustDictSites = [];
+        if (probed !== sites.length) return out;
+        const decisions: Array<'free' | 'closure' | 'helper'> = sites.map(() => 'free');
+        // Each site is judged against the line as the earlier stage left it (not cumulatively):
+        // guarded sites first (helper vs closure), then closure vs closure-free.
+        for (const line of probe.split('\n')) {
+            const ids = [ ...line.matchAll(/\u0001(\d+)\u0002/g) ].map((m) => Number(m[1]));
+            if (ids.length === 0) continue;
+            const plain = line.replace(/\u0001\d+\u0002|\u0003/g, '');
+            const base = plain.length + this.rustDictCloneGrowth(plain);
+            let closureLen = base;
+            for (const k of ids) {
+                const s = sites[k];
+                if (!s.guarded || s.ch <= 0) continue;
+                if (base <= 400 && base + s.ch > 400) decisions[k] = 'helper';
+                else closureLen += s.ch;
+            }
+            for (const k of ids) {
+                const s = sites[k];
+                if (decisions[k] === 'helper') continue;
+                if (!s.free) { decisions[k] = 'closure'; continue; }
+                if (closureLen <= 400 && closureLen + s.fc > 400) decisions[k] = 'closure';
+            }
+        }
+        this.rustDictPhase = 'final';
+        this.rustDictDecisions = decisions;
+        this.forLoopCounter = loops;
+        try {
+            const final = super.printNode(node, identation);
+            return this.rustDictSites.length === sites.length ? final : out;
+        } finally {
+            this.rustDictPhase = 'normal';
+            this.rustDictSites = [];
+            this.rustDictDecisions = [];
+        }
+    }
+
     printNativeMapAccess(receiverText: string, receiverNode: Node, keyText: string): string | undefined {
         // hx10w9 RP02: a native-map parameter is an `&mut IndexMap` too.
         if (this.rustMapParamDeclaration(receiverNode) !== undefined && RustTranspiler.rustBearerKeyTextOk(keyText)) {
@@ -5009,7 +5400,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
      *  matching their text; the native form is invisible to them, so it is only
      *  emitted where no such hoist is needed. */
-    isNativeAccessPositionSafe(node: Node): boolean {
+    isNativeAccessPositionSafe(node: Node, ignoreAssign?: Node): boolean {
         const parent = node.parent;
         // `x['k'].push(...)` / `x['k'](...)`: the post-pass rewrites the target.
         if (parent && (isPropertyAccessExpression(parent) || isCallExpression(parent)) && parent.expression === node && !this.r21PureStringMethodReceiver(node)) return false;
@@ -5019,7 +5410,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(current) && this.isNodeInsideNode(node, current.right)) {
                 const op = current.operatorToken.kind;
                 const isAssign = op === SyntaxKind.EqualsToken || (op >= SyntaxKind.PlusEqualsToken && op <= SyntaxKind.CaretEqualsToken);
-                if (isAssign && root !== undefined && this.rootPlaceText(current.left) === root) return false;
+                if (isAssign && root !== undefined && current !== ignoreAssign && this.rootPlaceText(current.left) === root) return false;
             }
             if (isCallExpression(current) && isPropertyAccessExpression(current.expression) &&
                 this.isNodeInsideNode(node, current) && current.arguments.some(a => this.isNodeInsideNode(node, a))) {
@@ -5125,7 +5516,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         let acc = this.printNode(current, 0);
         for (const { expression: receiver, argumentExpression: key } of chain) {
-            const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key) : undefined;
+            const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key)
+                : (this.rustDictReadInNativeInsert(acc, receiver, key, node) ?? this.rustFieldLengthRead(acc, receiver, key, node));
             const staticKey = native === undefined && !keepGetValue ? this.staticKeyLookup(key, receiver) : undefined;
             acc = native ?? (staticKey !== undefined
                 ? `crate::value::get_value_k(&${acc}, ${staticKey})`
@@ -6076,7 +6468,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustKeyIsProvenString(keyNode)) return undefined;
         const keyText = this.printNode(keyNode, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
-        return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+        return this.rustDictRead(receiverText, keyText, receiverNode);
     }
 
     // hx4 R04 — `const x = []` locals declared `Vec<Value>` when every use is a statement
@@ -7710,7 +8102,7 @@ export class RustTranspiler extends BaseTranspiler {
         const keyText = this.printNode(keyNode, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
         if (kind === 'param' && this.rustNodeIsKeyUnsafePlace(keyText)) return undefined;
-        return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+        return this.rustDictRead(receiverText, keyText, receiverNode);
     }
 
     // hx4 R11 — typed `Vec<Value>` locals also admit an argument of a non-`&mut self` `this.m(..)`
