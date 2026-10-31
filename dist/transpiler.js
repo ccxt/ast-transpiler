@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-MEKZ6QY3.js";
+} from "./chunk-O5MZOAMZ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -22708,6 +22708,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     // of a store entry (loadMarketsHelper sets it, the same chain clears it). Value = [accessor with a
     // null default, accessor with an empty-map default]; filled by the build layer from the header.
     this.javaOwnerStoreHandoffs = {};
+    // BaseExchange.java fields declared `Map<String, Object> f = new HashMap<>()` that the header only
+    // ever reassigns to a fresh HashMap: `m.put(k, v)` stores a null value like the helper does.
+    // Named by the build layer from the header; empty = every site keeps the helper.
+    this.javaPlainCacheFields = /* @__PURE__ */ new Set();
     // a literal-defaulted parameter is read as `Objects.requireNonNullElse(x, <default>)`: a dynamic
     // caller pads omitted slots with null, and the parameter stays final with no local copy
     this.javaDefaultedLocalNames = /* @__PURE__ */ new Map();
@@ -26229,8 +26233,11 @@ ${this.getIden(identation)}}}`;
       if (keys.length === 1 && this.javaMapWriteFieldReceiver(baseExpr) && (isStringLiteralLikeNode3(keys[0]) || this.javaDeclaredStringType(keys[0])) && !this.elementWriteValueMayBeNull(right)) {
         return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
-      if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr) && isStringLiteralLikeNode3(keys[0]) && !this.isNullishLiteral(this.unwrapPrintTransparentExpression(right))) {
+      if (keys.length === 1 && this.javaPlainCacheFieldReceiver(baseExpr) && this.javaStringProvenKey(keys[0])) {
         return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+      }
+      if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr) && isStringLiteralLikeNode3(keys[0])) {
+        return this.isNullishLiteral(this.unwrapPrintTransparentExpression(right)) ? `${prefixes}${acc}.remove(${lastKey})` : `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
       if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
         return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
@@ -26437,6 +26444,46 @@ ${this.getIden(identation)}}}`;
     }
     return JAVA_MAP_WRITE_FIELDS.has(expression.name.text);
   }
+  // `this.<cache>` whose TS declaration types the values (an `any`-valued bag is reassigned freely)
+  javaPlainCacheFieldReceiver(expression) {
+    if (expression === void 0 || !isPropertyAccessExpression2(expression) || expression.expression.kind !== SyntaxKind6.ThisKeyword || !this.javaPlainCacheFields.has(expression.name.text)) {
+      return false;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return false;
+    }
+    const value = checker.getIndexTypeOfType(checker.getTypeAtLocation(expression), IndexKind3.String);
+    return value !== void 0 && (value.flags & (TypeFlags5.Any | TypeFlags5.Unknown)) === 0;
+  }
+  // a key Java proves String: a literal, an `x as string` (prints `((String)x)`) or a String-declared name
+  javaStringProvenKey(key) {
+    if (isStringLiteralLikeNode3(key)) {
+      return true;
+    }
+    let node = key;
+    while (isParenthesizedExpression2(node)) {
+      node = node.expression;
+    }
+    return isAsExpression2(node) && node.type?.kind === SyntaxKind6.StringKeyword || this.javaDeclaredStringType(node);
+  }
+  // `this.<cache>[k]` with a non-literal String key: GetValue answers null for a null receiver or
+  // key and the plain map get is its Map branch. The key prints twice, so it must be repeatable.
+  javaPlainCacheReadText(receiver, key) {
+    if (isStringLiteralLikeNode3(key) || !this.javaPlainCacheFieldReceiver(receiver) || !this.javaStringProvenKey(key)) {
+      return void 0;
+    }
+    let operand = key;
+    while (isParenthesizedExpression2(operand) || isAsExpression2(operand)) {
+      operand = operand.expression;
+    }
+    if (!isIdentifier2(operand)) {
+      return void 0;
+    }
+    const target = this.printNode(receiver, 0);
+    const keyText = this.printNode(operand, 0);
+    return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+  }
   // `this.<field>` for a BaseExchange.java field declared over a single-owner store
   javaOwnerStoreFieldReceiver(expression) {
     if (expression === void 0 || !isPropertyAccessExpression2(expression)) {
@@ -26512,7 +26559,7 @@ ${this.getIden(identation)}}}`;
     if (!this.javaOhlcvsEntryIsFresh(node, symbolNode)) {
       return void 0;
     }
-    return `((java.util.Map<String, Object>) this.ohlcvs.get(${symbolText})).get(${keyText})`;
+    return `((java.util.Map<?, ?>)this.ohlcvs.get(${symbolText})).get(${keyText})`;
   }
   javaIsOhlcvsField(node) {
     const field = this.unwrapPrintTransparentExpression(node);
@@ -26755,14 +26802,15 @@ ${this.getIden(identation)}}}`;
       return void 0;
     }
     const key = node.argumentExpression;
-    if (!isIdentifier2(key) || !this.javaRepeatableOperand(key)) {
+    const operand = isAsExpression2(key) && key.type?.kind === SyntaxKind6.StringKeyword ? key.expression : key;
+    if (!isIdentifier2(operand) || !this.javaRepeatableOperand(operand)) {
       return void 0;
     }
-    const declared = this.javaDeclaredTypeOf(key);
+    const declared = this.javaDeclaredTypeOf(operand);
     if (declared !== void 0 && JAVA_PRIMITIVE_DECLARED_TYPES.has(declared.trim())) {
       return void 0;
     }
-    if (declared === void 0 && this.javaOperandPrintsPrimitiveNumber(key)) {
+    if (declared === void 0 && this.javaOperandPrintsPrimitiveNumber(operand)) {
       return void 0;
     }
     let keyType;
@@ -26777,7 +26825,7 @@ ${this.getIden(identation)}}}`;
     const target = this.printNode(node.expression, 0);
     const keyText = this.printNode(key, 0);
     if (keyType.getAliasSymbol?.() === void 0 && keyType.flags === TypeFlags5.String) {
-      return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+      return `(${target} == null || ${this.printNode(operand, 0)} == null ? null : ${target}.get(${keyText}))`;
     }
     return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
   }
@@ -26884,7 +26932,7 @@ ${this.getIden(identation)}}}`;
     const name = receiver.name?.text;
     const field = typeof name === "string" ? JAVA_FIELD_TYPES[name] : void 0;
     if (field === void 0 || field.map !== true) {
-      return this.javaJ02FieldMapReadText(receiver, key);
+      return this.javaJ02FieldMapReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
     }
     const keyText = this.printNode(key, 0);
     let keyGuarded = false;
@@ -26975,6 +27023,10 @@ ${this.getIden(identation)}}}`;
     const index = Number(key.text);
     if (!Number.isInteger(index) || index < 0) {
       return void 0;
+    }
+    const splitRead = this.javaNativeSplitIndexRead(node, index);
+    if (splitRead !== void 0) {
+      return splitRead;
     }
     if (this.isJavaListStructureType(type)) {
       if (index >= this.tupleRequiredElementCount(type)) {
@@ -27670,7 +27722,32 @@ ${this.getIden(identation)}}}`;
     if (this.javaScalarFamily(receiver) !== "string" || this.javaScalarFamily(separator) !== "string") {
       return void 0;
     }
-    return `${this.ARRAY_OPENING_TOKEN}((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))${this.ARRAY_CLOSING_TOKEN}`;
+    return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg)}${this.ARRAY_CLOSING_TOKEN}`;
+  }
+  javaNativeSplitText(name, parsedArg) {
+    return `((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))`;
+  }
+  // `s.split (<literal>)[<int literal>]` on the native split: the helper's List branch answers
+  // null off range (e.g. "/".split("/") is empty), which findFirst().orElse(null) keeps, with
+  // no local to hoist and the receiver evaluated once.
+  javaNativeSplitIndexRead(node, index) {
+    const call = node.expression;
+    if (node.questionDotToken !== void 0 || !isCallExpression5(call) || call.questionDotToken !== void 0 || !isPropertyAccessExpression2(call.expression) || call.expression.questionDotToken !== void 0) {
+      return void 0;
+    }
+    const receiver = call.expression.expression;
+    const separator = call.arguments?.[0];
+    if (separator === void 0) {
+      return void 0;
+    }
+    const name = this.printNode(receiver, 0);
+    const parsedArg = this.printNode(separator, 0).trimStart();
+    if (this.javaNativeSplitCall(call, name, parsedArg) === void 0) {
+      return void 0;
+    }
+    const array = this.javaNativeSplitText(name, parsedArg);
+    const skip = index > 0 ? `.skip(${index})` : "";
+    return `java.util.Arrays.stream(${array})${skip}.findFirst().orElse(null)`;
   }
   // integer literals print as Java `int`; the helpers normalize Integer to Long before
   // the arithmetic, so native integer arithmetic is emitted in long to keep the boxed
@@ -28697,6 +28774,10 @@ ${this.getIden(identation)}}}`;
       const finalWrapperVars = isMethodDeclaration4(node) ? "\n" : this.printFinalOutsideMethodVariableWrappersIfAny(node, identation) + "\n";
       const insideWrappers = isMethodDeclaration4(node) ? "\n" : this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
       const body = (firstStatement + remainingString).split("\n").map((line) => this.getIden(identation) + line).join("\n");
+      const failedFuture = bodyStatements.length === 1 && insideWrappers.trim() === "" ? this.javaFailedFutureOfThrow(bodyStatements[0], identation + 1) : void 0;
+      if (failedFuture !== void 0) {
+        return blockOpen + finalWrapperVars + failedFuture + blockClose;
+      }
       const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : bodyStatements.length > 0 ? bodyStatements[0] : void 0;
       const lastStmtIsReturn = lastStatement && (isReturnStatement3(lastStatement) || this.allBranchesTerminate(lastStatement));
       const returnNull = lastStmtIsReturn ? "" : this.getIden(identation + 2) + "return null;\n";
@@ -28708,6 +28789,25 @@ ${this.getIden(identation)}}}`;
       return blockOpen + finalWrapperVars + asyncBody + blockClose;
     }
     return blockOpen + firstStatement + remainingString + blockClose;
+  }
+  // An async body that is only `throw new X(..)` can complete its future exceptionally and
+  // nothing else, so the native completion API stands in for the supplier lambda.
+  javaFailedFutureOfThrow(statement, identation) {
+    if (!isThrowStatement3(statement) || statement.expression.kind !== SyntaxKind6.NewExpression) {
+      return void 0;
+    }
+    const thrown = statement.expression.expression;
+    if (thrown === void 0 || !isIdentifier2(thrown)) {
+      return void 0;
+    }
+    const printed = this.printNode(statement, 0).trim();
+    const head = `${this.THROW_TOKEN} ${this.NEW_TOKEN} `;
+    if (!printed.startsWith(head)) {
+      return void 0;
+    }
+    const value = printed.slice(this.THROW_TOKEN.length + 1).replace(/;\s*$/, "").trim();
+    return this.getIden(identation) + `return java.util.concurrent.CompletableFuture.failedFuture(${value});
+`;
   }
   printBlock(node, identation, chainBlock = false) {
     const managed = this.finalVarScopeStack.length > 0;
@@ -30397,6 +30497,9 @@ ${this.getIden(identation)}}}`;
   // be null too. Key and receiver print twice, so both must be side-effect free.
   javaJ02FieldMapReadText(receiver, key) {
     const name = receiver?.name?.text;
+    if (typeof name === "string" && Object.prototype.hasOwnProperty.call(JAVA_BASE_MAP_READ_FIELDS, name)) {
+      return this.javaBaseMapFieldReadText(receiver, key, JAVA_BASE_MAP_READ_FIELDS[name]);
+    }
     if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
       return void 0;
     }
@@ -30408,6 +30511,22 @@ ${this.getIden(identation)}}}`;
     const keyText = this.printNode(key, 0);
     const keyGuard = literal ? "" : `${keyText} == null || `;
     return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+  }
+  javaBaseMapFieldReadText(receiver, key, field) {
+    const operand = isAsExpression2(key) && key.type?.kind === SyntaxKind6.StringKeyword ? key.expression : key;
+    const literal = isStringLiteralLikeNode3(key);
+    if (!literal) {
+      if (!isIdentifier2(operand) || !this.javaRepeatableOperand(operand)) {
+        return void 0;
+      }
+      if (!field.anyKey && !this.isJavaStringType(this.getChecker().getTypeAtLocation(key)) && !this.javaDeclaredStringType(operand)) {
+        return void 0;
+      }
+    }
+    const target = this.printNode(receiver, 0);
+    const read = field.declared ? target : `((java.util.Map<?, ?>)${target})`;
+    const guard = literal ? `${target} == null` : `${target} == null || ${this.printNode(operand, 0)} == null`;
+    return `(${guard} ? null : ${read}.get(${this.printNode(key, 0)}))`;
   }
   // hx4 J05
   // `(a % N) <op> M` (N a non-zero integer literal, a an int/long operand, M an int literal): the
@@ -30506,6 +30625,12 @@ var JAVA_J02_MAP_FIELDS = {
   "fees": true,
   "urls": true,
   "markets_by_id": true
+};
+var JAVA_BASE_MAP_READ_FIELDS = {
+  "has": { declared: true, anyKey: true },
+  "features": { declared: true, anyKey: true },
+  "currencies": { declared: true, anyKey: false },
+  "requiredCredentials": { declared: false, anyKey: true }
 };
 var HX4_J09_SYNC_BASE_CALLS = /* @__PURE__ */ new Set([
   "safeString",
