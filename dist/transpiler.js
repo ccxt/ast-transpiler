@@ -22775,6 +22775,20 @@ var JAVA_WS_CLIENT_MAP_FIELDS = {
   "rejections": "Object"
 };
 var JAVA_WS_CLIENT_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]ws[\\/]Client\.ts$/;
+var JAVA_PLAIN_MAP_FIELDS = /* @__PURE__ */ new Set([
+  "balance",
+  "bidsasks",
+  "fundingRates",
+  "headers",
+  "ohlcvs",
+  "orderbooks",
+  "tickers",
+  "timeframes",
+  "trades",
+  "transformedApi"
+]);
+var JAVA_BOX_CAST = /\((?:final\s+)?(?:[A-Z][\w.]*|(?:java|io|com)\.[\w.]+)(?:<[^()]*>)?\)/;
+var JAVA_OWNER_MEMBER_NAME = /^(?:handle[A-Z]\w*|parseWSBalances)$/;
 var JAVA_DECLARED_MAP_FIELD_NAMES = /* @__PURE__ */ new Set([
   "markets",
   "markets_by_id",
@@ -26708,6 +26722,9 @@ ${this.getIden(identation)}}}`;
       if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr) && isStringLiteralLikeNode3(keys[0])) {
         return this.isNullishLiteral(this.unwrapPrintTransparentExpression(right)) ? `${prefixes}${acc}.remove(${lastKey})` : `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
+      if (keys.length === 1 && node.parent?.kind === SyntaxKind6.ExpressionStatement && this.javaPlainMapFieldReceiver(baseExpr) && (isStringLiteralLikeNode3(keys[0]) || this.javaDeclaredStringType(keys[0])) && this.javaInOwnerMember(node) && !JAVA_BOX_CAST.test(lastKey) && !JAVA_BOX_CAST.test(rhs)) {
+        return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+      }
       if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
         return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
       }
@@ -26952,6 +26969,20 @@ ${this.getIden(identation)}}}`;
     const target = this.printNode(receiver, 0);
     const keyText = this.printNode(operand, 0);
     return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+  }
+  // `this.<field>` for a BaseExchange.java field in JAVA_PLAIN_MAP_FIELDS
+  javaPlainMapFieldReceiver(expression) {
+    return expression !== void 0 && isPropertyAccessExpression2(expression) && expression.expression.kind === SyntaxKind6.ThisKeyword && JAVA_PLAIN_MAP_FIELDS.has(expression.name.text);
+  }
+  // the node sits in a class member whose name marks it as running on the owner executor
+  javaInOwnerMember(node) {
+    for (let current = node?.parent; current; current = current.parent) {
+      if (isMethodDeclaration4(current) && current.parent !== void 0 && isClassDeclaration3(current.parent)) {
+        const name = current.name?.text;
+        return typeof name === "string" && JAVA_OWNER_MEMBER_NAME.test(name);
+      }
+    }
+    return false;
   }
   // `this.<field>` for a BaseExchange.java field declared over a single-owner store
   javaOwnerStoreFieldReceiver(expression) {

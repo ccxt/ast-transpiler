@@ -227,6 +227,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPlainCacheFieldReceiver(expression: any): boolean;
     javaStringProvenKey(key: any): boolean;
     javaPlainCacheReadText(receiver: any, key: any): string | undefined;
+    javaPlainMapFieldReceiver(expression: any): boolean;
+    javaInOwnerMember(node: any): boolean;
     javaOwnerStoreFieldReceiver(expression: any): boolean;
     javaOhlcvsElementRead(node: any): string | undefined;
     javaStringArrayAssertedCounterRead(node: any): string | undefined;
