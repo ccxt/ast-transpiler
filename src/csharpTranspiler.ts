@@ -926,6 +926,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // see the note above). Every other read keeps the helper; a site no gate names keeps the
     // base printing.
     printElementAccessExpression(node, identation) {
+        const declaredMember = this.csharpDeclaredDictMemberElementRead(node); // RF-cs-1 c03
+        if (declaredMember !== undefined) {
+            return declaredMember;
+        }
         const native = this.csharpNativeElementAccess(node);
         if (native !== undefined) {
             return native;
@@ -2788,9 +2792,105 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (parent.kind !== SyntaxKind.AsExpression) && (parent.kind !== SyntaxKind.TypeAssertionExpression) && (parent.kind !== SyntaxKind.NonNullExpression);
     }
 
+    // RF-cs-1 c03: reads of a hand-written class's string-keyed dictionary member.
+    // The C# class that backs a TS class (ccxt: WebSocketClient for ws `Client`) declares members
+    // such as `futures` / `subscriptions` as `IDictionary<string, V>` and may carry a typed accessor
+    // (`getFuture(string)`). The consumer names such a member through csharpDeclaredDictMember (a
+    // table keyed on the checker's receiver class and member, stub undefined here, so an unpatched printer
+    // keeps the helper call). `recv.member[key]` and `this.safeValue (recv.member, key)` then print:
+    //   - the accessor call `recv.getX(key)` when the table names one (safeValue only: the accessor
+    //     answers null for a missing key exactly like the helper), or
+    //   - the helper's own key test: `(recv.member != null && key != null && recv.member.ContainsKey(key)
+    //     ? recv.member[key] : null)` (literal keys skip the key null test).
+    // The key must be a string literal or an identifier whose printed C# type is string / string?
+    // (csharpNativeStringKey, then the build layer's declared record); every other key, a write, a
+    // delete and a safeValue default keep the helper.
+    csharpDeclaredDictMemberReads = new WeakSet<Node>();
+
+    csharpDeclaredDictMember(node): { getter?: string } | undefined {
+        return undefined; // stub to override
+    }
+
+    // true when the printer printed this read as a typed member read (the build layer then drops the
+    // `(ValueType)` box cast it would add around a helper read)
+    csharpIsDeclaredDictMemberRead(node): boolean {
+        return this.csharpDeclaredDictMemberReads.has(node);
+    }
+
+    // the receiver of the member is a parameter of the enclosing function: its printed type is the
+    // hand-written class (ccxt's `object client` -> `WebSocketClient client`), whereas a local bound
+    // from a call prints `var` and keeps the helper
+    csharpDeclaredDictMemberReceiverIsParameter(member): boolean {
+        return this.csharpReceiverBinding(member.expression)?.kind === SyntaxKind.Parameter;
+    }
+
+    csharpDeclaredDictMemberKey(key): string | undefined {
+        if (isStringLiteralLikeNode(key)) {
+            return this.printNode(key, 0);
+        }
+        if (!isIdentifier(key)) {
+            return undefined;
+        }
+        const printedParam = this.csharpPrintedParamType(key); // a parameter whose printed signature is string
+        if ((printedParam === 'string') || (printedParam === 'string?')) {
+            return this.printNode(key, 0);
+        }
+        return this.csharpNativeStringKey(key) ?? this.csharpDeclaredStringKey(key);
+    }
+
+    csharpDeclaredDictMemberElementRead(node): string | undefined {
+        if (node?.kind !== SyntaxKind.ElementAccessExpression || !isPropertyAccessExpression(node.expression)) {
+            return undefined;
+        }
+        const parent = node.parent;
+        const isWrite = (parent?.kind === SyntaxKind.BinaryExpression && parent.left === node
+            && parent.operatorToken.kind >= SyntaxKind.FirstAssignment && parent.operatorToken.kind <= SyntaxKind.LastAssignment)
+            || parent?.kind === SyntaxKind.DeleteExpression
+            || ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken));
+        const exception: any = this.printElementAccessExpressionExceptionIfAny(node);
+        if (isWrite || exception || !this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
+            return undefined;
+        }
+        const member = this.csharpDeclaredDictMemberReceiverIsParameter(node.expression) ? this.csharpDeclaredDictMember(node.expression) : undefined;
+        const key = this.csharpDeclaredDictMemberKey(node.argumentExpression);
+        if (member === undefined || key === undefined) {
+            return undefined;
+        }
+        const receiver = this.printNode(node.expression, 0);
+        this.csharpDeclaredDictMemberReads.add(node);
+        const keyTest = isStringLiteralLikeNode(node.argumentExpression) ? '' : ` && ${key} != null`;
+        return `(${receiver} != null${keyTest} && ${receiver}.ContainsKey(${key}) ? ${receiver}[${key}] : null)`;
+    }
+
+    csharpDeclaredDictMemberCall(node): string | undefined {
+        if (node?.kind !== SyntaxKind.CallExpression || node.arguments?.length !== 2) {
+            return undefined;
+        }
+        const callee = node.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression?.kind !== SyntaxKind.ThisKeyword || callee.name?.text !== 'safeValue') {
+            return undefined;
+        }
+        const target = node.arguments[0];
+        if (!isPropertyAccessExpression(target)) {
+            return undefined;
+        }
+        const member = this.csharpDeclaredDictMemberReceiverIsParameter(target) ? this.csharpDeclaredDictMember(target) : undefined;
+        const key = this.csharpDeclaredDictMemberKey(node.arguments[1]);
+        if (member?.getter === undefined || key === undefined) {
+            return undefined;
+        }
+        this.csharpDeclaredDictMemberReads.add(node);
+        return `${this.printNode(target.expression, 0)}.${member.getter}(${key})`;
+    }
+
     // `parseInt(...)` / `parseFloat(...)` print the runtime helper call; the folds below replace
     // it with the exact box the helper returns, everything else falls through to the printer
     printCallExpression(node, identation) {
+        const declaredMember = this.csharpDeclaredDictMemberCall(node); // RF-cs-1 c03
+        if (declaredMember !== undefined) {
+            return declaredMember;
+        }
         const nativeParse = this.csharpNativeParseCall(node);
         if (nativeParse !== undefined) {
             return nativeParse;

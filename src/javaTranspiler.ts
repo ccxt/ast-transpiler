@@ -2485,6 +2485,23 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_ELEMENT_WRITE_MAP_TYPE;
     }
 
+    // RF-java-2: `const x = Object.values(..)` with no other write prints the helper's exact return type
+    javaObjectValuesLocalType(declaration): string | undefined {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || !declaration.initializer) {
+            return undefined;
+        }
+        const init = this.unwrapPrintTransparentExpression(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
+            || !isIdentifier(init.expression.expression) || init.expression.expression.text !== 'Object'
+            || init.expression.name.text !== 'values' || init.arguments.length !== 1) {
+            return undefined;
+        }
+        if (this.javaLocalHasWriteAtAll(declaration.name)) {
+            return undefined;
+        }
+        return 'List<Object>';
+    }
+
     // every other mention of the local must be a read a `Map<String, Object>` declaration leaves
     // unchanged: an element-access receiver, a call argument, a return value, an assignment's
     // right-hand side, a comparison or a container element. A cast, a method call, a spread or a
@@ -6907,6 +6924,11 @@ export class JavaTranspiler extends BaseTranspiler {
                 if (baseFieldType !== undefined) {
                     varToken = baseFieldType + " ";
                 }
+            }
+            // RF-java-2: Object.values() is an array and the helper returns a fresh non-null List<Object>
+            const valuesType = this.javaObjectValuesLocalType(declaration);
+            if (valuesType !== undefined) {
+                varToken = valuesType + " ";
             }
             // the ws handler table and the local bound to one of its reads name their type,
             // so the dispatch is a plain virtual call

@@ -8199,3 +8199,15 @@ describe('hx10 J08: element access on a typed parameter', () => {
         expect(venueOutput).toContain('Helpers.addElementToObject(parameters, "seen", "yes")');
     });
 });
+
+describe('java Object.values local (RF-java-2)', () => {
+    const wrap = (body: string) => "class T {\n    m(d: any): any {\n" + body + "\n    }\n}";
+    test('unwritten Object.values local is a List<Object>', () => {
+        const out = transpiler.transpileJava(wrap("const v = Object.values(d);\n        return v;")).content;
+        expect(out).toContain('List<Object> v = Helpers.objectValues(d)');
+    });
+    test('a rewritten Object.values local keeps Object', () => {
+        const out = transpiler.transpileJava(wrap("let v = Object.values(d);\n        v = d;\n        return v;")).content;
+        expect(out).toContain('Object v = Helpers.objectValues(d)');
+    });
+});
