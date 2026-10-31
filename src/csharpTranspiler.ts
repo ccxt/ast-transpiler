@@ -277,6 +277,7 @@ export interface CsharpDeclaredMember {
     routed?: boolean;
     refresh?: string;
     views?: { [key: string]: { view: string, sections?: string } };
+    dictView?: string;
 }
 
 // hx11 RF-cs-2: the hand-written runtime declares these members; the printer reads the declarations of a
@@ -392,6 +393,11 @@ function csharpReadDeclaredMembers(root: string, owner: 'this' | 'client'): Map<
         }
         if (Object.keys(views).length > 0) {
             entry.views = views;
+        }
+        // an `object` member with a declared `<name>Dict` property typed as the string-keyed dictionary
+        const dictView = members.get(name + 'Dict');
+        if (declared.type === 'object' && dictView !== undefined && /^IDictionary<string,\s*object>$/.test(dictView.type)) {
+            entry.dictView = name + 'Dict';
         }
         if (new RegExp('public\\s+void\\s+Refresh' + capital(name) + 'Views\\s*\\(\\s*\\)').test(whole)) {
             entry.refresh = 'Refresh' + capital(name) + 'Views';
@@ -1131,6 +1137,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const declaredMember = this.csharpDeclaredDictMemberElementRead(node); // RF-cs-1 c03
         if (declaredMember !== undefined) {
             return declaredMember;
+        }
+        const viewRead = this.csharpMemberViewRead(node);
+        if (viewRead !== undefined) {
+            return viewRead;
         }
         const native = this.csharpNativeElementAccess(node);
         if (native !== undefined) {
@@ -3495,6 +3505,55 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `(${leftSide} = -${leftSide})`;
     }
 
+    // `this.<member>['k1'][key]` over a member whose hand-written class declares a typed view of `['k1']`
+    // (urls['api'] -> urlsApi): the key read goes through the view's own ContainsKey/indexer, carrying the
+    // helper's null-receiver and null-key tests; an object key casts like GetValue. Other keys keep the helper.
+    csharpMemberViewRead(node): string | undefined {
+        if (node?.kind !== SyntaxKind.ElementAccessExpression || !this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
+            return undefined;
+        }
+        const entry = this.csharpUnwrapAssertion(node.expression);
+        if (entry?.kind !== SyntaxKind.ElementAccessExpression || !isStringLiteralLikeNode(entry.argumentExpression)
+            || !isPropertyAccessExpression(entry.expression) || entry.expression.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const parent = node.parent;
+        const isWrite = (parent?.kind === SyntaxKind.BinaryExpression && parent.left === node
+            && parent.operatorToken.kind >= SyntaxKind.FirstAssignment && parent.operatorToken.kind <= SyntaxKind.LastAssignment)
+            || parent?.kind === SyntaxKind.DeleteExpression
+            || ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken));
+        if (isWrite || this.printElementAccessExpressionExceptionIfAny(node)) {
+            return undefined;
+        }
+        const root = entry.expression;
+        if (!this.csharpMemberDeclaredIn(root, 'this')) {
+            return undefined;
+        }
+        const view = this.csharpDeclaredMember(root, 'this', root.name?.text as string)?.views?.[(entry.argumentExpression as any).text]?.view;
+        if (view === undefined || !/^IDictionary<string,\s*object>$/.test(this.csharpDeclaredMember(root, 'this', view)?.type ?? '')) {
+            return undefined;
+        }
+        const target = `this.${view}`;
+        const key = node.argumentExpression;
+        if (isStringLiteralLikeNode(key)) {
+            const printed = this.printNode(key, 0);
+            return `(${target} != null && ${target}.ContainsKey(${printed}) ? ${target}[${printed}] : null)`;
+        }
+        if (!isIdentifier(key) || !this.csharpHx4IsPlainRead(key)) {
+            return undefined;
+        }
+        const kind = this.csharpMemberKeyKind(key);
+        const printedKey = this.printNode(key, 0);
+        if (kind === 'string' || kind === 'string?') {
+            return `(${target} != null && ${printedKey} != null && ${target}.ContainsKey(${printedKey}) ? ${target}[${printedKey}] : null)`;
+        }
+        if (kind === 'object' || kind === 'param') {
+            return `(${target} != null && ${printedKey} != null && ${target}.ContainsKey((string)${printedKey}) ? ${target}[(string)${printedKey}] : null)`;
+        }
+        return undefined;
+    }
+
     // hx11 RF-cs-2: `this.<member>['k1']['k2']['k3']` over a member whose hand-written class declares a
     // typed view of `['k1']` entries that are themselves dictionaries (urls['api'] -> urlsApiSections):
     // the section read becomes the view's two indexers, carrying the helper's missing-key tests. The
@@ -3611,6 +3670,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             const mayBeNull = type.startsWith('I') || (declared.initializer === undefined) || (declared.initializer === 'null');
             const identity = (type === 'Dictionary<string, object>') || (type === 'IDictionary<string, object>');
             return { text: printed, type: canonical, kind: 'dict', declared: identity, nullTest: mayBeNull ? printed : undefined };
+        }
+        if (type === 'object' && owner === 'this' && declared.dictView !== undefined) {
+            // the declared dictionary view of the box (Exchange.Options.cs): its own members replace the helpers
+            const view = `this.${declared.dictView}`;
+            return { text: view, type: 'IDictionary<string, object>', kind: 'dict', declared: false, nullTest: view };
         }
         if (type === 'object' && owner === 'this' && this.csharpMemberWritesOnlyDictionaries(node, name)) {
             // an `object` box that only ever holds a dictionary: every write in this file stores a
@@ -4348,6 +4412,10 @@ export class CSharpTranspiler extends BaseTranspiler {
                 if (this.csharpNonNullStringOperandType(left) === 'string') {
                     return `${leftText} = (${leftText} + (${rightText}))`;
                 }
+                const objectStringAppend = this.csharpObjectStringConcat(left, [ right ]);
+                if (objectStringAppend !== undefined) {
+                    return `${leftText} = ${objectStringAppend}`;
+                }
                 return `${leftText} = add(${leftText}, ${rightText})`;
             }
 
@@ -4391,6 +4459,11 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const printerConcat = this.csharpPrinterStringConcat(left, right, leftText, rightText);
                 if (printerConcat !== undefined) {
                     return printerConcat;
+                }
+                const spine = this.csharpPlusSpine(node);
+                const objectStringChain = (spine === undefined) ? undefined : this.csharpObjectStringConcat(spine.base, spine.rights);
+                if (objectStringChain !== undefined) {
+                    return objectStringChain;
                 }
             }
 
@@ -5153,7 +5226,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const localType = isNew ? 'var' : this.getCSharpLocalType(declaration);
         const declaredType = (localType === this.VAR_TOKEN && node.declarations.length === 1)
-            ? (this.csharpOmitMemberLocalType(declaration) ?? localType) : localType;
+            ? (this.csharpOmitMemberLocalType(declaration) ?? this.csharpMemberAliasLocalType(declaration) ?? localType) : localType;
         if (!isNew && declaredType === this.VAR_TOKEN && node.declarations.length === 1) {
             const rowType = this.csharpElementRowLocalType(declaration);
             if (rowType !== undefined) {
@@ -5186,6 +5259,20 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const member = this.csharpMemberReceiver(this.csharpUnwrapAssertion(call.arguments[0]));
         return (member !== undefined && member.kind === 'dict' && member.declared) ? 'Dictionary<string, object>' : undefined;
+    }
+
+    // `const x = this.<member>` over a member DECLARED a string-keyed dictionary (Exchange.Options.cs): the const
+    // local is never rewritten, so its declaration names the member's own type and every later read is native.
+    csharpMemberAliasLocalType(declaration): string | undefined {
+        if (declaration?.name?.kind !== SyntaxKind.Identifier || ((declaration.parent?.flags & NodeFlags.Const) === 0)) {
+            return undefined;
+        }
+        const init = this.csharpUnwrapAssertion(declaration.initializer);
+        if (!isPropertyAccessExpression(init) || init.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const member = this.csharpMemberReceiver(init);
+        return (member !== undefined && member.kind === 'dict' && member.declared && member.type === 'IDictionary<string, object>') ? member.type : undefined;
     }
 
     // `const row = list[i]` (non-string key): when every use of the local in its function reads the
@@ -6314,6 +6401,89 @@ export class CSharpTranspiler extends BaseTranspiler {
         return false;
     }
 
+    // `a + b + c` as its left spine: the base operand and the right operands in order (parentheses stay transparent)
+    csharpPlusSpine(node): { base: any, rights: any[] } | undefined {
+        const rights: any[] = [];
+        let current = node;
+        while (current?.kind === SyntaxKind.BinaryExpression && current.operatorToken?.kind === SyntaxKind.PlusToken) {
+            rights.unshift(current.right);
+            current = current.left;
+            while (current?.kind === SyntaxKind.ParenthesizedExpression) {
+                current = current.expression;
+            }
+        }
+        return rights.length === 0 ? undefined : { base: current, rights };
+    }
+
+    // `x + r1 + r2` over a local the checker types string (or string | undefined) whose C# declaration is the
+    // untyped `object` box: add(object, object) of a string left is `(string)x + (string)r`, and a null left answers
+    // null, so the null test plus the concatenation is the same value. Each right is spelled as the string it
+    // prints, or cast through object the way the helper casts it. A right operand is evaluated only when x is
+    // non-null; one that awaits, assigns or creates a closure keeps the helper.
+    csharpObjectStringConcat(base, rights: any[]): string | undefined {
+        let local = base;
+        while (local?.kind === SyntaxKind.ParenthesizedExpression) {
+            local = local.expression;
+        }
+        if (!isIdentifier(local) || !this.csharpObjectStringLocal(local)) {
+            return undefined;
+        }
+        const texts: string[] = [];
+        for (const right of rights) {
+            if (this.csharpEvaluationHasEffects(right)) {
+                return undefined;
+            }
+            const printed = this.printNode(right, 0);
+            texts.push(this.csharpConcatOperandPrintsString(right, 0, true) ? printed : `(string)(object)(${printed})`);
+        }
+        const name = this.printNode(local, 0);
+        return `((object)(${name} == null ? null : ${name} + ${texts.join(' + ')}))`;
+    }
+
+    // a single-binding local whose printed declaration is the untyped box and whose checker type is a string
+    csharpObjectStringLocal(identifier): boolean {
+        const declaration: any = this.csharpReceiverBinding(identifier);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || (declaration.parent as any)?.declarations?.length !== 1) {
+            return false;
+        }
+        if (this.getCSharpLocalType(declaration) !== this.VAR_TOKEN) {
+            return false;
+        }
+        const type = this.getChecker().getTypeAtLocation(identifier);
+        const members = ((type.flags & TypeFlags.Union) !== 0) ? ((type as UnionType).getTypes() ?? []) : [ type ];
+        let strings = 0;
+        for (const member of members) {
+            if ((member.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) {
+                continue;
+            }
+            if (!this.isStringType(member.flags)) {
+                return false;
+            }
+            strings++;
+        }
+        return strings > 0;
+    }
+
+    csharpEvaluationHasEffects(node): boolean {
+        let found = false;
+        const visit = (n) => {
+            if (found) {
+                return;
+            }
+            if (n.kind === SyntaxKind.AwaitExpression || n.kind === SyntaxKind.FunctionExpression || n.kind === SyntaxKind.ArrowFunction
+                || n.kind === SyntaxKind.NewExpression || n.kind === SyntaxKind.YieldExpression || n.kind === SyntaxKind.DeleteExpression
+                || (n.kind === SyntaxKind.BinaryExpression && this.csharpIsAssignmentOperator(n.operatorToken.kind))
+                || ((n.kind === SyntaxKind.PrefixUnaryExpression || n.kind === SyntaxKind.PostfixUnaryExpression)
+                    && (n.operator === SyntaxKind.PlusPlusToken || n.operator === SyntaxKind.MinusMinusToken))) {
+                found = true;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        visit(node);
+        return found;
+    }
+
     printFunctionType(node) {
         const booleanType = this.csharpBooleanReturnType(node);
         if (booleanType !== undefined) {
@@ -6444,6 +6614,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         // cast only named the box; `.Keys` is the same collection either way
         if ((node?.arguments?.length === 1) && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
             return `new List<object>(${parsedArg}.Keys)`;
+        }
+        // an `object` member with a declared dictionary view: the view is the box the cast would name
+        const view = (node?.arguments?.length === 1) ? this.csharpMemberReceiver(node.arguments[0]) : undefined;
+        if (view !== undefined && view.kind === 'dict' && view.text.startsWith('this.') && view.text !== parsedArg) {
+            return `new List<object>(${view.text}.Keys)`;
         }
         return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
     }
