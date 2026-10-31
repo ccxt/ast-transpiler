@@ -7817,7 +7817,9 @@ function installCcxtGoTupleStringJoin (goTranspiler) {
         if ((node?.operatorToken?.kind === ts.SyntaxKind.EqualsToken) && ts.isIdentifier (node.left)
             && ccxtGoTupleStringWriteNeedsLift (this, right)
             && (ccxtGoTupleStringDeclarationOf (this, node.left) !== undefined)) {
-            return this.printNode (node.left, 0) + ' = SafeStringPtr(' + this.printNode (right, 0) + ')';
+            const value = this.printNode (right, 0);
+            return ((typeof this.goStringPointerStore === 'function') ? this.goStringPointerStore (node, value, identation) : undefined)
+                ?? (this.printNode (node.left, 0) + ' = SafeStringPtr(' + value + ')');
         }
         return shippedBinary.call (this, node, identation);
     };
@@ -9679,7 +9681,7 @@ function ccxtGoTernaryLiftArm (goTranspiler, armNode, armText) {
         return { type: armType };
     }
     const lift = CCXT_GO_TERNARY_LIFT[armType];
-    return (lift === undefined) ? undefined : { type: lift[0], wrap: lift[1] };
+    return (lift === undefined) ? undefined : { type: lift[0], wrap: lift[1], call: node };
 }
 
 // { joinType, whenTrue, whenFalse } with the lifted arm texts, or undefined when unproven
@@ -9719,7 +9721,19 @@ export function ccxtGoTernaryLiftJoin (goTranspiler, declaration, literal) {
         return undefined;
     }
     const lifted = (arm, text) => ((arm.wrap === undefined) ? text : arm.wrap + '(' + text + ')');
-    return { joinType: joinType, whenTrue: lifted (arms[0], literal.whenTrue), whenFalse: lifted (arms[1], literal.whenFalse) };
+    // a string-returning `this.<name>(..)` arm is not boxed: its value is kept in a typed local the
+    // arm returns the address of (the arm node order is the source order the local names count in)
+    const hoisted = arms.map ((arm, i) => ((arm.wrap === 'SafeStringPtr') && (typeof goTranspiler.goStringCallLocalName === 'function'))
+        ? goTranspiler.goStringCallLocalName (arm.call) : undefined);
+    return {
+        joinType: joinType,
+        whenTrue: lifted (arms[0], literal.whenTrue),
+        whenFalse: lifted (arms[1], literal.whenFalse),
+        whenTrueLocal: hoisted[0],
+        whenFalseLocal: hoisted[1],
+        whenTrueCall: literal.whenTrue,
+        whenFalseCall: literal.whenFalse,
+    };
 }
 
 function installCcxtGoTernaryLiftJoin (goTranspiler) {
@@ -9745,8 +9759,10 @@ function installCcxtGoTernaryLiftJoin (goTranspiler) {
         const lines = printed.split ('\n');
         const body = literal.indent + '\t';
         lines[0] = literal.indent + 'var ' + literal.name + ' ' + join.joinType + ' = func() ' + join.joinType + ' {';
-        lines[2] = body + '\treturn ' + join.whenTrue;
-        lines[4] = body + 'return ' + join.whenFalse;
+        lines[2] = (join.whenTrueLocal === undefined) ? body + '\treturn ' + join.whenTrue
+            : body + '\t' + join.whenTrueLocal + ' := ' + join.whenTrueCall + '\n' + body + '\treturn &' + join.whenTrueLocal;
+        lines[4] = (join.whenFalseLocal === undefined) ? body + 'return ' + join.whenFalse
+            : body + join.whenFalseLocal + ' := ' + join.whenFalseCall + '\n' + body + 'return &' + join.whenFalseLocal;
         return lines.join ('\n');
     };
     goTranspiler.__ccxtGoTernaryLiftJoinInstalled = true;

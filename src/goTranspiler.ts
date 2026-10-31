@@ -2560,7 +2560,88 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim();
-        return `${this.printNode(left, 0)} = SafeStringPtr(${value})`;
+        return this.goStringPointerStore(node, value, identation) ?? `${this.printNode(left, 0)} = SafeStringPtr(${value})`;
+    }
+
+    // `x = <this.m(..)>` on a *string local where the call already returns a Go string: not boxed, the
+    // result is kept in a typed local and the pointer takes its address (statement-level assignments
+    // only; `value` is the printed call). undefined: the caller prints its SafeStringPtr box.
+    goStringPointerStore(node, value: string, identation): string | undefined {
+        const local = (node.parent?.kind === SyntaxKind.ExpressionStatement) ? this.goStringCallLocalName(node.right) : undefined;
+        if (local === undefined) {
+            return undefined;
+        }
+        return `${local} := ${value.trim()}\n${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
+    }
+
+    // the Go func a node prints into: arrow / function expressions inside a method print as closures
+    // of that method's func, so the outermost enclosing function owns the name space
+    goOutermostFunction(node): any {
+        let outer: any = this.goEnclosingFunction(node);
+        while ((outer !== undefined) && (outer.kind !== SyntaxKind.SourceFile)) {
+            const next: any = this.goEnclosingFunction(outer);
+            if ((next === undefined) || (next.kind === SyntaxKind.SourceFile)) {
+                break;
+            }
+            outer = next;
+        }
+        return outer;
+    }
+
+    // `this.<name>(..)` whose checker type is exactly TS `string` (not `string | undefined`) and whose
+    // printed Go call returns a Go `string` (goTypeOfInitializer): the value needs no SafeStringPtr box
+    goStringReturningThisCall(call): boolean {
+        const callee = call?.expression;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text === undefined)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const type: any = checker?.getTypeAtLocation(call);
+        if ((type === undefined) || ((type.flags & TypeFlags.String) === 0)) {
+            return false;
+        }
+        return this.goTypeOfInitializer(call, this.printNode(call, 0)) === 'string';
+    }
+
+    goStringCallLocals = new WeakMap<object, Map<string, { clash: boolean, names: Map<any, string> }>>();
+
+    // the typed local that keeps a string-returning `this.<name>(..)` call (`jsonText`, `jsonText2`, ...):
+    // `<name>Text`, numbered in the order the Go func's statements print (= source order). The name is
+    // stable per call node, so a re-print of the same statement gets the same local. undefined keeps the
+    // SafeStringPtr box: not such a call, or a source identifier already spelled like the family.
+    goStringCallLocalName(call): string | undefined {
+        if (!this.goStringReturningThisCall(call)) {
+            return undefined;
+        }
+        const scope: any = this.goOutermostFunction(call);
+        if (scope === undefined) {
+            return undefined;
+        }
+        const base = call.expression.name.text + 'Text';
+        let families = this.goStringCallLocals.get(scope);
+        if (families === undefined) {
+            families = new Map();
+            this.goStringCallLocals.set(scope, families);
+        }
+        let family = families.get(base);
+        if (family === undefined) {
+            const spelled = new RegExp('^' + base + '\\d*$');
+            family = {
+                clash: this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && spelled.test(n.text)),
+                names: new Map(),
+            };
+            families.set(base, family);
+        }
+        if (family.clash) {
+            return undefined;
+        }
+        let name = family.names.get(call);
+        if (name === undefined) {
+            name = (family.names.size === 0) ? base : base + (family.names.size + 1);
+            family.names.set(call, name);
+        }
+        return name;
     }
 
     // the container/key argument nodes of a whole `this.SafeDict(container, key)` call, or undefined
