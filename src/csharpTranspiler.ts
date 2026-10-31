@@ -478,6 +478,9 @@ const CSHARP_DECLARED_DICT_FIELDS = [ 'requiredCredentials' ];
 const CSHARP_DICT_FIELD_VIEWS: { [field: string]: string } = { 'currencies': 'currenciesDict' };
 const CSHARP_DICT_ENTRY_VIEWS: { [field: string]: { [key: string]: string } } = { 'urls': { 'api': 'urlsApi' } };
 
+// hand-written members declared `IDictionary<string, object>` whose copy into a local names the declared type
+const CSHARP_DECLARED_DICT_COPY_FIELDS = [ 'currencies_by_id' ];
+
 // Hand-written BaseExchange / PredictionExchange fields declared as C# reference types: the field
 // holds a reference box, so a null comparison is exactly the isEqual(field, null) branch. A
 // value-typed field keeps the helper — rateLimit is a `double` (its TS number type proves nothing).
@@ -4609,6 +4612,14 @@ export class CSharpTranspiler extends BaseTranspiler {
             return (initializer.operator === SyntaxKind.ExclamationToken) ? 'bool' : undefined;
         case SyntaxKind.ParenthesizedExpression:
             return this.csharpTypeOfInitializer(initializer.expression);
+        case SyntaxKind.PropertyAccessExpression: {
+            const copied = (initializer.expression?.kind === SyntaxKind.ThisKeyword) && CSHARP_DECLARED_DICT_COPY_FIELDS.indexOf(initializer.name?.text as string) >= 0
+                ? this.csharpMemberReceiver(initializer) : undefined;
+            if (copied !== undefined && copied.kind === 'dict' && copied.declared && copied.type === 'IDictionary<string, object>') {
+                return copied.type;
+            }
+            break;
+        }
         case SyntaxKind.ConditionalExpression: {
             // `cond ? 'a' : 'b'` prints the same C# conditional, whose static type is the type both
             // arms share: a non-null string when neither arm can answer null
@@ -8296,6 +8307,17 @@ export class CSharpTranspiler extends BaseTranspiler {
         let receiver: string | undefined;
         let csharpType: string | undefined;
         const member = this.csharpMemberReceiver(expression);
+        if (member !== undefined && member.routed === true && member.kind === 'dict' && (expression as any).name?.text !== 'orderbooks') {
+            // an owner-routed ws cache: its property is the IDictionary the accessors hand out, so the helper's
+            // own tests read it natively (orderbooks stays: the ws transpile maps its reads to getOrderBook)
+            const routedKey = this.csharpMemberKeyKind(argumentExpression);
+            if (routedKey === undefined) {
+                return undefined;
+            }
+            const routedPrinted = this.printNode(argumentExpression, 0);
+            const routedSpelling = (routedKey === 'string' || routedKey === 'string?') ? routedPrinted : `(string)${routedPrinted}`;
+            return `(${member.text} != null && ${routedPrinted} != null && ${member.text}.ContainsKey(${routedSpelling}) ? ${member.text}[${routedSpelling}] : null)`;
+        }
         if (member !== undefined && member.routed !== true) {
             const keyType = this.csharpHx4DeclaredKeyType(argumentExpression);
             const keyKind = (member.kind === 'dict') ? this.csharpMemberKeyKind(argumentExpression) : undefined;
@@ -8331,6 +8353,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const printedKey = this.printNode(argumentExpression, 0);
         const keyType = this.csharpHx4DeclaredKeyType(argumentExpression);
         if (csharpType.indexOf('Dictionary<') >= 0) {
+            if (keyType === 'object' && this.csharpObjectKeyCastable(argumentExpression)) {
+                // an `object` key takes the helper's own `(string)key` cast
+                return `(${receiver} != null && ${printedKey} != null && ${receiver}.ContainsKey((string)${printedKey}) ? ${receiver}[(string)${printedKey}] : null)`;
+            }
             if (keyType !== 'string' && keyType !== 'string?') {
                 return undefined;
             }
@@ -8340,6 +8366,13 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined; // Int64/object indices do not bind the List indexer
         }
         return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : null)`;
+    }
+
+    // an `object` key identifier whose `(string)` cast cannot hide a later retype: a parameter the body
+    // writes (or defaults) gets a shadow local the embedding build layer retypes after printing
+    csharpObjectKeyCastable(key): boolean {
+        const binding: any = this.csharpReceiverBinding(key);
+        return !((binding?.kind === SyntaxKind.Parameter) && ((binding.initializer !== undefined) || this.csharpParameterWrittenAnywhere(key)));
     }
 
     // a read that is no write target: not the left of any assignment, not ++/--, not delete
