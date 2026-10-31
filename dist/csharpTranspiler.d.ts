@@ -57,6 +57,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         type: string;
     }, argumentExpression: any, isStringKey: boolean, isNumberKey: boolean): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
+    csharpDeclaredStringIndexRead(node: any, expression: any, argumentExpression: any, isNumberKey: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
     csharpProvenDictionaryRead(node: any, expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
@@ -159,6 +160,29 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredDictMemberKey(key: any): string | undefined;
     csharpDeclaredDictMemberElementRead(node: any): string | undefined;
     csharpDeclaredDictMemberCall(node: any): string | undefined;
+    csharpDeclaredBaseFields: {
+        [name: string]: string;
+    };
+    csharpDeclaredBaseFieldType(name: string): string | undefined;
+    csharpBaseFieldDeclaredDictionary(name: string): boolean;
+    csharpBaseFieldIsDeclaredDictionary(node: any): boolean;
+    csharpBaseFieldName(node: any): string | undefined;
+    csharpBaseFieldWritesAreDictionaries(node: any, name: string): boolean;
+    csharpBaseFieldDictionary(node: any): {
+        text: string;
+        type: string;
+        field: string;
+        name: string;
+    } | undefined;
+    csharpParameterWrittenAnywhere(identifier: any): boolean;
+    csharpBaseFieldKey(key: any, allowObject: boolean): {
+        text: string;
+        kind: 'literal' | 'string' | 'string?' | 'object';
+    } | undefined;
+    csharpBaseFieldElementRead(node: any): string | undefined;
+    csharpBaseFieldInExpression(key: any, obj: any): string | undefined;
+    csharpBaseFieldKeyNames: WeakMap<object, number>;
+    csharpNativeModLiteralEquality(left: any, right: any, isEquality: boolean): string | undefined;
     printCallExpression(node: any, identation: any): any;
     csharpNativeParseCall(node: any): string;
     csharpCalleeIsGlobalFunction(node: any): boolean;
