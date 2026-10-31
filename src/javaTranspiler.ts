@@ -432,6 +432,17 @@ const JAVA_NATIVE_RETURN_MAP_TYPE = 'java.util.Map<String, Object>';
 // but `string`, whose slots print List<String>) declares `java.util.List<Object>` when every
 // return site already prints a List<Object>.
 const JAVA_NATIVE_RETURN_LIST_TYPE = 'java.util.List<Object>';
+// the native Map/List return spellings a generated callee prints, in either import spelling
+function javaVenueCalleeNativeType(printed: unknown): string | undefined {
+    if (typeof printed !== 'string') {
+        return undefined;
+    }
+    const type = printed.replace(/\s+/g, '').replace(/^java\.util\./, '');
+    if (type === 'Map<String,Object>') {
+        return JAVA_NATIVE_RETURN_MAP_TYPE;
+    }
+    return type === 'List<Object>' ? JAVA_NATIVE_RETURN_LIST_TYPE : undefined;
+}
 // `this.<name> (...)` returns whose printed Java call already answers a List<Object>: the
 // hand-written `toArray` (BaseExchange.java) and Object.keys/values (Helpers.objectKeys/Values).
 const JAVA_LIST_RETURN_BASE_METHODS: Set<string> = new Set<string>(['toArray']);
@@ -3300,11 +3311,10 @@ export class JavaTranspiler extends BaseTranspiler {
     // declarations it retypes itself, and a parameter the printer retypes
     // (javaNativeParameterType) answers for itself, so its element reads go native too
     javaDeclaredTypeOfDeclaration(declaration): string | undefined {
-        const resolver = this.javaDeclaredLocalTypeResolver;
-        if (resolver !== undefined) {
+        if (this.javaDeclaredLocalTypeResolver !== undefined) {
             let type;
             try {
-                type = resolver(declaration);
+                type = this.javaDeclaredLocalType(declaration);
             } catch (e) {
                 type = undefined;
             }
@@ -3334,6 +3344,106 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return undefined;
     }
+
+    // The declared Java type of a local as the embedding build layer publishes it
+    // (javaDeclaredLocalTypeResolver), else the type its own initialiser prints when that is a
+    // sync `this.<m> (...)` call of a generated venue method whose declaration prints a native
+    // Map/List (javaVenueCalleeReturnType). The resolver only knows the files the calling worker
+    // printed, and a callee's local can sit in another file: the fallback answers from the callee's
+    // declaration, so the answer never depends on what an earlier generation or worker printed.
+    // No resolver installed (no consumer) = no fallback, every read keeps the helper.
+    javaDeclaredLocalType(declaration): string | undefined {
+        const resolver = this.javaDeclaredLocalTypeResolver;
+        if (typeof resolver !== 'function') {
+            return undefined;
+        }
+        const own = resolver(declaration);
+        if (own !== undefined || declaration === undefined) {
+            return own;
+        }
+        try {
+            return this.javaVenueCalleeLocalType(declaration);
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    javaVenueCalleeLocalType(declaration): string | undefined {
+        if (!isVariableDeclaration(declaration) || declaration.initializer === undefined) {
+            return undefined;
+        }
+        let initializer = declaration.initializer;
+        while (isParenthesizedExpression(initializer)) {
+            initializer = initializer.expression;
+        }
+        return this.javaVenueCalleeReturnType(initializer);
+    }
+
+    // the emitted Java type of a sync `this.<m> (...)` / `super.<m> (...)` call whose resolved callee
+    // is a generated venue method (ts/src/<id>.ts, pro/, prediction/) and whose declaration prints a
+    // native Map<String, Object> / List<Object> return: the annotation print, or the native fallback
+    // printMethodDefinition takes when that prints the boxed `Object`. A base-tier or hand-written
+    // callee, a future, a DTO or a scalar answers undefined (the build layer's tables stay the proof).
+    javaVenueCalleeReturnType(call): string | undefined {
+        if (call === undefined || !isCallExpression(call)) {
+            return undefined;
+        }
+        const callee = call.expression;
+        if (!isPropertyAccessExpression(callee)
+            || (callee.expression.kind !== SyntaxKind.ThisKeyword
+                && !(isIdentifier(callee.expression) && callee.expression.text === 'super'))) {
+            return undefined;
+        }
+        if (this.javaVenueCalleeInProgress.has(call)) {
+            return undefined; // a mutually recursive proof reads as unproven
+        }
+        this.javaVenueCalleeInProgress.add(call);
+        try {
+            // the resolved declaration is a pure function of the call node: ask the checker once
+            let declaration = this.javaVenueCalleeDeclarations.get(call);
+            for (let attempt = 0; attempt < 2 && declaration === undefined; attempt++) {
+                try {
+                    declaration = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+                } catch (e) {
+                    declaration = undefined; // a transient checker failure: one retry, then the tables decide
+                }
+            }
+            if (declaration !== undefined) {
+                this.javaVenueCalleeDeclarations.set(call, declaration);
+            }
+            if (declaration === undefined || declaration.kind !== SyntaxKind.MethodDeclaration
+                || declaration.body === undefined) {
+                return undefined;
+            }
+            const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+            if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(fileName)) {
+                return undefined;
+            }
+            let printed;
+            try {
+                printed = this.printFunctionType(declaration);
+            } catch (e) {
+                return undefined;
+            }
+            const direct = javaVenueCalleeNativeType(printed);
+            if (direct !== undefined) {
+                return direct;
+            }
+            if (printed !== this.DEFAULT_RETURN_TYPE) {
+                return undefined;
+            }
+            try {
+                return javaVenueCalleeNativeType(this.javaNativeReturnType(declaration));
+            } catch (e) {
+                return undefined;
+            }
+        } finally {
+            this.javaVenueCalleeInProgress.delete(call);
+        }
+    }
+
+    javaVenueCalleeInProgress: Set<Node> = new Set();
+    javaVenueCalleeDeclarations: WeakMap<Node, Node> = new WeakMap();
 
     // javaOptionalParameterType walks the heritage chain, and every element access consults it
     javaOptionalParameterTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED> = new WeakMap();
@@ -4206,7 +4316,7 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         let declared;
         try {
-            declared = this.javaDeclaredLocalTypeResolver(declaration);
+            declared = this.javaDeclaredLocalType(declaration);
         } catch (e) {
             return false;
         }

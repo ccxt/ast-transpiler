@@ -8239,3 +8239,79 @@ describe('java typed String slice / split / replaceAll (RF-java-1)', () => {
         expect(output).not.toContain("Helpers.replaceAll");
     });
 });
+
+// hx11 FJ4-D: a local initialised from a sync `this.<m> (...)` call of a generated venue method whose own
+// declaration prints a native Map/List takes that type in the printer (javaDeclaredLocalType), with no
+// build-side resolver wrapper: the consumer's tables know nothing about this file or its first generation
+describe('java venue-callee local type (hx11 FJ4-D)', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-javafj4d');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuefj4d.ts');
+    const BASE_SOURCE =
+        'export class Exchange {\n' +
+        '    safeValue (a: any, k: any, d: any = undefined): any { return d; }\n' +
+        '    baseDict (a: any): any { return a; }\n' +
+        '    sink (...args: any[]): void {}\n' +
+        '}\n';
+    const VENUE_SOURCE =
+        "import { Dict } from './base/types';\n" +
+        "import { Exchange } from './base/Exchange';\n" +
+        'export default class venuefj4d extends Exchange {\n' +
+        '    parseMap (data: Dict): any { return { "a": data }; }\n' +
+        '    parseList (data: Dict): any { return [ data ]; }\n' +
+        '    parseUnproven (data: Dict): any { return this.safeValue (data, "k"); }\n' +
+        '    parseScalar (data: Dict): string { return "x"; }\n' +
+        '    async parseFuture (data: Dict): Promise<Dict> { return { "a": data }; }\n' +
+        '    useCalls (data: Dict) {\n' +
+        '        const viaMap = this.parseMap (data);\n' +
+        '        const viaParens = (this.parseMap (data));\n' +
+        '        const viaList = this.parseList (data);\n' +
+        '        const viaUnproven = this.parseUnproven (data);\n' +
+        '        const viaScalar = this.parseScalar (data);\n' +
+        '        const viaBase = this.baseDict (data);\n' +
+        '        this.sink (viaMap["k"], viaParens["k"], viaList[0], viaUnproven["k"], viaScalar, viaBase["k"]);\n' +
+        '    }\n' +
+        '}\n';
+    const run = (resolver: any): string => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, 'export type Dict = Record<string, any>;\n');
+        fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+        fs.writeFileSync(VENUE_FIXTURE, VENUE_SOURCE);
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        (byPath as any).javaTranspiler.javaDeclaredLocalTypeResolver = resolver;
+        return byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    };
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a consumer that published nothing: the callee declaration decides the local', () => {
+        const out = run(() => undefined);
+        expect(out).toContain('public java.util.Map<String, Object> parseMap(');
+        expect(out).toContain('viaMap.get("k")');
+        expect(out).toContain('viaParens.get("k")');
+        expect(out).toContain('viaList.get(0)');
+    });
+
+    test('an unproven, scalar or base-tier callee keeps the helper', () => {
+        const out = run(() => undefined);
+        expect(out).toContain('Helpers.GetValue(viaUnproven, "k")');
+        expect(out).toContain('Helpers.GetValue(viaBase, "k")');
+        expect(out).not.toContain('viaUnproven.get(');
+        expect(out).not.toContain('viaBase.get(');
+    });
+
+    test('a published answer wins over the callee declaration', () => {
+        const out = run((declaration: any) => declaration?.name?.text === 'viaMap' ? 'java.util.List<Object>' : undefined);
+        expect(out).not.toContain('viaMap.get("k")');
+        expect(out).toContain('viaParens.get("k")');
+    });
+
+    test('no consumer installed: every read keeps the helper', () => {
+        const out = run(undefined);
+        expect(out).not.toContain('viaMap.get("k")');
+        expect(out).toContain('Helpers.GetValue(viaMap, "k")');
+    });
+});
