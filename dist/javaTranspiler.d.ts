@@ -148,6 +148,11 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaRepeatableOperand(node: any): any;
     javaDeclaredTypeOf(expression: any): string | undefined;
     javaDeclaredTypeOfDeclaration(declaration: any): string | undefined;
+    javaDeclaredLocalType(declaration: any): string | undefined;
+    javaVenueCalleeLocalType(declaration: any): string | undefined;
+    javaVenueCalleeReturnType(call: any): string | undefined;
+    javaVenueCalleeInProgress: Set<Node>;
+    javaVenueCalleeDeclarations: WeakMap<Node, Node>;
     javaOptionalParameterTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED>;
     javaOptionalParameterTypeCached(node: any): string | undefined;
     javaNativeParameterType(node: any): string | undefined;
@@ -214,6 +219,16 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDeclarationOfIdentifier(expression: any): any;
     javaDeclaredMapReceiver(expression: any): boolean;
     javaMapWriteFieldReceiver(expression: any): boolean;
+    javaOwnerStoreFields: ReadonlySet<string>;
+    javaOwnerStoreHandoffs: {
+        [key: string]: [string, string];
+    };
+    javaOwnerStoreFieldReceiver(expression: any): boolean;
+    javaWsClientMapField(expression: any): string | undefined;
+    javaWsClientMapReadText(receiver: any, key: any): string | undefined;
+    javaWsClientMapRead(node: any): string | undefined;
+    javaWsClientLocalType(declaration: any): string | undefined;
+    printOptionsHandoffRead(node: any): string | undefined;
     javaDeclaredListElementRead(node: any, isCounter: any): string;
     javaDeclaredMapElementRead(node: any): string;
     javaDeclaredListIndexRead(node: any): string | undefined;
