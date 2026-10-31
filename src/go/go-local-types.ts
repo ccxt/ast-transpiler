@@ -1213,7 +1213,7 @@ export function ccxtGoUnboxCurrencyDeclaration (goTranspiler, printed) {
 function ccxtGoTypeOfUrlsInitializer (goTranspiler, initializer, printedValue) {
     if ((initializer?.parent?.kind !== ts.SyntaxKind.VariableDeclaration) || (initializer.parent.initializer !== initializer)
         || (initializer.parent.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement)
-        || !/^GetValue\(/.test ((printedValue ?? '').trim ()) || !urlsDescribeStringProducer (initializer)) {
+        || !/^(?:GetValue\(|this\.UrlsApi(?:Sections)?\[)/.test ((printedValue ?? '').trim ()) || !urlsDescribeStringProducer (initializer)) {
         return undefined;
     }
     const declaration = initializer.parent;
@@ -1380,7 +1380,7 @@ export function ccxtGoWrapUrlsDeclaration (printed) {
     if (typeof printed !== 'string') {
         return printed;
     }
-    const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ \*string = )(GetValue\((?:GetValue\()?[^\n]*this\.Urls[^\n]*\))(\s*)$/.exec (printed);
+    const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ \*string = )(GetValue\((?:GetValue\()?[^\n]*this\.Urls[^\n]*\)|this\.UrlsApi(?:Sections)?\[[^\n]*\])(\s*)$/.exec (printed);
     return (match === null) ? printed : match[1] + 'SafeStringPtr(' + match[2] + ')' + match[3];
 }
 

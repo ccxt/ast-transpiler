@@ -10729,7 +10729,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             node = node.expression;
         }
         if (node.expression.kind !== SyntaxKind.AwaitExpression) {
-            return this.stripWhitespaceOnlyLines (super.printExpressionStatement(node, identation));
+            const printed = this.stripWhitespaceOnlyLines (super.printExpressionStatement(node, identation));
+            // the urls views (UrlsApi, UrlsApiSections) are re-derived right after each write of urls
+            return ((printed.length > 0) && this.goIsUrlsWrite(node)) ? `${printed}\n${this.getIden(identation)}this.RefreshUrlsViews()` : printed;
         }
 
         const exprStm = this.printNode(node.expression, identation);
@@ -12261,6 +12263,67 @@ ${tryBodyBlock}
         return acc;
     }
 
+    // `this.urls` on the exchange base: the hand-written go/v4/exchange.go keeps `urls` as a
+    // map[string]any (the ccxt field table answers it) and derives two views of `urls["api"]` from it
+    goIsUrlsField(node): boolean {
+        return this.isGoThisPropertyAccessExpression(node) && (node.name?.text === 'urls')
+            && (this.goFieldContainerTypeNative(node) === 'map[string]any');
+    }
+
+    // `this.urls['api']` is declared a Dict in the TS base (`urls: { api: Dict; ... }`): a string
+    // index signature is the proof that every entry of it is the plain `any` a map index reads
+    goUrlsApiIsDict(apiAccess): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        try {
+            const type = checker.getTypeAtLocation(apiAccess);
+            return (type !== undefined) && this.goParameterTypeIsDict(type);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // `this.urls['api'][k]` reads the view BaseExchange.UrlsApi (urls["api"] as stored), and
+    // `this.urls['api'][k][j]` the view UrlsApiSections (its dictionary entries); RefreshUrlsViews
+    // re-derives both after every write of urls, so each read is the map's own index. A key the printer
+    // cannot prove a Go string keeps its helper step, as does every step below the second.
+    goUrlsViewRead(node, baseExpr, keys, keyStrs: string[]): string | undefined {
+        if ((keys.length < 2) || !this.goIsUrlsField(baseExpr) || this.isGoElementAccessAssignmentTarget(node)) {
+            return undefined;
+        }
+        if ((keys[0]?.kind !== SyntaxKind.StringLiteral) || (keys[0].text !== 'api') || !this.goKeyIsString(keys[1], keyStrs[1])) {
+            return undefined;
+        }
+        let apiAccess = node;
+        for (let i = keys.length - 1; i > 0; i--) {
+            apiAccess = apiAccess.expression;
+        }
+        if (!this.goUrlsApiIsDict(apiAccess)) {
+            return undefined;
+        }
+        const section = (keys.length > 2) && this.goKeyIsString(keys[2], keyStrs[2]);
+        const view = section ? `this.UrlsApiSections[${keyStrs[1]}][${keyStrs[2]}]` : `this.UrlsApi[${keyStrs[1]}]`;
+        return this.goElementAccessChain(view, keyStrs.slice(section ? 2 : 1));
+    }
+
+    // a statement assigning `this.urls` or one of its entries: the views have to be re-derived after it
+    goIsUrlsWrite(statement): boolean {
+        const expression: any = statement?.expression;
+        if ((expression?.kind !== SyntaxKind.BinaryExpression) || (expression.operatorToken?.kind !== SyntaxKind.EqualsToken)) {
+            return false;
+        }
+        let target: any = expression.left;
+        while ((target?.kind === SyntaxKind.ElementAccessExpression) || (target?.kind === SyntaxKind.PropertyAccessExpression)) {
+            if (this.goIsUrlsField(target)) {
+                return true;
+            }
+            target = target.expression;
+        }
+        return false;
+    }
+
     // the container of a nested `m["a"]["b"] = v` write, for all but the last key: its first step is a
     // plain read, so a receiver typed as a map indexes natively and only `any` steps keep the helper.
     // A missing key or nil map reads nil in both forms; a non-map container is a no-op either way.
@@ -12609,6 +12672,11 @@ ${tryBodyBlock}
         const boundedRead = (keys.length === 1) ? this.goLoopBoundedSliceRead(node, baseExpr, keys[0], containerStr, keyStrs[0]) : undefined;
         if (boundedRead !== undefined) {
             return boundedRead;
+        }
+
+        const urlsView = this.goUrlsViewRead(node, baseExpr, keys, keyStrs);
+        if (urlsView !== undefined) {
+            return urlsView;
         }
 
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
