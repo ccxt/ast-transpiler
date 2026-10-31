@@ -6461,8 +6461,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (init?.kind === SyntaxKind.ParenthesizedExpression) {
             init = init.expression;
         }
-        if (isIdentifier(init) && this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(init) ?? '')) {
-            return false;
+        if (isIdentifier(init) && (this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(init) ?? '')
+            || this.csharpReceiverBinding(init)?.kind === SyntaxKind.BindingElement)) {
+            return false; // a destructured slot is declared string? by the build layer's retype after printing
         }
         const scope = this.csharpEnclosingFunction(declaration);
         if (scope === undefined || !this.csharpIsStringValued(declaration.initializer, depth + 1)) {

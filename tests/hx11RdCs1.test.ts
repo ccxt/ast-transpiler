@@ -76,6 +76,11 @@ describe('RD-CS-1: declared member views and string-typed object concatenation',
         expect(printed(ts, false)).not.toContain('m == null');
     });
 
+    test('a copy of a destructured string slot keeps the helper', () => {
+        const ts = BASE + '    f (a: any) { const [ s, p ] = this.pair (a); let m = s; m = m + "x"; return [ m, p ]; }\n    pair (a: any): [ string | undefined, any ] { return [ undefined, a ]; }\n}';
+        expect(printed(ts, false)).not.toContain('m == null');
+    });
+
     test('a right operand with effects and a non-string left keep the helper', () => {
         const ts = BASE + '    f (a: any, n: number, m: any) { const id = this.safeString (a, "id"); const x = id + (n++); const y = n + 1; const z = m + "s"; return [x, y, z]; }\n}';
         const out = printed(ts, false);
