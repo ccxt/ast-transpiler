@@ -10,6 +10,7 @@ import { installCcxtGoSignTyping } from './hx11-sign-typing.js';
 import { installHx11w8NumParams } from './hx11w8-num-param.js';
 import { installRfGo5OwnedTables } from './hx11rf-go5.js';
 import { installFmGo5G01 } from './hx11fmgo5-G01.js';
+import { installFmGo5OG02 } from './hx11fmgo5-OG02.js';
 import { installFmGo5GP08 } from './hx11fmgo5-GP08.js';
 import { installFmGo5G04 } from './hx11fmgo5-G04.js';
 
@@ -24,6 +25,7 @@ export function installCcxtGoHooks (goTranspiler: any, unifiedInt64Params?: any)
     installHx11w8NumParams (goTranspiler);
     installRfGo5OwnedTables (goTranspiler);
     installFmGo5G01 (goTranspiler);
+    installFmGo5OG02 (goTranspiler);
     installFmGo5GP08 (goTranspiler);
     installFmGo5G04 (goTranspiler);
 }
