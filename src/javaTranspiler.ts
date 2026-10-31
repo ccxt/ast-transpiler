@@ -284,6 +284,8 @@ const JAVA_THIS_BOOLEAN_BOX_METHODS: { [name: string]: number } = {
 
 // the Java spellings a consumer declares a dict local with (import-shortened forms
 // included); every other declared type keeps Helpers.GetValue
+// the base class that owns the options counters (BaseExchange.nextCounter / nextCounterAbove)
+const JAVA_OWNER_CLASS = 'BaseExchange';
 const JAVA_DECLARED_MAP_TYPES = /^(java\.util\.)?(Map|HashMap)\s*<\s*String\s*,\s*Object\s*>$/;
 // the declaration token a local the printer feeds a fresh plain map prints with: fully qualified,
 // because the generated test tier imports only java.util.HashMap (JAVA_DECLARED_MAP_TYPES accepts it)
@@ -8441,9 +8443,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const initParams = splitCore ? this.javaDefaultedParameterLocals(node) : [];
         const processedParts = [];
         try {
-            for (let i = 0; i < bodyStatements.length; i++) {
-                processedParts.push(this.printNode(bodyStatements[i], identation + 1));
-            }
+            processedParts.push(...this.javaPrintBodyStatements(bodyStatements, identation + 1));
         } finally {
             this.varListFromObjectLiterals = savedVarList;
             this.usageToFinalName = savedUsageToFinalName;
@@ -8556,6 +8556,10 @@ export class JavaTranspiler extends BaseTranspiler {
         const managed = this.finalVarScopeStack.length > 0;
         if (managed) this.finalVarScopeStack.push(new Set<string>());
         try {
+            if (this.javaCounterPlan(node.statements, identation + 1) !== undefined) {
+                const body = this.javaPrintBodyStatements(node.statements, identation + 1).join("\n");
+                return this.getBlockOpen(identation) + body + this.getBlockClose(identation, chainBlock);
+            }
             return super.printBlock(node, identation, chainBlock);
         } finally {
             if (managed) this.finalVarScopeStack.pop();
@@ -10882,6 +10886,8 @@ const JAVA_BASE_MAP_READ_FIELDS: { [name: string]: { declared: boolean, anyKey: 
 const JAVA_SYNC_CALL_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/](functions[\\/][^\\/]+|Exchange(\.nooverloads\.\d+)?)\.ts$|(^|[\\/])lib\.[^\\/]*\.d\.ts$/;
 
 export interface JavaTranspiler {
+    javaCounterPlan(statements, identation: number): Map<any, any> | undefined;
+    javaPrintBodyStatements(statements, identation: number): string[];
     hx4J09BoxIdentifier(node, seen: Set<any>, depth: number): boolean;
     hx4J09BoxValue(node, seen: Set<any>, depth: number): boolean;
     hx4J09LiteralTupleElement(node, index: number): boolean;
@@ -11245,5 +11251,228 @@ const JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]cry
             }
         }
         return printNativeEquality.call(this, node, leftText, rightText);
+    };
+}
+
+// Owner-store counters. The base class keeps `this.options` single-owner, so a request-id / nonce counter that
+// lives in it is ONE owner task (BaseExchange.nextCounter / nextCounterAbove) instead of a lock bracket:
+//   this.lockId (); <read-modify-write of this.options[k]>; this.unlockId ()  -> Long x = this.nextCounter("k", 1L)
+//   BaseExchange.incrementingNonce (): lock / compare / store / unlock         -> Long r = this.nextCounterAbove("lastNonce", 1L, c)
+// Every member is proven by its checker-resolved declaration (a member of the base class), never by printed text;
+// a span whose shape is not proven prints as before.
+{
+    const proto: any = JavaTranspiler.prototype;
+    const unparen = (node: any) => {
+        while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        return node;
+    };
+    const baseMemberDecl = (java: any, node: any, name: string) => {
+        if (node?.kind !== SyntaxKind.PropertyAccessExpression || node.expression?.kind !== SyntaxKind.ThisKeyword
+            || node.name?.text !== name) {
+            return undefined;
+        }
+        let decl: any;
+        try {
+            decl = java.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return undefined;
+        }
+        return decl?.parent?.name?.text === JAVA_OWNER_CLASS ? decl : undefined;
+    };
+    const baseCall = (java: any, node: any, name: string, args: number) => {
+        node = unparen(node);
+        return node?.kind === SyntaxKind.CallExpression && (node.arguments?.length ?? 0) === args
+            && baseMemberDecl(java, node.expression, name) !== undefined;
+    };
+    const callStatement = (java: any, stmt: any, name: string) =>
+        stmt?.kind === SyntaxKind.ExpressionStatement && baseCall(java, stmt.expression, name, 0);
+    const constDecl = (stmt: any) => {
+        const list = stmt?.kind === SyntaxKind.VariableStatement ? stmt.declarationList : undefined;
+        const d = list?.declarations;
+        if (d?.length !== 1 || d[0].name?.kind !== SyntaxKind.Identifier || d[0].initializer === undefined
+            || (getCombinedNodeFlags(d[0]) & NodeFlags.Const) === 0) {
+            return undefined;
+        }
+        return d[0];
+    };
+    const literal = (node: any) => node?.kind === SyntaxKind.StringLiteral ? node : undefined;
+    // `this.options['k'] = <ident>` -> [key literal, ident name]
+    const optionWrite = (java: any, stmt: any) => {
+        const e = stmt?.kind === SyntaxKind.ExpressionStatement ? stmt.expression : undefined;
+        if (e?.kind !== SyntaxKind.BinaryExpression || e.operatorToken?.kind !== SyntaxKind.EqualsToken) {
+            return undefined;
+        }
+        const target = e.left;
+        if (target?.kind !== SyntaxKind.ElementAccessExpression || baseMemberDecl(java, target.expression, 'options') === undefined
+            || literal(target.argumentExpression) === undefined || e.right?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        return [ target.argumentExpression, e.right.text ];
+    };
+    // `this.safeInteger (this.options, 'k', 0)` -> the key literal
+    const counterRead = (java: any, node: any) => {
+        node = unparen(node);
+        if (!baseCall(java, node, 'safeInteger', 3)) {
+            return undefined;
+        }
+        const [ options, key, fallback ] = node.arguments;
+        if (baseMemberDecl(java, options, 'options') === undefined || literal(key) === undefined
+            || fallback?.kind !== SyntaxKind.NumericLiteral || fallback.text !== '0') {
+            return undefined;
+        }
+        return key;
+    };
+    const countIdentifier = (root: any, name: string) => {
+        let n = 0;
+        const visit = (node: any) => {
+            if (node.kind === SyntaxKind.Identifier && node.text === name) {
+                n++;
+            }
+            node.forEachChild(visit);
+        };
+        visit(root);
+        return n;
+    };
+    const sumOfOne = (java: any, call: any) => {
+        call = unparen(call);
+        return baseCall(java, call, 'sum', 2) && call.arguments[1]?.kind === SyntaxKind.NumericLiteral
+            && call.arguments[1].text === '1' ? call : undefined;
+    };
+    // the statements of a lock/unlock span as one counter: [declared name, key literal] or undefined
+    const counterSpan = (java: any, body: any[], fn: any) => {
+        if (body.length === 2) {
+            const decl = constDecl(body[0]);
+            const write = optionWrite(java, body[1]);
+            const sum = decl !== undefined ? sumOfOne(java, decl.initializer) : undefined;
+            const key = sum !== undefined ? counterRead(java, sum.arguments[0]) : undefined;
+            if (key !== undefined && write !== undefined && write[0].text === key.text && write[1] === decl.name.text) {
+                return [ decl.name, key ];
+            }
+            return undefined;
+        }
+        if (body.length === 3) {
+            const seed = constDecl(body[0]);
+            const next = constDecl(body[1]);
+            const write = optionWrite(java, body[2]);
+            const key = seed !== undefined ? counterRead(java, seed.initializer) : undefined;
+            const sum = next !== undefined ? sumOfOne(java, next.initializer) : undefined;
+            if (key !== undefined && sum !== undefined && write !== undefined && sum.arguments[0]?.kind === SyntaxKind.Identifier
+                && sum.arguments[0].text === seed.name.text && write[0].text === key.text && write[1] === next.name.text
+                && countIdentifier(fn, seed.name.text) === 2) { // the seed local is read by nothing but the increment
+                return [ next.name, key ];
+            }
+        }
+        return undefined;
+    };
+    // `incrementingNonce` of the base class: lock, compare nonce () with the stored last nonce, store, unlock, return
+    const nonceShape = (java: any, method: any) => {
+        if (method?.kind !== SyntaxKind.MethodDeclaration || method.name?.text !== 'incrementingNonce'
+            || method.parent?.name?.text !== JAVA_OWNER_CLASS || method.parameters?.length !== 0) {
+            return undefined;
+        }
+        const s = method.body?.statements;
+        if (s === undefined || s.length !== 7) {
+            return undefined;
+        }
+        const current = constDecl(s[0]);
+        const last = constDecl(s[2]);
+        const result = constDecl(s[3]);
+        const write = optionWrite(java, s[4]);
+        if (current === undefined || last === undefined || result === undefined || write === undefined
+            || !baseCall(java, current.initializer, 'nonce', 0) || !callStatement(java, s[1], 'lockLastNonce')
+            || !callStatement(java, s[5], 'unlockLastNonce')) {
+            return undefined;
+        }
+        const key = counterRead(java, last.initializer);
+        const cond = unparen(result.initializer);
+        if (key?.text !== 'lastNonce' || write[0].text !== 'lastNonce' || write[1] !== result.name.text
+            || cond?.kind !== SyntaxKind.ConditionalExpression) {
+            return undefined;
+        }
+        const compare = unparen(cond.condition);
+        const plusOne = unparen(cond.whenFalse);
+        const isId = (n: any, name: string) => n?.kind === SyntaxKind.Identifier && n.text === name;
+        if (compare?.kind !== SyntaxKind.BinaryExpression || compare.operatorToken?.kind !== SyntaxKind.GreaterThanToken
+            || !isId(compare.left, current.name.text) || !isId(compare.right, last.name.text) || !isId(cond.whenTrue, current.name.text)
+            || plusOne?.kind !== SyntaxKind.BinaryExpression || plusOne.operatorToken?.kind !== SyntaxKind.PlusToken
+            || !isId(plusOne.left, last.name.text) || plusOne.right?.kind !== SyntaxKind.NumericLiteral || plusOne.right.text !== '1'
+            || s[6].kind !== SyntaxKind.ReturnStatement || !isId(s[6].expression, result.name.text)
+            || countIdentifier(method, last.name.text) !== 3) { // the stored value is read by the compare and the increment only
+            return undefined;
+        }
+        return { current, result };
+    };
+    const bare = (java: any, stmt: any) => java.printLeadingComments(stmt, 0) === '' && java.printTraillingComment(stmt, 0) === '';
+
+    // statement -> { counter: [name, key] } | { nonce: { current, result } } | { drop: true }
+    proto.javaCounterPlan = function (statements, _identation: number): Map<any, any> | undefined {
+        if (statements === undefined || statements.length === 0) {
+            return undefined;
+        }
+        let fn: any = statements[0].parent;
+        while (fn !== undefined && !isFunctionLike(fn)) {
+            fn = fn.parent;
+        }
+        if (fn === undefined) {
+            return undefined;
+        }
+        let plan: Map<any, any> | undefined;
+        const set = (stmt: any, value: any) => { (plan ??= new Map()).set(stmt, value); };
+        const nonce = fn.body?.statements === statements ? nonceShape(this, fn) : undefined;
+        if (nonce !== undefined) {
+            for (let i = 0; i < 6; i++) {
+                if (!bare(this, statements[i])) {
+                    return undefined;
+                }
+            }
+            set(statements[1], { nonce });
+            for (let i = 2; i < 6; i++) {
+                set(statements[i], { drop: true });
+            }
+        }
+        for (let i = 0; i < statements.length; i++) {
+            if (!callStatement(this, statements[i], 'lockId')) {
+                continue;
+            }
+            let end = i + 1;
+            while (end < statements.length && !callStatement(this, statements[end], 'unlockId')) {
+                end++;
+            }
+            if (end >= statements.length) {
+                continue;
+            }
+            const body = Array.from(statements).slice(i + 1, end);
+            const found = counterSpan(this, body, fn);
+            if (found !== undefined && body.every((st: any) => bare(this, st)) && bare(this, statements[end])) {
+                set(statements[i], { counter: found });
+                for (let k = i + 1; k <= end; k++) {
+                    set(statements[k], { drop: true });
+                }
+                i = end;
+            }
+        }
+        return plan;
+    };
+
+    proto.javaPrintBodyStatements = function (statements, identation: number): string[] {
+        const plan = this.javaCounterPlan(statements, identation);
+        const parts: string[] = [];
+        for (const stmt of statements) {
+            const step = plan?.get(stmt);
+            if (step === undefined) {
+                parts.push(this.printNode(stmt, identation));
+            } else if (step.counter !== undefined) {
+                const [ name, key ] = step.counter;
+                const line = this.getIden(identation) + `Long ${this.printNode(name, 0)} = this.nextCounter(${this.printNode(key, 0)}, 1L);`;
+                parts.push(this.printNodeCommentsIfAny(stmt, identation, line));
+            } else if (step.nonce !== undefined) {
+                const { current, result } = step.nonce;
+                const line = this.getIden(identation) + `Long ${this.printNode(result.name, 0)} = this.nextCounterAbove("lastNonce", 1L, ${this.printNode(current.name, 0)});`;
+                parts.push(line);
+            }
+        }
+        return parts;
     };
 }
