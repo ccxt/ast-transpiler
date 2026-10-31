@@ -9,6 +9,7 @@ const t = (install = true) => {
     return x;
 };
 const SRC = [
+    'type Dict = { [key: string]: any };',
     'class Client {',
     '    subscriptions: Record<string, any> = {};',
     '}',
@@ -32,6 +33,8 @@ const SRC = [
     '        const known = client.subscriptions[h];',
     '        const d = this.safeDict (client.subscriptions, h);',
     '        if (d === undefined) { return undefined; }',
+    '        client.subscriptions[h][\'checksum\'] = true;',
+    '        const typed = this.safeDict (client.subscriptions, h, {}) as Dict;',
     '        const u = other.subscriptions[h];',
     '        delete other.subscriptions[h];',
     '        return [ keys, values, s, snap, nested, known, u ];',
@@ -51,7 +54,8 @@ describe('FM-GO5 G01 client subscriptions hand-off', () => {
         expect (out).toContain ('this.SafeString(client.SubscriptionGet(h), "id")');
         expect (out).toContain ('this.SafeString(client.SubscriptionsSnapshot(), h)');
         expect (out).toContain ('GetValue(client.SubscriptionGet(h), "x")');
-        expect (out).toContain ('client.SubscriptionDict(h)');
+        expect (out).toContain ('AddElementToObject(client.SubscriptionGet(h), "checksum", true)');
+        expect (out).toContain ('var typed map[string]any = client.SubscriptionDict(h)');
     });
     test('an any-typed local keeps the dereferencing base read of the snapshot', () => {
         const out = t ().transpileGo (SRC).content;

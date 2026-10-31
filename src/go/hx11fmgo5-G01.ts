@@ -112,11 +112,24 @@ export function installFmGo5G01 (goTranspiler: any) {
                 return owner (this, table) + '.SubscriptionHas(' + this.printNode (node.left, 0) + ')';
             }
         } else if ((op === SK.EqualsToken) && (node.left?.kind === SK.ElementAccessExpression)) {
-            const table = clientSubscriptions (this, node.left.expression);
+            const keys: any[] = [];
+            let root = node.left;
+            while (root?.kind === SK.ElementAccessExpression) {
+                keys.unshift (root.argumentExpression);
+                root = root.expression;
+            }
+            const table = clientSubscriptions (this, root);
             if (table !== undefined) {
-                const key = this.printNode (node.left.argumentExpression, 0);
                 const value = this.goWithExprDepth (this.goExprDepth + 1, () => this.printNode (node.right, identation)).trimStart ();
-                return owner (this, table) + '.SubscriptionSet(' + key + ', ' + value + ')';
+                if (keys.length === 1) {
+                    return owner (this, table) + '.SubscriptionSet(' + this.printNode (keys[0], 0) + ', ' + value + ')';
+                }
+                // a nested write `R.subscriptions[a][b] = v` mutates the entry the owner holds: the entry is read through the owner
+                let acc = owner (this, table) + '.SubscriptionGet(' + this.printNode (keys[0], 0) + ')';
+                for (let i = 1; i < keys.length - 1; i++) {
+                    acc = this.ELEMENT_ACCESS_WRAPPER_OPEN + acc + ', ' + this.printNode (keys[i], 0) + this.ELEMENT_ACCESS_WRAPPER_CLOSE;
+                }
+                return 'AddElementToObject(' + acc + ', ' + this.printNode (keys[keys.length - 1], 0) + ', ' + value + ')';
             }
         }
         return printBinary.call (this, node, identation);
@@ -147,7 +160,12 @@ export function installFmGo5G01 (goTranspiler: any) {
     const dictValue = goTranspiler.goSafeDictUnboxValue;
     goTranspiler.goSafeDictUnboxValue = function (this: any, declaration: any, identation: number) {
         const known = dictValue.call (this, declaration, identation);
-        const args = (known !== undefined) ? this.goSafeDictLocalArgs (declaration.initializer) : undefined;
+        // the initializer may carry a type assertion (`this.safeDict (R.subscriptions, k, {}) as Dict`)
+        let initializer = declaration.initializer;
+        while ((initializer?.kind === SK.AsExpression) || (initializer?.kind === SK.ParenthesizedExpression) || (initializer?.kind === SK.NonNullExpression)) {
+            initializer = initializer.expression;
+        }
+        const args = (known !== undefined) ? this.goSafeDictLocalArgs (initializer) : undefined;
         const table = (args !== undefined) ? clientSubscriptions (this, args.container) : undefined;
         if ((table !== undefined) && known.startsWith ('SafeMapTyped(')) {
             return owner (this, table) + '.SubscriptionDict(' + this.printNode (args.key, 0) + ')';
