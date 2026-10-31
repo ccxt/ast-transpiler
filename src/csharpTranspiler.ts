@@ -626,6 +626,9 @@ export class CSharpTranspiler extends BaseTranspiler {
 
         // user overrides
         this.applyUserOverrides(config);
+
+        // RFM-C2-B: the embedding build layer's table of hand-written base member -> declared C# type
+        this.csharpDeclaredBaseFields = Object.assign ({}, config['declaredBaseFieldTypes'] ?? {});
     }
 
     initConfig() {
@@ -974,6 +977,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (keyRead !== undefined) {
             return keyRead; // hx4 C11
         }
+        const baseField = this.csharpBaseFieldElementRead(node); // RFM-C2-B: after every earlier typed rule
+        if (baseField !== undefined) {
+            return baseField;
+        }
         return super.printElementAccessExpression(node, identation);
     }
 
@@ -1115,7 +1122,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         // transpiled helper body (initializeProperties may leave the box null when describe() has no such
         // row). `has`/`options` are concrete dictionaries, never null, so they need no test.
         if (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) {
-            const receiver = `((IDictionary<string, object>)${field})`;
+            const receiver = this.csharpBaseFieldDeclaredDictionary(name) ? field : `((IDictionary<string, object>)${field})`; // RFM-C2-B: no identity cast
             return `(${field} != null && ${receiver}.ContainsKey(${printedKey}) ? ${receiver}[${printedKey}] : null)`;
         }
         return `(${field}.ContainsKey(${printedKey}) ? ${field}[${printedKey}] : null)`;
@@ -2960,6 +2967,233 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `${this.printNode(target.expression, 0)}.${member.getter}(${key})`;
     }
 
+    // ===== RFM-C2-B: declared dictionary base fields, and `mod` equality against a literal =====
+    // A hand-written BaseExchange field the printer's tables above do not name is declared in the
+    // embedding build layer's derived table (config.csharp.declaredBaseFieldTypes: the field's C# type in
+    // cs/ccxt/base/Exchange.Options.cs, read through csharpDeclaredBaseFieldType). Two declared shapes read natively:
+    //   - `IDictionary<string, object>` / `Dictionary<string, object>` (ccxt: urls, headers): the member IS a
+    //     dictionary, so its indexer and ContainsKey replace getValue / inOp; the helper's null receiver,
+    //     null key and missing key branches are spelled back as tests;
+    //   - `object` (ccxt: positions, currencies): the box is a dictionary whenever every write of the member in the
+    //     source file stores one (`{}` literal, a dictionary-typed value, null, undefined) and at least one
+    //     write exists, so the same reads go through the helper's own `(IDictionary<string,object>)` cast.
+    // The key is a string literal, an identifier whose printed C# type is string / string?, or an identifier
+    // whose TypeScript type is a string (printed `object` or string: `(string)key` is the helper's own cast).
+    // Every other key, a write, a delete and a name no hook declares keep the helper.
+    csharpDeclaredBaseFields: { [name: string]: string } = {};
+
+    csharpDeclaredBaseFieldType(name: string): string | undefined {
+        return Object.prototype.hasOwnProperty.call(this.csharpDeclaredBaseFields, name) ? this.csharpDeclaredBaseFields[name] : undefined;
+    }
+
+    // the member is declared a dictionary type in the hand-written base (so `(IDictionary<string, object>)this.<name>` is an identity cast)
+    csharpBaseFieldDeclaredDictionary(name: string): boolean {
+        const declared = (typeof this.csharpDeclaredBaseFieldType === 'function') ? this.csharpDeclaredBaseFieldType(name) : undefined;
+        return (declared !== undefined) && (declared.indexOf('Dictionary<') >= 0);
+    }
+
+    // `this.<field>` that the table above declares and no printer table names, or undefined
+    csharpBaseFieldName(node): string | undefined {
+        if (!isPropertyAccessExpression(node) || node.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const name = node.name?.text as string;
+        if ((CSHARP_NATIVE_FIELDS[name] !== undefined) || (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) || (CSHARP_MISSING_KEY_FIELDS_NATIVE.indexOf(name) >= 0)) {
+            return undefined;
+        }
+        return (typeof this.csharpDeclaredBaseFieldType === 'function' && this.csharpDeclaredBaseFieldType(name) !== undefined) ? name : undefined;
+    }
+
+    // every write of `this.<name>` in the node's source file stores a dictionary (or null), and there is one
+    csharpBaseFieldWritesAreDictionaries(node, name: string): boolean {
+        const source: any = node.getSourceFile?.();
+        if (source === undefined) {
+            return false;
+        }
+        let writes = 0;
+        let ok = true;
+        const isField = (n) => isPropertyAccessExpression(n) && n.expression?.kind === SyntaxKind.ThisKeyword && n.name?.text === name;
+        const visit = (n) => {
+            if (!ok) {
+                return;
+            }
+            if (isBinaryExpression(n) && this.csharpIsAssignmentOperator(n.operatorToken.kind) && isField(n.left)) {
+                writes++;
+                const right = n.right;
+                const nullish = (right.kind === SyntaxKind.NullKeyword) || (isIdentifier(right) && right.text === 'undefined');
+                const type = this.getChecker().getTypeAtLocation(right);
+                if ((n.operatorToken.kind !== SyntaxKind.EqualsToken)
+                    || !(nullish || isObjectLiteralExpression(right) || this.csharpIsDictionaryType(type) || this.csharpNullableDictionaryType(type))) {
+                    ok = false;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        source.forEachChild(visit);
+        return ok && writes > 0;
+    }
+
+    // the receiver text of a declared base-field dictionary, or undefined
+    csharpBaseFieldDictionary(node): { text: string, type: string, field: string, name: string } | undefined {
+        const name = this.csharpBaseFieldName(node);
+        if (name === undefined) {
+            return undefined;
+        }
+        const declared = this.csharpDeclaredBaseFieldType(name) as string;
+        const field = this.printNode(node, 0);
+        if (declared.indexOf('Dictionary<') >= 0) {
+            return { text: field, type: declared, field, name };
+        }
+        if ((declared === 'object') && this.csharpBaseFieldWritesAreDictionaries(node, name)) {
+            const cast = `((IDictionary<string,object>)${field})`;
+            return { text: cast, type: 'IDictionary<string, object>', field: cast, name };
+        }
+        return undefined;
+    }
+
+    // the identifier is written (assigned, ++/--) anywhere in its enclosing function
+    csharpParameterWrittenAnywhere(identifier): boolean {
+        const scope = this.csharpEnclosingFunction(identifier);
+        if (scope === undefined) {
+            return true;
+        }
+        const name = identifier.text as string;
+        let written = false;
+        const visit = (n) => {
+            if (written) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.Identifier) && (n.text === name)) {
+                const parent = n.parent;
+                if (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && this.csharpIsAssignmentOperator(parent.operatorToken.kind))
+                    || (((parent?.kind === SyntaxKind.PostfixUnaryExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression))
+                        && ((parent.operator === SyntaxKind.PlusPlusToken) || (parent.operator === SyntaxKind.MinusMinusToken)))) {
+                    written = true;
+                    return;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return written;
+    }
+
+    // the key of a declared base-field read: { text, cast } or undefined
+    csharpBaseFieldKey(key, allowObject: boolean): { text: string, kind: 'literal' | 'string' | 'string?' | 'object' } | undefined {
+        if (isStringLiteralLikeNode(key)) {
+            return { text: this.printNode(key, 0), kind: 'literal' };
+        }
+        if (!isIdentifier(key)) {
+            return undefined;
+        }
+        const declared = this.csharpHx4DeclaredKeyType(key) ?? this.csharpPrintedParamType(key) ?? this.csharpParameterOperandType(key);
+        if ((declared === 'string') || (declared === 'string?')) {
+            return { text: this.printNode(key, 0), kind: declared };
+        }
+        if ((declared !== undefined) && (declared !== 'object')) {
+            return undefined;
+        }
+        if (!allowObject) {
+            return undefined; // a dictionary-declared member: only a key the printed declaration proves a string
+        }
+        // a parameter the body writes gets a shadow local the embedding build layer retypes after printing:
+        // a `(string)` cast here would hide the string-typed use from that retype, so the helper stays
+        const binding: any = this.csharpReceiverBinding(key);
+        if ((binding?.kind === SyntaxKind.Parameter) && ((binding.initializer !== undefined) || this.csharpParameterWrittenAnywhere(key))) {
+            return undefined; // a default value prints a `??=` prologue: the same shadow
+        }
+        const type = this.getChecker().getTypeAtLocation(key);
+        const members = ((type.flags & TypeFlags.Union) !== 0) ? ((type as UnionType).getTypes() ?? []) : [ type ];
+        const strings = members.filter((t) => this.isStringType(t.flags)).length;
+        const nullish = members.filter((t) => (t.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0).length;
+        return ((strings > 0) && (strings + nullish === members.length)) ? { text: this.printNode(key, 0), kind: 'object' } : undefined;
+    }
+
+    // `this.<field>[key]` as a read: the helper's null-receiver, null-key and missing-key answers as tests
+    csharpBaseFieldElementRead(node): string | undefined {
+        if (node?.kind !== SyntaxKind.ElementAccessExpression || !isPropertyAccessExpression(node.expression)) {
+            return undefined;
+        }
+        const parent = node.parent;
+        const isWrite = (parent?.kind === SyntaxKind.BinaryExpression && parent.left === node
+            && parent.operatorToken.kind >= SyntaxKind.FirstAssignment && parent.operatorToken.kind <= SyntaxKind.LastAssignment)
+            || parent?.kind === SyntaxKind.DeleteExpression
+            || ((parent?.kind === SyntaxKind.PrefixUnaryExpression || parent?.kind === SyntaxKind.PostfixUnaryExpression)
+                && (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken));
+        if (isWrite || !this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE || this.printElementAccessExpressionExceptionIfAny(node)) {
+            return undefined;
+        }
+        const receiver = this.csharpBaseFieldDictionary(node.expression);
+        const key = (receiver === undefined) ? undefined : this.csharpBaseFieldKey(node.argumentExpression, !this.csharpBaseFieldDeclaredDictionary(receiver.name));
+        if (receiver === undefined || key === undefined) {
+            return undefined;
+        }
+        const keyText = (key.kind === 'object') ? `(string)${key.text}` : key.text;
+        // a non-nullable string key is its own proof on a member declared a dictionary; a string? / object key (and any key
+        // through the object member's cast form) may hold null, where ContainsKey throws
+        const keyTest = ((key.kind === 'literal') || ((key.kind === 'string') && this.csharpBaseFieldDeclaredDictionary(receiver.name))) ? '' : ` && ${key.text} != null`;
+        return `(${receiver.field} != null${keyTest} && ${receiver.text}.ContainsKey(${keyText}) ? ${receiver.text}[${keyText}] : null)`;
+    }
+
+    // `key in this.<field>`: inOp's dictionary branch (a non-string key answers false)
+    csharpBaseFieldInExpression(key, obj): string | undefined {
+        const receiver = this.csharpBaseFieldDictionary(obj);
+        const printedKey = (receiver === undefined) ? undefined : this.csharpBaseFieldKey(key, !this.csharpBaseFieldDeclaredDictionary(receiver.name));
+        if (receiver === undefined || printedKey === undefined) {
+            return undefined;
+        }
+        if (printedKey.kind === 'literal') {
+            return `(${receiver.field} != null && ${receiver.text}.ContainsKey(${printedKey.text}))`;
+        }
+        if ((printedKey.kind === 'string') && this.csharpBaseFieldDeclaredDictionary(receiver.name)) {
+            return `(${receiver.field} != null && ${receiver.text}.ContainsKey(${printedKey.text}))`; // a non-nullable string is its own key proof
+        }
+        if (printedKey.kind === 'string?') {
+            return undefined; // a nullable string key keeps the existing nullable-key guard
+        }
+        if (printedKey.kind === 'string') {
+            return `(${receiver.field} != null && ${printedKey.text} != null && ${receiver.text}.ContainsKey(${printedKey.text}))`;
+        }
+        // inOp's dictionary branch answers false for a non-string key: a declaration pattern tests and binds it once
+        // (a bare `is string` on a key a later pass retypes `string` would be CS0183); one name per use in the file
+        const source: any = key.getSourceFile?.();
+        const used = this.csharpBaseFieldKeyNames.get(source) ?? 0;
+        this.csharpBaseFieldKeyNames.set(source, used + 1);
+        const bound = `hx10w3Key${used}`;
+        return `(${receiver.field} != null && ${printedKey.text} is string ${bound} && ${receiver.text}.ContainsKey(${bound}))`;
+    }
+
+    csharpBaseFieldKeyNames = new WeakMap<object, number>();
+
+    // `isEqual (a % b, N)` -> `((a % b) == N)` when both operands are Int64 / Int64? locals: the helper takes the double remainder and converts it back, which is the
+    // integer remainder for every value the type holds in practice, and the lifted `%` / `==` answer false for a
+    // null operand exactly where isEqual does against a non-null integer literal.
+    csharpNativeModLiteralEquality(left, right, isEquality: boolean): string | undefined {
+        const strip = (n) => {
+            while (n?.kind === SyntaxKind.ParenthesizedExpression) {
+                n = n.expression;
+            }
+            return n;
+        };
+        const l = strip(left);
+        const r = strip(right);
+        const modIsLeft = isBinaryExpression(l) && (l.operatorToken.kind === SyntaxKind.PercentToken);
+        const mod = modIsLeft ? l : r;
+        const literal = modIsLeft ? r : l;
+        if (!isBinaryExpression(mod) || (mod.operatorToken.kind !== SyntaxKind.PercentToken) || (this.csharpIntegerLiteralKind(literal) === undefined)) {
+            return undefined;
+        }
+        const int64 = (n) => [ 'Int64', 'Int64?', 'long', 'long?' ].indexOf(this.csharpArithmeticOperandType(n) as string) >= 0;
+        const operand = (n) => isIdentifier(n) && int64(n);
+        const divisor = mod.right;
+        if (!operand(mod.left) || !operand(divisor)) {
+            return undefined; // a literal divisor keeps mod(): the build layer's own mod rules print that one
+        }
+        const arithmetic = `(${this.printNode(mod.left, 0)} % ${this.printNode(divisor, 0)})`;
+        const literalText = this.printNode(literal, 0);
+        return isEquality ? `(${arithmetic} == ${literalText})` : `(${arithmetic} != ${literalText})`;
+    }
+
     // `parseInt(...)` / `parseFloat(...)` print the runtime helper call; the folds below replace
     // it with the exact box the helper returns, everything else falls through to the printer
     printCallExpression(node, identation) {
@@ -3092,6 +3326,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (isPropertyAccessExpression(node) && node.expression?.kind === SyntaxKind.ThisKeyword) {
             const name = node.name?.text as string;
             if (CSHARP_OBJECT_DICT_FIELDS.indexOf(name) >= 0) {
+                if (this.csharpBaseFieldDeclaredDictionary(name)) {
+                    return { text: this.printNode(node, 0), type: 'IDictionary<string, object>' }; // RFM-C2-B: declared, so the cast is an identity
+                }
                 // the field is declared `object`; its box is always a dictionary
                 return { text: `((IDictionary<string, object>)${this.printNode(node, 0)})`, type: 'IDictionary<string, object>' };
             }
@@ -3341,6 +3578,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `key in obj` -> `obj.ContainsKey(key)`, only when both the printed key and the printed
     // operand are already C# string / dictionary values. Every other shape keeps the inOp helper
     csharpNativeInExpression(key, obj): string | undefined {
+        const baseFieldIn = this.csharpBaseFieldInExpression(key, obj); // RFM-C2-B: a declared base field keeps the helper's key null test
+        if (baseFieldIn !== undefined) {
+            return baseFieldIn;
+        }
         const printedKey = this.csharpNativeStringKey(key);
         if (printedKey === undefined) {
             return this.csharpDeclaredDictInExpression(key, obj);
@@ -3664,6 +3905,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                     ?? this.csharpNullLiteralEquality(op, left, right, leftText, rightText)
                     ?? this.printInlineEquality(left, right, leftText, rightText, isEquality)
                     ?? this.csharpNativeScalarFieldEquality(left, right, leftText, rightText, isEquality)
+                    ?? this.csharpNativeModLiteralEquality(left, right, isEquality) // RFM-C2-B
                     ?? this.csharpNativeArithmeticEquality(left, right, leftText, rightText, isEquality)
                     ?? this.csharpNativeElementLiteralEquality(left, right, leftText, rightText, isEquality)
                     ?? this.csharpNativeNumericCallEquality(left, right, leftText, rightText, isEquality);
