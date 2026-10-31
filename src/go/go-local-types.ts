@@ -4462,6 +4462,10 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
     const rightVar = goTranspiler.printNode (node.right, identation);
     if (node.right.kind === ts.SyntaxKind.AwaitExpression) {
         // PanicOnError sees the received Raw before the conversion, as the const receive does
+        const checked = ccxtGoEndpointCheckedRead (goTranspiler, node.right, goType, rightVar);
+        if (checked !== undefined) {
+            return '\n' + goTranspiler.getIden (identation) + leftVar + ' = ' + checked;
+        }
         return '\n' + goTranspiler.getIden (identation) + leftVar + ' = ' + conversion + '(PanicOnError(' + rightVar.trim () + '))';
     }
     const separator = (typeof goTranspiler.goBinarySeparator === 'function')
@@ -6191,6 +6195,29 @@ export function ccxtGoEndpointElement (goTranspiler, call) {
     return element;
 }
 
+// A receive from an implicit endpoint whose declared Go type IS the stub's EndpointResult element
+// reads the carrier's typed view: Fetch2Result fills `Value: endpointValue[T](Raw)`, and
+// endpointValue[T] is MapTyped(Raw) for map[string]any (ListTyped(Raw) for []any), so
+// `MapTyped(PanicOnError((<-this.Stub(..)).Raw))` and `(<-this.Stub(..)).Checked()` read the same
+// map after the same failure check. The element comes from the receiver's own `*_api.go` stub
+// (ccxtGoEndpointElement), never from the stub name alone.
+// A []any receive printed on one line stays on the ListTyped(PanicOnError(..)) spelling that the
+// line-bound `listEp` rewrite in build/ turns into its own holder; only a receive that spans lines
+// (a multi-line argument literal, which that rewrite cannot read) is printed checked here.
+function ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, printed) {
+    const text = (printed ?? '').trim ();
+    if ((awaitNode?.kind !== ts.SyntaxKind.AwaitExpression) || !text.startsWith ('(<-') || !text.endsWith (').Raw')) {
+        return undefined;
+    }
+    if ((goType === '[]any') && (text.indexOf ('\n') < 0)) {
+        return undefined;
+    }
+    if ((goType !== 'map[string]any') && (goType !== '[]any')) {
+        return undefined;
+    }
+    return (ccxtGoEndpointElement (goTranspiler, awaitNode.expression) === goType) ? (text.slice (0, -'.Raw'.length) + '.Checked()') : undefined;
+}
+
 // a typed endpoint local handed as arg 0 to this.parse*/this.safe*/Object.keys: those readers only read
 // members through safe accessors, so an absent/empty body (typed view nil) reads as the raw box did
 const CCXT_GO_ENDPOINT_PARSER_READ = /^(?:parse[A-Z]\w*|safe[A-Z]\w*|addPaginationCursorToResult|indexBy|groupBy)$/;
@@ -6550,7 +6577,10 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
             return undefined;
         }
     }
-    return { goType: goType, wrap: (recv) => conv + '(PanicOnError(' + recv.trim () + '))' };
+    return {
+        goType: goType,
+        wrap: (recv) => ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, recv) ?? (conv + '(PanicOnError(' + recv.trim () + '))'),
+    };
 }
 
 // `var retResN T = ..` + `ch <- retResN`: a nil map/slice would reach the caller as a non-nil
