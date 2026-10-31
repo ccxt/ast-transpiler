@@ -1,10 +1,11 @@
-import { Transpiler } from '../src/transpiler';
+import { Transpiler, installCcxtGoLocalTypes } from '../src/transpiler';
 
 // RF-go-6-C: Go native reads on proven list receivers (moved from ccxt build/hx10w2-G02.ts)
 const SRC = 'type Trade = { id: string };\n'
     + 'class Exchange {\n'
     + '    parseTrades (trades: any[], market: any = undefined): Trade[] { return []; }\n'
     + '    parseThing (x: any): any { return x; }\n'
+    + '    safeList (o: any, k: any, d: any = undefined): any[] { return d; }\n'
     + '    f (p: any): any {\n'
     + '        const trades = this.parseTrades (p);\n'
     + '        const n = trades.length;\n'
@@ -45,6 +46,32 @@ const SRC = 'type Trade = { id: string };\n'
     + '        }\n'
     + '        return out;\n'
     + '    }\n'
+    + '    m (p: any): any {\n'
+    + '        let symbols: string[] = undefined;\n'
+    + '        if (p !== undefined) {\n'
+    + '            symbols = [ p ];\n'
+    + '        }\n'
+    + '        return this.parseThing (symbols);\n'
+    + '    }\n'
+    + '    n (p: any): any {\n'
+    + '        let symbols: string[] = undefined;\n'
+    + '        if (p !== undefined) {\n'
+    + '            symbols = [ p ];\n'
+    + '        }\n'
+    + '        if (symbols === undefined) {\n'
+    + '            return 0;\n'
+    + '        }\n'
+    + '        return this.parseThing (symbols);\n'
+    + '    }\n'
+    + '    q (p: any): any {\n'
+    + '        let a: any[] = undefined;\n'
+    + '        a = [ p ];\n'
+    + '        if (a === undefined) {\n'
+    + '            return 0;\n'
+    + '        }\n'
+    + '        const b = a;\n'
+    + '        return b.length;\n'
+    + '    }\n'
     + '}\n';
 
 const print = (callees: string[]): string => new Transpiler ({ 'verbose': false, 'go': { 'generatedListCallees': callees, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
@@ -74,5 +101,16 @@ describe('RF-go-6-C list reads', () => {
     });
     test('a const length local and an `as string[]` cast keep the proof', () => {
         expect (fn (print ([]), 'K')).toContain ('out = syms[i]');
+    });
+    test('a nil-initialised local whose every write is a list prints []any; a nil compare keeps the box', () => {
+        expect (fn (print ([]), 'M')).toContain ('var symbols []any = nil');
+        expect (fn (print ([]), 'N')).not.toContain ('var symbols []any');
+    });
+    test('an alias of a nil-join list local carries its slice type', () => {
+        const t: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (t.goTranspiler);
+        const q = fn (t.transpileGo (SRC).content, 'Q');
+        expect (q).toContain ('var a []any = nil');
+        expect (q).toContain ('var b []any = a');
     });
 });

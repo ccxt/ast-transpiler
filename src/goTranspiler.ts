@@ -3758,7 +3758,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         this.goNilInitLocalTypeInProgress.add(declaration);
         let result;
         try {
-            result = this.goNilInitLocalTypeScan(declaration) ?? this.goNilInitStringLocalType(declaration);
+            result = this.goNilInitLocalTypeScan(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration);
         } finally {
             this.goNilInitLocalTypeInProgress.delete(declaration);
         }
@@ -3849,6 +3849,62 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         return candidate;
     }
+
+    // ===== RF-go-6-C =====
+    // a nil-initialised local (`let x: List; x = [ a ]`, `let r: Dict | List; r = await this.listEndpoint (...)`)
+    // whose every write prints a Go `[]any` is that slice: `var x []any = nil`. The nil slice reads as
+    // the absent list at every consumer; a read that compares it with undefined/null observes the
+    // box, so it keeps `any`.
+    goNilInitListLocalType(declaration): string | undefined {
+        const name = declaration?.name?.text;
+        const scope = (name === undefined) ? undefined : this.goEnclosingFunction(declaration);
+        if ((scope === undefined) || !this.goNilInitInitializer(declaration.initializer)) {
+            return undefined;
+        }
+        const writes: any[] = [];
+        let rejected = false;
+        const isNilLike = (n: any) => (n?.kind === SyntaxKind.NullKeyword) || (n?.kind === SyntaxKind.UndefinedKeyword)
+            || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+        const visit = (n) => {
+            if (rejected) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
+                const parent: any = n.parent;
+                if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
+                    return;
+                }
+                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left === n)) {
+                    writes.push(parent.right);
+                    return;
+                }
+                if ((parent?.kind === SyntaxKind.BinaryExpression) && this.goAssignmentWritesName(parent.left, name)) {
+                    rejected = true;
+                    return;
+                }
+                if ((parent?.kind === SyntaxKind.BinaryExpression) && ((isNilLike(parent.left) && (parent.right === n)) || (isNilLike(parent.right) && (parent.left === n)))) {
+                    rejected = true; // `x === undefined` observes the box
+                    return;
+                }
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        if (rejected || (writes.length === 0)) {
+            return undefined;
+        }
+        for (const right of writes) {
+            if (this.goTypeOfInitializer(right, this.printNode(right, 0)) !== '[]any') {
+                return undefined;
+            }
+        }
+        if (this.goTypeNameIsShadowed(scope, '[]any') || !this.goLocalIsSafeToType(scope, declaration, name, '[]any')) {
+            return undefined;
+        }
+        return '[]any';
+    }
+    // ===== end RF-go-6-C =====
 
     // GP16: a nil-initialised local whose every write is a proven Go string is a string
     // accumulator (`let x: Str = undefined` + `x += …`). It prints `var x string`, so the

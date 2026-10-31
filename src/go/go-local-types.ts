@@ -6956,6 +6956,10 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         if (known !== undefined) {
             return known;
         }
+        // RF-go-6-C: `const y = x` over a nil-declared local the container join typed `[]any` holds that slice
+        if ((initializer?.kind === ts.SyntaxKind.Identifier) && (ccxtGoNilJoinDeclarationType (this, initializer) === '[]any')) {
+            return '[]any';
+        }
         const alias = aliasExchangeReceiver (this, printedValue);
         if (alias !== undefined) {
             // the printer's own table decides first (Milliseconds, Extend, IndexBy,
