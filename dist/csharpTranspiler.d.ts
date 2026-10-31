@@ -48,6 +48,14 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalResolverType(node: any): string | undefined;
     csharpDeclaredLocalResolverRowRead(expression: any, argumentExpression: any): string | undefined;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
+    csharpNullableStateField(node: any): {
+        text: string;
+        type: string;
+    } | undefined;
+    csharpNullableStateRead(state: {
+        text: string;
+        type: string;
+    }, argumentExpression: any, isStringKey: boolean, isNumberKey: boolean): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
     csharpProvenDictionaryRead(node: any, expression: any, argumentExpression: any, isStringKey: any): string | undefined;
@@ -142,6 +150,15 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpMinMaxResultIsPlainValue(node: any): boolean;
+    csharpDeclaredDictMemberReads: WeakSet<Node>;
+    csharpDeclaredDictMember(node: any): {
+        getter?: string;
+    } | undefined;
+    csharpIsDeclaredDictMemberRead(node: any): boolean;
+    csharpDeclaredDictMemberReceiverIsParameter(member: any): boolean;
+    csharpDeclaredDictMemberKey(key: any): string | undefined;
+    csharpDeclaredDictMemberElementRead(node: any): string | undefined;
+    csharpDeclaredDictMemberCall(node: any): string | undefined;
     printCallExpression(node: any, identation: any): any;
     csharpNativeParseCall(node: any): string;
     csharpCalleeIsGlobalFunction(node: any): boolean;

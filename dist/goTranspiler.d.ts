@@ -488,7 +488,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSkipQuoted(text: string, start: number): number;
     printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
+    goStatement: any;
     goFileStdlibImports: Set<string>;
+    goPrintedFileStdlibImports: string[];
     printSourceFileStatements(node: any, identation: any): string;
     goBinaryMemoized<T>(node: any, key: string, compute: () => T): T;
     goBinaryContextKey(): string;
@@ -609,6 +611,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goUnwrapPrintedAssertions(node: any): any;
     goNativeStringCallOr(node: any, texts: string[], expected: string[], nativeCall: (ops: string[]) => string, helperCall: string, unwrapReceiver?: boolean): string;
     goBaseFileStdlibImportSeamPaths: RegExp | undefined;
+    goExcisedSpanMarkers: [string, string] | undefined;
+    goExcisedSpans: WeakMap<object, [number, number][]>;
+    goInsideExcisedSpan(): boolean;
     goStdlibImportIsPlaceable(): boolean;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
