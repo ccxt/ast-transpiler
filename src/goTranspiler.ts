@@ -385,6 +385,10 @@ const GO_NON_NIL_DEFAULT_KINDS = [
     SyntaxKind.NumericLiteral, SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword,
 ];
 
+// the String methods the printer answers natively on a proven Go string (strings.* / len)
+const GO_STRING_METHOD_NAMES = [ 'split', 'replace', 'replaceAll', 'startsWith', 'endsWith', 'toUpperCase', 'toLowerCase',
+    'indexOf', 'length', 'trim', 'padStart', 'padEnd', 'toString' ];
+
 // the operators that write their left operand: an assignment through any of them may
 // store a nil pointer where the deref proof expected the defaulted call's result
 const GO_WRITE_OPERATOR_KINDS = [
@@ -2607,6 +2611,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         const goType = this.goDeclaredTypeOfIdentifier(left);
+        if ((goType === 'string') && this.goLiteralDefaultStringWrite(left, right)) {
+            return `${this.printNode(left, 0)} = *${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}`;
+        }
         if ((goType === undefined) || (this.goPointerWriteConversion(right, goType) !== 'wrap')) {
             return undefined;
         }
@@ -4846,7 +4853,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return 'any';
         }
         const scope = this.goEnclosingFunction(declaration);
-        if (this.goAnnotatedStringLocal(declaration, goType, scope, sourceName)) {
+        if (this.goAnnotatedStringLocal(declaration, goType, scope, sourceName) || this.goLiteralDefaultStringLocal(declaration, goType, scope, sourceName)) {
             return 'string';
         }
         // outside any nested resolution the verdict depends only on (declaration, goType)
@@ -4880,6 +4887,148 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         return !this.goTypeNameIsShadowed(scope, 'string') && this.goLocalIsSafeToType(scope, declaration, name, 'string')
             && !this.goAnnotatedStringLocalHasNilShapedRead(scope, declaration, name);
+    }
+
+    // `const x = this.safeString (o, k, 'lit')`: the call returns a fresh non-nil pointer, so a local
+    // that is never rebound and is only read as a string consumer, a literal comparison or a concat
+    // operand, and written only with a literal or such a call, is a plain Go `string`.
+    goLiteralDefaultStringLocal(declaration, goType: string, scope, name: string): boolean {
+        if ((goType !== '*string') || (scope === undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return false;
+        }
+        if (this.goLiteralDefaultStringLocalCache.has(declaration)) {
+            return this.goLiteralDefaultStringLocalCache.get(declaration);
+        }
+        const verdict = !this.goTypeNameIsShadowed(scope, 'string')
+            && this.goLiteralDefaultStringCall(declaration.initializer, undefined)
+            && this.goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name);
+        this.goLiteralDefaultStringLocalCache.set(declaration, verdict);
+        return verdict;
+    }
+    goLiteralDefaultStringLocalCache = new WeakMap<object, boolean>();
+
+    // `this.safeString (o, k, 'lit')` (or the Lower/Upper twin): exactly three arguments, the last a
+    // string literal (or, for a rewrite of `name`, the local itself)
+    goLiteralDefaultStringCall(node, name: string | undefined): boolean {
+        let call: any = node;
+        while ((call?.kind === SyntaxKind.ParenthesizedExpression) || (call?.kind === SyntaxKind.AsExpression)
+            || (call?.kind === SyntaxKind.NonNullExpression)) {
+            call = call.expression;
+        }
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 3)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+            || ['safeString', 'safeStringLower', 'safeStringUpper'].indexOf(call.expression.name?.text) < 0) {
+            return false;
+        }
+        const last: any = call.arguments[2];
+        return (last?.kind === SyntaxKind.StringLiteral) || (last?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+            || ((name !== undefined) && (last?.kind === SyntaxKind.Identifier) && (last.text === name));
+    }
+
+    goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name: string): boolean {
+        let safe = true;
+        const visit = (n: any) => {
+            if (!safe) {
+                return;
+            }
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                n.forEachChild(visit);
+                return;
+            }
+            const parent: any = n.parent;
+            if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+                || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
+                return; // a member name, not the local
+            }
+            // a second binding of the name makes the scan ambiguous
+            if (((parent?.kind === SyntaxKind.VariableDeclaration) || (parent?.kind === SyntaxKind.Parameter)
+                || (parent?.kind === SyntaxKind.BindingElement)) && (parent.name === n)) {
+                safe = false;
+                return;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
+                const right: any = parent.right;
+                safe = (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+                    && ((right?.kind === SyntaxKind.StringLiteral) || this.goLiteralDefaultStringCall(right, name));
+                return;
+            }
+            safe = this.goLiteralDefaultStringLocalReadIsSafe(n);
+        };
+        scope.forEachChild(visit);
+        return safe;
+    }
+
+    // a read the printer answers with the same Go value whether the local is `*string` or `string`
+    goLiteralDefaultStringLocalReadIsSafe(node): boolean {
+        let current: any = node;
+        let parent: any = current.parent;
+        while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || (parent?.kind === SyntaxKind.AsExpression)
+            || (parent?.kind === SyntaxKind.NonNullExpression)) {
+            current = parent;
+            parent = parent.parent;
+        }
+        // the default slot of the local's own `x = this.safeString (o, k, x)` write
+        if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[2] === current)
+            && this.goLiteralDefaultStringCall(parent, node.text)) {
+            const write: any = parent.parent;
+            return (write?.kind === SyntaxKind.BinaryExpression) && (write.right === parent)
+                && (write.operatorToken?.kind === SyntaxKind.EqualsToken) && (write.left?.text === node.text);
+        }
+        switch (parent?.kind) {
+        case SyntaxKind.BinaryExpression: {
+            const operator = parent.operatorToken?.kind;
+            if (operator === SyntaxKind.PlusToken) {
+                return true;
+            }
+            if (operator === SyntaxKind.InKeyword) {
+                return parent.left === current;
+            }
+            if ((operator === SyntaxKind.EqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsToken)
+                || (operator === SyntaxKind.EqualsEqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                const other: any = (parent.left === current) ? parent.right : parent.left;
+                return (other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+            }
+            return false;
+        }
+        case SyntaxKind.PropertyAccessExpression:
+            return (parent.expression === current) && (GO_STRING_METHOD_NAMES.indexOf(parent.name?.text) >= 0);
+        case SyntaxKind.ElementAccessExpression:
+            return parent.argumentExpression === current;
+        case SyntaxKind.CallExpression:
+            return this.goLiteralDefaultStringCallArgument(parent, current);
+        }
+        return false;
+    }
+
+    // an argument the callee takes as a Go `string` (its printed parameter), or a runtime accessor that
+    // derefs its `any` arguments: the string passes where the pointer did
+    goLiteralDefaultStringCallArgument(call, argument): boolean {
+        const index = call.arguments?.indexOf(argument) ?? -1;
+        if (index < 0) {
+            return false;
+        }
+        const name = this.goAstCalleeName(call);
+        if ((name !== undefined) && GO_NIL_INIT_ANY_ARG_CALLEES.has(name) && !(name.startsWith('this.Safe') && (index === call.arguments.length - 1) && (call.arguments.length > 2))) {
+            return true;
+        }
+        // read from the declaration only: printing the callee's parameters from inside this scan would
+        // resolve this very local while its type is still open
+        try {
+            const declaration: any = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+            const parameter: any = declaration?.parameters?.[index];
+            return (parameter?.kind === SyntaxKind.Parameter) && (parameter.type?.kind === SyntaxKind.StringKeyword)
+                && (parameter.initializer === undefined) && (parameter.questionToken === undefined) && (parameter.dotDotDotToken === undefined);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // `x = this.safeString (o, k, x)` on a local the rule above typed `string`: the call's deref
+    goLiteralDefaultStringWrite(left, right): boolean {
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
+        return (decl?.kind === SyntaxKind.VariableDeclaration) && this.goLiteralDefaultStringLocalCache.get(decl) === true
+            && this.goLiteralDefaultStringCall(right, left.text);
     }
 
     // a read a Go string cannot serve natively: a nil comparison (boxes into IsEqual) or a copy
