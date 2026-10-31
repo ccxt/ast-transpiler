@@ -266,6 +266,15 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaOhlcvsFreshAnchor(statement: any, symbol: any): boolean;
     javaOhlcvsDisturbed(statement: any, symbol: any): boolean;
     javaWsClientMapField(expression: any): string | undefined;
+    javaWsClientDeclaredMapField(expression: any): string | undefined;
+    javaWsClientTypedMapField(expression: any): string | undefined;
+    javaWsClientUntypedMapField(expression: any): string | undefined;
+    javaWsClientFieldMapType(field: string): string;
+    javaWsClientAliasLocalType(declaration: any): string | undefined;
+    javaWsClientMapReceiverField(expression: any): string | undefined;
+    javaWsClientReceiverIsAny(expression: any): boolean;
+    javaWsClientMapReceiver(expression: any): boolean;
+    javaWsClientObjectMapReceiver(expression: any): boolean;
     javaWsClientMapReadText(receiver: any, key: any): string | undefined;
     javaWsClientMapRead(node: any): string | undefined;
     javaWsClientLocalType(declaration: any): string | undefined;
