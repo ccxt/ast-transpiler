@@ -881,6 +881,10 @@ export class GoTranspiler extends BaseTranspiler {
         this.uncalledStringParams = config['uncalledStringParams'] ?? {};
         this.stringPointerTupleCalls = config['stringPointerTupleCalls'] ?? [];
         this.siblingStringPassthroughPattern = (typeof config['siblingStringPassthroughPattern'] === 'string') ? new RegExp(config['siblingStringPassthroughPattern']) : undefined;
+        // consumer tables for the stdlib import placement (goStdlibImportIsPlaceable): the source paths
+        // whose writer declares its own imports, and the comment markers of the spans a writer cuts out
+        this.goBaseFileStdlibImportSeamPaths = config['baseFileStdlibImportSeamPaths'] !== undefined ? new RegExp(config['baseFileStdlibImportSeamPaths']) : undefined;
+        this.goExcisedSpanMarkers = config['excisedSpanMarkers'];
     }
 
     initConfig() {
@@ -8003,10 +8007,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // relative to it (go/printer), whatever level the expression printers hand down
     goStatementLevel = 0;
 
+    // the innermost statement being printed (undefined outside any statement)
+    goStatement: any = undefined;
+
     // stdlib packages this file's native emissions call; printSourceFileStatements turns them
     // into the import declarations the emitted Go needs (an occurrence outside a file print,
     // e.g. the intellisense body, only marks a set that the next file print replaces)
     goFileStdlibImports = new Set<string>();
+
+    // the packages of the source file printed last, sorted (what printSourceFileStatements put in
+    // its leading import clause): a consumer that splices the printed body into a file it assembles
+    // itself declares exactly these instead of scanning the text for `pkg.Name(`
+    goPrintedFileStdlibImports: string[] = [];
 
     // gofmt separates a top-level declaration that carries a comment from the previous
     // declaration by a blank line (go/printer declList: min = 2 when the decl has a doc
@@ -8022,6 +8034,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         } finally {
             this.goFileStdlibImports = outerImports;
         }
+        this.goPrintedFileStdlibImports = [...fileImports].sort();
         if (fileImports.size === 0) {
             return body;
         }
@@ -8073,8 +8086,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const isStatement = node !== undefined && isStatementNode(node) && node.kind !== SyntaxKind.Block;
         const previousLevel = this.goStatementLevel;
+        const previousStatement = this.goStatement;
         if (isStatement) {
             this.goStatementLevel = identation;
+            this.goStatement = node;
         }
         try {
             const printed = super.printNode(node, identation);
@@ -8083,6 +8098,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return this.goControlClauseParens(node, printed);
         } finally {
             this.goStatementLevel = previousLevel;
+            this.goStatement = previousStatement;
         }
     }
 
@@ -10224,7 +10240,7 @@ ${this.getIden(identation)}${returnStatement}`;
         if (name.includes('\n') || parsedArg.includes('\n')) {
             return undefined;
         }
-        if (!this.goFileKeepsFileLevelImports()) {
+        if (!this.goFileKeepsFileLevelImports() || this.goInsideExcisedSpan()) {
             return undefined;
         }
         const receiver = this.goUnwrapPrintedAssertions(node?.expression?.expression);
@@ -10314,7 +10330,44 @@ ${this.getIden(identation)}${returnStatement}`;
     // build sets the source paths here), so only those files may emit a stdlib call.
     goBaseFileStdlibImportSeamPaths: RegExp | undefined = undefined;
 
+    // A consumer writer may cut every `START ... END` comment-marker span out of the printed Go
+    // (config excisedSpanMarkers; the END comment is printed as the leading comment of the next statement; one that ends its
+    // block is not printed, and then nothing is cut). A native stdlib call printed inside a cut
+    // span would leave an import nothing uses, so a statement in the span keeps the helper call.
+    goExcisedSpanMarkers: [string, string] | undefined = undefined;
+    goExcisedSpans = new WeakMap<object, [number, number][]>();
+
+    goInsideExcisedSpan(): boolean {
+        const markers = this.goExcisedSpanMarkers;
+        const src: any = this.getSrc();
+        if ((markers === undefined) || (src === undefined) || (this.goStatement === undefined)) {
+            return false;
+        }
+        let spans = this.goExcisedSpans.get(src);
+        if (spans === undefined) {
+            spans = [];
+            const text: string = src.getFullText();
+            for (let from = text.indexOf(markers[0]); from >= 0;) {
+                const to = text.indexOf(markers[1], from);
+                if (to < 0) {
+                    break;
+                }
+                const next = text.slice(text.indexOf('\n', to) + 1).trimStart()[0];
+                if ((next !== undefined) && (next !== '}')) {
+                    spans.push([from, to]);
+                }
+                from = text.indexOf(markers[0], to);
+            }
+            this.goExcisedSpans.set(src, spans);
+        }
+        const start = this.goStatement.getStart();
+        return spans.some(([from, to]) => (start >= from) && (start < to));
+    }
+
     goStdlibImportIsPlaceable(): boolean {
+        if (this.goInsideExcisedSpan()) {
+            return false;
+        }
         if (this.goFileKeepsFileLevelImports()) {
             return true;
         }

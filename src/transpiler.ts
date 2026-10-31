@@ -517,6 +517,7 @@ export default class Transpiler {
         }
 
         let transpiledContent = undefined;
+        let stdlibImports = undefined;
         switch(lang) {
         case Languages.Python:
             this.pythonTranspiler.asyncTranspiling = !sync;
@@ -535,6 +536,7 @@ export default class Transpiler {
             // gofmt aligns trailing `//` comments through its tabwriter; the printer has to do
             // that itself so the emitted Go is already gofmt-clean (see alignGoTrailingComments)
             transpiledContent = alignGoTrailingComments (this.goTranspiler.printNode(src, -1));
+            stdlibImports = this.goTranspiler.goPrintedFileStdlibImports;
             break;
         case Languages.Java:
             transpiledContent = this.javaTranspiler.printNode(src, -1);
@@ -566,7 +568,8 @@ export default class Transpiler {
             content: transpiledContent,
             imports,
             exports,
-            methodsTypes
+            methodsTypes,
+            stdlibImports
         };
     }
 

@@ -57,6 +57,8 @@ interface ITranspiledFile {
     imports: IFileImport[];
     exports: IFileExport[];
     methodsTypes?: IMethodType[];
+    // Go only: the stdlib packages the printed file's native emissions call (sorted)
+    stdlibImports?: string[];
 }
 
 enum Languages {

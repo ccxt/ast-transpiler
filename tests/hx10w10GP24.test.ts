@@ -163,3 +163,59 @@ describe('hx10w10 GP24 printToStringCall native arms', () => {
         }
     });
 });
+
+// hx11 RFM-G1 GP24: the printer answers which stdlib packages a file's native emissions call, so a
+// writer that splices the printed body into a file it assembles declares exactly those
+// (ITranspiledFile.stdlibImports), and a span the writer cuts out never records an import.
+describe('hx11 GP24 stdlib imports the printer recorded', () => {
+    const SRC =
+        'type Dict = { [key: string]: any };\n' +
+        'export class Exchange {\n' +
+        '    total (xs: any[]): string {\n' +
+        '        const n = xs.length;\n' +
+        '        const s: string = \'a-b\';\n' +
+        '        const ids = s.split (\'-\');\n' +
+        '        const text = ids.join (\',\');\n' +
+        '        // @SKIP_START_GO\n' +
+        '        const m = xs.length;\n' +
+        '        const skipped = m.toString ();\n' +
+        '        // @SKIP_END_GO\n' +
+        '        const rest = xs.length;\n' +
+        '        return n.toString () + text + rest.toString ();\n' +
+        '    }\n' +
+        '}\n';
+    const run = (config: any) => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hx11-GP24-'));
+        try {
+            const src = path.join(tmp, 'ts', 'src', 'base');
+            fs.mkdirSync(src, { recursive: true });
+            const file = path.join(src, 'Exchange.ts');
+            fs.writeFileSync(file, SRC);
+            return new Transpiler({ 'verbose': false, 'go': Object.assign({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, config) }).transpileGoByPath(file);
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+
+    test('the transpiled file lists the packages its native calls need, sorted', () => {
+        const res = run({ 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$' });
+        expect(res.stdlibImports).toEqual(['strconv', 'strings']);
+        expect(res.content).toContain('strconv.Itoa(n)');
+        expect(res.content).toContain('strings.Join(ids, ",")');
+    });
+
+    test('a file the writer does not declare imports for lists none and keeps the helper', () => {
+        const res = run({});
+        expect(res.stdlibImports).toEqual([]);
+        expect(res.content).toContain('ToString(n)');
+    });
+
+    test('a statement inside a cut span keeps the helper call and records no import for it', () => {
+        const markers = run({ 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$', 'excisedSpanMarkers': ['@SKIP_START_GO', '@SKIP_END_GO'] });
+        expect(markers.content).toContain('ToString(m)');
+        expect(markers.content).not.toContain('strconv.Itoa(m)');
+        expect(markers.content).toContain('strconv.Itoa(rest)');
+        const plain = run({ 'baseFileStdlibImportSeamPaths': 'base/Exchange\\.ts$' });
+        expect(plain.content).toContain('strconv.Itoa(m)');
+    });
+});
