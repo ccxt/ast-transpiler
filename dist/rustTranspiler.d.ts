@@ -647,6 +647,69 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  the ccxt clone-pruning passes; the parenthesised `match` keeps the
      *  driver's `};` trailing-block replacement off the statement's `;`. */
     rustProHandlerShadowReadText(kind: string, key: string, dflt: string): string;
+    private rustDictPhase;
+    private rustDictSites;
+    private rustDictDecisions;
+    private rustDictOwnerDepth;
+    private rustDictHoistHosts;
+    /** Base `Exchange` fields that hold plain, tag-free runtime state (never a cache/book marker). */
+    static readonly RUST_DICT_FIELDS: Set<string>;
+    /** Fields whose values are themselves Dicts (cache containers / client handles). */
+    static readonly RUST_DICT_VALUE_FIELDS: Set<string>;
+    static readonly RUST_DICT_TAGGED_ENTRY_FIELDS: Set<string>;
+    static readonly RUST_DICT_MARKER_KEYS: RegExp;
+    /** Base callees that only ever return a Dict (the content may still carry a marker). */
+    static readonly RUST_DICT_CALLEES: Set<string>;
+    /** Name of the base-Exchange runtime-state field behind `this.<name>`, else undefined. */
+    rustDictField(node: Node): string | undefined;
+    /** One dict-read site. `free` = closure-free text, `closure` = closure text, `helper` = the helper call;
+     *  `guarded` = the helper form is kept when the closure would push the line over 400 chars. */
+    rustDictSite(site: {
+        free?: string;
+        closure: string;
+        helper?: string;
+        guarded?: boolean;
+    }): string;
+    /** Dict read keyed by a Str place: closure-free when both operands are side-effect-free places. */
+    rustDictRead(recv: string, key: string, node: Node, guarded?: boolean): string;
+    /** `K.as_str().and_then(|__k| D.get(__k))` on a shadowed parameter map. */
+    rustShadowKeyRead(shadow: string, key: string, node: Node): string;
+    /** `K.as_str().map(|__k| D.contains_key(__k)).unwrap_or(false)` on a shadowed parameter map. */
+    rustShadowKeyHas(shadow: string, key: string, node: Node): string;
+    /** Key text a dict read can take as `K.as_str()`: any printed place/expression that is not a boxed literal. */
+    rustDictKeyText(keyNode: Node): string | undefined;
+    /** `this.<field>[k]` with a non-literal key: the runtime reads the key as a Str and yields
+     *  Null for anything else, which is `K.as_str()`; the field container is never tagged. */
+    rustFieldDynamicRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    /** A local whose declaration and every write pin a Dict. 'plain': fresh object literals and nullish only
+     *  (never tagged by the runtime); 'dicty': also dict-only base callees (content unproven). */
+    rustDictLocalProof(ident: Node): 'plain' | 'dicty' | undefined;
+    /** 'plain' for a fresh object literal (or nullish when `allowNullish`), 'dicty' for a dict-only base callee. */
+    rustDictSource(node: any, allowNullish: boolean): 'plain' | 'dicty' | undefined;
+    /** `X[k]` on a proven local with a non-literal key. */
+    rustLocalDictRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    /** `X['k']` on a proven local, for a key the runtime does not route to a marker store. */
+    rustLocalDictLiteralRead(receiverText: string, receiverNode: Node, keyText: string): string | undefined;
+    /** `k in D` on a base-field / field-container map or a proven local: `in_op`'s Dict arm. */
+    rustDictInOp(key: Node, obj: Node): string | undefined;
+    /** `this.F['k1']['k2'] = v` as a statement on a base runtime-state field: the first hop is the map's own
+     *  `entry`, the write below it an `insert`; a value that reads `self` keeps the helper pair. */
+    rustFieldNestedInsert(node: Node, baseExpr: any, keys: any[], keyStrs: string[], rhs: string): string | undefined;
+    /** `x[k] = f(x[k])`: the read sits in the value of an assignment the printer writes as a native
+     *  insert (which binds the value first, `{ let __be_tmp = ..; insert }`), so the position rule that
+     *  protects the helper-form write passes does not apply to it. */
+    rustDictReadInNativeInsert(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
+    /** Characters the ccxt clone passes add to a printed line afterwards: every bare local passed by value in a
+     *  call or array-literal argument slot gets a `.clone()` (`autoCloneCallArgs` / `cloneInArrayLiterals`). */
+    rustDictCloneGrowth(line: string): number;
+    /** `this.<field>['k'].length`: a read-only use of a literal-key read off a base runtime-state field. */
+    rustFieldLengthRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
+    /** Statement-like nodes whose finished lines the 400-char budget is measured on. */
+    private rustDictIsOwner;
+    printNode(node: any, identation?: number): string;
+    /** Print a statement; when a finished line of it passes 400 chars, decide each dict site against the
+     *  line it sits on (the budget the closure-free / closure / helper forms are chosen under). */
+    private rustDictPrintOwner;
     printNativeMapAccess(receiverText: string, receiverNode: Node, keyText: string): string | undefined;
     /** Keys `get_value(_k)` serves from the book store, a cache bucket or a
      *  live `__live_id` snapshot instead of from the dict itself: those routes
@@ -686,7 +749,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
      *  matching their text; the native form is invisible to them, so it is only
      *  emitted where no such hoist is needed. */
-    isNativeAccessPositionSafe(node: Node): boolean;
+    isNativeAccessPositionSafe(node: Node, ignoreAssign?: Node): boolean;
     /** `(x.k as T).push(..)`: the cast wrapper hides the push receiver from the position check. */
     isCastOrParenOperand(node: Node): boolean;
     /** Receiver shapes whose printed text is a single `Value` place (`x`, `this.x`). */

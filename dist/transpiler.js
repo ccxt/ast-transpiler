@@ -19169,10 +19169,10 @@ ${indent}}`);
     if (node?.kind === SyntaxKind5.BinaryExpression && GO_ARITHMETIC_KINDS.indexOf(node.operatorToken.kind) >= 0) {
       return this.goPrintBinaryMemoized(node, identation);
     }
-    const isStatement4 = node !== void 0 && isStatementNode(node) && node.kind !== SyntaxKind5.Block;
+    const isStatement3 = node !== void 0 && isStatementNode(node) && node.kind !== SyntaxKind5.Block;
     const previousLevel = this.goStatementLevel;
     const previousStatement = this.goStatement;
-    if (isStatement4) {
+    if (isStatement3) {
       this.goStatementLevel = identation;
       this.goStatement = node;
     }
@@ -33291,6 +33291,15 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
      *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
     // call node -> resolved signature's declaration (null: none); a handle resolve per call is JS-heavy
     this.rustCallDeclarations = /* @__PURE__ */ new WeakMap();
+    // ── FM-RS1 L1: closure-free dict reads / membership (formerly ccxt nativeDictKeyRead + R08) ──
+    // A read keyed by a Str place prints `(if let (Some(__m), Some(__k)) = (M.as_map(), K.as_str()) { .. })`;
+    // `k in D` on a proven Dict prints `D.as_map().is_some_and(..)`. Each site picks its form from the
+    // statement's finished line length (400-char budget): helper call, closure, or closure-free.
+    this.rustDictPhase = "normal";
+    this.rustDictSites = [];
+    this.rustDictDecisions = [];
+    this.rustDictOwnerDepth = 0;
+    this.rustDictHoistHosts = /* @__PURE__ */ new Set();
     // ── `i64` loop counters ───────────────────────────────────────────────────
     // A proven `Value::Int` counter bounded by `i < <place>.length` whose every other use is a list
     // index read or a boxed argument/initializer is a plain `i64`: reads become `.get(i as usize)`,
@@ -34668,15 +34677,19 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       for (const key of keyStrs.slice(0, -1))
         acc = `get_value_mut(${acc}, &${key})`;
       const rhs = this.printNode(right, 0);
-      const helperWrite = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+      const helperCall = `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+      const helperWrite = this.rustDictHoistHosts.has(node) ? `{ let __be_tmp = ${rhs}; add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, __be_tmp); }` : helperCall;
       const nestedInsert = keyStrs.length === 2 ? this.rustNestedBearerInsert(baseExpr, keys[0], keyStrs[0], keys[1], keyStrs[1], rhs) ?? this.rp05NestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite) : this.rp05NestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite) ?? this.rustNestedBearerBucket(baseExpr, keys[0], keyStrs[0], right);
       if (nestedInsert !== void 0)
         return nestedInsert;
+      const fieldNested = this.rustFieldNestedInsert(node, baseExpr, keys, keyStrs, rhs);
+      if (fieldNested !== void 0)
+        return fieldNested;
       const bearerChain = keyStrs.length > 1 ? this.rustBearerChainedWrite(baseExpr, keys, keyStrs, rhs) : void 0;
       if (bearerChain !== void 0)
         return bearerChain;
       const nativeInsert = keyStrs.length === 1 ? this.rustBearerDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustMapParamDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeBookMetaWrite(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustR01NativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) : void 0;
-      return nativeInsert ?? `add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${rhs})`;
+      return nativeInsert ?? helperWrite;
     }
     if (isAssign && isIdentifier3(left) && this.rustDictBearerDeclaration(left) !== void 0 && this.rustR01BearerPlainLiteral(right)) {
       return `${this.printNode(left, 0)} = (${this.rustObjectLiteralBlock(this.rustSkipWrappers(right), identation)})`;
@@ -34699,7 +34712,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (op === SyntaxKind7.InKeyword) {
       const shadow = this.rustParamShadowOf(right);
-      return (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.r04BearerInOp(left, right) ?? this.printNativeInOperator(left, right) ?? this.r18LiteralInOp(left, right) ?? this.r05InOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
+      return (shadow !== void 0 ? this.printShadowInOperator(shadow, left) : void 0) ?? this.r04BearerInOp(left, right) ?? this.printNativeInOperator(left, right) ?? this.r18LiteralInOp(left, right) ?? this.r05InOp(left, right) ?? this.rustDictInOp(left, right) ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
     }
     if ((op === SyntaxKind7.PlusEqualsToken || op === SyntaxKind7.MinusEqualsToken) && left.kind !== SyntaxKind7.ElementAccessExpression) {
       const isPlus = op === SyntaxKind7.PlusEqualsToken;
@@ -36655,7 +36668,7 @@ ${classMethods}
       const bookField = this.printNativeBookFieldRead(receiverText, receiverNode, keyNode.text);
       if (bookField !== void 0)
         return bookField;
-      return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text);
+      return this.printNativeMapAccess(receiverText, receiverNode, keyNode.text) ?? this.rustLocalDictLiteralRead(receiverText, receiverNode, keyNode.text);
     }
     if (isNumericLiteral4(keyNode)) {
       const index = Number(keyNode.text);
@@ -36668,7 +36681,7 @@ ${classMethods}
         return void 0;
       return this.printNativeListIndex(receiverText, index, receiverNode);
     }
-    const dictRead = this.rustBearerDictDynamicRead(receiverText, receiverNode, keyNode) ?? this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.rustR10DynamicRead(receiverText, receiverNode, keyNode);
+    const dictRead = this.rustBearerDictDynamicRead(receiverText, receiverNode, keyNode) ?? this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.rustR10DynamicRead(receiverText, receiverNode, keyNode) ?? this.rustFieldDynamicRead(receiverText, receiverNode, keyNode) ?? this.rustLocalDictRead(receiverText, receiverNode, keyNode);
     if (dictRead !== void 0)
       return dictRead;
     return this.printNativeDynamicListIndex(receiverText, receiverNode, keyNode) ?? this.r14ListArithIndex(receiverText, receiverNode, keyNode);
@@ -36839,7 +36852,7 @@ ${classMethods}
       return void 0;
     if (this.rustNodeIsKeyUnsafePlace(keyText))
       return void 0;
-    return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+    return this.rustDictRead(receiverText, keyText, receiverNode);
   }
   /** Keys `get_value` serves from the book store / cache bucket / live
    *  snapshot instead of the dict itself — a dynamic read cannot prove the
@@ -37093,7 +37106,7 @@ ${classMethods}
       const k = this.rustShadowMapKey(key);
       if (k === void 0)
         return void 0;
-      return k.literal !== void 0 ? `${shadow.name}.get("${k.literal}").cloned().unwrap_or(Value::Null)` : `${k.place}.as_str().and_then(|__k| ${shadow.name}.get(__k)).cloned().unwrap_or(Value::Null)`;
+      return k.literal !== void 0 ? `${shadow.name}.get("${k.literal}").cloned().unwrap_or(Value::Null)` : this.rustShadowKeyRead(shadow.name, k.place, keyNode);
     }
     if (isNumericLiteral4(key)) {
       const index = Number(key.text);
@@ -37115,7 +37128,7 @@ ${classMethods}
     const k = this.rustShadowMapKey(keyNode);
     if (k === void 0)
       return void 0;
-    return k.literal !== void 0 ? `Value::Bool(${shadow.name}.contains_key("${k.literal}"))` : `Value::Bool(${k.place}.as_str().map(|__k| ${shadow.name}.contains_key(__k)).unwrap_or(false))`;
+    return k.literal !== void 0 ? `Value::Bool(${shadow.name}.contains_key("${k.literal}"))` : `Value::Bool(${this.rustShadowKeyHas(shadow.name, k.place, keyNode)})`;
   }
   /** A shadow dict key: an inlinable literal, or a proven-string plain place. */
   rustShadowMapKey(key) {
@@ -37332,6 +37345,384 @@ ${ind}let ${view}: &${map} = &${arc};
     }
     return void 0;
   }
+  /** Name of the base-Exchange runtime-state field behind `this.<name>`, else undefined. */
+  rustDictField(node) {
+    const n = this.rustSkipWrappers(node);
+    if (n === void 0 || !isPropertyAccessExpression3(n) || n.expression.kind !== SyntaxKind7.ThisKeyword)
+      return void 0;
+    const name = String(n.name.text);
+    if (!_RustTranspiler.RUST_DICT_FIELDS.has(name))
+      return void 0;
+    let declaration;
+    try {
+      declaration = symbolValueDeclaration(this.getChecker().getSymbolAtLocation(n.name));
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration === void 0 || declaration.kind !== SyntaxKind7.PropertyDeclaration)
+      return void 0;
+    return /ts[\\/]src[\\/]base[\\/](?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(String(declaration.getSourceFile().fileName)) ? name : void 0;
+  }
+  /** One dict-read site. `free` = closure-free text, `closure` = closure text, `helper` = the helper call;
+   *  `guarded` = the helper form is kept when the closure would push the line over 400 chars. */
+  rustDictSite(site) {
+    const k = this.rustDictSites.length;
+    const guarded = site.guarded === true && site.helper !== void 0;
+    this.rustDictSites.push({
+      guarded,
+      free: site.free !== void 0,
+      fc: site.free !== void 0 ? site.free.length - site.closure.length : 0,
+      ch: guarded ? site.closure.length - site.helper.length : 0
+    });
+    if (this.rustDictPhase === "probe")
+      return `${k}${guarded ? site.helper : site.closure}`;
+    if (this.rustDictPhase === "final") {
+      const d = this.rustDictDecisions[k];
+      if (d === "helper" && site.helper !== void 0)
+        return site.helper;
+      if (d === "closure" || site.free === void 0)
+        return site.closure;
+      return site.free;
+    }
+    return site.free ?? site.closure;
+  }
+  /** Dict read keyed by a Str place: closure-free when both operands are side-effect-free places. */
+  rustDictRead(recv, key, node, guarded = false) {
+    const free = RUST_PLAIN_PLACE.test(recv) && RUST_PLAIN_PLACE.test(key) && !this.r05IsTest(node) ? `(if let (Some(__m), Some(__k)) = (${recv}.as_map(), ${key}.as_str()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })` : void 0;
+    return this.rustDictSite({
+      free,
+      guarded,
+      helper: `get_value(&${recv}, &${key})`,
+      closure: `${recv}.as_map().and_then(|__m| ${key}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`
+    });
+  }
+  /** `K.as_str().and_then(|__k| D.get(__k))` on a shadowed parameter map. */
+  rustShadowKeyRead(shadow, key, node) {
+    const free = RUST_PLAIN_PLACE.test(key) && !this.r05IsTest(node) ? `(if let Some(__k) = ${key}.as_str() { ${shadow}.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })` : void 0;
+    return this.rustDictSite({ free, closure: `${key}.as_str().and_then(|__k| ${shadow}.get(__k)).cloned().unwrap_or(Value::Null)` });
+  }
+  /** `K.as_str().map(|__k| D.contains_key(__k)).unwrap_or(false)` on a shadowed parameter map. */
+  rustShadowKeyHas(shadow, key, node) {
+    const free = RUST_PLAIN_PLACE.test(key) && !this.r05IsTest(node) ? `matches!(${key}.as_str(), Some(__k) if ${shadow}.contains_key(__k))` : void 0;
+    return this.rustDictSite({ free, closure: `${key}.as_str().map(|__k| ${shadow}.contains_key(__k)).unwrap_or(false)` });
+  }
+  /** Key text a dict read can take as `K.as_str()`: any printed place/expression that is not a boxed literal. */
+  rustDictKeyText(keyNode) {
+    const keyType = this.getCheckedTypeOf(keyNode);
+    if (keyType === void 0 || (keyType.flags & (TypeFlags6.NumberLike | TypeFlags6.BigIntLike | TypeFlags6.BooleanLike)) !== 0)
+      return void 0;
+    const key = this.printNode(keyNode, 0).trim();
+    if (key === "" || /^(?:crate::)?Value::(?:Str|Int|Float|Bool|Null)\b/.test(key) || key.startsWith("&"))
+      return void 0;
+    return key;
+  }
+  /** `this.<field>[k]` with a non-literal key: the runtime reads the key as a Str and yields
+   *  Null for anything else, which is `K.as_str()`; the field container is never tagged. */
+  rustFieldDynamicRead(receiverText, receiverNode, keyNode) {
+    const field = this.rustDictField(receiverNode);
+    if (field === void 0 || field === "accounts" || this.r05IsTest(receiverNode))
+      return void 0;
+    const key = this.rustDictKeyText(keyNode);
+    if (key === void 0)
+      return void 0;
+    return this.rustDictRead(receiverText, key, receiverNode);
+  }
+  /** A local whose declaration and every write pin a Dict. 'plain': fresh object literals and nullish only
+   *  (never tagged by the runtime); 'dicty': also dict-only base callees (content unproven). */
+  rustDictLocalProof(ident) {
+    if (!isIdentifier3(ident) || this.rustParamShadowOf(ident) !== void 0)
+      return void 0;
+    if (this.rustDictBearerDeclaration(ident) !== void 0 || this.rustMapParamDeclaration(ident) !== void 0)
+      return void 0;
+    const declaration = this.rustSingleLocalDeclaration(ident);
+    if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier3(declaration.name) || declaration.initializer === void 0)
+      return void 0;
+    if (this.rustReadBearerKindOfDeclaration(declaration) || this.rustDictLocalIsTyped(declaration) || this.rustNestedDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration))
+      return void 0;
+    const scope = this.rustEnclosingFunction(declaration);
+    const symbol = this.rustSymbolOf(declaration.name);
+    if (scope === void 0 || isSourceFile5(scope) || symbol === void 0)
+      return void 0;
+    let proof = this.rustDictSource(declaration.initializer, false);
+    if (proof === void 0)
+      return void 0;
+    const name = String(ident.text);
+    for (const n of this.rustScopeNameNodes(scope, name)) {
+      if (n === declaration)
+        continue;
+      if (this.rustBindsName(n, name)) {
+        if (this.rustSymbolOf(n.name) === void 0)
+          return void 0;
+        continue;
+      }
+      if (n.kind !== SyntaxKind7.Identifier || n === declaration.name || this.rustSymbolOf(n) !== symbol)
+        continue;
+      let target = n;
+      while (target.parent !== void 0 && (isParenthesizedExpression3(target.parent) || isNonNullExpression2(target.parent) || isAsExpression3(target.parent)))
+        target = target.parent;
+      const parent = target.parent;
+      if (parent === void 0)
+        continue;
+      if (isBinaryExpression5(parent) && parent.left === target && rustIsAssignmentOperator(parent.operatorToken.kind)) {
+        if (parent.operatorToken.kind !== SyntaxKind7.EqualsToken || this.rustEnclosingFunction(n) !== scope)
+          return void 0;
+        const rhs = this.rustDictSource(parent.right, true);
+        if (rhs === void 0)
+          return void 0;
+        if (rhs === "dicty")
+          proof = "dicty";
+        continue;
+      }
+      if (parent.kind === SyntaxKind7.PrefixUnaryExpression || parent.kind === SyntaxKind7.PostfixUnaryExpression || (isForOfStatement2(parent) || isForInStatement2(parent)) && parent.initializer === target)
+        return void 0;
+      if (parent.kind === SyntaxKind7.ArrayLiteralExpression && isBinaryExpression5(parent.parent) && parent.parent.left === parent)
+        return void 0;
+    }
+    return proof;
+  }
+  /** 'plain' for a fresh object literal (or nullish when `allowNullish`), 'dicty' for a dict-only base callee. */
+  rustDictSource(node, allowNullish) {
+    const n = this.rustSkipWrappers(node);
+    if (n === void 0)
+      return void 0;
+    if (isObjectLiteralExpression4(n)) {
+      return n.properties.some((p) => p.kind === SyntaxKind7.SpreadAssignment) ? void 0 : "plain";
+    }
+    if (allowNullish && (n.kind === SyntaxKind7.NullKeyword || isIdentifier3(n) && String(n.text) === "undefined"))
+      return "plain";
+    if (isCallExpression6(n) && isPropertyAccessExpression3(n.expression) && n.expression.expression.kind === SyntaxKind7.ThisKeyword && _RustTranspiler.RUST_DICT_CALLEES.has(String(n.expression.name.text)) && this.rustR01CalleeIsBase(n))
+      return "dicty";
+    return void 0;
+  }
+  /** `X[k]` on a proven local with a non-literal key. */
+  rustLocalDictRead(receiverText, receiverNode, keyNode) {
+    if (this.rustDictLocalProof(receiverNode) !== "plain")
+      return void 0;
+    const key = this.rustDictKeyText(keyNode);
+    if (key === void 0)
+      return void 0;
+    return this.rustDictRead(receiverText, key, receiverNode, true);
+  }
+  /** `X['k']` on a proven local, for a key the runtime does not route to a marker store. */
+  rustLocalDictLiteralRead(receiverText, receiverNode, keyText) {
+    const proof = this.rustDictLocalProof(receiverNode);
+    if (proof === void 0 || _RustTranspiler.RUST_DICT_MARKER_KEYS.test(keyText))
+      return void 0;
+    const literal = `"${this.escapeRustStringLiteral(keyText)}"`;
+    return this.rustDictSite({
+      guarded: true,
+      helper: `get_value(&${receiverText}, &Value::Str(${literal}.into()))`,
+      closure: `${receiverText}.as_map().and_then(|__m| __m.get(${literal})).cloned().unwrap_or(Value::Null)`
+    });
+  }
+  /** `k in D` on a base-field / field-container map or a proven local: `in_op`'s Dict arm. */
+  rustDictInOp(key, obj) {
+    const recv = this.rustSkipWrappers(obj);
+    if (recv === void 0)
+      return void 0;
+    let guarded = false;
+    if (this.rustDictField(recv) === void 0) {
+      const nested = isElementAccessExpression4(recv) && recv.argumentExpression !== void 0 && _RustTranspiler.RUST_DICT_VALUE_FIELDS.has(String(this.rustDictField(recv.expression))) && !isStringLiteralLikeNode4(recv.argumentExpression);
+      if (!nested) {
+        const proof = this.rustDictLocalProof(recv);
+        if (proof === void 0 || proof !== "plain" && !isStringLiteral3(key))
+          return void 0;
+        guarded = true;
+      } else if (this.r05IsTest(obj)) {
+        return void 0;
+      }
+    } else if (this.r05IsTest(obj)) {
+      return void 0;
+    }
+    const recvText = this.printNode(recv, 0).trim();
+    let keyText;
+    if (isStringLiteral3(key)) {
+      const literal = this.rustStringLiteralOf(this.printStringLiteral(key));
+      if (literal === void 0 || guarded && _RustTranspiler.RUST_DICT_MARKER_KEYS.test(String(key.text)))
+        return void 0;
+      return `Value::Bool(${this.rustDictSite({
+        guarded,
+        helper: `in_op(&${recvText}, &Value::Str(${literal}.into()))`,
+        closure: `${recvText}.as_map().is_some_and(|__m| __m.contains_key(${literal}))`
+      })})`;
+    }
+    const printed = this.rustDictKeyText(key);
+    if (printed === void 0)
+      return void 0;
+    keyText = printed;
+    return `Value::Bool(${this.rustDictSite({
+      guarded,
+      helper: `in_op(&${recvText}, &${keyText})`,
+      closure: `${recvText}.as_map().is_some_and(|__m| ${keyText}.as_str().is_some_and(|__k| __m.contains_key(__k)))`
+    })})`;
+  }
+  /** `this.F['k1']['k2'] = v` as a statement on a base runtime-state field: the first hop is the map's own
+   *  `entry`, the write below it an `insert`; a value that reads `self` keeps the helper pair. */
+  rustFieldNestedInsert(node, baseExpr, keys, keyStrs, rhs) {
+    const field = this.rustDictField(baseExpr);
+    if (keys.length !== 2 || field === void 0 || _RustTranspiler.RUST_DICT_TAGGED_ENTRY_FIELDS.has(field) || this.r05IsTest(node))
+      return void 0;
+    const parent = node.parent;
+    if (parent === void 0 || parent.kind !== SyntaxKind7.ExpressionStatement || /\bself\b/.test(rhs))
+      return void 0;
+    if (!isStringLiteral3(keys[0]) || !isStringLiteral3(keys[1]))
+      return void 0;
+    const k1 = this.rustStringLiteralOf(keyStrs[0]);
+    const k2 = this.rustStringLiteralOf(keyStrs[1]);
+    if (k1 === void 0 || k2 === void 0)
+      return void 0;
+    const recv = this.printNode(baseExpr, 0).trim();
+    const trimmed = rhs.trim();
+    const value = this.rustPrintedBoolArg(rhs) ? `Value::Bool(${rhs})` : /^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed) && trimmed !== "self" && trimmed !== "true" && trimmed !== "false" ? `${trimmed}.clone()` : rhs;
+    return `if let Value::Dict(__r08a) = &mut ${recv} { let __r08e = std::sync::Arc::make_mut(__r08a).entry(${k1}.to_string()).or_insert(Value::Null); if let Value::Dict(__r08b) = __r08e { std::sync::Arc::make_mut(__r08b).insert(${k2}.to_string(), ${value}); } }`;
+  }
+  /** `x[k] = f(x[k])`: the read sits in the value of an assignment the printer writes as a native
+   *  insert (which binds the value first, `{ let __be_tmp = ..; insert }`), so the position rule that
+   *  protects the helper-form write passes does not apply to it. */
+  rustDictReadInNativeInsert(acc, receiver, key, chain) {
+    if (this.isNativeWriteTargetBase(chain) || this.r05IsTest(chain))
+      return void 0;
+    const root = this.rootPlaceText(chain);
+    if (root === void 0)
+      return void 0;
+    let host;
+    for (let current = chain.parent; current; current = current.parent) {
+      if (isStatement(current) || isSourceFile5(current) || isFunctionLike(current))
+        break;
+      if (isBinaryExpression5(current) && current.operatorToken.kind === SyntaxKind7.EqualsToken && this.isNodeInsideNode(chain, current.right) && this.rootPlaceText(current.left) === root)
+        host = current;
+    }
+    if (host === void 0 || !isElementAccessExpression4(host.left) || host.parent?.kind !== SyntaxKind7.ExpressionStatement || !this.isNativeAccessPositionSafe(chain, host))
+      return void 0;
+    const base = host.left.expression;
+    const keyNode = host.left.argumentExpression;
+    const keyText = this.printNode(keyNode, 0);
+    const writesNatively = !isElementAccessExpression4(base) && (this.rustBearerDictInsert(base, keyNode, keyText, "x") ?? this.rustMapParamDictInsert(base, keyNode, keyText, "x") ?? this.printNativeBookMetaWrite(base, keyNode, keyText, "x") ?? this.printNativeDictInsert(base, keyNode, keyText, "x") ?? this.rustR01NativeDictInsert(base, keyNode, keyText, "x")) !== void 0;
+    if (isStringLiteralLikeNode4(key))
+      return void 0;
+    const read = this.rustFieldDynamicRead(acc, receiver, key) ?? this.rustLocalDictRead(acc, receiver, key);
+    if (read !== void 0 && !writesNatively)
+      this.rustDictHoistHosts.add(host);
+    return read;
+  }
+  /** Characters the ccxt clone passes add to a printed line afterwards: every bare local passed by value in a
+   *  call or array-literal argument slot gets a `.clone()` (`autoCloneCallArgs` / `cloneInArrayLiterals`). */
+  rustDictCloneGrowth(line) {
+    const thrown = /^\s*panic!\("\{\}", .*::new\(/.test(line) ? "crate::exchange_errors::create_error(&crate::runtime::stringify_param(&(".length + ")), &crate::runtime::stringify_param(&(".length + ")))".length - "::new(".length - 1 : 0;
+    const masked = line.replace(/"(?:[^"\\]|\\.)*"/g, (m) => '"' + " ".repeat(Math.max(0, m.length - 2)) + '"');
+    let n = 0;
+    for (const m of masked.matchAll(/(?<=[(\[,]\s?)([A-Za-z_][A-Za-z0-9_]*)(?=\s*[,)\]])/g)) {
+      const start = m.index;
+      const before = masked.slice(Math.max(0, start - 6), start);
+      if (/&\s*(?:mut\s+)?$/.test(before) || /\bmut\s+$/.test(before) || /[:.]$/.test(before.trimEnd()))
+        continue;
+      if (/^(?:self|true|false|None|Some|Ok|Err|Value|i64|f64|String|usize|bool|__\w+)$/.test(m[1]))
+        continue;
+      n += 8;
+    }
+    return n + thrown;
+  }
+  /** `this.<field>['k'].length`: a read-only use of a literal-key read off a base runtime-state field. */
+  rustFieldLengthRead(acc, receiver, key, chain) {
+    const parent = chain.parent;
+    if (parent === void 0 || !isPropertyAccessExpression3(parent) || parent.expression !== chain || String(parent.name.text) !== "length")
+      return void 0;
+    if (this.rustDictField(receiver) === void 0 || !isStringLiteralLikeNode4(key) || this.r05IsTest(chain) || !RUST_PLAIN_PLACE.test(acc))
+      return void 0;
+    const text = String(key.text);
+    if (text === "" || !/^[A-Za-z0-9_./-]+$/.test(text))
+      return void 0;
+    const literal = `"${text}"`;
+    return this.rustDictSite({
+      guarded: true,
+      helper: `get_value(&${acc}, &Value::Str(${literal}.into()))`,
+      closure: `${acc}.as_map().and_then(|__m| __m.get(${literal})).cloned().unwrap_or(Value::Null)`
+    });
+  }
+  /** Statement-like nodes whose finished lines the 400-char budget is measured on. */
+  rustDictIsOwner(node) {
+    switch (node.kind) {
+      case SyntaxKind7.ExpressionStatement:
+      case SyntaxKind7.VariableStatement:
+      case SyntaxKind7.ReturnStatement:
+      case SyntaxKind7.ThrowStatement:
+      case SyntaxKind7.IfStatement:
+      case SyntaxKind7.WhileStatement:
+      case SyntaxKind7.ForStatement:
+        return true;
+      default:
+        return false;
+    }
+  }
+  printNode(node, identation = 0) {
+    if (this.rustDictOwnerDepth > 0 || !this.rustDictIsOwner(node))
+      return super.printNode(node, identation);
+    this.rustDictOwnerDepth++;
+    try {
+      return this.rustDictPrintOwner(node, identation);
+    } finally {
+      this.rustDictOwnerDepth--;
+    }
+  }
+  /** Print a statement; when a finished line of it passes 400 chars, decide each dict site against the
+   *  line it sits on (the budget the closure-free / closure / helper forms are chosen under). */
+  rustDictPrintOwner(node, identation) {
+    const loops = this.forLoopCounter;
+    this.rustDictPhase = "normal";
+    this.rustDictSites = [];
+    const out = super.printNode(node, identation);
+    const sites = this.rustDictSites;
+    this.rustDictSites = [];
+    if (sites.length === 0 || !sites.some((s) => s.fc > 0 || s.ch > 0) || !out.split("\n").some((l) => l.length > 400))
+      return out;
+    this.rustDictPhase = "probe";
+    this.forLoopCounter = loops;
+    const probe = super.printNode(node, identation);
+    const probed = this.rustDictSites.length;
+    this.rustDictSites = [];
+    if (probed !== sites.length)
+      return out;
+    const decisions = sites.map(() => "free");
+    for (const line of probe.split("\n")) {
+      const ids = [...line.matchAll(/\u0001(\d+)\u0002/g)].map((m) => Number(m[1]));
+      if (ids.length === 0)
+        continue;
+      const plain = line.replace(/\u0001\d+\u0002|\u0003/g, "");
+      const base = plain.length + this.rustDictCloneGrowth(plain);
+      let closureLen = base;
+      for (const k of ids) {
+        const s = sites[k];
+        if (!s.guarded || s.ch <= 0)
+          continue;
+        if (base <= 400 && base + s.ch > 400)
+          decisions[k] = "helper";
+        else
+          closureLen += s.ch;
+      }
+      for (const k of ids) {
+        const s = sites[k];
+        if (decisions[k] === "helper")
+          continue;
+        if (!s.free) {
+          decisions[k] = "closure";
+          continue;
+        }
+        if (closureLen <= 400 && closureLen + s.fc > 400)
+          decisions[k] = "closure";
+      }
+    }
+    this.rustDictPhase = "final";
+    this.rustDictDecisions = decisions;
+    this.forLoopCounter = loops;
+    try {
+      const final = super.printNode(node, identation);
+      return this.rustDictSites.length === sites.length ? final : out;
+    } finally {
+      this.rustDictPhase = "normal";
+      this.rustDictSites = [];
+      this.rustDictDecisions = [];
+    }
+  }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
     if (this.rustMapParamDeclaration(receiverNode) !== void 0 && _RustTranspiler.rustBearerKeyTextOk(keyText)) {
       return `${receiverText}.get("${this.escapeRustStringLiteral(keyText)}").cloned().unwrap_or(Value::Null)`;
@@ -37543,7 +37934,7 @@ ${ind}let ${view}: &${map} = &${arc};
   /** The ccxt post-passes hoist `get_value(...)` reads out of `&mut` calls by
    *  matching their text; the native form is invisible to them, so it is only
    *  emitted where no such hoist is needed. */
-  isNativeAccessPositionSafe(node) {
+  isNativeAccessPositionSafe(node, ignoreAssign) {
     const parent = node.parent;
     if (parent && (isPropertyAccessExpression3(parent) || isCallExpression6(parent)) && parent.expression === node && !this.r21PureStringMethodReceiver(node))
       return false;
@@ -37554,7 +37945,7 @@ ${ind}let ${view}: &${map} = &${arc};
       if (isBinaryExpression5(current) && this.isNodeInsideNode(node, current.right)) {
         const op = current.operatorToken.kind;
         const isAssign = op === SyntaxKind7.EqualsToken || op >= SyntaxKind7.PlusEqualsToken && op <= SyntaxKind7.CaretEqualsToken;
-        if (isAssign && root !== void 0 && this.rootPlaceText(current.left) === root)
+        if (isAssign && root !== void 0 && current !== ignoreAssign && this.rootPlaceText(current.left) === root)
           return false;
       }
       if (isCallExpression6(current) && isPropertyAccessExpression3(current.expression) && this.isNodeInsideNode(node, current) && current.arguments.some((a) => this.isNodeInsideNode(node, a))) {
@@ -37646,7 +38037,7 @@ ${ind}let ${view}: &${map} = &${arc};
     }
     let acc = this.printNode(current, 0);
     for (const { expression: receiver, argumentExpression: key } of chain) {
-      const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key) : void 0;
+      const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key) : this.rustDictReadInNativeInsert(acc, receiver, key, node) ?? this.rustFieldLengthRead(acc, receiver, key, node);
       const staticKey = native === void 0 && !keepGetValue ? this.staticKeyLookup(key, receiver) : void 0;
       acc = native ?? (staticKey !== void 0 ? `crate::value::get_value_k(&${acc}, ${staticKey})` : `get_value(&${acc}, &${this.printNode(key, 0)})`);
     }
@@ -38500,7 +38891,7 @@ ${iden}}`;
     const keyText = this.printNode(keyNode, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
       return void 0;
-    return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+    return this.rustDictRead(receiverText, keyText, receiverNode);
   }
   rustVecLocalIsTyped(declaration) {
     if (declaration?.kind !== SyntaxKind7.VariableDeclaration)
@@ -40115,7 +40506,7 @@ ${this.getIden(identation)}}`;
       return void 0;
     if (kind === "param" && this.rustNodeIsKeyUnsafePlace(keyText))
       return void 0;
-    return `${receiverText}.as_map().and_then(|__m| ${keyText}.as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(Value::Null)`;
+    return this.rustDictRead(receiverText, keyText, receiverNode);
   }
   // hx4 R11 — typed `Vec<Value>` locals also admit an argument of a non-`&mut self` `this.m(..)`
   // call that is not the final use (boxed as `Value::from(x.clone())`, the clone the post-pass
@@ -41792,6 +42183,91 @@ _RustTranspiler.PRO_HANDLER_SHADOW_SAFE_READS = {
   "safeList": "list",
   "safeBool": "bool"
 };
+/** Base `Exchange` fields that hold plain, tag-free runtime state (never a cache/book marker). */
+_RustTranspiler.RUST_DICT_FIELDS = /* @__PURE__ */ new Set([
+  "options",
+  "urls",
+  "markets",
+  "markets_by_id",
+  "currencies",
+  "currencies_by_id",
+  "commonCurrencies",
+  "baseCurrencies",
+  "quoteCurrencies",
+  "timeframes",
+  "precision",
+  "limits",
+  "fees",
+  "has",
+  "exceptions",
+  "features",
+  "api",
+  "accounts",
+  "accountsById",
+  "tokenBucket",
+  "headers",
+  "requiredCredentials",
+  "networkAliases",
+  "balance",
+  "positions",
+  "ohlcvs",
+  "tickers",
+  "bidsasks",
+  "orderbooks",
+  "trades",
+  "orders",
+  "myTrades",
+  "liquidations",
+  "myLiquidations",
+  "fundingRates",
+  "triggerOrders",
+  "transactions",
+  "clients"
+]);
+/** Fields whose values are themselves Dicts (cache containers / client handles). */
+_RustTranspiler.RUST_DICT_VALUE_FIELDS = /* @__PURE__ */ new Set([
+  "ohlcvs",
+  "tickers",
+  "bidsasks",
+  "orderbooks",
+  "trades",
+  "orders",
+  "myTrades",
+  "liquidations",
+  "myLiquidations",
+  "fundingRates",
+  "triggerOrders",
+  "positions",
+  "clients"
+]);
+_RustTranspiler.RUST_DICT_TAGGED_ENTRY_FIELDS = /* @__PURE__ */ new Set([
+  "options",
+  "urls",
+  "fees",
+  "exceptions",
+  "markets",
+  "currencies",
+  "headers",
+  "has",
+  "tokenBucket",
+  "markets_by_id",
+  "currencies_by_id"
+]);
+_RustTranspiler.RUST_DICT_MARKER_KEYS = /^(?:timestamp|datetime|nonce|symbol|checksum|cache|hashmap|subscriptions|futures|\d+)$/;
+/** Base callees that only ever return a Dict (the content may still carry a marker). */
+_RustTranspiler.RUST_DICT_CALLEES = /* @__PURE__ */ new Set([
+  "safeDict",
+  "safeDict2",
+  "safeDictN",
+  "safeDictionary",
+  "createSafeDictionary",
+  "extend",
+  "deepExtend",
+  "omit",
+  "groupBy",
+  "indexBy",
+  "filterByArray"
+]);
 // Declared-Dict locals: the checker types many dict-holding locals `any`, losing the proof
 // above, but the declaration still proves a plain dict (object literal, `getArg(.., {})` bag,
 // `this.safeDict`, `extend` onto those, or an element of a map-typed container) at every read.
@@ -55950,7 +56426,7 @@ function r04Scalars(content) {
       continue;
     const args = splitTopLevel(content.slice(open + 1, close), ",");
     const region = fnRegionOf(masked, start);
-    const proofOf2 = (e) => {
+    const proofOf = (e) => {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e))
         return void 0;
       return proveLocal(masked, e, region, 0).variants;
@@ -55959,7 +56435,7 @@ function r04Scalars(content) {
       if (args.length !== 1)
         continue;
       const operand = stripOuter(args[0].replace(/^&/, ""));
-      const variants = proofOf2(operand);
+      const variants = proofOf(operand);
       if (variants === void 0 || !isBoolOnly(variants))
         continue;
       pushEdit(edits, masked, start, close, `${operand}.as_bool() == Some(true)`);
@@ -55972,8 +56448,8 @@ function r04Scalars(content) {
     const lit = (e) => e === "Value::Null" || /^Value::Bool\((?:true|false)\)$/.test(e);
     if (lit(a) && lit(b))
       continue;
-    const va = lit(a) ? new Set(UNION) : proofOf2(a);
-    const vb = lit(b) ? new Set(UNION) : proofOf2(b);
+    const va = lit(a) ? new Set(UNION) : proofOf(a);
+    const vb = lit(b) ? new Set(UNION) : proofOf(b);
     if (va === void 0 || vb === void 0 || !isBoolOnly(va) || !isBoolOnly(vb))
       continue;
     const asOption = (e) => {
@@ -55995,274 +56471,6 @@ function r04Scalars(content) {
     at = e.end;
   }
   return out + content.slice(at);
-}
-
-// src/rustPasses/hx10w2-R08.ts
-init_esm_shims();
-var FIELDS_ARR = [
-  "options",
-  "urls",
-  "markets",
-  "markets_by_id",
-  "currencies",
-  "currencies_by_id",
-  "commonCurrencies",
-  "baseCurrencies",
-  "quoteCurrencies",
-  "timeframes",
-  "precision",
-  "limits",
-  "fees",
-  "has",
-  "exceptions",
-  "features",
-  "api",
-  "accounts",
-  "accountsById",
-  "tokenBucket",
-  "headers",
-  "requiredCredentials",
-  "networkAliases",
-  "balance",
-  "positions",
-  "ohlcvs",
-  "tickers",
-  "bidsasks",
-  "orderbooks",
-  "trades",
-  "orders",
-  "myTrades",
-  "liquidations",
-  "myLiquidations",
-  "fundingRates",
-  "triggerOrders",
-  "transactions",
-  "clients"
-];
-var PLAIN_VALUES = /^(?:options|urls|markets|markets_by_id|currencies|currencies_by_id|commonCurrencies|baseCurrencies|quoteCurrencies|timeframes|precision|limits|fees|has|exceptions|features|api|accounts|accountsById|tokenBucket|headers|requiredCredentials|networkAliases|balance|transactions)$/;
-var DICT_VALUES = /^(?:ohlcvs|tickers|bidsasks|orderbooks|trades|orders|myTrades|liquidations|myLiquidations|fundingRates|triggerOrders|positions|clients)$/;
-var MARKER_KEYS2 = /^(?:timestamp|datetime|nonce|symbol|checksum|cache|hashmap|subscriptions|futures)$/;
-var RECV = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS_ARR.join("|") + ")";
-var STR_KEY = '&Value::Str\\("((?:[^"\\\\]|\\\\.)*)"\\.(?:into|to_string)\\(\\)\\)';
-var NATIVE_TAIL = /\.cloned\(\)\.unwrap_or\(Value::Null\)$/;
-var NULL = "Value::Null";
-function maskSrc(src) {
-  const out = src.split("");
-  const blank = (from, to) => {
-    for (let i2 = from; i2 < to && i2 < out.length; i2++)
-      if (out[i2] !== "\n")
-        out[i2] = " ";
-  };
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      const end = src.indexOf("\n", i);
-      const stop = end < 0 ? src.length : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      const end = src.indexOf("*/", i + 2);
-      const stop = end < 0 ? src.length : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "'") {
-      const m = /^'(?:\\.|[^\\'])'/.exec(src.slice(i, i + 4));
-      if (m !== null) {
-        i += m[0].length;
-        continue;
-      }
-    }
-    if (c === '"') {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === '"')
-          break;
-        j++;
-      }
-      blank(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function argSpans(masked, open) {
-  let depth = 0;
-  const spans = [];
-  let start = open + 1;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0) {
-        spans.push([start, j]);
-        return spans;
-      }
-    } else if (c === "," && depth === 1) {
-      spans.push([start, j]);
-      start = j + 1;
-    }
-  }
-  return void 0;
-}
-function callEnd(masked, open) {
-  let depth = 0;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return j + 1;
-    }
-  }
-  return -1;
-}
-function isStatement2(masked, from, to) {
-  let k = to;
-  while (k < masked.length && (masked[k] === " " || masked[k] === "	"))
-    k++;
-  if (masked[k] !== ";")
-    return false;
-  let s = from - 1;
-  while (s >= 0 && (masked[s] === " " || masked[s] === "	" || masked[s] === "\n"))
-    s--;
-  return s < 0 || "{};".indexOf(masked[s]) >= 0;
-}
-function receiverOf(arg) {
-  const e = arg.trim().replace(/^&\s*/, "").trim();
-  const direct = new RegExp("^" + RECV + "$");
-  if (direct.test(e))
-    return { text: e, chained: false };
-  const head = new RegExp("^" + RECV + "\\.as_map\\(\\)\\.and_then\\(\\|__m\\|");
-  if (head.test(e) && NATIVE_TAIL.test(e))
-    return { text: e, chained: true };
-  return void 0;
-}
-function rootField(text) {
-  const m = new RegExp("^" + RECV).exec(text.trim());
-  return m === null ? "" : m[1];
-}
-function runPass(content) {
-  if (!content.includes("self."))
-    return content;
-  const masked = maskSrc(content);
-  const callRe = /(?<![A-Za-z0-9_:.])(add_element_to_object|get_value|in_op)\(/g;
-  const rws = [];
-  let m;
-  while ((m = callRe.exec(masked)) !== null) {
-    const name = m[1];
-    const open = m.index + name.length;
-    const spans = argSpans(masked, open);
-    if (spans === void 0)
-      continue;
-    const end = callEnd(masked, open);
-    if (end < 0)
-      continue;
-    const raw = spans.map(function(sp) {
-      return content.slice(sp[0], sp[1]).trim();
-    });
-    if (name === "get_value" || name === "in_op") {
-      if (spans.length !== 2)
-        continue;
-      const recv = receiverOf(raw[0]);
-      if (recv === void 0)
-        continue;
-      if (/&mut\s*$/.test(masked.slice(Math.max(0, m.index - 5), m.index)))
-        continue;
-      const plainValues = PLAIN_VALUES.test(rootField(recv.text));
-      const lit2 = new RegExp("^" + STR_KEY + "$").exec(raw[1]);
-      if (lit2 !== null) {
-        const k = lit2[1];
-        if (recv.chained && !plainValues && (k === "" || /^[0-9]+$/.test(k) || MARKER_KEYS2.test(k)))
-          continue;
-        rws.push({
-          start: m.index,
-          end,
-          text: name === "get_value" ? recv.text + '.as_map().and_then(|__m| __m.get("' + k + '")).cloned().unwrap_or(' + NULL + ")" : recv.text + '.as_map().is_some_and(|__m| __m.contains_key("' + k + '"))'
-        });
-        continue;
-      }
-      if (recv.chained && (name === "get_value" || !DICT_VALUES.test(rootField(recv.text))))
-        continue;
-      const dynKey = /^&\s*(.+)$/.exec(raw[1]);
-      if (dynKey === null)
-        continue;
-      const keyText = dynKey[1].trim();
-      if (/^Value::(?:Str|Int|Float|Bool|Null)\(/.test(keyText) || keyText === "Value::Null")
-        continue;
-      rws.push({
-        start: m.index,
-        end,
-        text: name === "get_value" ? recv.text + ".as_map().and_then(|__m| " + keyText + ".as_str().and_then(|__k| __m.get(__k))).cloned().unwrap_or(" + NULL + ")" : recv.text + ".as_map().is_some_and(|__m| " + keyText + ".as_str().is_some_and(|__k| __m.contains_key(__k)))"
-      });
-      continue;
-    }
-    if (spans.length !== 3)
-      continue;
-    if (!isStatement2(masked, m.index, end))
-      continue;
-    const lit = new RegExp("^" + STR_KEY + "$").exec(raw[1]);
-    if (lit === null)
-      continue;
-    const value = raw[2];
-    if (/\bself\b/.test(value))
-      continue;
-    const inner = new RegExp("^get_value_mut\\(\\s*&mut\\s+(" + RECV + ")\\s*,\\s*" + STR_KEY + "\\s*\\)$").exec(raw[0]);
-    if (inner !== null) {
-      rws.push({
-        start: m.index,
-        end,
-        text: "if let Value::Dict(__r08a) = &mut " + inner[1] + ' { let __r08e = std::sync::Arc::make_mut(__r08a).entry("' + inner[inner.length - 1] + '".to_string()).or_insert(' + NULL + '); if let Value::Dict(__r08b) = __r08e { std::sync::Arc::make_mut(__r08b).insert("' + lit[1] + '".to_string(), ' + value + "); } }"
-      });
-      continue;
-    }
-    const direct = new RegExp("^&mut\\s+(" + RECV + ")$").exec(raw[0]);
-    if (direct === null)
-      continue;
-    rws.push({
-      start: m.index,
-      end,
-      text: "if let Value::Dict(__r08d) = &mut " + direct[1] + ' { std::sync::Arc::make_mut(__r08d).insert("' + lit[1] + '".to_string(), ' + value + "); }"
-    });
-  }
-  if (rws.length === 0)
-    return content;
-  rws.sort(function(a, b) {
-    return a.start - b.start;
-  });
-  let out = "";
-  let at = 0;
-  for (const r of rws) {
-    if (r.start < at)
-      continue;
-    out += content.slice(at, r.start) + r.text;
-    at = r.end;
-  }
-  return out + content.slice(at);
-}
-function hx10w2R08(content) {
-  let out = content;
-  for (let i = 0; i < 3; i++) {
-    const next = runPass(out);
-    if (next === out)
-      break;
-    out = next;
-  }
-  return out;
 }
 
 // src/rustPasses/hx10w2-r06.ts
@@ -56514,26 +56722,26 @@ function r06Push(content) {
     }
     if (!ok)
       continue;
-    const callEnd4 = r06CloseParen(masked, argStart - 1);
-    if (callEnd4 < 0)
+    const callEnd2 = r06CloseParen(masked, argStart - 1);
+    if (callEnd2 < 0)
       continue;
     const valueStart = argStart + recv[0].length;
-    const value = content.slice(valueStart, callEnd4);
+    const value = content.slice(valueStart, callEnd2);
     if (nameRx.test(value))
       continue;
     let stmtStart = masked.lastIndexOf(";", start);
     stmtStart = Math.max(stmtStart, masked.lastIndexOf("{", start), masked.lastIndexOf("}", start)) + 1;
     if (masked.slice(stmtStart, start).trim() !== "")
       continue;
-    if (!/^\)\s*;/.test(masked.slice(callEnd4, callEnd4 + 4)))
+    if (!/^\)\s*;/.test(masked.slice(callEnd2, callEnd2 + 4)))
       continue;
     const text = `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value.trim()}); }`;
     const lStart = content.lastIndexOf("\n", start) + 1;
-    const lEnd = content.indexOf("\n", callEnd4) < 0 ? content.length : content.indexOf("\n", callEnd4);
+    const lEnd = content.indexOf("\n", callEnd2) < 0 ? content.length : content.indexOf("\n", callEnd2);
     const lenNow = lEnd - lStart;
-    if (lenNow <= R06_MAX_LINE && lenNow - (callEnd4 + 1 - start) + text.length > R06_MAX_LINE)
+    if (lenNow <= R06_MAX_LINE && lenNow - (callEnd2 + 1 - start) + text.length > R06_MAX_LINE)
       continue;
-    jobs.push({ start, end: callEnd4 + 1, text });
+    jobs.push({ start, end: callEnd2 + 1, text });
   }
   if (jobs.length === 0)
     return content;
@@ -58126,11 +58334,11 @@ function r04Callee(content) {
 
 // src/rustPasses/hx10w3-R05.ts
 init_esm_shims();
-var FIELDS_ARR2 = ["balance", "ohlcvs", "options"];
-var RECV2 = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS_ARR2.join("|") + ")";
-var STR_KEY2 = '&Value::Str\\("((?:[^"\\\\]|\\\\.)*)"\\.(?:into|to_string)\\(\\)\\)';
+var FIELDS_ARR = ["balance", "ohlcvs", "options"];
+var RECV = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS_ARR.join("|") + ")";
+var STR_KEY = '&Value::Str\\("((?:[^"\\\\]|\\\\.)*)"\\.(?:into|to_string)\\(\\)\\)';
 var MAX_LINE = 400;
-function maskSrc2(src) {
+function maskSrc(src) {
   const out = src.split("");
   const blank = (from, to) => {
     for (let i2 = from; i2 < to && i2 < out.length; i2++)
@@ -58180,7 +58388,7 @@ function maskSrc2(src) {
   }
   return out.join("");
 }
-function argSpans2(masked, open) {
+function argSpans(masked, open) {
   let depth = 0;
   const spans = [];
   let start = open + 1;
@@ -58201,7 +58409,7 @@ function argSpans2(masked, open) {
   }
   return void 0;
 }
-function callEnd2(masked, open) {
+function callEnd(masked, open) {
   let depth = 0;
   for (let j = open; j < masked.length; j++) {
     const c = masked[j];
@@ -58215,7 +58423,7 @@ function callEnd2(masked, open) {
   }
   return -1;
 }
-function isStatement3(masked, from, to) {
+function isStatement2(masked, from, to) {
   let k = to;
   while (k < masked.length && (masked[k] === " " || masked[k] === "	"))
     k++;
@@ -58246,7 +58454,7 @@ function firstArg2(expr) {
   return "";
 }
 function chainField(recv) {
-  const direct = new RegExp("^&mut\\s+" + RECV2 + "$").exec(recv);
+  const direct = new RegExp("^&mut\\s+" + RECV + "$").exec(recv);
   if (direct !== null)
     return direct[1];
   let expr = recv;
@@ -58254,10 +58462,10 @@ function chainField(recv) {
     if (!expr.startsWith("get_value_mut("))
       return "";
     const a = firstArg2(expr);
-    const mutRoot = new RegExp("^&mut\\s+" + RECV2 + "$").exec(a);
+    const mutRoot = new RegExp("^&mut\\s+" + RECV + "$").exec(a);
     if (mutRoot !== null)
       return mutRoot[1];
-    const coerced = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV2 + "\\)\\s*\\}$").exec(a);
+    const coerced = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV + "\\)\\s*\\}$").exec(a);
     if (coerced !== null)
       return coerced[1];
     if (!a.startsWith("get_value_mut("))
@@ -58293,22 +58501,22 @@ function identKeyArg(body, ident, header) {
     return "crate::runtime::stringify_param(&" + ident + ")";
   return "";
 }
-function runPass2(content) {
+function runPass(content) {
   if (!content.includes("add_element_to_object("))
     return content;
-  const masked = maskSrc2(content);
+  const masked = maskSrc(content);
   const callRe = /(?<![A-Za-z0-9_:.])(add_element_to_object)\(/g;
   const rws = [];
   let m;
   while ((m = callRe.exec(masked)) !== null) {
     const open = m.index + m[1].length;
-    const spans = argSpans2(masked, open);
+    const spans = argSpans(masked, open);
     if (spans === void 0 || spans.length !== 3)
       continue;
-    const end = callEnd2(masked, open);
+    const end = callEnd(masked, open);
     if (end < 0)
       continue;
-    if (!isStatement3(masked, m.index, end))
+    if (!isStatement2(masked, m.index, end))
       continue;
     const raw = spans.map((sp) => content.slice(sp[0], sp[1]).trim());
     if (chainField(raw[0]) === "")
@@ -58317,7 +58525,7 @@ function runPass2(content) {
     if (/\bself\b/.test(value))
       continue;
     let keyArg = "";
-    const lit = new RegExp("^" + STR_KEY2 + "$").exec(raw[1]);
+    const lit = new RegExp("^" + STR_KEY + "$").exec(raw[1]);
     if (lit !== null) {
       keyArg = '"' + lit[1] + '".to_string()';
     } else {
@@ -58360,7 +58568,7 @@ function runPass2(content) {
 function r05FieldChainInserts(content) {
   let out = content;
   for (let i = 0; i < 4; i++) {
-    const next = runPass2(out);
+    const next = runPass(out);
     if (next === out)
       break;
     out = next;
@@ -58555,7 +58763,7 @@ function r06w3Push(content) {
       return true;
     if (isPlainField(t))
       return true;
-    const safeValue = /^self\.safe_value(?:_k)?\(self\.([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
+    const safeValue = /^self\.safe_value(?:_k)?\(\(?(?:if let \(Some\(__m\), Some\(__k\)\) = \()?self\.([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
     if (safeValue !== null && plainFields.has(safeValue[1]))
       return true;
     const matchRead = /^match\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*Value::Dict\(__m\d+\)\s*=>\s*__m\d+\.get\("/.exec(t);
@@ -58580,6 +58788,12 @@ function r06w3Push(content) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(recv))
         return localFree(recv, region, seen);
       return false;
+    }
+    const freeRead = /^\(if let \(Some\(__m\), Some\(__k\)\) = \(([A-Za-z_][A-Za-z0-9_.]*)\.as_map\(\), /.exec(t);
+    if (freeRead !== null) {
+      if (isPlainField(freeRead[1]))
+        return true;
+      return /^[A-Za-z_][A-Za-z0-9_]*$/.test(freeRead[1]) && localFree(freeRead[1], region, seen);
     }
     const clone = /^([A-Za-z_][A-Za-z0-9_]*)\.clone\(\)$/.exec(t);
     if (clone !== null)
@@ -58681,26 +58895,26 @@ function r06w3Push(content) {
     }
     if (!ok)
       continue;
-    const callEnd4 = closeParenAt2(masked, argStart - 1);
-    if (callEnd4 < 0)
+    const callEnd2 = closeParenAt2(masked, argStart - 1);
+    if (callEnd2 < 0)
       continue;
     const valueStart = argStart + recv[0].length;
-    const value = content.slice(valueStart, callEnd4);
+    const value = content.slice(valueStart, callEnd2);
     if (nameRx.test(value))
       continue;
     let stmtStart = masked.lastIndexOf(";", start);
     stmtStart = Math.max(stmtStart, masked.lastIndexOf("{", start), masked.lastIndexOf("}", start)) + 1;
     if (masked.slice(stmtStart, start).trim() !== "")
       continue;
-    if (!/^\)\s*;/.test(masked.slice(callEnd4, callEnd4 + 4)))
+    if (!/^\)\s*;/.test(masked.slice(callEnd2, callEnd2 + 4)))
       continue;
     const text = `if let Value::Arr(__a) = &mut ${name} { std::sync::Arc::make_mut(__a).push(${value.trim()}); }`;
     const lStart = content.lastIndexOf("\n", start) + 1;
-    const lEnd = content.indexOf("\n", callEnd4) < 0 ? content.length : content.indexOf("\n", callEnd4);
+    const lEnd = content.indexOf("\n", callEnd2) < 0 ? content.length : content.indexOf("\n", callEnd2);
     const lenNow = lEnd - lStart;
-    if (lenNow <= lineBudget && lenNow - (callEnd4 + 1 - start) + text.length > lineBudget)
+    if (lenNow <= lineBudget && lenNow - (callEnd2 + 1 - start) + text.length > lineBudget)
       continue;
-    jobs.push({ start, end: callEnd4 + 1, text });
+    jobs.push({ start, end: callEnd2 + 1, text });
   }
   if (jobs.length === 0)
     return content;
@@ -59172,277 +59386,15 @@ function r07StringNatives(content) {
   return out + content.slice(at);
 }
 
-// src/rustPasses/hx10w3-R08.ts
-init_esm_shims();
-var ROUTED = /^(?:timestamp|datetime|nonce|symbol|checksum|cache|hashmap|subscriptions|futures)$/;
-var PLAIN_INIT = /^Value::Map\(/;
-var DICT_INIT2 = /^(?:Value::Map\(|self\.safe_dict|self\.safe_dictionary|self\.create_safe_dictionary|self\.extend\(|self\.deep_extend\(|self\.omit\(|self\.group_by\(|self\.index_by\(|self\.filter_by_array\()/;
-var WRITE_HELPER = /(?:add_element_to_object|get_value_mut|set_value|remove)\(\s*$/;
-var CALL2 = /(?<![A-Za-z0-9_:.])(get_value|in_op)\(/g;
-var STR_LIT2 = /^&Value::Str\("((?:[^"\\]|\\.)*)"\.(?:into|to_string)\(\)\)$/;
-function maskSrc3(src) {
-  const out = src.split("");
-  const blank = (from, to) => {
-    for (let i2 = from; i2 < to && i2 < out.length; i2++)
-      if (out[i2] !== "\n")
-        out[i2] = " ";
-  };
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    if (c === "/" && src[i + 1] === "/") {
-      const end = src.indexOf("\n", i);
-      const stop = end < 0 ? src.length : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      const end = src.indexOf("*/", i + 2);
-      const stop = end < 0 ? src.length : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (c === "'") {
-      const m = /^'(?:\\.|[^\\'])'/.exec(src.slice(i, i + 5));
-      if (m !== null) {
-        i += m[0].length;
-        continue;
-      }
-    }
-    if (c === '"') {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === '"')
-          break;
-        j++;
-      }
-      blank(i, Math.min(j + 1, src.length));
-      i = j + 1;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
-function callEnd3(masked, open) {
-  let depth = 0;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0)
-        return j + 1;
-    }
-  }
-  return -1;
-}
-function argSpans3(masked, open) {
-  const spans = [];
-  let depth = 0;
-  let start = open + 1;
-  for (let j = open; j < masked.length; j++) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0) {
-        spans.push([start, j]);
-        return spans;
-      }
-    } else if (c === "," && depth === 1) {
-      spans.push([start, j]);
-      start = j + 1;
-    }
-  }
-  return spans;
-}
-function initOf(masked, from) {
-  let depth = 0;
-  let j = from;
-  while (j < masked.length) {
-    const c = masked[j];
-    if (c === "(" || c === "[" || c === "{")
-      depth++;
-    else if (c === ")" || c === "]" || c === "}")
-      depth--;
-    else if (c === ";" && depth === 0)
-      break;
-    j++;
-  }
-  return [from, j];
-}
-function proofOf(masked, raw, name, header) {
-  if (new RegExp("(?:^|[\\s,(])" + name + "\\s*:").test(header))
-    return void 0;
-  if (new RegExp("(?:^|[^|A-Za-z0-9_])\\|\\s*(?:mut\\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\\s*(?::[^|]*?)?,?\\s*)+\\|").test(masked)) {
-    const lists = masked.match(/\|\s*(?:mut\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:,[^|]*)?\|/g) ?? [];
-    for (const l of lists) {
-      if (new RegExp("\\b" + name + "\\b").test(l.replace(/::[A-Za-z0-9_:]*/g, "")))
-        return void 0;
-    }
-  }
-  if (new RegExp("\\bfor\\s+" + name + "\\s+in\\b").test(masked))
-    return void 0;
-  if (new RegExp("\\b(?:Some|Ok|Err|Value::(?:Dict|Arr|Str|Int|Float|Bool))\\(\\s*(?:mut\\s+)?" + name + "\\s*[),]").test(masked))
-    return void 0;
-  const declRe = new RegExp("let (?:mut )?" + name + "(?:: Value)? = ", "g");
-  let cls;
-  let decls = 0;
-  let dm;
-  while ((dm = declRe.exec(masked)) !== null) {
-    decls++;
-    const span = initOf(masked, dm.index + dm[0].length);
-    const init = raw.slice(span[0], span[1]).trim();
-    const this_cls = PLAIN_INIT.test(init) ? "plain" : DICT_INIT2.test(init) ? "dicty" : void 0;
-    if (this_cls === void 0)
-      return void 0;
-    if (cls === void 0)
-      cls = this_cls;
-    else if (this_cls === "dicty")
-      cls = "dicty";
-  }
-  if (decls === 0 || cls === void 0)
-    return void 0;
-  const assignRe = new RegExp("(?<![&A-Za-z0-9_.])" + name + "\\s*=(?!=)", "g");
-  let am;
-  while ((am = assignRe.exec(masked)) !== null) {
-    const span = initOf(masked, am.index + am[0].length);
-    const rhs = raw.slice(span[0], span[1]).trim();
-    if (/^Value::Map\(/.test(rhs) || /^Value::Null\b/.test(rhs))
-      continue;
-    if (DICT_INIT2.test(rhs)) {
-      cls = "dicty";
-      continue;
-    }
-    return void 0;
-  }
-  const mutRe = new RegExp("&mut\\s+" + name + "\\b", "g");
-  let mm;
-  while ((mm = mutRe.exec(masked)) !== null) {
-    const pre = masked.slice(Math.max(0, mm.index - 60), mm.index);
-    if (WRITE_HELPER.test(pre) || /(?:crate::)?Value::Dict\(\w+\)\s*=\s*$/.test(pre))
-      continue;
-    return void 0;
-  }
-  return cls;
-}
-function runPass3(content) {
-  if (!content.includes("get_value(") && !content.includes("in_op("))
-    return content;
-  const masked = maskSrc3(content);
-  const starts = [];
-  const headerRe = /(?:^|\n)[ \t]*(?:pub )?(?:async )?fn /g;
-  let hm;
-  while ((hm = headerRe.exec(masked)) !== null)
-    starts.push(hm.index + (hm[0][0] === "\n" ? 1 : 0));
-  starts.push(content.length);
-  const rewrites = [];
-  for (let h = 0; h + 1 < starts.length; h++) {
-    const from = starts[h];
-    const to = starts[h + 1];
-    const region = masked.slice(from, to);
-    const hit = region.indexOf("get_value(") >= 0 || region.indexOf("in_op(") >= 0;
-    if (!hit)
-      continue;
-    const raw = content.slice(from, to);
-    const header = region.slice(0, region.indexOf("{") < 0 ? 200 : region.indexOf("{"));
-    const proofs = /* @__PURE__ */ new Map();
-    let cm;
-    CALL2.lastIndex = 0;
-    while ((cm = CALL2.exec(region)) !== null) {
-      const name = cm[1];
-      const open = cm.index + name.length;
-      const end = callEnd3(region, open);
-      if (end < 0)
-        continue;
-      const spans = argSpans3(region, open);
-      if (spans.length !== 2)
-        continue;
-      const recvRaw = raw.slice(spans[0][0], spans[0][1]).trim();
-      const recvMasked = region.slice(spans[0][0], spans[0][1]).trim();
-      const ident = /^&\s*([A-Za-z_][A-Za-z0-9_]*)$/.exec(recvMasked);
-      if (ident === null)
-        continue;
-      const local = ident[1];
-      if (recvRaw !== "&" + local)
-        continue;
-      if (!proofs.has(local))
-        proofs.set(local, proofOf(region, raw, local, header));
-      const proof = proofs.get(local);
-      if (proof === void 0)
-        continue;
-      const keyRaw = raw.slice(spans[1][0], spans[1][1]).trim();
-      const lit = STR_LIT2.exec(keyRaw);
-      let key;
-      if (lit !== null) {
-        const k = lit[1];
-        if (ROUTED.test(k) || /^[0-9]+$/.test(k))
-          continue;
-        key = '"' + k + '"';
-      } else {
-        if (proof !== "plain")
-          continue;
-        const dyn = /^&\s*(.+)$/s.exec(keyRaw);
-        if (dyn === null)
-          continue;
-        if (/^(?:crate::)?Value::(?:Str|Int|Float|Bool|Null)\b/.test(dyn[1].trim()))
-          continue;
-        key = dyn[1].trim();
-      }
-      const dynKey = key.startsWith('"') ? void 0 : key;
-      const text = cm[1] === "get_value" ? `${local}.as_map().and_then(|__m| ${dynKey === void 0 ? `__m.get(${key})` : `${dynKey}.as_str().and_then(|__k| __m.get(__k))`}).cloned().unwrap_or(Value::Null)` : `${local}.as_map().is_some_and(|__m| ${dynKey === void 0 ? `__m.contains_key(${key})` : `${dynKey}.as_str().is_some_and(|__k| __m.contains_key(__k))`})`;
-      const start = from + cm.index;
-      const stop = from + end;
-      const lineStart = content.lastIndexOf("\n", start) + 1;
-      const lineStop = content.indexOf("\n", stop);
-      const lineLen = (lineStop < 0 ? content.length : lineStop) - lineStart;
-      if (lineLen <= 400 && lineLen - (stop - start) + text.length > 400)
-        continue;
-      rewrites.push({ start, end: stop, text });
-    }
-  }
-  if (rewrites.length === 0)
-    return content;
-  rewrites.sort((a, b) => a.start - b.start);
-  let out = "";
-  let at = 0;
-  for (const r of rewrites) {
-    if (r.start < at)
-      continue;
-    out += content.slice(at, r.start) + r.text;
-    at = r.end;
-  }
-  return out + content.slice(at);
-}
-function r08DictReads(content) {
-  let out = content;
-  for (let i = 0; i < 2; i++) {
-    const next = runPass3(out);
-    if (next === out)
-      break;
-    out = next;
-  }
-  return out;
-}
-
 // src/rustPasses/hx10w4-BF03.ts
 init_esm_shims();
 var FIELDS = ["options", "markets", "balance", "ohlcvs"];
-var RECV3 = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS.join("|") + ")";
-var STR_KEY3 = /^&Value::Str\("((?:[^"\\]|\\.)*)"\.(?:into|to_string)\(\)\)$/;
-var ROOT = new RegExp("^&mut\\s+" + RECV3 + "$");
-var COERCED = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV3 + "\\)\\s*\\}$");
+var RECV2 = "self\\.(?:(?:core|parent)\\.)*(" + FIELDS.join("|") + ")";
+var STR_KEY2 = /^&Value::Str\("((?:[^"\\]|\\.)*)"\.(?:into|to_string)\(\)\)$/;
+var ROOT = new RegExp("^&mut\\s+" + RECV2 + "$");
+var COERCED = new RegExp("^unsafe\\s*\\{\\s*crate::runtime::coerce_value_to_mut\\(&" + RECV2 + "\\)\\s*\\}$");
 var MAX_LINE2 = 400;
-function maskSrc4(src) {
+function maskSrc2(src) {
   const out = src.split("");
   const blank = (from, to) => {
     for (let i2 = from; i2 < to && i2 < out.length; i2++)
@@ -59492,7 +59444,7 @@ function maskSrc4(src) {
   }
   return out.join("");
 }
-function argSpans4(masked, open) {
+function argSpans2(masked, open) {
   let depth = 0;
   const spans = [];
   let start = open + 1;
@@ -59531,14 +59483,14 @@ function hopAt(content, masked, at) {
   if (!/^get_value_mut\(/.test(masked.slice(at, at + 14)))
     return void 0;
   const open = at + "get_value_mut".length;
-  const spans = argSpans4(masked, open);
+  const spans = argSpans2(masked, open);
   if (spans === void 0 || spans.length !== 2)
     return void 0;
   const close = closeOf(masked, open);
   if (close < 0)
     return void 0;
   const key = content.slice(spans[1][0], spans[1][1]).trim();
-  const lit = STR_KEY3.exec(key);
+  const lit = STR_KEY2.exec(key);
   return {
     recv: content.slice(spans[0][0], spans[0][1]).trim(),
     key,
@@ -59586,10 +59538,10 @@ function valueIdentKey(masked, at, key) {
     return "crate::runtime::stringify_param(&" + ident + ")";
   return "";
 }
-function runPass4(content) {
+function runPass2(content) {
   if (!content.includes("get_value_mut("))
     return content;
-  const masked = maskSrc4(content);
+  const masked = maskSrc2(content);
   const headRe = /if let Value::Dict\(\s*(\w+)\s*\)\s*=\s*get_value_mut\(/g;
   const rws = [];
   let m;
@@ -59678,7 +59630,7 @@ function runPass4(content) {
   return out + content.slice(at);
 }
 function bf03PlainDictChains(content) {
-  return runPass4(content);
+  return runPass2(content);
 }
 
 // src/rustPasses/hx10w7-R10.ts
@@ -60041,7 +59993,7 @@ function narrowStrSinkLocals(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -60077,7 +60029,7 @@ function narrowStrSinkLocals(content) {
       continue;
     const stmtEnd3 = callClose + tail[0].length;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 3)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -60122,7 +60074,7 @@ function narrowStrSinkLocals(content) {
         break;
       }
       const inner = hit[0] + "format!(".length;
-      const slot = argSpans5(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
+      const slot = argSpans3(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
       if (slot.length === 0) {
         ok = false;
         break;
@@ -60227,7 +60179,7 @@ function narrowStrNullLocals(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -60263,7 +60215,7 @@ function narrowStrNullLocals(content) {
     if (tail === null)
       continue;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 3)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -60751,7 +60703,7 @@ function hx11w9RustStrLiteralLocalNativeString(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -60824,7 +60776,7 @@ function hx11w9RustStrLiteralLocalNativeString(content) {
       if (cand.length > 0) {
         const hit = cand.reduce((a, b) => b[0] > a[0] ? b : a);
         const inner = hit[0] + "format!(".length;
-        const slot = argSpans5(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
+        const slot = argSpans3(body.slice(inner, hit[1] - 1)).filter(([a, b]) => inner + a <= at && at + name.length <= inner + b);
         if (slot.length > 0 && body.slice(inner + slot[0][0], inner + slot[0][1]).replace(/\s+/g, "") === name) {
           if (hit[2]) {
             ok = false;
@@ -60849,7 +60801,8 @@ function hx11w9RustStrLiteralLocalNativeString(content) {
     }
     if (!ok)
       continue;
-    const declText = `${m[1]}let mut ${name}: String = ${lit[1]}.to_string();`;
+    const tail = content.slice(m.index + lit.index + lit[0].length, stmtEnd3);
+    const declText = `${m[1]}let mut ${name}: String = ${lit[1]}.to_string();${tail}`;
     const all = [{ start: m.index, end: stmtEnd3, text: declText }, ...edits];
     const lineGrow = /* @__PURE__ */ new Map();
     for (const e of all) {
@@ -60977,7 +60930,7 @@ function hx11w9StrLocalReassign(content) {
     }
     return -1;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -61018,7 +60971,7 @@ function hx11w9StrLocalReassign(content) {
       if (twin === void 0)
         return null;
       const base = open + 1;
-      const spans = argSpans5(masked.slice(base, close - 1));
+      const spans = argSpans3(masked.slice(base, close - 1));
       if (spans.length !== 3)
         return null;
       const keyRaw = content.slice(base + spans[1][0], base + spans[1][1]).trim();
@@ -61233,7 +61186,7 @@ function hx11w9RustBoolKLocalOptionBool(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -61267,7 +61220,7 @@ function hx11w9RustBoolKLocalOptionBool(content) {
       continue;
     const stmtEnd3 = callClose + tail[0].length;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 3)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -61439,7 +61392,7 @@ function hx11w9RustBool2LocalOptionBool(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -61472,7 +61425,7 @@ function hx11w9RustBool2LocalOptionBool(content) {
       continue;
     const stmtEnd3 = callClose + tail[0].length;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 4)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -61644,7 +61597,7 @@ function hx11w9RustBoolNLocalOptionBool(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -61677,7 +61630,7 @@ function hx11w9RustBoolNLocalOptionBool(content) {
       continue;
     const stmtEnd3 = callClose + tail[0].length;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 3)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -61850,7 +61803,7 @@ function hx11w9RustStr2LocalOptionString(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -61884,7 +61837,7 @@ function hx11w9RustStr2LocalOptionString(content) {
       continue;
     const stmtEnd3 = callClose + tail[0].length;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 4)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -62469,7 +62422,7 @@ function hx11w9RustStrNLocalOptionString(content) {
     }
     return src.length;
   };
-  const argSpans5 = (src) => {
+  const argSpans3 = (src) => {
     const out2 = [];
     let depth = 0;
     let start = 0;
@@ -62503,7 +62456,7 @@ function hx11w9RustStrNLocalOptionString(content) {
       continue;
     const stmtEnd3 = callClose + tail[0].length;
     const base = callOpen + 1;
-    const spans = argSpans5(masked.slice(base, callClose - 1));
+    const spans = argSpans3(masked.slice(base, callClose - 1));
     if (spans.length !== 3)
       continue;
     const obj = content.slice(base + spans[0][0], base + spans[0][1]).trim();
@@ -63504,7 +63457,6 @@ export {
   g08w3Check,
   hx10G06Check,
   hx10w2R03,
-  hx10w2R08,
   hx10w3R03,
   hx10w8GB01Check,
   hx10w8GB05Check,
@@ -63550,7 +63502,6 @@ export {
   r06Push,
   r06w3Push,
   r07StringNatives,
-  r08DictReads,
   r10ClientHandle
 };
 //# sourceMappingURL=transpiler.js.map
