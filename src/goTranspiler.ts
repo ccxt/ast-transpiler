@@ -14815,14 +14815,24 @@ ${tryBodyBlock}
         }
         if (parent?.kind === SyntaxKind.CallExpression) {
             const callee: any = parent.expression;
-            const local: any = parent.parent;
+            // `this.safeList (R, k, []) as List`: the wrapper prints as the call itself
+            let wrapped: any = parent;
+            while (((wrapped.parent?.kind === SyntaxKind.AsExpression) || (wrapped.parent?.kind === SyntaxKind.NonNullExpression)
+                || (wrapped.parent?.kind === SyntaxKind.ParenthesizedExpression)) && (wrapped.parent.expression === wrapped)) {
+                wrapped = wrapped.parent;
+            }
+            const local: any = wrapped.parent;
             if ((parent.arguments[0] !== node) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
                 || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
-                || (local?.kind !== SyntaxKind.VariableDeclaration) || (local.initializer !== parent)) {
+                || (local?.kind !== SyntaxKind.VariableDeclaration) || (local.initializer !== wrapped)
+                || (local.name?.kind !== SyntaxKind.Identifier)) {
                 return false;
             }
-            return (callee.name?.text === 'safeList') ? (this.goSafeListLocalUnbox(local) === GO_SAFE_LIST_LOCAL_TYPE)
-                : ((callee.name?.text === 'safeDict') && (this.goSafeDictLocalUnbox(local) === GO_SAFE_DICT_LOCAL_TYPE));
+            // the printer's own unbox, or the type the host's declared-type table names for the local
+            const isType = (unboxed: string | undefined, type: string): boolean => (unboxed === type)
+                || ((wrapped !== parent) && (this.goResolvedLocalGoType(local.name) === type));
+            return (callee.name?.text === 'safeList') ? isType(this.goSafeListLocalUnbox(local), GO_SAFE_LIST_LOCAL_TYPE)
+                : ((callee.name?.text === 'safeDict') && isType(this.goSafeDictLocalUnbox(local), GO_SAFE_DICT_LOCAL_TYPE));
         }
         return this.goIsNilComparisonOperand(node, parent);
     }
@@ -14892,11 +14902,17 @@ ${tryBodyBlock}
         if (this.goWritesOrRebindsName(node, name, [])) {
             return false;
         }
-        const parent: any = node.parent;
-        if (parent?.kind === SyntaxKind.PropertyAccessExpression) {
-            return (parent.expression === node) && (parent.name?.text === 'length');
+        // `(x as List).length` / `x!`: the wrapper prints as x itself
+        let use: any = node;
+        while (((use.parent?.kind === SyntaxKind.AsExpression) || (use.parent?.kind === SyntaxKind.NonNullExpression)
+            || (use.parent?.kind === SyntaxKind.ParenthesizedExpression)) && (use.parent.expression === use)) {
+            use = use.parent;
         }
-        if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== node)) {
+        const parent: any = use.parent;
+        if (parent?.kind === SyntaxKind.PropertyAccessExpression) {
+            return (parent.expression === use) && (parent.name?.text === 'length');
+        }
+        if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== use)) {
             return false;
         }
         let read: any = parent;
@@ -14907,11 +14923,18 @@ ${tryBodyBlock}
     }
 
     goJsonOriginList(baseExpr): boolean {
+        // the caller proved the local is declared `[]any` (the printer's own safeList unbox, or the host's
+        // declared-type table for `safeList (..) as List`); the initializer is the accessor either way
         const declaration: any = this.goAnyBoxLocalDeclaration(baseExpr);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeListLocalUnbox(declaration) !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
             return false;
         }
-        const args: any = this.goSafeListLocalArgs(declaration.initializer);
+        let initializer: any = declaration.initializer;
+        while ((initializer?.kind === SyntaxKind.AsExpression) || (initializer?.kind === SyntaxKind.NonNullExpression)
+            || (initializer?.kind === SyntaxKind.ParenthesizedExpression)) {
+            initializer = initializer.expression;
+        }
+        const args: any = this.goSafeListLocalArgs(initializer);
         return (args !== undefined) && this.goJsonOriginContainer(args.container)
             && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name));
     }
@@ -14921,7 +14944,7 @@ ${tryBodyBlock}
             || this.isGoElementAccessAssignmentTarget(node) || containerStr.includes('\n') || keyStr.includes('\n')) {
             return undefined;
         }
-        if ((this.goSafeListUnboxIdentifier(baseExpr) !== true) || (this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) === undefined)) {
+        if (!this.goDeclaredListIdentifier(baseExpr) || (this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) === undefined)) {
             return undefined;
         }
         return this.goJsonOriginList(baseExpr) ? `${containerStr}[${keyStr}]` : undefined;

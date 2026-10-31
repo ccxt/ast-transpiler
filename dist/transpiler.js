@@ -23127,11 +23127,16 @@ ${this.getIden(level)}}()`;
     }
     if (parent?.kind === SyntaxKind5.CallExpression) {
       const callee = parent.expression;
-      const local = parent.parent;
-      if (parent.arguments[0] !== node || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || local?.kind !== SyntaxKind5.VariableDeclaration || local.initializer !== parent) {
+      let wrapped = parent;
+      while ((wrapped.parent?.kind === SyntaxKind5.AsExpression || wrapped.parent?.kind === SyntaxKind5.NonNullExpression || wrapped.parent?.kind === SyntaxKind5.ParenthesizedExpression) && wrapped.parent.expression === wrapped) {
+        wrapped = wrapped.parent;
+      }
+      const local = wrapped.parent;
+      if (parent.arguments[0] !== node || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || local?.kind !== SyntaxKind5.VariableDeclaration || local.initializer !== wrapped || local.name?.kind !== SyntaxKind5.Identifier) {
         return false;
       }
-      return callee.name?.text === "safeList" ? this.goSafeListLocalUnbox(local) === GO_SAFE_LIST_LOCAL_TYPE : callee.name?.text === "safeDict" && this.goSafeDictLocalUnbox(local) === GO_SAFE_DICT_LOCAL_TYPE;
+      const isType = (unboxed, type) => unboxed === type || wrapped !== parent && this.goResolvedLocalGoType(local.name) === type;
+      return callee.name?.text === "safeList" ? isType(this.goSafeListLocalUnbox(local), GO_SAFE_LIST_LOCAL_TYPE) : callee.name?.text === "safeDict" && isType(this.goSafeDictLocalUnbox(local), GO_SAFE_DICT_LOCAL_TYPE);
     }
     return this.goIsNilComparisonOperand(node, parent);
   }
@@ -23191,11 +23196,15 @@ ${this.getIden(level)}}()`;
     if (this.goWritesOrRebindsName(node, name, [])) {
       return false;
     }
-    const parent = node.parent;
-    if (parent?.kind === SyntaxKind5.PropertyAccessExpression) {
-      return parent.expression === node && parent.name?.text === "length";
+    let use = node;
+    while ((use.parent?.kind === SyntaxKind5.AsExpression || use.parent?.kind === SyntaxKind5.NonNullExpression || use.parent?.kind === SyntaxKind5.ParenthesizedExpression) && use.parent.expression === use) {
+      use = use.parent;
     }
-    if (parent?.kind !== SyntaxKind5.ElementAccessExpression || parent.expression !== node) {
+    const parent = use.parent;
+    if (parent?.kind === SyntaxKind5.PropertyAccessExpression) {
+      return parent.expression === use && parent.name?.text === "length";
+    }
+    if (parent?.kind !== SyntaxKind5.ElementAccessExpression || parent.expression !== use) {
       return false;
     }
     let read = parent;
@@ -23206,17 +23215,21 @@ ${this.getIden(level)}}()`;
   }
   goJsonOriginList(baseExpr) {
     const declaration = this.goAnyBoxLocalDeclaration(baseExpr);
-    if (declaration?.kind !== SyntaxKind5.VariableDeclaration || this.goSafeListLocalUnbox(declaration) !== GO_SAFE_LIST_LOCAL_TYPE) {
+    if (declaration?.kind !== SyntaxKind5.VariableDeclaration) {
       return false;
     }
-    const args = this.goSafeListLocalArgs(declaration.initializer);
+    let initializer = declaration.initializer;
+    while (initializer?.kind === SyntaxKind5.AsExpression || initializer?.kind === SyntaxKind5.NonNullExpression || initializer?.kind === SyntaxKind5.ParenthesizedExpression) {
+      initializer = initializer.expression;
+    }
+    const args = this.goSafeListLocalArgs(initializer);
     return args !== void 0 && this.goJsonOriginContainer(args.container) && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name));
   }
   goJsonOriginLoopRead(node, baseExpr, keyNode, containerStr, keyStr) {
     if (baseExpr?.kind !== SyntaxKind5.Identifier || keyNode?.kind !== SyntaxKind5.Identifier || baseExpr.text === keyNode.text || this.isGoElementAccessAssignmentTarget(node) || containerStr.includes("\n") || keyStr.includes("\n")) {
       return void 0;
     }
-    if (this.goSafeListUnboxIdentifier(baseExpr) !== true || this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) === void 0) {
+    if (!this.goDeclaredListIdentifier(baseExpr) || this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) === void 0) {
       return void 0;
     }
     return this.goJsonOriginList(baseExpr) ? `${containerStr}[${keyStr}]` : void 0;
