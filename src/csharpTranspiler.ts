@@ -5690,7 +5690,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // A call of a base-tier method whose array parameter this rule typed from its declared type: an
-    // argument the printer does not hold as a list is converted at the call, as `x.push` does
+    // argument the printer does not hold as a list is converted at the call (toArray)
     printArgsForCallExpression(node, identation) {
         const callee: any = node.expression;
         const fileName = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
@@ -5726,7 +5726,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (!this.csharpArgumentMayBeList(this.getChecker().getTypeAtLocation(inner))) {
                 return printed;
             }
-            return `((IList<object>)${printed})`;
+            // toArray keeps a List<object> as is and re-boxes a typed list (a hard cast would throw)
+            return `this.toArray(${printed})`;
         }).join(', ');
     }
 

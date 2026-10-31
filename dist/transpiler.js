@@ -7490,7 +7490,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return (type.flags & (TypeFlags3.Any | TypeFlags3.Unknown)) !== 0 || checker.isArrayType(type) || checker.isTupleType(type);
   }
   // A call of a base-tier method whose array parameter this rule typed from its declared type: an
-  // argument the printer does not hold as a list is converted at the call, as `x.push` does
+  // argument the printer does not hold as a list is converted at the call (toArray)
   printArgsForCallExpression(node, identation) {
     const callee = node.expression;
     const fileName = String(node.getSourceFile?.()?.fileName ?? "").replace(/\\/g, "/");
@@ -7525,7 +7525,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       if (!this.csharpArgumentMayBeList(this.getChecker().getTypeAtLocation(inner))) {
         return printed;
       }
-      return `((IList<object>)${printed})`;
+      return `this.toArray(${printed})`;
     }).join(", ");
   }
   // whether the method body rebinds the parameter (an assignment or ++/--): the declaration

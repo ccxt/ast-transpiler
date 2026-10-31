@@ -76,6 +76,6 @@ describe('csharp base-tier array parameters (fold of ccxt hx10w3-C01)', () => {
     });
 
     test('an object argument to a base-typed parameter is converted at the call', () => {
-        expect(venue).toContain('this.ids(((IList<object>)box))');
+        expect(venue).toContain('this.ids(this.toArray(box))');
     });
 });
