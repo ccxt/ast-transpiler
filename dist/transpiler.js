@@ -8289,7 +8289,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return;
     }
     for (let index = 0; index < statements.length; index++) {
-      const plan = this.csharpPromiseAllPlanStatement(statements, index);
+      const plan = this.csharpPromiseAllPlanStatement(statements, index) ?? this.csharpPromiseAllSlotsPlan(statements, index);
       if (plan !== void 0) {
         this.csharpPromiseAllSites.set(statements[index], plan);
         for (const declaration of plan.declarations) {
@@ -8435,9 +8435,99 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
   }
+  // RD-CS-2 (folds ccxt build/hx10w5-C08): `await Promise.all ([this.a (), this.b ()]);` as a statement.
+  // The result is discarded, so the helper's re-box is unobservable and WhenAll waits for the same
+  // tasks whatever their T: every element is a resolved `this.<m> (...)` call typed Promise<...>.
+  csharpPromiseAllDiscardedTasks(awaited) {
+    const call = awaited?.expression;
+    if (awaited?.parent?.kind !== SyntaxKind4.ExpressionStatement || call?.kind !== SyntaxKind4.CallExpression || call.expression?.getText() !== "Promise.all" || call.arguments?.length !== 1) {
+      return void 0;
+    }
+    const list = call.arguments[0];
+    if (list?.kind !== SyntaxKind4.ArrayLiteralExpression || list.elements.length === 0) {
+      return void 0;
+    }
+    return list.elements.every((element) => this.csharpPromiseAllIsThisTaskCall(element)) ? [...list.elements] : void 0;
+  }
+  csharpPromiseAllIsThisTaskCall(element) {
+    const callee = element?.expression;
+    if (element?.kind !== SyntaxKind4.CallExpression || callee?.kind !== SyntaxKind4.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind4.ThisKeyword || !this.csharpCalleeResolves(element)) {
+      return false;
+    }
+    try {
+      return this.getTypeFromRawType(this.getChecker().getTypeAtLocation(element)) === this.PROMISE_TYPE_KEYWORD;
+    } catch (e) {
+      return false;
+    }
+  }
+  // RD-CS-2 (folds ccxt build/hx10w5-C08 slots arm): `const [a, b] = await Promise.all ([p, q])` over const task
+  // locals read nowhere else, each holding a resolved `this.<m> (...)` call whose Task<T> has a plain T. The
+  // locals print as Task<T>, one WhenAll waits for them, and each slot is read from its own task.
+  csharpPromiseAllSlotsPlan(statements, index) {
+    const statement = statements[index];
+    const declaration = statement?.declarationList?.declarations?.[0];
+    if (statement?.kind !== SyntaxKind4.VariableStatement || statement.declarationList.declarations.length !== 1 || (statement.declarationList.flags & NodeFlags.Const) === 0 || declaration.name?.kind !== SyntaxKind4.ArrayBindingPattern) {
+      return void 0;
+    }
+    const elements = this.csharpPromiseAllList(declaration.initializer);
+    const bindings = declaration.name.elements;
+    if (elements === void 0 || bindings.length !== elements.length || bindings.some((binding) => binding.kind !== SyntaxKind4.BindingElement || binding.name?.kind !== SyntaxKind4.Identifier || binding.initializer !== void 0 || binding.dotDotDotToken !== void 0)) {
+      return void 0;
+    }
+    const fn = this.csharpEnclosingFunction(statement);
+    const typedElements = elements.map((element) => this.csharpPromiseAllTypedElement(fn, element));
+    if (typedElements.every((typed) => typed !== void 0) && new Set(typedElements.map((typed) => typed.type)).size === 1) {
+      return void 0;
+    }
+    const slots = [];
+    const locals = [];
+    for (let i = 0; i < elements.length; i++) {
+      const element = elements[i];
+      const local = element?.kind === SyntaxKind4.Identifier ? this.csharpReceiverBinding(element) : void 0;
+      const position = statements.indexOf(local?.parent?.parent);
+      if (local?.kind !== SyntaxKind4.VariableDeclaration || local.name?.kind !== SyntaxKind4.Identifier || (local.parent?.flags & NodeFlags.Const) === 0 || local.parent.declarations.length !== 1 || position < 0 || position >= index || local.initializer === void 0 || !this.csharpPromiseAllIsThisTaskCall(local.initializer) || this.csharpPromiseAllMentions(fn, local) !== 1) {
+        return void 0;
+      }
+      const type = this.csharpPromiseAllSlotTaskType(local.initializer);
+      if (type === void 0 || locals.some((other) => other.name.text === local.name.text)) {
+        return void 0;
+      }
+      locals.push({ name: local.name, declaration: local, type });
+      slots.push({ task: local.name.text, name: this.printNode(bindings[i].name, 0).trim() });
+    }
+    for (const local of locals) {
+      this.csharpPromiseAllTypedLocals.set(this.csharpPromiseAllKey(local.declaration), local.type);
+    }
+    return { statement, declaration, elements: [], declarations: [], slots };
+  }
+  // the plain T of the Task<T> a `this.<m> (...)` call prints: an implicit-API endpoint's body type, or the
+  // object of an un-annotated method returning `any`; undefined for anything the helper would re-box
+  csharpPromiseAllSlotTaskType(call) {
+    const implicit = this.csharpImplicitApiTaskType(call);
+    if (implicit !== void 0) {
+      return implicit;
+    }
+    let declaration;
+    try {
+      declaration = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    } catch (e) {
+      return void 0;
+    }
+    if (declaration?.kind !== SyntaxKind4.MethodDeclaration || declaration.type !== void 0 || this.csharpPrintedReturnType(declaration) !== "Task<object>") {
+      return void 0;
+    }
+    return "object";
+  }
   csharpPromiseAllNativeStatement(plan, identation) {
     const indent = this.getIden(identation);
     const lines = [];
+    if (plan.slots !== void 0) {
+      lines.push("await Task.WhenAll(" + plan.slots.map((slot) => slot.task).join(", ") + ")" + this.LINE_TERMINATOR);
+      for (const slot of plan.slots) {
+        lines.push("var " + slot.name + " = await " + slot.task + this.LINE_TERMINATOR);
+      }
+      return lines.map((line) => indent + line).join("\n");
+    }
     const tasks = [];
     for (const element of plan.elements) {
       if (element.declaration !== void 0) {
@@ -8485,6 +8575,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     return declaration === void 0 ? void 0 : this.csharpPromiseAllTypedLists.get(this.csharpPromiseAllKey(declaration));
   }
   printAwaitExpression(node, identation) {
+    const discarded = this.csharpPromiseAllDiscardedTasks(node);
+    if (discarded !== void 0) {
+      return `await Task.WhenAll(new Task[] {${discarded.map((element) => this.printNode(element, 0).trim()).join(", ")}})`;
+    }
     if (this.csharpPromiseAllTypedAwaits.has(this.csharpPromiseAllKey(node))) {
       return `new List<object>(await Task.WhenAll(${this.printNode(node.expression.arguments[0], 0)}))`;
     }

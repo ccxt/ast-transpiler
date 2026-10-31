@@ -368,6 +368,16 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpPromiseAllTypeIsPlain(checker: any, type: any, depth: any): any;
     csharpPromiseAllIsIndexOnlyObject(type: any): boolean;
     csharpPromiseAllIndexType(type: any): any;
+    csharpPromiseAllDiscardedTasks(awaited: any): any[] | undefined;
+    csharpPromiseAllIsThisTaskCall(element: any): boolean;
+    csharpPromiseAllSlotsPlan(statements: any, index: any): {
+        statement: any;
+        declaration: any;
+        elements: any[];
+        declarations: any[];
+        slots: any[];
+    };
+    csharpPromiseAllSlotTaskType(call: any): string | undefined;
     csharpPromiseAllNativeStatement(plan: any, identation: any): string;
     csharpPromiseAllKey(node: any): string;
     csharpPromiseAllTypedListRead(receiver: any): string | undefined;
