@@ -6465,6 +6465,92 @@ describe('csharp native Promise.all -> Task.WhenAll (hx10w6 AU03)', () => {
     });
 });
 
+describe('csharp native Promise.all over mixed Task types (RD-CS-2, folds hx10w5-C08)', () => {
+    const head =
+        "class Test {\n" +
+        "    async fetchA (x: number): Promise<{ [key: string]: any }> { return {}; }\n" +
+        "    async fetchList (x: number): Promise<{ [key: string]: any }[]> { return []; }\n" +
+        "    async fetchVoid (): Promise<void> { }\n" +
+        "    async fetchAny (x: number) { return x; }\n";
+    test('a discarded result waits natively on any mix of resolved this-call tasks', () => {
+        const ts = head +
+        "    async f (): Promise<void> {\n" +
+        "        await Promise.all ([ this.fetchA (1), this.fetchVoid (), this.fetchAny (2) ]);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).not.toContain('promiseAll(');
+        expect(output).toContain('await Task.WhenAll(new Task[] {this.fetchA(1), this.fetchVoid(), this.fetchAny(2)});');
+    });
+    test('a discarded result with an unresolved or non-task element keeps the helper', () => {
+        const ts = head +
+        "    async f (other: any): Promise<void> {\n" +
+        "        await Promise.all ([ this.fetchA (1), other.thing () ]);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toContain('promiseAll(');
+        expect(output).not.toContain('Task.WhenAll');
+    });
+    test('a used result of a mixed list keeps the helper', () => {
+        const ts = head +
+        "    async f (): Promise<void> {\n" +
+        "        const r = await Promise.all ([ this.fetchA (1), this.fetchList (2) ]);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).not.toContain('Task.WhenAll(new Task[]');
+    });
+});
+
+describe('csharp destructured Promise.all slots over un-annotated any tasks (RD-CS-2, folds hx11w8 slots)', () => {
+    const head =
+        "class Test {\n" +
+        "    async fetchAny (x: any) { const r: any = x; return r; }\n" +
+        "    async fetchTyped (x: any): Promise<string> { return 'a'; }\n";
+    test('each slot is read from its own Task<object> local after one WhenAll', () => {
+        const ts = head +
+        "    async f (): Promise<void> {\n" +
+        "        const p1 = this.fetchAny (1);\n" +
+        "        const p2 = this.fetchAny (2);\n" +
+        "        const [ a, b ] = await Promise.all ([ p1, p2 ]);\n" +
+        "        console.log (a, b);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).not.toContain('promiseAll(');
+        expect(output).toContain('Task<object> p1 = this.fetchAny(1);');
+        expect(output).toContain('Task<object> p2 = this.fetchAny(2);');
+        expect(output).toContain('await Task.WhenAll(p1, p2);');
+        expect(output).toContain('var a = await p1;');
+        expect(output).toContain('var b = await p2;');
+    });
+    test('a task local read again elsewhere keeps the helper', () => {
+        const ts = head +
+        "    async f (): Promise<void> {\n" +
+        "        const p1 = this.fetchAny (1);\n" +
+        "        const p2 = this.fetchAny (2);\n" +
+        "        const [ a, b ] = await Promise.all ([ p1, p2 ]);\n" +
+        "        await p1;\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).toContain('promiseAll(');
+        expect(output).not.toContain('Task.WhenAll');
+    });
+    test('an annotated Promise<string> task is a typed Task<string>, which the slots arm leaves to the helper', () => {
+        const ts = head +
+        "    async f (): Promise<void> {\n" +
+        "        const p1 = this.fetchTyped (1);\n" +
+        "        const p2 = this.fetchAny (2);\n" +
+        "        const [ a, b ] = await Promise.all ([ p1, p2 ]);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileCSharp(ts).content;
+        expect(output).not.toContain('Task<object> p1');
+    });
+});
+
 describe('csharp native Promise.all negative shapes (hx10w6 AU03)', () => {
     const head =
         "class Test {\n" +
