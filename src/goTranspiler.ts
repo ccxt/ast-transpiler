@@ -123,6 +123,11 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'this.GroupBy': 'map[string]any',
     'this.Milliseconds': 'int64',
     'this.Seconds': 'int64',
+    // FM-GO4-1: `Nonce() int64` / `IncrementingNonce() int64` are the hand-written signatures of
+    // go/v4/exchange_interface.go (ICoreExchange 284/285, IDerivedExchange 439); goNonceReturnType prints
+    // every generated Nonce () override to match, so a local fed by either holds an int64
+    'this.Nonce': 'int64',
+    'this.IncrementingNonce': 'int64',
     'this.Microseconds': 'int64',
     'ParseInt': 'int64',
     'MathFloor': 'float64',
@@ -1378,7 +1383,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     printGoSignature(node, identation, receiver: string): string {
         const name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(node.name.text));
         // G03: a market producer whose every path answers a dictionary prints that map
-        const returnType = (this.goMarketProducerReturnType(node) ?? this.printFunctionType(node)).trim();
+        const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.printFunctionType(node)).trim();
         const parsedArgs = this.printMethodParameters(node);
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
         const returnSignature = returnType ? " " + returnType : "";
@@ -3136,6 +3141,125 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return (initializer.kind === SyntaxKind.CallExpression) && this.goMarketCalleePrintsMap(initializer);
     }
 
+    // ---- FM-GO4-1: Nonce () is int64 end to end (was ccxt build/hx11w8-nonce-int64.ts) ----------------
+    // `BaseExchange.nonce` and every override print `int64` (go/v4/exchange_interface.go pins one
+    // signature for the whole tree). A method is the nonce family when the checker walks its class chain
+    // up to the class `BaseExchange` declaring `nonce` (no parameters, not async); it prints int64 when
+    // EVERY return of its own body is provably an int64 operand: a clock call, an int literal, an int64
+    // local, a defaulted/narrowed `*int64` difference (goNativeArithmetic), or `this.sum(a, b)` of two such
+    // operands (printed `a + b`, see goNonceSumText). Anything else throws: the interface cannot take
+    // `any` for one venue.
+    goNonceReturnCache = new WeakMap<object, string | undefined>();
+
+    goNonceReturnType(node): string | undefined {
+        if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.name?.text !== 'nonce') || (node.parameters?.length !== 0)) {
+            return undefined;
+        }
+        if (this.goNonceReturnCache.has(node)) {
+            return this.goNonceReturnCache.get(node);
+        }
+        let result: string | undefined = undefined;
+        if (this.goIsBaseNonceMethod(node)) {
+            const returns = this.goDescendantsOf(node.body).filter((n: any) => (n.kind === SyntaxKind.ReturnStatement) && (this.goEnclosingFunction(n) === node));
+            const bad = (returns.length === 0) ? node : returns.find((r: any) => (r.expression === undefined) || !this.goNonceReturnIsInt64(r.expression));
+            if (bad !== undefined) {
+                throw new Error(`goNonceReturnType: ${this.goEnclosingClassName(node)}.nonce returns unproven \`${bad.getText?.() ?? ''}\`; the interface pins int64`);
+            }
+            result = 'int64';
+        }
+        this.goNonceReturnCache.set(node, result);
+        return result;
+    }
+
+    // the class chain of `fn` (a method named nonce, no params, not async) ends in `BaseExchange.nonce`
+    goIsBaseNonceMethod(fn): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if ((checker === undefined) || (fn.body === undefined) || this.isAsyncFunction(fn)) {
+            return false;
+        }
+        let current: any = fn;
+        for (let depth = 0; depth < 12; depth++) {
+            const cls: any = this.goEnclosingClass(current);
+            if (cls === undefined) {
+                return false;
+            }
+            const clause: any = (cls.heritageClauses ?? []).find((c: any) => c.token === SyntaxKind.ExtendsKeyword);
+            if (clause === undefined) {
+                return (cls.name?.text === 'BaseExchange');
+            }
+            const baseType = checker.getTypeAtLocation(clause.types?.[0]);
+            const symbol = baseType?.getProperty?.('nonce');
+            const declaration: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d: any) => d.resolve())?.[0];
+            if ((declaration === undefined) || (declaration.kind !== SyntaxKind.MethodDeclaration)) {
+                return false;
+            }
+            current = declaration;
+        }
+        return false;
+    }
+
+    // one `return` expression of a nonce method prints as a Go int64 (or an untyped int constant)
+    goNonceReturnIsInt64(expression): boolean {
+        let inner: any = expression;
+        while (inner?.kind === SyntaxKind.ParenthesizedExpression) {
+            inner = inner.expression;
+        }
+        if (this.goInt64SumOperands(inner) !== undefined) {
+            return true;
+        }
+        const type = this.goOperandStaticType(inner, this.printNode(inner, 0));
+        return (type === 'int64') || (type === 'const-int');
+    }
+
+    // `this.sum(a, b)` (BaseExchange.sum) whose operands both print as int64: [a, b], else undefined
+    goInt64SumOperands(call): any[] | undefined {
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'sum')
+            || (call.arguments?.length !== 2)) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const symbol = checker?.getSymbolAtLocation(call.expression.name);
+        const declaration: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d: any) => d.resolve())?.[0];
+        // BaseExchange declares `sum = sum;` (the generic helper) as a property, not a method
+        if (((declaration?.kind !== SyntaxKind.MethodDeclaration) && (declaration?.kind !== SyntaxKind.PropertyDeclaration))
+            || (this.goEnclosingClassName(declaration) !== 'BaseExchange')) {
+            return undefined;
+        }
+        const operands = [ call.arguments[0], call.arguments[1] ];
+        const proven = operands.every((operand: any) => {
+            if (operand.kind === SyntaxKind.SpreadElement) {
+                return false;
+            }
+            const type = this.goOperandStaticType(operand, this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(operand, 0)));
+            return (type === 'int64') || (type === 'const-int');
+        });
+        return proven ? operands : undefined;
+    }
+
+    // `return this.sum(a, b)` of a nonce method: the int64 sum Add returns for two int64 operands
+    goNonceSumText(node): string | undefined {
+        if (node?.parent?.kind !== SyntaxKind.ReturnStatement) {
+            return undefined;
+        }
+        const operands = this.goInt64SumOperands(node);
+        if (operands === undefined) {
+            return undefined;
+        }
+        const fn: any = this.goEnclosingFunction(node);
+        if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.text !== 'nonce') || (this.goNonceReturnType(fn) !== 'int64')) {
+            return undefined;
+        }
+        const text = operands.map((operand: any, index: number) => {
+            const printed = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(operand, 0)).trim();
+            const operator = this.goNativeBinaryOperator(operand);
+            const precedence = (operator === undefined) ? 6 : this.goOperatorPrecedence(operator);
+            return ((precedence < 4) || ((index === 1) && (precedence === 4)))
+                && (operand.kind !== SyntaxKind.ParenthesizedExpression) ? '(' + printed + ')' : printed;
+        });
+        return text[0] + ' + ' + text[1];
+    }
+
     // the printed return type of a market producer, or undefined to keep the checker's answer
     goMarketProducerReturnType(node): string | undefined {
         if (node?.kind !== SyntaxKind.MethodDeclaration) {
@@ -4849,6 +4973,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {
+        const nonceSum = this.goNonceSumText(node);
+        if (nonceSum !== undefined) {
+            return nonceSum;
+        }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const args = node.arguments;
 
