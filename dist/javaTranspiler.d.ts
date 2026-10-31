@@ -224,6 +224,14 @@ export declare class JavaTranspiler extends BaseTranspiler {
         [key: string]: [string, string];
     };
     javaOwnerStoreFieldReceiver(expression: any): boolean;
+    javaOhlcvsElementRead(node: any): string | undefined;
+    javaStringArrayAssertedCounterRead(node: any): string | undefined;
+    unwrapParenthesized(node: any): any;
+    javaOhlcvsSymbolMapRead(node: any, inner: any): string | undefined;
+    javaIsOhlcvsField(node: any): boolean;
+    javaOhlcvsEntryIsFresh(site: any, symbolNode: any): boolean;
+    javaOhlcvsFreshAnchor(statement: any, symbol: any): boolean;
+    javaOhlcvsDisturbed(statement: any, symbol: any): boolean;
     javaWsClientMapField(expression: any): string | undefined;
     javaWsClientMapReadText(receiver: any, key: any): string | undefined;
     javaWsClientMapRead(node: any): string | undefined;

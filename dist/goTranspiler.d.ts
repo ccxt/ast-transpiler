@@ -33,6 +33,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         remove: string;
         ownerSide: RegExp[];
     } | undefined;
+    predictionMapFields: Set<string>;
     goSliceLiteralTypes: Map<any, string>;
     CCXT_GO_GETARG_DECLARED_TYPES: any;
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
@@ -508,6 +509,16 @@ export declare class GoTranspiler extends BaseTranspiler {
     goFieldContainerTypeNative(node: any): string | undefined;
     goValueMayHoldPointer(valueNode: any): boolean;
     goIsPlainValuedMapField(node: any): boolean;
+    goG09CacheField(node: any): boolean;
+    goG09CacheNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
+    goG09CacheKeyText(keyNode: any, keyStr: string): string | undefined;
+    goG09IndexBoundedBy(index: any, list: any, use: any): boolean;
+    goG09CacheKeysRange(declaration: any, declaredType: string, varName: string, identation: any): string | undefined;
+    goG09CacheDuplicateNilTest(node: any): string | undefined;
+    goG09CacheKeysElementRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
+    goG09CacheRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
+    goG09CacheWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
+    goG09CacheInitializedBefore(access: any): boolean;
     goIsStringKeyExpression(node: any): boolean;
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
@@ -682,6 +693,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
+    goMapRangeLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    goIsRebindFreeMapReceiver(receiver: any): boolean;
+    goObjectValuesLocalIsList(declaration: any, scope: any): boolean;
     printJsonParseCall(node: any, identation: any, parsedArg?: any): string;
     printJsonStringifyCall(node: any, identation: any, parsedArg?: any): string;
     printPromiseAllCall(node: any, identation: any, parsedArg?: any): string;
@@ -811,6 +825,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goOtherBindingOfLoopBoundedElement(n: any, declaration: any): boolean;
     goBoundIsLengthOf(bound: any, baseExpr: any, loop: any): boolean;
     goLoopBoundedStringElementType(node: any, printedValue: string): string | undefined;
+    goGb08PredictionFile(): boolean;
+    goGb08IsDictExpression(expr: any): boolean;
+    goGb08BoundedListRead(node: any, keyNode: any): 'native' | 'deref' | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: Node): boolean;
     /**
