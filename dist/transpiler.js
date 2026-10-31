@@ -8162,6 +8162,13 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (this.csharpLocalTypeInProgress?.has(declaration) || this.getCSharpLocalType(declaration) !== this.VAR_TOKEN || this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(identifier) ?? "")) {
       return false;
     }
+    let init = declaration.initializer;
+    while (init?.kind === SyntaxKind4.ParenthesizedExpression) {
+      init = init.expression;
+    }
+    if (isIdentifier(init) && this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(init) ?? "")) {
+      return false;
+    }
     const scope = this.csharpEnclosingFunction(declaration);
     if (scope === void 0 || !this.csharpIsStringValued(declaration.initializer, depth + 1)) {
       return false;
