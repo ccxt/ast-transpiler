@@ -342,6 +342,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpObjectStringConcat(base: any, rights: any[]): string | undefined;
     csharpObjectStringLocal(identifier: any, depth?: number): boolean;
     csharpIsStringValued(node: any, depth?: number): boolean;
+    csharpCheckedStringOrNull(node: any): boolean;
     csharpEvaluationHasEffects(node: any): boolean;
     printFunctionType(node: any): string;
     printReturnStatement(node: any, identation: any): string;

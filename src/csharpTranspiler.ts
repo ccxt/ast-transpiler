@@ -6508,7 +6508,29 @@ export class CSharpTranspiler extends BaseTranspiler {
             const spine = this.csharpPlusSpine(value);
             return spine !== undefined && this.csharpIsStringValued(spine.base, depth + 1);
         }
-        return this.csharpConcatOperandPrintsString(value, 0, true);
+        return this.csharpConcatOperandPrintsString(value, 0, true) || this.csharpCheckedStringOrNull(value);
+    }
+
+    // the checker types the expression string / null / undefined only (at least one string): at run time it is a
+    // string or null whichever way the printer spells it
+    csharpCheckedStringOrNull(node): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        const type = checker.getTypeAtLocation(node);
+        const members = ((type.flags & TypeFlags.Union) !== 0) ? ((type as UnionType).getTypes() ?? []) : [ type ];
+        let strings = 0;
+        for (const member of members) {
+            if ((member.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) {
+                continue;
+            }
+            if (!this.isStringType(member.flags)) {
+                return false;
+            }
+            strings++;
+        }
+        return strings > 0;
     }
 
     csharpEvaluationHasEffects(node): boolean {
