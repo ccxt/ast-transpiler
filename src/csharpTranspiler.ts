@@ -3546,6 +3546,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (nativeParse !== undefined) {
             return nativeParse;
         }
+        // the source spelling `this.parseJson (<string call>)` is the same wrapper as `JSON.parse`
+        const callee = node?.expression;
+        if ((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+            && (callee.name?.text === 'parseJson') && (node.arguments?.length === 1)
+            && this.csharpCallReturnsString(node.arguments[0]) && this.csharpCalleeResolves(node)) {
+            return `JsonHelper.Deserialize((string)${this.printNode(node.arguments[0], 0).trim()})`;
+        }
         return super.printCallExpression(node, identation);
     }
 

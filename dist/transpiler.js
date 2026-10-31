@@ -5677,6 +5677,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (nativeParse !== void 0) {
       return nativeParse;
     }
+    const callee = node?.expression;
+    if (callee?.kind === SyntaxKind4.PropertyAccessExpression && callee.expression?.kind === SyntaxKind4.ThisKeyword && callee.name?.text === "parseJson" && node.arguments?.length === 1 && this.csharpCallReturnsString(node.arguments[0]) && this.csharpCalleeResolves(node)) {
+      return `JsonHelper.Deserialize((string)${this.printNode(node.arguments[0], 0).trim()})`;
+    }
     return super.printCallExpression(node, identation);
   }
   csharpNativeParseCall(node) {
