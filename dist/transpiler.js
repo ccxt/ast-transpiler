@@ -19938,6 +19938,10 @@ ${this.getIden(identation)}return nil`;
       return this.printInstanceOfExpression(node, identation);
     }
     if (operatorToken.kind === SyntaxKind5.EqualsToken) {
+      const a9fL1Init = this.goA9fL1CacheInitText(node);
+      if (a9fL1Init !== void 0) {
+        return a9fL1Init;
+      }
       const pointerWrite = this.goPointerWriteText(node, identation);
       if (pointerWrite !== void 0) {
         return pointerWrite;
@@ -21153,6 +21157,49 @@ GoTranspiler.prototype.g13NumericParameterCandidates = function(param) {
       return ["int64", "float64"];
   }
   return [];
+};
+var GO_A9F_L1_CACHE_FIELDS = {
+  "orderbooks": "Orderbooks",
+  "ohlcvs": "Ohlcvs",
+  "trades": "Trades",
+  "fundingRates": "FundingRates"
+};
+GoTranspiler.prototype.goA9fL1CacheField = function(node) {
+  if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
+    return void 0;
+  }
+  const name = node.name?.text;
+  if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(GO_A9F_L1_CACHE_FIELDS, name)) {
+    return void 0;
+  }
+  let declaration;
+  try {
+    declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+  } catch (e) {
+    declaration = void 0;
+  }
+  const owner = declaration?.parent;
+  const ownerName = owner?.name?.text;
+  if (declaration?.kind !== SyntaxKind5.PropertyDeclaration || owner?.kind !== SyntaxKind5.ClassDeclaration || ownerName !== "BaseExchange" && ownerName !== "Exchange") {
+    return void 0;
+  }
+  return GO_A9F_L1_CACHE_FIELDS[name];
+};
+GoTranspiler.prototype.goA9fL1CacheInitText = function(node) {
+  const field = this.goA9fL1CacheField(node.left);
+  const right = node.right;
+  if (field === void 0 || node.parent?.kind !== SyntaxKind5.ExpressionStatement || right?.kind !== SyntaxKind5.CallExpression) {
+    return void 0;
+  }
+  const callee = right.expression;
+  if (callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.text !== "createSafeDictionary") {
+    return void 0;
+  }
+  const args = right.arguments ?? [];
+  if (args.length > 1 || args.length === 1 && args[0].kind !== SyntaxKind5.TrueKeyword) {
+    return void 0;
+  }
+  return `${this.printNode(node.left, 0)} = map[string]any{}`;
 };
 
 // src/javaTranspiler.ts
