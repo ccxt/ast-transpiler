@@ -12,6 +12,7 @@ export interface CsharpDeclaredMember {
             sections?: string;
         };
     };
+    dictView?: string;
 }
 export declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
@@ -208,6 +209,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
+    csharpMemberViewRead(node: any): string | undefined;
     csharpMemberSectionRead(expression: any, argumentExpression: any): string | undefined;
     csharpUnwrapAssertion(node: any): any;
     csharpMemberRefreshStatement(node: any, identation: any): string | undefined;
@@ -294,6 +296,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpConditionPositionAllowsNative(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
     csharpOmitMemberLocalType(declaration: any): string | undefined;
+    csharpMemberAliasLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;
     csharpBindingNames(name: any): string[];
@@ -340,6 +343,15 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpPrintedReturnType(declaration: any): string | undefined;
     csharpPrinterStringConcat(left: any, right: any, leftText: any, rightText: any): string | undefined;
     csharpConcatOperandPrintsString(node: any, depth?: number, allowLocal?: boolean): boolean;
+    csharpPlusSpine(node: any): {
+        base: any;
+        rights: any[];
+    } | undefined;
+    csharpObjectStringConcat(base: any, rights: any[]): string | undefined;
+    csharpObjectStringLocal(identifier: any, depth?: number): boolean;
+    csharpIsStringValued(node: any, depth?: number): boolean;
+    csharpCheckedStringOrNull(node: any): boolean;
+    csharpEvaluationHasEffects(node: any): boolean;
     printFunctionType(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     csharpReturnValuePrintsType(expression: any, declared: string): boolean;

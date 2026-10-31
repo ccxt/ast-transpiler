@@ -2917,6 +2917,10 @@ function csharpReadDeclaredMembers(root, owner) {
     if (Object.keys(views).length > 0) {
       entry.views = views;
     }
+    const dictView = members.get(name + "Dict");
+    if (declared.type === "object" && dictView !== void 0 && /^IDictionary<string,\s*object>$/.test(dictView.type)) {
+      entry.dictView = name + "Dict";
+    }
     if (new RegExp("public\\s+void\\s+Refresh" + capital(name) + "Views\\s*\\(\\s*\\)").test(whole)) {
       entry.refresh = "Refresh" + capital(name) + "Views";
     }
@@ -3551,6 +3555,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     const declaredMember = this.csharpDeclaredDictMemberElementRead(node);
     if (declaredMember !== void 0) {
       return declaredMember;
+    }
+    const viewRead = this.csharpMemberViewRead(node);
+    if (viewRead !== void 0) {
+      return viewRead;
     }
     const native = this.csharpNativeElementAccess(node);
     if (native !== void 0) {
@@ -5727,6 +5735,49 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return `(${leftSide} = -${leftSide})`;
   }
+  // `this.<member>['k1'][key]` over a member whose hand-written class declares a typed view of `['k1']`
+  // (urls['api'] -> urlsApi): the key read goes through the view's own ContainsKey/indexer, carrying the
+  // helper's null-receiver and null-key tests; an object key casts like GetValue. Other keys keep the helper.
+  csharpMemberViewRead(node) {
+    if (node?.kind !== SyntaxKind4.ElementAccessExpression || !this.ELEMENT_ACCESS_WRAPPER_OPEN || !this.ELEMENT_ACCESS_WRAPPER_CLOSE) {
+      return void 0;
+    }
+    const entry = this.csharpUnwrapAssertion(node.expression);
+    if (entry?.kind !== SyntaxKind4.ElementAccessExpression || !isStringLiteralLikeNode2(entry.argumentExpression) || !isPropertyAccessExpression(entry.expression) || entry.expression.expression?.kind !== SyntaxKind4.ThisKeyword) {
+      return void 0;
+    }
+    const parent = node.parent;
+    const isWrite = parent?.kind === SyntaxKind4.BinaryExpression && parent.left === node && parent.operatorToken.kind >= SyntaxKind4.FirstAssignment && parent.operatorToken.kind <= SyntaxKind4.LastAssignment || parent?.kind === SyntaxKind4.DeleteExpression || (parent?.kind === SyntaxKind4.PrefixUnaryExpression || parent?.kind === SyntaxKind4.PostfixUnaryExpression) && (parent.operator === SyntaxKind4.PlusPlusToken || parent.operator === SyntaxKind4.MinusMinusToken);
+    if (isWrite || this.printElementAccessExpressionExceptionIfAny(node)) {
+      return void 0;
+    }
+    const root = entry.expression;
+    if (!this.csharpMemberDeclaredIn(root, "this")) {
+      return void 0;
+    }
+    const view = this.csharpDeclaredMember(root, "this", root.name?.text)?.views?.[entry.argumentExpression.text]?.view;
+    if (view === void 0 || !/^IDictionary<string,\s*object>$/.test(this.csharpDeclaredMember(root, "this", view)?.type ?? "")) {
+      return void 0;
+    }
+    const target = `this.${view}`;
+    const key = node.argumentExpression;
+    if (isStringLiteralLikeNode2(key)) {
+      const printed = this.printNode(key, 0);
+      return `(${target} != null && ${target}.ContainsKey(${printed}) ? ${target}[${printed}] : null)`;
+    }
+    if (!isIdentifier(key) || !this.csharpHx4IsPlainRead(key)) {
+      return void 0;
+    }
+    const kind = this.csharpMemberKeyKind(key);
+    const printedKey = this.printNode(key, 0);
+    if (kind === "string" || kind === "string?") {
+      return `(${target} != null && ${printedKey} != null && ${target}.ContainsKey(${printedKey}) ? ${target}[${printedKey}] : null)`;
+    }
+    if (kind === "object" || kind === "param") {
+      return `(${target} != null && ${printedKey} != null && ${target}.ContainsKey((string)${printedKey}) ? ${target}[(string)${printedKey}] : null)`;
+    }
+    return void 0;
+  }
   // hx11 RF-cs-2: `this.<member>['k1']['k2']['k3']` over a member whose hand-written class declares a
   // typed view of `['k1']` entries that are themselves dictionaries (urls['api'] -> urlsApiSections):
   // the section read becomes the view's two indexers, carrying the helper's missing-key tests. The
@@ -5828,6 +5879,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const mayBeNull = type.startsWith("I") || declared.initializer === void 0 || declared.initializer === "null";
       const identity = type === "Dictionary<string, object>" || type === "IDictionary<string, object>";
       return { text: printed, type: canonical, kind: "dict", declared: identity, nullTest: mayBeNull ? printed : void 0 };
+    }
+    if (type === "object" && owner === "this" && declared.dictView !== void 0) {
+      const view = `this.${declared.dictView}`;
+      return { text: view, type: "IDictionary<string, object>", kind: "dict", declared: false, nullTest: view };
     }
     if (type === "object" && owner === "this" && this.csharpMemberWritesOnlyDictionaries(node, name)) {
       const cast = `((IDictionary<string,object>)${printed})`;
@@ -6473,6 +6528,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
         if (this.csharpNonNullStringOperandType(left) === "string") {
           return `${leftText} = (${leftText} + (${rightText}))`;
         }
+        const objectStringAppend = this.csharpObjectStringConcat(left, [right]);
+        if (objectStringAppend !== void 0) {
+          return `${leftText} = ${objectStringAppend}`;
+        }
         return `${leftText} = add(${leftText}, ${rightText})`;
       }
       if (op === SyntaxKind4.MinusEqualsToken) {
@@ -6495,6 +6554,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
         const printerConcat = this.csharpPrinterStringConcat(left, right, leftText, rightText);
         if (printerConcat !== void 0) {
           return printerConcat;
+        }
+        const spine = this.csharpPlusSpine(node);
+        const objectStringChain = spine === void 0 ? void 0 : this.csharpObjectStringConcat(spine.base, spine.rights);
+        if (objectStringChain !== void 0) {
+          return objectStringChain;
         }
       }
       if (op === SyntaxKind4.AsteriskToken) {
@@ -7135,7 +7199,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return this.getIden(identation) + specificVarToken + " " + this.printNode(declaration.name) + " = " + parsedValue;
     }
     const localType = isNew ? "var" : this.getCSharpLocalType(declaration);
-    const declaredType = localType === this.VAR_TOKEN && node.declarations.length === 1 ? this.csharpOmitMemberLocalType(declaration) ?? localType : localType;
+    const declaredType = localType === this.VAR_TOKEN && node.declarations.length === 1 ? this.csharpOmitMemberLocalType(declaration) ?? this.csharpMemberAliasLocalType(declaration) ?? localType : localType;
     if (!isNew && declaredType === this.VAR_TOKEN && node.declarations.length === 1) {
       const rowType = this.csharpElementRowLocalType(declaration);
       if (rowType !== void 0) {
@@ -7163,6 +7227,19 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     const member = this.csharpMemberReceiver(this.csharpUnwrapAssertion(call.arguments[0]));
     return member !== void 0 && member.kind === "dict" && member.declared ? "Dictionary<string, object>" : void 0;
+  }
+  // `const x = this.<member>` over a member DECLARED a string-keyed dictionary (Exchange.Options.cs): the const
+  // local is never rewritten, so its declaration names the member's own type and every later read is native.
+  csharpMemberAliasLocalType(declaration) {
+    if (declaration?.name?.kind !== SyntaxKind4.Identifier || (declaration.parent?.flags & NodeFlags.Const) === 0) {
+      return void 0;
+    }
+    const init = this.csharpUnwrapAssertion(declaration.initializer);
+    if (!isPropertyAccessExpression(init) || init.expression?.kind !== SyntaxKind4.ThisKeyword) {
+      return void 0;
+    }
+    const member = this.csharpMemberReceiver(init);
+    return member !== void 0 && member.kind === "dict" && member.declared && member.type === "IDictionary<string, object>" ? member.type : void 0;
   }
   // `const row = list[i]` (non-string key): when every use of the local in its function reads the
   // box as a string-keyed dictionary, the box IS a dictionary and the declaration may name it.
@@ -8255,6 +8332,148 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     return false;
   }
+  // `a + b + c` as its left spine: the base operand and the right operands in order (parentheses stay transparent)
+  csharpPlusSpine(node) {
+    const rights = [];
+    let current = node;
+    while (current?.kind === SyntaxKind4.BinaryExpression && current.operatorToken?.kind === SyntaxKind4.PlusToken) {
+      rights.unshift(current.right);
+      current = current.left;
+      while (current?.kind === SyntaxKind4.ParenthesizedExpression) {
+        current = current.expression;
+      }
+    }
+    return rights.length === 0 ? void 0 : { base: current, rights };
+  }
+  // `x + r1 + r2` over a local the checker types string (or string | undefined) whose C# declaration is the
+  // untyped `object` box: add(object, object) of a string left is `(string)x + (string)r`, and a null left answers
+  // null, so the null test plus the concatenation is the same value. Each right is spelled as the string it
+  // prints, or cast through object the way the helper casts it. A right operand is evaluated only when x is
+  // non-null; one that awaits, assigns or creates a closure keeps the helper.
+  csharpObjectStringConcat(base, rights) {
+    let local = base;
+    while (local?.kind === SyntaxKind4.ParenthesizedExpression) {
+      local = local.expression;
+    }
+    if (!isIdentifier(local) || !this.csharpObjectStringLocal(local)) {
+      return void 0;
+    }
+    const texts = [];
+    for (const right of rights) {
+      if (this.csharpEvaluationHasEffects(right)) {
+        return void 0;
+      }
+      const printed = this.printNode(right, 0);
+      texts.push(this.csharpConcatOperandPrintsString(right, 0, true) ? printed : `(string)(object)(${printed})`);
+    }
+    const name = this.printNode(local, 0);
+    return `((object)(${name} == null ? null : ${name} + ${texts.join(" + ")}))`;
+  }
+  // a single-binding local whose printed declaration is the untyped box and whose initializer and every write
+  // store null or a value the printed C# makes a string (a literal, a string-typed call, a string concatenation,
+  // another such local): the box holds a string or null at every read, so add's string branch is the concat
+  csharpObjectStringLocal(identifier, depth = 0) {
+    const declaration = this.csharpReceiverBinding(identifier);
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.parent?.declarations?.length !== 1 || declaration.initializer === void 0 || depth > 4) {
+      return false;
+    }
+    if (this.csharpLocalTypeInProgress?.has(declaration) || this.getCSharpLocalType(declaration) !== this.VAR_TOKEN || this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(identifier) ?? "")) {
+      return false;
+    }
+    let init = declaration.initializer;
+    while (init?.kind === SyntaxKind4.ParenthesizedExpression) {
+      init = init.expression;
+    }
+    if (isIdentifier(init) && this.csharpReceiverBinding(init)?.kind === SyntaxKind4.BindingElement) {
+      return false;
+    }
+    const scope = this.csharpEnclosingFunction(declaration);
+    if (scope === void 0 || !this.csharpIsStringValued(declaration.initializer, depth + 1)) {
+      return false;
+    }
+    let ok = true;
+    const symbol = this.getChecker().getSymbolAtLocation(identifier);
+    const visit = (n) => {
+      if (!ok) {
+        return;
+      }
+      if (isIdentifier(n) && n.text === identifier.text && n !== declaration.name && n.parent?.kind !== SyntaxKind4.PropertyAccessExpression && this.getChecker().getSymbolAtLocation(n) === symbol) {
+        const parent = n.parent;
+        if (parent?.kind === SyntaxKind4.BinaryExpression && parent.left === n && this.csharpIsAssignmentOperator(parent.operatorToken.kind)) {
+          const op = parent.operatorToken.kind;
+          if (op === SyntaxKind4.PlusEqualsToken) {
+          } else if (op !== SyntaxKind4.EqualsToken || !this.csharpIsStringValued(parent.right, depth + 1)) {
+            ok = false;
+          }
+        } else if ((parent?.kind === SyntaxKind4.PrefixUnaryExpression || parent?.kind === SyntaxKind4.PostfixUnaryExpression) && (parent.operator === SyntaxKind4.PlusPlusToken || parent.operator === SyntaxKind4.MinusMinusToken)) {
+          ok = false;
+        }
+      }
+      n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    return ok;
+  }
+  // the printed C# of this expression is null or a string
+  csharpIsStringValued(node, depth = 0) {
+    let value = node;
+    while (value?.kind === SyntaxKind4.ParenthesizedExpression) {
+      value = value.expression;
+    }
+    if (value === void 0 || depth > 6) {
+      return false;
+    }
+    if (value.kind === SyntaxKind4.NullKeyword || isIdentifier(value) && value.text === "undefined") {
+      return true;
+    }
+    if (value.kind === SyntaxKind4.ConditionalExpression) {
+      return this.csharpIsStringValued(value.whenTrue, depth + 1) && this.csharpIsStringValued(value.whenFalse, depth + 1);
+    }
+    if (isIdentifier(value) && (this.csharpObjectStringLocal(value, depth + 1) || this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(value) ?? ""))) {
+      return true;
+    }
+    if (value.kind === SyntaxKind4.BinaryExpression && value.operatorToken?.kind === SyntaxKind4.PlusToken) {
+      const spine = this.csharpPlusSpine(value);
+      return spine !== void 0 && this.csharpIsStringValued(spine.base, depth + 1);
+    }
+    return this.csharpConcatOperandPrintsString(value, 0, true) || this.csharpCheckedStringOrNull(value);
+  }
+  // the checker types the expression string / null / undefined only (at least one string): at run time it is a
+  // string or null whichever way the printer spells it
+  csharpCheckedStringOrNull(node) {
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return false;
+    }
+    const type = checker.getTypeAtLocation(node);
+    const members = (type.flags & TypeFlags3.Union) !== 0 ? type.getTypes() ?? [] : [type];
+    let strings = 0;
+    for (const member of members) {
+      if ((member.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) !== 0) {
+        continue;
+      }
+      if (!this.isStringType(member.flags)) {
+        return false;
+      }
+      strings++;
+    }
+    return strings > 0;
+  }
+  csharpEvaluationHasEffects(node) {
+    let found = false;
+    const visit = (n) => {
+      if (found) {
+        return;
+      }
+      if (n.kind === SyntaxKind4.AwaitExpression || n.kind === SyntaxKind4.FunctionExpression || n.kind === SyntaxKind4.ArrowFunction || n.kind === SyntaxKind4.NewExpression || n.kind === SyntaxKind4.YieldExpression || n.kind === SyntaxKind4.DeleteExpression || n.kind === SyntaxKind4.BinaryExpression && this.csharpIsAssignmentOperator(n.operatorToken.kind) || (n.kind === SyntaxKind4.PrefixUnaryExpression || n.kind === SyntaxKind4.PostfixUnaryExpression) && (n.operator === SyntaxKind4.PlusPlusToken || n.operator === SyntaxKind4.MinusMinusToken)) {
+        found = true;
+        return;
+      }
+      n.forEachChild(visit);
+    };
+    visit(node);
+    return found;
+  }
   printFunctionType(node) {
     const booleanType = this.csharpBooleanReturnType(node);
     if (booleanType !== void 0) {
@@ -8356,9 +8575,15 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (node?.arguments?.length === 1 && this.csharpReceiverIsDeclaredDictionary(node.arguments[0])) {
       return `new List<object>(${parsedArg}.Keys)`;
     }
+<<<<<<< HEAD
     const view = node?.arguments?.length === 1 ? this.csharpBaseDictionaryView(node.arguments[0]) : void 0;
     if (view !== void 0) {
       return `new List<object>(${view}.Keys)`;
+=======
+    const view = node?.arguments?.length === 1 ? this.csharpMemberReceiver(node.arguments[0]) : void 0;
+    if (view !== void 0 && view.kind === "dict" && view.text.startsWith("this.") && view.text !== parsedArg) {
+      return `new List<object>(${view.text}.Keys)`;
+>>>>>>> cb4da7b2
     }
     return `new List<object>(((IDictionary<string,object>)${parsedArg}).Keys)`;
   }
