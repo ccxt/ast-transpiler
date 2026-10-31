@@ -5622,6 +5622,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!Number.isInteger(index) || index < 0) {
             return undefined;
         }
+        const splitRead = this.javaNativeSplitIndexRead(node, index);
+        if (splitRead !== undefined) {
+            return splitRead;
+        }
         if (this.isJavaListStructureType(type)) {
             if (index >= this.tupleRequiredElementCount(type)) {
                 return undefined;
@@ -6381,7 +6385,35 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaScalarFamily(receiver) !== 'string' || this.javaScalarFamily(separator) !== 'string') {
             return undefined;
         }
-        return `${this.ARRAY_OPENING_TOKEN}((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))${this.ARRAY_CLOSING_TOKEN}`;
+        return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg)}${this.ARRAY_CLOSING_TOKEN}`;
+    }
+
+    javaNativeSplitText(name, parsedArg): string {
+        return `((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))`;
+    }
+
+    // `s.split (<literal>)[<int literal>]` on the native split: the helper's List branch answers
+    // null off range (e.g. "/".split("/") is empty), which findFirst().orElse(null) keeps, with
+    // no local to hoist and the receiver evaluated once.
+    javaNativeSplitIndexRead(node, index: number): string | undefined {
+        const call = node.expression;
+        if (node.questionDotToken !== undefined || !isCallExpression(call) || call.questionDotToken !== undefined
+            || !isPropertyAccessExpression(call.expression) || call.expression.questionDotToken !== undefined) {
+            return undefined;
+        }
+        const receiver = call.expression.expression;
+        const separator = call.arguments?.[0];
+        if (separator === undefined) {
+            return undefined;
+        }
+        const name = this.printNode(receiver, 0);
+        const parsedArg = this.printNode(separator, 0).trimStart();
+        if (this.javaNativeSplitCall(call, name, parsedArg) === undefined) {
+            return undefined;
+        }
+        const array = this.javaNativeSplitText(name, parsedArg);
+        const skip = index > 0 ? `.skip(${index})` : '';
+        return `java.util.Arrays.stream(${array})${skip}.findFirst().orElse(null)`;
     }
 
     // integer literals print as Java `int`; the helpers normalize Integer to Long before

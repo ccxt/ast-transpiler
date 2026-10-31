@@ -4786,6 +4786,33 @@ describe('java native split (Helpers.split -> Arrays.asList(String.split(Pattern
         expect(output).not.toContain("Helpers.split");
     });
 
+    test('a literal-index read of a native split prints a null-safe stream read', () => {
+        const input =
+        "class T {\n" +
+        "    test(s: string): void {\n" +
+        "        const a = s.split('/')[0];\n" +
+        "        const b = s.split('/')[1];\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("java.util.Arrays.stream(((String)s).split(java.util.regex.Pattern.quote(\"/\"))).findFirst().orElse(null)");
+        expect(output).toContain("java.util.Arrays.stream(((String)s).split(java.util.regex.Pattern.quote(\"/\"))).skip(1).findFirst().orElse(null)");
+        expect(output).not.toContain("Helpers.GetValue");
+        expect(output).not.toContain("Helpers.split");
+    });
+
+    test('a literal-index read of an any receiver split keeps the helper', () => {
+        const input =
+        "class T {\n" +
+        "    test(x: any): void {\n" +
+        "        const a = x.split('/')[0];\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain("Helpers.split(x, \"/\")");
+        expect(output).not.toContain("findFirst");
+    });
+
     // fallbacks: every shape without the proof keeps the runtime helper
     test('an any receiver keeps the helper', () => {
         const input =
