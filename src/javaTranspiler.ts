@@ -5016,6 +5016,10 @@ export class JavaTranspiler extends BaseTranspiler {
             if (inlined !== undefined) {
                 return inlined;
             }
+            const declaredBox = this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op);
+            if (declaredBox !== undefined) {
+                return declaredBox;
+            }
 
 
             if (op === SyntaxKind.PlusEqualsToken) {
@@ -5153,6 +5157,8 @@ export class JavaTranspiler extends BaseTranspiler {
     // text (build/java-local-types.js): it records every local it typed here. Reads consult
     // it; with no consumer installed the table is empty and every read keeps the helper.
     javaDeclaredLocalTypeResolver: ((declaration: Node) => string | undefined) | undefined;
+    // the type the embedding layer's destructuring pass gave a `const [ a, p ] = ...` element
+    javaBindingElementTypeResolver: ((declaration: Node) => string | undefined) | undefined;
 
     // the declaration node behind an identifier, when the checker resolves one
     javaDeclarationOfIdentifier(expression) {
@@ -5692,8 +5698,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const index = this.printNode(key, 0);
-        if (index.includes('Helpers.') || index.includes('()')) {
-            return undefined; // a boxed or call-borne index is not the helper's own int index
+        if (index.includes('Helpers.') || index.includes('()') || index.includes(' ? ')) {
+            return undefined; // a boxed, call-borne or null-armed index is not the helper's own int index
         }
         // j03 (build/javaTranspiler.ts nativeJavaJ03ElementReads) already converts a numeric
         // literal, a counter, an int/long/Long/Integer name and the `((long) X) - 1L` form;
@@ -6787,6 +6793,185 @@ export class JavaTranspiler extends BaseTranspiler {
             scanOuter(body);
         }
         return safe;
+    }
+
+    // ---- declared-box arithmetic (hx11 RFM-J2 leaf C) ----
+    // `Helpers.add/subtract/multiply/divide` on operands whose DECLARED Java type (the embedding layer's
+    // javaDeclaredLocalTypeResolver, or a Long core parameter) is Long/long/Integer/int/Double/double, or an
+    // integer literal. Every helper answers `null` for a null operand, so a boxed operand's null arm is
+    // the explicit ternary; integral operands print widened (`((long) i)`, `1L`) because the helpers
+    // normalize Integer to Long; a double operand promotes natively. `multiply` stays integral-only
+    // (it re-boxes an integral double product as Long), `+ - *` on a double keep `double` boxes.
+
+    // 'longbox' | 'longprim' | 'intbox' | 'intprim' | 'doublebox' | 'doubleprim' | 'intlit' | 'longlit'
+    javaDeclaredBoxOperandKind(node, text: string): string | undefined {
+        let inner = node;
+        while (inner !== undefined && (isParenthesizedExpression(inner) || isAsExpression(inner)
+            || inner.kind === SyntaxKind.NonNullExpression)) {
+            inner = inner.expression;
+        }
+        if (inner === undefined) {
+            return undefined;
+        }
+        if (isNumericLiteral(inner)) {
+            const kind = this.javaIntegerLiteralKind(inner);
+            return kind === undefined ? undefined : (kind === 'long' ? 'longlit' : 'intlit');
+        }
+        if (!isIdentifier(inner) || this.javaStripPrintedParens(text) !== String(inner.text)
+            || !this.javaIdentifierPrintsDeclaredName(inner)) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(inner);
+        if (declaration !== undefined && !this.javaIdentifierKeepsDeclaredName(inner)) {
+            return undefined; // a renamed capture (`finalX`) prints against another declaration
+        }
+        let declared: string | undefined;
+        if (declaration !== undefined) {
+            try {
+                declared = this.javaDeclaredTypeOfDeclaration(declaration);
+            } catch (e) {
+                declared = undefined;
+            }
+            if (declared === undefined && this.javaLongParameterRead(inner)) {
+                declared = 'Long'; // an unwritten default-valued `Int` parameter printed as the core's Long
+            }
+        } else if (typeof this.javaBindingElementTypeResolver === 'function') {
+            const element: any = this.getChecker().getSymbolAtLocation(inner)?.valueDeclaration?.resolve();
+            if (element?.kind === SyntaxKind.BindingElement && (element.name as any)?.text === inner.text) {
+                try {
+                    declared = this.javaBindingElementTypeResolver(element);
+                } catch (e) {
+                    declared = undefined;
+                }
+            }
+        }
+        const kinds: { [type: string]: string } = {
+            Long: 'longbox', long: 'longprim', Integer: 'intbox', int: 'intprim', Double: 'doublebox', double: 'doubleprim'
+        };
+        const kind = declared === undefined ? undefined : kinds[declared.replace(/^final\s+/, '').trim()];
+        // a read behind a dominating null test, and a `.length`-derived local (never null), are the
+        // operands the null-guard / length text passes after the printer turn native WITHOUT a null arm:
+        // leave them to those passes
+        if (kind !== undefined && kind.endsWith('box') && declaration !== undefined
+            && (this.javaNullGuardAdmitsRead(inner) || this.javaLocalIsLengthDerived(declaration))) {
+            return undefined;
+        }
+        // the checker type must itself be a number (plain or `Int` / `Num` = number | undefined): an `any`
+        // operand (`x.length` of an `any`, a `.length` switch local) is the shape of the passes that follow
+        return kind !== undefined && this.javaNumberOrNullishType(inner) ? kind : undefined;
+    }
+
+    // `const n = x.length` (a Java int read, never null)
+    javaLocalIsLengthDerived(declaration): boolean {
+        const init = declaration?.kind === SyntaxKind.VariableDeclaration
+            ? this.unwrapPrintTransparentExpression(declaration.initializer) : undefined;
+        return init !== undefined && isPropertyAccessExpression(init) && init.name.text === 'length';
+    }
+
+    // number, number-literal, or a union of those with undefined / null / void
+    javaNumberOrNullishType(node): boolean {
+        let type: any;
+        try {
+            type = this.checkerOrUndefined()?.getTypeAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        if (type === undefined) {
+            return false;
+        }
+        const isNumber = (t: any) => ((t?.flags ?? 0) & (TypeFlags.Number | TypeFlags.NumberLiteral)) !== 0;
+        if (isNumber(type)) {
+            return true;
+        }
+        const members: any[] = (((type.flags ?? 0) & TypeFlags.Union) !== 0 ? type.getTypes?.() : undefined) ?? [];
+        return members.some(isNumber) && members.every((m) => isNumber(m)
+            || ((m?.flags ?? 0) & (TypeFlags.Undefined | TypeFlags.Null | TypeFlags.Void)) !== 0);
+    }
+
+    javaStripPrintedParens(text: string): string {
+        let value = text.trim();
+        while (value.startsWith('(') && value.endsWith(')')) {
+            let depth = 0;
+            let closesAtEnd = true;
+            for (let i = 0; i < value.length; i++) {
+                if (value[i] === '(') {
+                    depth++;
+                } else if (value[i] === ')') {
+                    depth--;
+                    if (depth === 0 && i < value.length - 1) {
+                        closesAtEnd = false;
+                        break;
+                    }
+                }
+            }
+            if (!closesAtEnd) {
+                break;
+            }
+            value = value.slice(1, -1).trim();
+        }
+        return value;
+    }
+
+    // the value is read as itself: a ternary arm (`c ? (a + b) : 1.5` would binary-promote the boxed
+    // arm and unbox a null) or a member-access receiver keeps the helper's Object box
+    javaArithmeticResultIsBoxSensitive(node): boolean {
+        let child = node;
+        let parent = node?.parent;
+        while (parent !== undefined && isParenthesizedExpression(parent)) {
+            child = parent;
+            parent = parent.parent;
+        }
+        if (parent === undefined) {
+            return false;
+        }
+        if (parent.kind === SyntaxKind.ConditionalExpression) {
+            return parent.condition !== child;
+        }
+        return (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) && parent.expression === child;
+    }
+
+    printDeclaredBoxArithmetic(node, left, right, leftText: string, rightText: string, op): string | undefined {
+        // `/` is not here: Helpers.divide is null-first like multiply, but the old text pass never fired on it
+        // that the null-guard / `.length` passes after the printer did not already own (0 residual sites)
+        const operator = op === SyntaxKind.PlusToken ? '+' : op === SyntaxKind.MinusToken ? '-'
+            : op === SyntaxKind.AsteriskToken ? '*' : undefined;
+        if (operator === undefined || this.javaArithmeticResultIsBoxSensitive(node)) {
+            return undefined;
+        }
+        const leftKind = this.javaDeclaredBoxOperandKind(left, leftText);
+        const rightKind = this.javaDeclaredBoxOperandKind(right, rightText);
+        if (leftKind === undefined || rightKind === undefined) {
+            return undefined;
+        }
+        const isLiteral = (kind: string) => kind === 'intlit' || kind === 'longlit';
+        if (isLiteral(leftKind) && isLiteral(rightKind)) {
+            return undefined; // two literals are no declared operand
+        }
+        const isDouble = (kind: string) => kind === 'doublebox' || kind === 'doubleprim';
+        const hasDouble = isDouble(leftKind) || isDouble(rightKind);
+        if (hasDouble && operator === '*') {
+            return undefined; // Helpers.multiply re-boxes an integral double product as Long
+        }
+        // Helpers.add / subtract answer a null operand with `toDouble (null)` = 0.0 once the OTHER
+        // operand is a Double (and with null otherwise): the null arm is not one ternary, so a boxed
+        // operand of a double `+` / `-` keeps the helper. Helpers.divide is null-first.
+        if (hasDouble && (operator === '+' || operator === '-') && (leftKind.endsWith('box') || rightKind.endsWith('box'))) {
+            return undefined;
+        }
+        const texts = [this.javaStripPrintedParens(leftText), this.javaStripPrintedParens(rightText)];
+        const kinds = [leftKind, rightKind];
+        const asLong = (i: number) => {
+            if (kinds[i] === 'longbox' || kinds[i] === 'longprim' || kinds[i] === 'longlit') {
+                return texts[i];
+            }
+            return kinds[i] === 'intlit' ? `${texts[i]}L` : `((long) ${texts[i]})`;
+        };
+        const asDouble = (i: number) => (isDouble(kinds[i]) ? texts[i] : `((double) ${texts[i]})`);
+        const wide = (i: number) => (hasDouble ? asDouble(i) : asLong(i));
+        const expression = `(${wide(0)} ${operator} ${wide(1)})`;
+        const boxes = kinds.map((kind, i) => (kind.endsWith('box') ? texts[i] : undefined))
+            .filter((text, i, all) => text !== undefined && all.indexOf(text) === i);
+        return boxes.length === 0 ? expression : `((${boxes.map((box) => `${box} == null`).join(' || ')}) ? null : ${expression})`;
     }
 
     printInlineHelperArithmetic(left, right, leftText, rightText, op) {
@@ -9535,6 +9720,39 @@ export class JavaTranspiler extends BaseTranspiler {
         return declared === 'boolean' || declared === 'Boolean' ? declared : undefined;
     }
 
+    // a `boolean` / `Bool` (`boolean | undefined`) METHOD parameter the body never writes: its callers
+    // are typed, so the Java slot holds a Boolean or null and `Helpers.isTrue (p)` is exactly
+    // `Boolean.TRUE.equals (p)`. Returns the operand as the printer prints it (the bare name or its
+    // literal-default read), undefined to keep the helper. A lambda parameter is typed by its
+    // functional interface, not by a TS caller contract; a parameter the body writes is filled by
+    // the body; every member of the checker type must be boolean or nullish.
+    javaBooleanParameterBox(node): string | undefined {
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isParameterDeclaration(declaration) || node.text !== (declaration.name as any)?.text
+            || declaration.parent?.kind !== SyntaxKind.MethodDeclaration || this.javaParameterIsWritten(declaration)) {
+            return undefined;
+        }
+        let type: any;
+        try {
+            type = this.getChecker().getTypeAtLocation(node);
+        } catch (e) {
+            return undefined;
+        }
+        if (type === undefined) {
+            return undefined;
+        }
+        const booleanish = (t: any) => ((t?.flags ?? 0) & (TypeFlags.Boolean | TypeFlags.BooleanLiteral)) !== 0;
+        if (!booleanish(type)) {
+            const members: any[] = (((type.flags ?? 0) & TypeFlags.Union) !== 0 ? type.getTypes?.() : undefined) ?? [];
+            if (!members.some(booleanish) || !members.every((m) => booleanish(m)
+                || ((m?.flags ?? 0) & (TypeFlags.Undefined | TypeFlags.Null | TypeFlags.Void)) !== 0)) {
+                return undefined;
+            }
+        }
+        const printed = this.printNode(node, 0);
+        return printed === node.text || printed === this.javaDefaultedLocalName(node) ? printed : undefined;
+    }
+
     // the DECLARED type of the local is a nullable boolean: `Bool` (`boolean | undefined`) or an
     // equivalent union. Every member must be boolean or nullish - an `Int`/`Str`/`any` member can
     // hold a box the isTrue helper tests with its runtime truthiness, so the helper must stay.
@@ -9724,6 +9942,10 @@ export class JavaTranspiler extends BaseTranspiler {
             }
             if (declared === 'Boolean') {
                 return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
+            }
+            const parameterBox = this.javaBooleanParameterBox(node);
+            if (parameterBox !== undefined) {
+                return `Boolean.TRUE.equals(${parameterBox})`;
             }
         }
         const box = this.javaBooleanBoxIdentifier(node, new Set()) ?? this.javaNullableBooleanBoxIdentifier(node)
