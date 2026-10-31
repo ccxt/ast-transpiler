@@ -8585,4 +8585,14 @@ describe('java plain map field writes from owner-executor members', () => {
     test('a key that is not a proven String keeps the helper', () => {
         expect(java('handleTicker', "this.tickers[k] = v;")).toContain("Helpers.addElementToObject(this.tickers, k, v);");
     });
+
+    test('a String key written through an `as IndexType` assertion prints put (blofin handleTrades)', () => {
+        const output = java('handleTicker', "this.tickers[symbol as IndexType] = v;");
+        expect(output).toContain("this.tickers.put(symbol, v);");
+        expect(output).not.toContain("Helpers.addElementToObject(this.tickers");
+    });
+
+    test('an asserted key that is not a proven String keeps the helper', () => {
+        expect(java('handleTicker', "this.tickers[k as IndexType] = v;")).toContain("Helpers.addElementToObject(this.tickers, k, v);");
+    });
 });

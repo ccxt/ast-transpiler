@@ -4770,7 +4770,7 @@ export class JavaTranspiler extends BaseTranspiler {
             // no box cast in either operand: the field is never null, so put takes any value
             if (keys.length === 1 && node.parent?.kind === SyntaxKind.ExpressionStatement
                 && this.javaPlainMapFieldReceiver(baseExpr)
-                && (isStringLiteralLikeNode(keys[0]) || this.javaDeclaredStringType(keys[0]))
+                && (isStringLiteralLikeNode(this.unwrapPrintTransparentExpression(keys[0])) || this.javaDeclaredStringType(this.unwrapPrintTransparentExpression(keys[0])))
                 && this.javaInOwnerMember(node) && !JAVA_BOX_CAST.test(lastKey) && !JAVA_BOX_CAST.test(rhs)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }

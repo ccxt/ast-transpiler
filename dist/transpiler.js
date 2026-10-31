@@ -26722,7 +26722,7 @@ ${this.getIden(identation)}}}`;
       if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr) && isStringLiteralLikeNode3(keys[0])) {
         return this.isNullishLiteral(this.unwrapPrintTransparentExpression(right)) ? `${prefixes}${acc}.remove(${lastKey})` : `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
-      if (keys.length === 1 && node.parent?.kind === SyntaxKind6.ExpressionStatement && this.javaPlainMapFieldReceiver(baseExpr) && (isStringLiteralLikeNode3(keys[0]) || this.javaDeclaredStringType(keys[0])) && this.javaInOwnerMember(node) && !JAVA_BOX_CAST.test(lastKey) && !JAVA_BOX_CAST.test(rhs)) {
+      if (keys.length === 1 && node.parent?.kind === SyntaxKind6.ExpressionStatement && this.javaPlainMapFieldReceiver(baseExpr) && (isStringLiteralLikeNode3(this.unwrapPrintTransparentExpression(keys[0])) || this.javaDeclaredStringType(this.unwrapPrintTransparentExpression(keys[0]))) && this.javaInOwnerMember(node) && !JAVA_BOX_CAST.test(lastKey) && !JAVA_BOX_CAST.test(rhs)) {
         return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
       }
       if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
