@@ -495,6 +495,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goOrderBookSideLocalType(declaration: any): string | undefined;
     goOrderBookSideRead(node: any): string | undefined;
     goOrderBookParameterType(fn: any, param: any): string | undefined;
+    goOrderBookForwardedToBookParameter(fn: any, param: any): boolean;
     goNativeParameterTypeCache: Map<any, string>;
     goSameFileCallCache: Map<any, Map<string, any[]>>;
     goTsSrcTreeCache: Map<string, any>;

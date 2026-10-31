@@ -6712,10 +6712,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `${this.printNode(node.expression, 0)}.${this.goOrderBook.sides[node.argumentExpression.text]}()`;
     }
 
-    // a pro `handle*` method's book parameter prints the book interface when every call site hands it one
+    // A book-class parameter prints the book interface when (1) the method is the base's or overrides it (the hand-written
+    // base and IDerivedExchange carry the interface), (2) a pro `handle*` method hands it to a callee whose own parameter
+    // prints the interface and each call site passes a book, or (3) every call site hands it a typed book.
     goOrderBookParameterType(fn, param): string | undefined {
         const cfg = this.goOrderBook;
-        if ((cfg === undefined) || !this.goIsProHandlerMethod(fn) || this.isAsyncFunction(fn) || (param.name?.kind !== SyntaxKind.Identifier)) {
+        if ((cfg === undefined) || this.isAsyncFunction(fn) || (param.name?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        const declaredBook = this.goNodeIsOrderBook(param.name);
+        const inheritsBase = /(^|\/)ts\/src\/base\//.test(fn.getSourceFile().fileName) || ((this.goEnclosingClass(fn)?.heritageClauses ?? []).length > 0);
+        if (declaredBook && inheritsBase && this.goMethodKeepsBaseSignature(fn)) {
+            return this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : undefined;
+        }
+        if (!this.goIsProHandlerMethod(fn)) {
             return undefined;
         }
         // declared as the book class, or as `any` with every caller handing a book (the call-site proof below)
@@ -6725,14 +6735,40 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         } catch (e) {
             return undefined;
         }
-        if (!declaredAny && !this.goNodeIsOrderBook(param.name)) {
+        if (!declaredAny && !declaredBook) {
             return undefined;
         }
         const index = fn.parameters.indexOf(param);
         const calls = this.goSameFileCallsOf(fn, fn.name.text);
-        return ((calls.length > 0) && calls.every((call) => (call.arguments?.[index] !== undefined) && (call.arguments[index].kind !== SyntaxKind.SpreadElement)
-            && (this.goPrintedArgType(call.arguments[index]) === cfg.type))
-            && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type)) ? cfg.type : undefined;
+        if ((calls.length === 0) || calls.some((call) => (call.arguments?.[index] === undefined) || (call.arguments[index].kind === SyntaxKind.SpreadElement))) {
+            return undefined;
+        }
+        const forwarded = declaredBook && this.goOrderBookForwardedToBookParameter(fn, param)
+            && calls.every((call) => this.goNodeIsOrderBook(call.arguments[index]));
+        return (forwarded || calls.every((call) => this.goPrintedArgType(call.arguments[index]) === cfg.type))
+            && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type) ? cfg.type : undefined;
+    }
+
+    // the body hands `param` itself to a callee parameter that prints the book interface
+    goOrderBookForwardedToBookParameter(fn, param): boolean {
+        const checker: any = this.getChecker();
+        return this.hasNodeWhere(fn.body, (n: any) => {
+            if ((n.kind !== SyntaxKind.CallExpression) || (n.expression?.kind !== SyntaxKind.PropertyAccessExpression)) {
+                return false;
+            }
+            return (n.arguments ?? []).some((arg: any, at: number) => {
+                if ((arg.kind !== SyntaxKind.Identifier) || (arg.text !== param.name.text)) {
+                    return false;
+                }
+                try {
+                    const callee: any = checker.getResolvedSignature(n)?.declaration?.resolve();
+                    const target: any = callee?.parameters?.[at];
+                    return (callee !== fn) && (target !== undefined) && (this.goNativeParameterType(target) === this.goOrderBook?.type);
+                } catch (e) {
+                    return false;
+                }
+            });
+        });
     }
     // ===== RF-go-6-D (end) =====
 
