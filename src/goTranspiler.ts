@@ -891,6 +891,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.goBaseFileStdlibImportSeamPaths = config['baseFileStdlibImportSeamPaths'] !== undefined ? new RegExp(config['baseFileStdlibImportSeamPaths']) : undefined;
         this.goExcisedSpanMarkers = config['excisedSpanMarkers'];
         this.nativeStoreFields = config['nativeStoreFields'];  // RF-go-6-B
+        this.goOrderBook = config['orderBook'];  // RF-go-6-D
     }
 
     initConfig() {
@@ -4217,6 +4218,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         if (goType === undefined) {
             return this.goSafeDictLocalUnbox(declaration) ?? this.goSafeListLocalUnbox(declaration) ?? this.goMarketLocalUnbox(declaration)
+                ?? this.goOrderBookLocalUnbox(declaration) ?? this.goOrderBookSideLocalType(declaration)  // RF-go-6-D
                 ?? this.goFieldStringLocalType(declaration) ?? this.goNilInitLocalType(declaration) ?? 'any';
         }
         // the scan matches AST identifiers, so it needs the source name, not the
@@ -4381,7 +4383,8 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             const declaredType = (containerType !== undefined) ? containerType : this.getGoLocalType(declaration, parsedValue);
             // a typed dict/list local is declared with the typed reader rather than the `any`
             // accessor, so the declaration compiles against the map/slice type
-            const unboxValue = this.goMarketUnboxValue(declaration, parsedValue)
+            const unboxValue = this.goOrderBookUnboxValue(declaration, parsedValue)  // RF-go-6-D
+                ?? this.goMarketUnboxValue(declaration, parsedValue)
                 ?? ((declaredType === GO_SAFE_DICT_LOCAL_TYPE)
                     ? this.goSafeDictUnboxValue(declaration, identation)
                     : ((declaredType === GO_SAFE_LIST_LOCAL_TYPE) ? this.goSafeListUnboxValue(declaration, identation) : undefined));
@@ -5518,6 +5521,372 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // B-02: a parameter of a nullable ccxt alias (`Str`) prints as the native Go type (`*string`) only
     // when the method is internal (not async/override, no inherited member), every call site passes
     // that type (checker here, textual for siblings), and the body never writes another type (D2).
+
+    // ===== RF-go-6-D =====
+    // Order-book side reads, keyed on the checker type. A value whose checker type is the ws order-book class
+    // (config `orderBook.classes`) and whose Go local is retyped to the port's own book interface prints its
+    // `x['asks'|'bids']` read as the interface accessor (`x.GetAsks()`). The retype is made at the DECLARATION and
+    // only when no nil can reach a read: every write is a book constructor, or a cache read (`obj[key]` /
+    // `this.safeValue(obj, key)` on a Dictionary of books) whose entry is proven present by a dominating guard
+    // (an enclosing `key in obj`, a preceding `if (!(key in obj)) {store | exit}`, or a preceding
+    // `if (x === undefined) {x = ctor | exit}` that every later read follows). A pro handler parameter of the book
+    // class is retyped when every call site in the tree hands it a typed book. Without config nothing changes.
+    goOrderBook: { classes: string[], constructors: string[], cacheReaders: string[], type: string, sideType: string, unbox: string, sides: { [side: string]: string } } | undefined;
+    goOrderBookLocalCache = new Map<any, string | undefined>();
+    goOrderBookEntryProven = new Map<any, boolean>();
+
+    goIsOrderBookType(type): boolean {
+        const cfg = this.goOrderBook;
+        if ((cfg === undefined) || (type === undefined)) {
+            return false;
+        }
+        const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
+        const kept = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        return (kept.length === 1) && [ kept[0].getAliasSymbol?.()?.name, kept[0].getSymbol?.()?.name ].some((n) => cfg.classes.includes(n));
+    }
+
+    goNodeIsOrderBook(node): boolean {
+        try {
+            return this.goIsOrderBookType(this.getChecker().getTypeAtLocation(node));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // `this.orderBook (...)` and its Counted/Indexed twins: the constructor answers a book, never nil
+    goIsOrderBookProducer(node): boolean {
+        const cfg = this.goOrderBook;
+        while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        const callee: any = node?.expression;
+        return (cfg !== undefined) && (node?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+            && (callee.expression?.kind === SyntaxKind.ThisKeyword) && cfg.constructors.includes(callee.name?.text);
+    }
+
+    // the container/key of a cache read: `obj[key]` or `this.safeValue (obj, key)` on a Dictionary whose values are books
+    goOrderBookCacheRead(node): { obj: any, key: any } | undefined {
+        const cfg = this.goOrderBook;
+        let obj: any;
+        let key: any;
+        if ((cfg === undefined) || (node === undefined)) {
+            return undefined;
+        }
+        if (node.kind === SyntaxKind.ElementAccessExpression) {
+            obj = node.expression;
+            key = node.argumentExpression;
+        } else if ((node.kind === SyntaxKind.CallExpression) && (node.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (node.expression.expression?.kind === SyntaxKind.ThisKeyword) && cfg.cacheReaders.includes(node.expression.name?.text)
+            && (node.arguments?.length === 2)) {
+            obj = node.arguments[0];
+            key = node.arguments[1];
+        } else {
+            return undefined;
+        }
+        try {
+            const values = this.getChecker().getTypeAtLocation(obj)?.getStringIndexType?.();
+            return this.goIsOrderBookType(values) ? { obj, key } : undefined;
+        } catch (e) {
+            return undefined;
+        }
+    }
+
+    goSameExpressionText(a, b): boolean {
+        return (a !== undefined) && (b !== undefined) && (a.getText().replace(/\s+/g, '') === b.getText().replace(/\s+/g, ''));
+    }
+
+    // `<key> in <obj>` possibly under `&&`
+    goConditionHasPresence(cond, read: { obj: any, key: any }): boolean {
+        while (cond?.kind === SyntaxKind.ParenthesizedExpression) {
+            cond = cond.expression;
+        }
+        if (cond?.kind !== SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        if (cond.operatorToken?.kind === SyntaxKind.InKeyword) {
+            return this.goSameExpressionText(cond.left, read.key) && this.goSameExpressionText(cond.right, read.obj);
+        }
+        return (cond.operatorToken?.kind === SyntaxKind.AmpersandAmpersandToken)
+            && (this.goConditionHasPresence(cond.left, read) || this.goConditionHasPresence(cond.right, read));
+    }
+
+    goConditionIsNegatedPresence(cond, read: { obj: any, key: any }): boolean {
+        while (cond?.kind === SyntaxKind.ParenthesizedExpression) {
+            cond = cond.expression;
+        }
+        // `this.safeValue (obj, key) === undefined`: the same absent test through the cache reader
+        if ((cond?.kind === SyntaxKind.BinaryExpression) && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.EqualsEqualsToken ].includes(cond.operatorToken?.kind)) {
+            const absent = (cond.right?.kind === SyntaxKind.NullKeyword) || ((cond.right?.kind === SyntaxKind.Identifier) && (cond.right.text === 'undefined'));
+            const cached = absent ? this.goOrderBookCacheRead(cond.left) : undefined;
+            return (cached !== undefined) && this.goSameExpressionText(cached.obj, read.obj) && this.goSameExpressionText(cached.key, read.key);
+        }
+        return (cond?.kind === SyntaxKind.PrefixUnaryExpression) && (cond.operator === SyntaxKind.ExclamationToken)
+            && this.goConditionHasPresence(cond.operand, read);
+    }
+
+    goBlockStatements(node): any[] {
+        return (node?.kind === SyntaxKind.Block) ? Array.from(node.statements) : (node === undefined ? [] : [ node ]);
+    }
+
+    goStatementExits(statement): boolean {
+        const kind = statement?.kind;
+        return (kind === SyntaxKind.ReturnStatement) || (kind === SyntaxKind.ThrowStatement)
+            || (kind === SyntaxKind.ContinueStatement) || (kind === SyntaxKind.BreakStatement);
+    }
+
+    // `<obj>[<key>] = <book>` or `<obj>[<key>] = x` at the top level of a block
+    goStoresBookInCache(statements: any[], read: { obj: any, key: any }): boolean {
+        return statements.some((st) => {
+            if ((st.kind === SyntaxKind.IfStatement) && (st.elseStatement !== undefined)) {
+                return this.goStoresBookInCache(this.goBlockStatements(st.thenStatement), read)
+                    && this.goStoresBookInCache(this.goBlockStatements(st.elseStatement), read);
+            }
+            const e: any = (st.kind === SyntaxKind.ExpressionStatement) ? st.expression : undefined;
+            return (e?.kind === SyntaxKind.BinaryExpression) && (e.operatorToken?.kind === SyntaxKind.EqualsToken)
+                && (e.left?.kind === SyntaxKind.ElementAccessExpression) && this.goSameExpressionText(e.left.expression, read.obj)
+                && this.goSameExpressionText(e.left.argumentExpression, read.key)
+                && (this.goNodeIsOrderBook(e.right) || this.goIsOrderBookProducer(e.right));
+        });
+    }
+
+    // the entry `read.obj[read.key]` holds a book at `at`: an enclosing `key in obj` guard, or an earlier sibling
+    // `if (!(key in obj)) { obj[key] = <book> | exit }` of an enclosing block
+    goOrderBookEntryPresent(at, read: { obj: any, key: any }): boolean {
+        let child: any = at;
+        for (let parent: any = at.parent; parent !== undefined; child = parent, parent = parent.parent) {
+            if (isFunctionLike(parent)) {
+                return false;
+            }
+            if ((parent.kind === SyntaxKind.IfStatement) && (parent.thenStatement === child) && this.goConditionHasPresence(parent.expression, read)) {
+                return true;
+            }
+            if ((parent.kind === SyntaxKind.IfStatement) && (parent.elseStatement === child) && this.goConditionIsNegatedPresence(parent.expression, read)) {
+                return true;
+            }
+            if ((parent.kind === SyntaxKind.Block) || (parent.kind === SyntaxKind.CaseClause) || (parent.kind === SyntaxKind.DefaultClause)) {
+                for (const st of Array.from(parent.statements as any[])) {
+                    if (st === child) {
+                        break;
+                    }
+                    if ((st.kind === SyntaxKind.IfStatement) && (st.elseStatement === undefined) && this.goConditionIsNegatedPresence(st.expression, read)) {
+                        const body = this.goBlockStatements(st.thenStatement);
+                        if (this.goStoresBookInCache(body, read) || this.goStatementExits(body[body.length - 1])) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // `x = <ctor>` as a whole statement
+    goIsProducerAssignment(statement, name: string): boolean {
+        const e: any = (statement?.kind === SyntaxKind.ExpressionStatement) ? statement.expression : undefined;
+        return (e?.kind === SyntaxKind.BinaryExpression) && (e.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (e.left?.kind === SyntaxKind.Identifier) && (e.left.text === name) && this.goIsOrderBookProducer(e.right);
+    }
+
+    // a producer assignment of `name` precedes `at` in an enclosing block
+    goDominatedByProducerWrite(at, name: string): boolean {
+        let child: any = at;
+        for (let parent: any = at.parent; parent !== undefined; child = parent, parent = parent.parent) {
+            if (isFunctionLike(parent)) {
+                return false;
+            }
+            if (parent.kind === SyntaxKind.Block) {
+                for (const st of Array.from(parent.statements as any[])) {
+                    if (st === child) {
+                        break;
+                    }
+                    if (this.goIsProducerAssignment(st, name)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // `if (x === undefined) { x = <ctor> | exit }` : the first such sibling after the declaration statement
+    goOrderBookRepairGuard(declaration, name: string): any {
+        const statement: any = declaration.parent?.parent;
+        const siblings: any[] = Array.from((statement?.parent?.statements ?? []) as any[]);
+        for (const st of siblings.slice(siblings.indexOf(statement) + 1)) {
+            if (st.kind !== SyntaxKind.IfStatement) {
+                continue;
+            }
+            const c: any = st.expression;
+            const nilTest = (c?.kind === SyntaxKind.BinaryExpression) && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.EqualsEqualsToken ].includes(c.operatorToken?.kind)
+                && (c.left?.kind === SyntaxKind.Identifier) && (c.left.text === name)
+                && ((c.right?.kind === SyntaxKind.NullKeyword) || ((c.right?.kind === SyntaxKind.Identifier) && (c.right.text === 'undefined')));
+            const body = this.goBlockStatements(st.thenStatement);
+            if (nilTest && (body.some((b) => this.goIsProducerAssignment(b, name)) || this.goStatementExits(body[body.length - 1]))) {
+                return st;
+            }
+        }
+        return undefined;
+    }
+
+    // `x['asks']`, or `x` handed whole to a call whose declared parameter is the book class
+    goOrderBookRefIsRead(id): boolean {
+        const parent: any = id.parent;
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === id)) {
+            return this.goIsOrderBookSideAccess(parent);
+        }
+        // a member of the book (`x.reset (..)`, `x.cache`): the port prints these on the interface
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === id)) {
+            return true;
+        }
+        if ((parent?.kind !== SyntaxKind.CallExpression) || !parent.arguments?.includes(id)) {
+            return false;
+        }
+        try {
+            const target: any = this.getChecker().getResolvedSignature(parent)?.declaration?.resolve();
+            const param: any = target?.parameters?.[parent.arguments.indexOf(id)];
+            return (param?.name !== undefined) && this.goIsProHandlerMethod(target)
+                && (this.goNodeIsOrderBook(param.name) || ((this.getChecker().getTypeAtLocation(param.name).flags & TypeFlags.Any) !== 0));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    goIsOrderBookSideAccess(node): boolean {
+        const cfg = this.goOrderBook;
+        const key: any = node.argumentExpression;
+        return (cfg !== undefined) && (node.expression?.kind === SyntaxKind.Identifier) && (key?.kind === SyntaxKind.StringLiteral)
+            && Object.prototype.hasOwnProperty.call(cfg.sides, key.text) && !this.isGoElementAccessAssignmentTarget(node);
+    }
+
+    goOrderBookLocalUnbox(declaration): string | undefined {
+        return this.goCachedLocalUnbox(this.goOrderBookLocalCache, declaration, () => this.goOrderBookLocalUnboxUncached(declaration));
+    }
+
+    goOrderBookLocalUnboxUncached(declaration): string | undefined {
+        const cfg = this.goOrderBook;
+        const name: string = declaration.name.text;
+        if ((cfg === undefined) || (declaration.initializer === undefined) || (declaration.type?.kind === SyntaxKind.AnyKeyword)
+            || !/(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/]/.test(String(declaration.getSourceFile().fileName ?? ''))) {
+            return undefined;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        // sibling-block locals of the same name are separate Go variables: only the type name must be free
+        if ((scope === undefined) || this.goTypeNameIsShadowed(scope, cfg.type)) {
+            return undefined;
+        }
+        const refs: any[] = this.goDescendantsOf(scope).filter((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+            && (n !== declaration.name) && this.goIdentifierRefersToDeclaration(n, declaration)
+            && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n)));
+        const isWrite = (n: any) => (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+            && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment);
+        const writes = refs.filter(isWrite);
+        // the retype exists for the side reads (and for the handlers that receive the book): any other local keeps its box
+        if (!refs.some((n) => this.goOrderBookRefIsRead(n))) {
+            return undefined;
+        }
+        if (refs.some((n) => (n.parent?.kind === SyntaxKind.PrefixUnaryExpression) || (n.parent?.kind === SyntaxKind.PostfixUnaryExpression)
+            || (n.parent?.kind === SyntaxKind.SpreadElement)) || writes.some((w) => w.parent.operatorToken.kind !== SyntaxKind.EqualsToken)) {
+            return undefined;
+        }
+        let needsRepair = false;
+        const init = declaration.initializer;
+        if (!this.goIsOrderBookProducer(init)) {
+            const read = this.goOrderBookCacheRead(init);
+            if (read === undefined) {
+                return undefined;
+            }
+            needsRepair = !this.goOrderBookEntryPresent(init, read);
+            this.goOrderBookEntryProven.set(declaration, !needsRepair);
+        }
+        for (const w of writes) {
+            const rhs: any = w.parent.right;
+            const cached = this.goOrderBookCacheRead(rhs);
+            if (!this.goIsOrderBookProducer(rhs) && !((cached !== undefined) && this.goOrderBookEntryPresent(rhs, cached))) {
+                return undefined;
+            }
+        }
+        if (needsRepair) {
+            const guard = this.goOrderBookRepairGuard(declaration, name);
+            if (guard === undefined) {
+                return undefined;
+            }
+            const nilTested = (n: any) => (n.parent?.kind === SyntaxKind.BinaryExpression) && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.EqualsEqualsToken,
+                SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken ].includes(n.parent.operatorToken?.kind)
+                && (((n.parent.left === n) ? n.parent.right : n.parent.left)?.text === 'undefined');
+            const inElse = (n: any) => (guard.elseStatement !== undefined) && (n.pos >= guard.elseStatement.pos) && (n.end <= guard.elseStatement.end);
+            const early = refs.filter((n) => !isWrite(n) && !nilTested(n) && !inElse(n) && (n.end <= guard.end));
+            if (early.some((n) => !this.goDominatedByProducerWrite(n, name))) {
+                return undefined;
+            }
+        }
+        return cfg.type;
+    }
+
+    // the declaration's initializer: a cache read is unboxed by the port's own typed reader
+    goOrderBookUnboxValue(declaration, parsedValue: string): string | undefined {
+        const cfg = this.goOrderBook;
+        if ((cfg === undefined) || (this.goOrderBookLocalUnbox(declaration) !== cfg.type) || this.goIsOrderBookProducer(declaration.initializer)) {
+            return undefined;
+        }
+        // an entry a dominating guard proved present is Go's own assertion (it cannot see a nil, and it is what proves
+        // the book non-nil to the setter calls); an entry a later nil test repairs keeps the nil-tolerant unboxer
+        if (this.goOrderBookEntryProven.get(declaration) === true) {
+            return `${parsedValue.trimStart()}.(${cfg.type})`;
+        }
+        return `${cfg.unbox}(${parsedValue.trimStart()})`;
+    }
+
+    // `const asks = x['asks']`: the local holds the side the accessor answers (`ccxt.IOrderBookSide`), never rebound
+    goOrderBookSideLocalType(declaration): string | undefined {
+        const cfg = this.goOrderBook;
+        const init: any = declaration.initializer;
+        if ((cfg === undefined) || (init?.kind !== SyntaxKind.ElementAccessExpression) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+            || (init.expression?.kind !== SyntaxKind.Identifier) || (this.goOrderBookSideRead(init) === undefined)) {
+            return undefined;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        const name = declaration.name.text;
+        const rebound = this.goDescendantsOf(scope).some((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+            && this.goIdentifierRefersToDeclaration(n, declaration) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+            && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment));
+        // one binding of the name per function: a sibling-block redeclaration keeps the box
+        const bindings = this.goDescendantsOf(scope).filter((n: any) => ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter))
+            && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name));
+        return (rebound || (bindings.length !== 1) || this.goTypeNameIsShadowed(scope, cfg.sideType)) ? undefined : cfg.sideType;
+    }
+
+    // `x['asks']` on an identifier printed as the book interface is the interface's accessor
+    goOrderBookSideRead(node): string | undefined {
+        if (!this.goIsOrderBookSideAccess(node) || (this.goDeclaredTypeOfIdentifier(node.expression) !== this.goOrderBook?.type)) {
+            return undefined;
+        }
+        return `${this.printNode(node.expression, 0)}.${this.goOrderBook.sides[node.argumentExpression.text]}()`;
+    }
+
+    // a pro `handle*` method's book parameter prints the book interface when every call site hands it one
+    goOrderBookParameterType(fn, param): string | undefined {
+        const cfg = this.goOrderBook;
+        if ((cfg === undefined) || !this.goIsProHandlerMethod(fn) || this.isAsyncFunction(fn) || (param.name?.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        // declared as the book class, or as `any` with every caller handing a book (the call-site proof below)
+        let declaredAny = false;
+        try {
+            declaredAny = (this.getChecker().getTypeAtLocation(param.name).flags & TypeFlags.Any) !== 0;
+        } catch (e) {
+            return undefined;
+        }
+        if (!declaredAny && !this.goNodeIsOrderBook(param.name)) {
+            return undefined;
+        }
+        const index = fn.parameters.indexOf(param);
+        const calls = this.goSameFileCallsOf(fn, fn.name.text);
+        return ((calls.length > 0) && calls.every((call) => (call.arguments?.[index] !== undefined) && (call.arguments[index].kind !== SyntaxKind.SpreadElement)
+            && (this.goPrintedArgType(call.arguments[index]) === cfg.type))
+            && this.goLocalIsSafeToType(fn.body, param, param.name.text, cfg.type)) ? cfg.type : undefined;
+    }
+    // ===== RF-go-6-D (end) =====
+
     goNativeParameterTypeCache = new Map<any, string | undefined>();
     goSameFileCallCache = new Map<any, Map<string, Array<any>>>();
     goTsSrcTreeCache = new Map<string, any>();
@@ -5579,6 +5948,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // the string table above. A method whose declarations or call sites disagree prints `any`
             // everywhere so the Go signature stays the one the hand-written interfaces declare.
             return this.goUnifiedSliceParameterType(fn, param);
+        }
+        const bookParameter = this.goOrderBookParameterType(fn, param);  // RF-go-6-D
+        if (bookParameter !== undefined) {
+            return bookParameter;
         }
         if (this.goMethodKeepsBaseSignature(fn)) {
             return undefined; // inherited/base methods are pinned by the base class and IDerivedExchange
@@ -8603,6 +8976,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const goType = this.goDeclaredTypeOfIdentifier(node);
         if ((goType === 'map[string]any') || (goType === '[]any') || (goType === '[]string')) {
+            return goType;
+        }
+        // RF-go-6-D: a book interface local is nil exactly when the cache / OrderBookTyped answered no book
+        if ((goType !== undefined) && (goType === this.goOrderBook?.type)) {
             return goType;
         }
         return undefined;
@@ -11778,6 +12155,10 @@ ${tryBodyBlock}
     }
 
     printElementAccessExpression(node, identation) {
+        const bookSide = this.goOrderBookSideRead(node);  // RF-go-6-D
+        if (bookSide !== undefined) {
+            return bookSide;
+        }
         // Maintain original special-case handling first.
         const special = this.printElementAccessExpressionExceptionIfAny(node);
         if (special) {
