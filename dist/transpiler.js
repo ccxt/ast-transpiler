@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-O5MZOAMZ.js";
+} from "./chunk-MEKZ6QY3.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -3133,10 +3133,15 @@ var CSHARP_OVERRIDE_PARAM_TYPES = {
   signEvmTransaction: { 0: "IDictionary<string, object>" }
 };
 var csharpListParamCensuses = /* @__PURE__ */ new WeakMap();
+var csharpListParamBaseKeys = /* @__PURE__ */ new WeakMap();
 function csharpListParamFileIsPrintedAlone(node) {
   const file = typeof node.getSourceFile === "function" ? node.getSourceFile() : void 0;
   const fileName = String(file?.fileName ?? "");
-  return fileName.includes("/ts/src/base/");
+  if (!fileName.replace(/\\/g, "/").includes("ts/src/base/")) {
+    return false;
+  }
+  const delimiter = String(file?.text ?? "").indexOf("METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT");
+  return delimiter < 0 || node.pos > delimiter;
 }
 function csharpSyntacticArrayType(node) {
   if (node === void 0) {
@@ -3144,6 +3149,9 @@ function csharpSyntacticArrayType(node) {
   }
   if (node.kind === SyntaxKind4.ArrayType) {
     return true;
+  }
+  if (node.kind === SyntaxKind4.TypeReference) {
+    return String(node.typeName?.text ?? "") === "Strings";
   }
   if (node.kind === SyntaxKind4.UnionType || node.kind === SyntaxKind4.ParenthesizedType) {
     const parts = node.types !== void 0 ? Array.from(node.types) : [node.type];
@@ -3188,6 +3196,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
     this.csharpMemberWriteCache = /* @__PURE__ */ new WeakMap();
     // source file -> next pattern variable number of csharpMemberKeyVariable
     this.csharpMemberKeyCounters = /* @__PURE__ */ new WeakMap();
+    // the subset fixed by a base-tier declaration: printed `IList<object> x = null`, the spelling every override shares
+    this.csharpBaseListParamDeclarations = /* @__PURE__ */ new WeakSet();
     // hx10w6 AU03: variable statements whose `await Promise.all ([...])` prints as typed task
     // locals + `Task.WhenAll`, and the promise-holding declarations that plan prints as `var`
     this.csharpPromiseAllSites = /* @__PURE__ */ new WeakMap();
@@ -7245,17 +7255,15 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // pc01: the array-parameter rule -- the type an array-annotated parameter prints with, or
   // undefined when the whole-program census (csharpListParamCensus) has not admitted it
   csharpArrayListParamType(node) {
-    if (node === void 0 || node.kind !== SyntaxKind4.Parameter || node.name === void 0) {
-      return void 0;
-    }
-    if (!csharpSyntacticArrayType(node.type)) {
-      return void 0;
-    }
-    if (csharpListParamFileIsPrintedAlone(node)) {
+    if (node === void 0 || node.kind !== SyntaxKind4.Parameter || node.name === void 0 || node.dotDotDotToken !== void 0) {
       return void 0;
     }
     const method = findAncestor(node, (n) => isMethodDeclaration2(n));
     if (method === void 0 || method.name === void 0 || method.parameters === void 0) {
+      return void 0;
+    }
+    const loose = node.type === void 0 || node.type.kind === SyntaxKind4.AnyKeyword;
+    if (!csharpSyntacticArrayType(node.type) && !(loose && method.parent?.heritageClauses !== void 0)) {
       return void 0;
     }
     const index = method.parameters.indexOf(node);
@@ -7263,24 +7271,29 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     const census = this.csharpListParamCensus();
-    const admitted = census === void 0 ? void 0 : census.get(method.name.getText().trim() + ":" + index);
+    const key = method.name.getText().trim() + ":" + index;
+    const admitted = census === void 0 ? void 0 : census.get(key);
+    if (admitted === true && csharpListParamBaseKeys.get(this.getProgram())?.has(key)) {
+      this.csharpBaseListParamDeclarations.add(node);
+    }
     return admitted === true ? "IList<object>" : void 0;
   }
   // The C# spelling an annotation proves, or undefined: an array (or a `T[] | undefined` union)
   // whose cells the generated C# holds as `object` -- an `any` cell, a JSON dictionary, or a row
   // class/interface (a TS object is a Dictionary<string, object> in every generated port). A
   // `string`/`number`/`boolean` cell and a nested array keep their own C# type, so they decline.
-  csharpListParamSpelling(node) {
-    return this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(node), 1);
+  csharpListParamSpelling(node, anyCell = false) {
+    return this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(node), 1, anyCell);
   }
-  csharpListSpellingOfType(type, unionArms = 1) {
+  // anyCell: the base tier boxes every array cell (`string[]`, `number[][]`) as the list's `object`
+  csharpListSpellingOfType(type, unionArms = 1, anyCell = false) {
     if (type === void 0 || unionArms !== 1) {
       return void 0;
     }
     const checker = this.getChecker();
     if (type.isUnionType && type.isUnionType()) {
       const arms = (type.getTypes() ?? []).filter((arm) => (arm.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) === 0);
-      return arms.length === 1 ? this.csharpListSpellingOfType(arms[0], arms.length) : void 0;
+      return arms.length === 1 ? this.csharpListSpellingOfType(arms[0], arms.length, anyCell) : void 0;
     }
     if (type.flags & (TypeFlags3.TypeParameter | TypeFlags3.Any | TypeFlags3.Unknown | TypeFlags3.EnumLike)) {
       return void 0;
@@ -7293,6 +7306,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     if (element.flags & (TypeFlags3.Any | TypeFlags3.Unknown)) {
+      return "IList<object>";
+    }
+    if (anyCell) {
       return "IList<object>";
     }
     if (checker.isArrayType(element) || checker.isTupleType(element)) {
@@ -7322,6 +7338,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
       return census;
     }
     census = /* @__PURE__ */ new Map();
+    const baseKeys = /* @__PURE__ */ new Set();
+    csharpListParamBaseKeys.set(program, baseKeys);
     const declarations = /* @__PURE__ */ new Map();
     const calls = /* @__PURE__ */ new Map();
     const add = (table, key, value) => {
@@ -7344,7 +7362,11 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const walk = (node) => {
         if (isMethodDeclaration2(node) && node.name !== void 0 && node.parameters !== void 0 && node.parameters.length > 0) {
           const methodName = node.name.getText().trim();
-          Array.from(node.parameters).forEach((parameter, index) => add(declarations, methodName + ":" + index, parameter));
+          Array.from(node.parameters).forEach((parameter, index) => {
+            if (parameter.dotDotDotToken === void 0) {
+              add(declarations, methodName + ":" + index, parameter);
+            }
+          });
         } else if (isCallExpression3(node) && isPropertyAccessExpression(node.expression) && isIdentifier(node.expression.name)) {
           add(calls, node.expression.name.getText().trim(), node);
         }
@@ -7367,12 +7389,14 @@ var CSharpTranspiler = class extends BaseTranspiler {
       const methodName = key.substring(0, separator);
       const index = Number(key.substring(separator + 1));
       let admitted = !(typeof this.csharpListParamExclusions === "function" && this.csharpListParamExclusions(methodName, index));
-      for (const parameter of declarations.get(key) ?? []) {
-        if (this.csharpListParamSpelling(parameter) !== "IList<object>") {
-          admitted = false;
-          break;
-        }
-        if (csharpListParamFileIsPrintedAlone(parameter)) {
+      const rows = declarations.get(key) ?? [];
+      const baseTier = rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter));
+      if (baseTier) {
+        baseKeys.add(key);
+      }
+      for (const parameter of rows) {
+        const followsBase = baseTier && !csharpListParamFileIsPrintedAlone(parameter);
+        if (!followsBase && this.csharpListParamSpelling(parameter, baseTier) !== "IList<object>") {
           admitted = false;
           break;
         }
@@ -7381,7 +7405,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
           break;
         }
       }
-      if (admitted) {
+      if (admitted && !baseTier) {
         for (const call of calls.get(methodName) ?? []) {
           const args = Array.from(call.arguments ?? []);
           if (index >= args.length) {
@@ -7403,6 +7427,40 @@ var CSharpTranspiler = class extends BaseTranspiler {
     }
     csharpListParamCensuses.set(program, census);
     return census;
+  }
+  // A call of a base-tier method whose array parameter this rule typed from its declared type: an
+  // argument the printer does not hold as a list is converted at the call, as `x.push` does
+  printArgsForCallExpression(node, identation) {
+    const callee = node.expression;
+    if (node.kind !== SyntaxKind4.CallExpression || !isPropertyAccessExpression(callee) || !isIdentifier(callee.name) || node.arguments.length === 0) {
+      return super.printArgsForCallExpression(node, identation);
+    }
+    const census = this.csharpListParamCensus();
+    const baseKeys = census === void 0 ? void 0 : csharpListParamBaseKeys.get(this.getProgram());
+    const name = callee.name.getText().trim();
+    if (census === void 0 || baseKeys === void 0 || !Array.from(baseKeys).some((key) => key.startsWith(name + ":"))) {
+      return super.printArgsForCallExpression(node, identation);
+    }
+    const decide = (key) => census.get(key) === true;
+    return Array.from(node.arguments).map((argument, index) => {
+      const printed = this.printNode(argument, identation).trim();
+      const key = name + ":" + index;
+      if (!baseKeys.has(key) || census.get(key) !== true || printed === "null") {
+        return printed;
+      }
+      let inner = argument;
+      while (isParenthesizedExpression(inner)) {
+        inner = inner.expression;
+      }
+      const proven = this.csharpExpressionTypeOf(inner);
+      if (proven === "List<object>" || proven === "IList<object>") {
+        return printed;
+      }
+      if (!isAsExpression(inner) && this.csharpListParamArgumentPrintsList(inner, decide)) {
+        return printed;
+      }
+      return `((IList<object>)${printed})`;
+    }).join(", ");
   }
   // whether the method body rebinds the parameter (an assignment or ++/--): the declaration
   // would then have to accept a value that is not a list
@@ -7813,7 +7871,8 @@ var CSharpTranspiler = class extends BaseTranspiler {
       if (initializer) {
         const customDefaultValue = this.printCustomDefaultValueIfNeeded(initializer);
         const defaultValue2 = customDefaultValue ? customDefaultValue : this.printNode(initializer, 0);
-        type = defaultValue2 === "null" && type !== "object" ? type.endsWith("?") ? type + " " : type + "? " : type + " ";
+        const baseList = this.csharpBaseListParamDeclarations.has(node);
+        type = defaultValue2 === "null" && type !== "object" && !baseList ? type.endsWith("?") ? type + " " : type + "? " : type + " ";
         return type + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + defaultValue2;
       }
       return type + " " + name;
