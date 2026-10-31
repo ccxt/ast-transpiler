@@ -8711,3 +8711,106 @@ describe('java base-tier list parameters (FJ4-A2)', () => {
         expect(output).toContain('pick(Object array, Object limit)');
     });
 });
+
+// RFM-J2 leaf D: hx10w2-J05 (objectValues / isInstance) and hx10w3-J06 (awaited / tuple box locals) as
+// checker-keyed printer rules. The proofs anchor on base-tier declarations, so the fixture mirrors the layout.
+describe('rfm-j2d: objectValues copy, catch isInstance, awaited / tuple box locals', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-rfm-j2d');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const ERRORS_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'errors.ts');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuej2d.ts');
+    let out: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE,
+            "export interface Dictionary<T> {\n    [key: string]: T;\n}\n" +
+            "export type Dict = Dictionary<any>;\n" +
+            "export type Str = string | undefined;\n");
+        fs.writeFileSync(ERRORS_FIXTURE,
+            "class BaseError extends Error {\n}\n" +
+            "class BadSymbol extends BaseError {\n}\n" +
+            "export { BaseError, BadSymbol };\n");
+        fs.writeFileSync(BASE_FIXTURE,
+            "import type { Dict, Str } from './types';\n" +
+            "export default class Exchange {\n" +
+            "    safeString (d: any, k: any, defaultValue: Str = undefined): Str {\n        return defaultValue;\n    }\n" +
+            "    omit (d: Dict, k: any): Dict {\n        return d;\n    }\n" +
+            "    throwExactlyMatchedException (exact: any, str: string, message: string): void {\n    }\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str } from './base/types';\n" +
+            "import Exchange from './base/Exchange';\n" +
+            "import { BadSymbol } from './base/errors';\n" +
+            "class Venue extends Exchange {\n" +
+            "    async loadDict (): Promise<Dict> { return {}; }\n" +
+            "    async loadList (): Promise<any[]> { return []; }\n" +
+            "    ownSync (x: any): any { return x; }\n" +
+            "    prepareTuple (): [Dict, Dict] { return [ {}, {} ]; }\n" +
+            // objectValues
+            "    valuesOfMap (): any { const data = { 'a': 1 }; const v = Object.values (data); return v; }\n" +
+            "    valuesOfRewritten (other: any): any { let data = { 'a': 1 }; data = other; const v = Object.values (data); return v; }\n" +
+            "    valuesOfParam (data: any): any { const v = Object.values (data); return v; }\n" +
+            // isInstance
+            "    catchOmit (d: Dict): void { try { this.omit (d, 'a'); this.safeString (d, 'a'); } catch (e1) { if (e1 instanceof BadSymbol) { return; } } }\n" +
+            "    catchOwnSync (d: Dict): void { try { this.ownSync (d); } catch (e2) { if (e2 instanceof BadSymbol) { return; } } }\n" +
+            "    catchPromise (d: Dict): void { try { this.loadDict (); } catch (e3) { if (e3 instanceof BadSymbol) { return; } } }\n" +
+            "    async catchAwait (d: Dict) { try { await this.loadDict (); } catch (e4) { if (e4 instanceof BadSymbol) { return; } } }\n" +
+            // awaited / tuple box locals
+            "    async readDict (symbol: string) { const data = await this.loadDict (); return data[symbol]; }\n" +
+            "    async readDictLit () { const data2 = await this.loadDict (); return data2['walletAddress']; }\n" +
+            "    async readDictOther (params = {}) { const data3 = await this.loadDict (); return this.omit (data3, params); }\n" +
+            "    async readList (symbol: string) { const xs = await this.loadList (); return xs[0]; }\n" +
+            "    readTuple (symbol: string) { const [ request, query ] = this.prepareTuple (); return request[symbol]; }\n" +
+            "    readTupleMixed (symbol: string) { const [ request2, query2 ] = this.prepareTuple (); return this.omit (request2, query2); }\n" +
+            "}\n");
+        const byPath = new Transpiler({ 'verbose': false, 'java': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        out = byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    const method = (name: string) => {
+        const at = out.indexOf(' ' + name + '(');
+        const next = out.indexOf('\n    public ', at + 1);
+        return out.slice(at, next === -1 ? undefined : next);
+    };
+
+    test('Object.values of a printer-declared Map local copies the map values', () => {
+        expect(method('valuesOfMap')).toContain('new java.util.ArrayList<Object>(data.values())');
+    });
+
+    test('Object.values keeps the helper for a rewritten local and for an untyped parameter', () => {
+        expect(method('valuesOfRewritten')).toContain('Helpers.objectValues(data)');
+        expect(method('valuesOfParam')).toContain('Helpers.objectValues(data)');
+    });
+
+    test('instanceof on a catch variable is native when every call in the try resolves to a synchronous base member', () => {
+        expect(method('catchOmit')).toContain('(e1 instanceof BadSymbol)');
+    });
+
+    test('instanceof keeps the helper when the try calls a venue member, an unawaited promise or awaits', () => {
+        expect(method('catchOwnSync')).toContain('Helpers.isInstance(e2, BadSymbol.class)');
+        expect(method('catchPromise')).toContain('Helpers.isInstance(e3, BadSymbol.class)');
+        expect(method('catchAwait')).toContain('Helpers.isInstance(e4, BadSymbol.class)');
+    });
+
+    test('an awaited Dict local that is only element-accessed takes the Map box', () => {
+        expect(method('readDict')).toContain('java.util.Map<String, Object> data = (java.util.Map<String, Object>) (this.loadDict()).join();');
+        expect(method('readDict')).toContain('data.get(symbol)');
+        expect(method('readDictLit')).toContain('data2.get("walletAddress")');
+    });
+
+    test('an awaited local with a non-element use, and an awaited list, stay Object', () => {
+        expect(method('readDictOther')).toContain('Object data3 = (this.loadDict()).join();');
+        expect(method('readList')).toContain('Object xs = (this.loadList()).join();');
+    });
+
+    test('a destructured Dict slot that is only element-accessed takes the Map box', () => {
+        expect(method('readTuple')).toContain('java.util.Map<String, Object> request = (java.util.Map<String, Object>) ((java.util.List<Object>) requestqueryVariable).get(0);');
+        expect(method('readTupleMixed')).toContain('var request2 = ((java.util.List<Object>) request2query2Variable).get(0);');
+    });
+});

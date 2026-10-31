@@ -2591,6 +2591,190 @@ export class JavaTranspiler extends BaseTranspiler {
         return 'List<Object>';
     }
 
+    // a json object box: the generic `Dictionary<T>` of ts/src/base/types.ts (so `Dict` and
+    // `Dictionary<Dictionary<..>>`): an object type with a string index signature and no numeric one.
+    // Arrays, tuples, DTOs, primitives, unions and the named typed views that extend it (Balances,
+    // Tickers, ..., which own a typed print) all decline.
+    javaJsonBoxType(type): boolean {
+        if (type === undefined || type === null || !((type.flags as number) & TypeFlags.Object)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        try {
+            if (checker.isArrayType(type) || checker.isTupleType(type)) {
+                return false;
+            }
+            const symbol: any = (type as any).getSymbol?.();
+            const declaration: any = symbol?.declarations?.[0]?.resolve();
+            if (symbol?.escapedName !== 'Dictionary'
+                || !/(^|[\\/])ts[\\/]src[\\/]base[\\/]types\.ts$/.test(declaration?.getSourceFile?.()?.fileName ?? '')) {
+                return false;
+            }
+            return checker.getIndexTypeOfType(type, IndexKind.String) !== undefined
+                && checker.getIndexTypeOfType(type, IndexKind.Number) === undefined;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // How the identifier at `node` is used. 'element' = the printed Java is a native get/put on the
+    // local; 'neutral' = a property NAME, not a read of the local; 'value' = a position that takes the
+    // box as an Object (return, copy, the value of an element write); 'other' = any use that would see
+    // the local's new static type (argument, receiver, comparison, delete, spread, call of an element)
+    javaBoxUseVerdict(node): 'element' | 'neutral' | 'value' | 'other' {
+        const parent: any = node.parent;
+        if (parent === undefined || parent === null) {
+            return 'other';
+        }
+        if (isPropertyAccessExpression(parent) && parent.name === node) {
+            return 'neutral';
+        }
+        if ((parent.kind === SyntaxKind.ReturnStatement && parent.expression === node)
+            || (parent.kind === SyntaxKind.VariableDeclaration && parent.initializer === node)
+            || (parent.kind === SyntaxKind.BinaryExpression && parent.right === node
+                && parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+            return 'value';
+        }
+        if (isElementAccessExpression(parent) && parent.expression === node) {
+            const grand: any = parent.parent;
+            if (grand?.kind === SyntaxKind.DeleteExpression || isSpreadElement(grand) || isSpreadAssignment(grand)
+                || (isCallExpression(grand) && grand.expression === parent)) {
+                return 'other';
+            }
+            // a numeric / counter key takes the printer's LIST arm, which a Map box cannot honour
+            const key: any = parent.argumentExpression;
+            return key !== undefined && (isStringLiteralLikeNode(key) || isIdentifier(key)) ? 'element' : 'other';
+        }
+        return 'other';
+    }
+
+    // every use of the local in its function is an element access (at least one), so declaring it a
+    // Map cannot rebind any call in the file through the new static type
+    javaBoxLocalUsedOnlyAsElements(nameNode): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const symbol = checker?.getSymbolAtLocation(nameNode);
+        if (symbol === undefined) {
+            return false;
+        }
+        let scope: any = nameNode.parent;
+        while (scope && !isFunctionLike(scope)) {
+            scope = scope.parent;
+        }
+        if (!scope) {
+            return false;
+        }
+        let uses = 0;
+        let ok = true;
+        const walk = (current) => {
+            if (!ok || current === undefined) {
+                return;
+            }
+            if (current !== nameNode && isIdentifier(current) && current.text === nameNode.text
+                && checker.getSymbolAtLocation(current) === symbol) {
+                const verdict = this.javaBoxUseVerdict(current);
+                if (verdict === 'element') {
+                    uses++;
+                } else if (verdict === 'other') {
+                    ok = false;
+                    return;
+                }
+            }
+            current.forEachChild(walk);
+        };
+        scope.forEachChild(walk);
+        return ok && uses > 0;
+    }
+
+    // `const x = await this.m(..)` / `[a, b] = this.m(..)` slot: the awaited / tuple-element TS type is
+    // a json object box and the local is only element-accessed. The erased `.join()` / list `get` needs
+    // the checkcast the declaration carries.
+    javaCheckedBoxLocalType(declaration): string | undefined {
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return undefined;
+        }
+        if (isVariableDeclaration(declaration) && isIdentifier(declaration.name) && declaration.initializer?.kind === SyntaxKind.AwaitExpression) {
+            const call: any = this.unwrapParenthesesOnly((declaration.initializer as any).expression);
+            if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression)
+                || (call.expression.expression.kind !== SyntaxKind.ThisKeyword
+                    && call.expression.expression.kind !== SyntaxKind.SuperKeyword)) {
+                return undefined;
+            }
+            let type;
+            try {
+                type = checker.getTypeAtLocation(declaration.initializer);
+            } catch (e) {
+                return undefined;
+            }
+            return this.javaJsonBoxType(type) && this.javaBoxLocalUsedOnlyAsElements(declaration.name)
+                ? JAVA_ELEMENT_WRITE_MAP_TYPE : undefined;
+        }
+        if (declaration.kind === SyntaxKind.BindingElement && isIdentifier(declaration.name)
+            && declaration.dotDotDotToken === undefined && declaration.initializer === undefined) {
+            const pattern: any = declaration.parent;
+            const owner: any = pattern?.parent;
+            if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || owner === undefined || !isVariableDeclaration(owner)
+                || owner.name !== pattern || owner.initializer === undefined) {
+                return undefined;
+            }
+            const call: any = this.unwrapParenthesesOnly(owner.initializer);
+            if (!isCallExpression(call)) {
+                return undefined;
+            }
+            let element;
+            try {
+                const type = checker.getTypeAtLocation(call);
+                if (!checker.isTupleType(type)) {
+                    return undefined;
+                }
+                const arguments_ = checker.getTypeArguments(type);
+                if (arguments_ === undefined || arguments_.length !== pattern.elements.length) {
+                    return undefined;
+                }
+                element = arguments_[pattern.elements.indexOf(declaration)];
+            } catch (e) {
+                return undefined;
+            }
+            return this.javaJsonBoxType(element) && this.javaBoxLocalUsedOnlyAsElements(declaration.name)
+                ? JAVA_ELEMENT_WRITE_MAP_TYPE : undefined;
+        }
+        return undefined;
+    }
+
+    javaCheckedBoxLocalTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED> = new WeakMap();
+
+    javaCheckedBoxLocalTypeCached(declaration): string | undefined {
+        if (declaration === undefined) {
+            return undefined;
+        }
+        const cached = this.javaCheckedBoxLocalTypeCache.get(declaration);
+        if (cached !== undefined) {
+            return cached === JAVA_MEMO_UNDEFINED ? undefined : cached;
+        }
+        let type;
+        try {
+            type = this.javaCheckedBoxLocalType(declaration);
+        } catch (e) {
+            type = undefined;
+        }
+        this.javaCheckedBoxLocalTypeCache.set(declaration, type ?? JAVA_MEMO_UNDEFINED);
+        return type;
+    }
+
+    unwrapParenthesesOnly(node): any {
+        let current = node;
+        while (current !== undefined && isParenthesizedExpression(current)) {
+            current = current.expression;
+        }
+        return current;
+    }
+
     // every other mention of the local must be a read a `Map<String, Object>` declaration leaves
     // unchanged: an element-access receiver, a call argument, a return value, an assignment's
     // right-hand side, a comparison or a container element. A cast, a method call, a spread or a
@@ -3409,6 +3593,11 @@ export class JavaTranspiler extends BaseTranspiler {
         const baseField = this.javaBaseMapFieldLocalType(declaration);
         if (baseField !== undefined) {
             return baseField;
+        }
+        // an awaited / destructured json-box local the printer declares with its checked Map box
+        const checkedBox = this.javaCheckedBoxLocalTypeCached(declaration);
+        if (checkedBox !== undefined) {
+            return checkedBox;
         }
         if (isParameterDeclaration(declaration)) {
             const fixed = this.javaNativeParameterType(declaration);
@@ -7868,9 +8057,14 @@ export class JavaTranspiler extends BaseTranspiler {
                     0
                 )};\n`;
 
-            return arrayBindingStatement + parsedArrayBindingElements.map((e, index) =>
-                this.getIden(identation) + `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`
-            ).join(";\n");
+            return arrayBindingStatement + parsedArrayBindingElements.map((e, index) => {
+                // a slot whose tuple element type is a json box that is only element-accessed
+                const boxType = this.javaCheckedBoxLocalTypeCached(arrayBindingPatternElements[index]);
+                if (boxType !== undefined) {
+                    return this.getIden(identation) + `${boxType} ${e} = (${boxType}) ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+                }
+                return this.getIden(identation) + `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+            }).join(";\n");
         }
 
         const isNew =
@@ -7944,6 +8138,13 @@ export class JavaTranspiler extends BaseTranspiler {
                 " = " +
                 parsedValue
             );
+        }
+        // `const x = await this.m(..)` whose awaited TS type is a json box that is only element-accessed:
+        // the erased `.join()` is cast to the box, so the reads and writes on x print natively
+        const awaitedBox = !isNew && declaration.initializer.kind === SyntaxKind.AwaitExpression
+            ? this.javaCheckedBoxLocalTypeCached(declaration) : undefined;
+        if (awaitedBox !== undefined) {
+            return this.getIden(identation) + awaitedBox + " " + this.printNode(declaration.name) + " = (" + awaitedBox + ") " + parsedValue;
         }
         return (
             this.getIden(identation) +
@@ -8653,8 +8854,24 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${receiver} == null ? new java.util.ArrayList<Object>() : new java.util.ArrayList<Object>(${receiver}.keySet()))`;
     }
 
-    printObjectValuesCall(_node, _identation, parsedArg = undefined) {
-        return `Helpers.objectValues(${parsedArg})`;
+    printObjectValuesCall(node, _identation, parsedArg = undefined) {
+        return this.printNativeObjectValuesCall(node) ?? `Helpers.objectValues(${parsedArg})`;
+    }
+
+    // `Object.values(m)` where m is a local the printer declares `Map<String, Object>` and nothing
+    // else writes: the helper's only surviving branch is the `Map.values()` copy (a declared map is
+    // never the null / non-map fallback), so the copy binds on the declaration's own type
+    printNativeObjectValuesCall(node) {
+        const argument = node?.arguments?.[0];
+        if (argument === undefined || node.arguments.length !== 1 || !isIdentifier(argument)) {
+            return undefined;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(argument);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !declaration.initializer
+            || !this.javaDeclaredMapReceiver(argument) || this.javaLocalHasWriteAtAll(declaration.name)) {
+            return undefined;
+        }
+        return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.values())`;
     }
 
     printJsonParseCall(_node, _identation, parsedArg = undefined) {
@@ -10547,11 +10764,11 @@ const JAVA_BASE_MAP_READ_FIELDS: { [name: string]: { declared: boolean, anyKey: 
     'requiredCredentials': { declared: false, anyKey: true },
 };
 
-// hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands
-const HX4_J09_SYNC_BASE_CALLS = new Set<string>([
-    'safeString', 'safeString2', 'safeStringN', 'safeValue', 'safeDict', 'safeInteger', 'json',
-    'throwExactlyMatchedException', 'throwBroadlyMatchedException',
-]);
+// hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands.
+// A call whose resolved declaration is a base-tier accessor/thrower (ts/src/base/Exchange.ts or the
+// ts/src/base/functions mixins it re-exports) or a lib.*.d.ts built-in, and whose return type is not a
+// Promise, runs synchronously: it prints no `.join()`, so it cannot raise a CompletionException.
+const JAVA_SYNC_CALL_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/](functions[\\/][^\\/]+|Exchange(\.nooverloads\.\d+)?)\.ts$|(^|[\\/])lib\.[^\\/]*\.d\.ts$/;
 
 export interface JavaTranspiler {
     hx4J09BoxIdentifier(node, seen: Set<any>, depth: number): boolean;
@@ -10739,15 +10956,12 @@ JavaTranspiler.prototype.hx4J09CatchCannotWrap = function (node): boolean {
             return;
         }
         if (current.kind === SyntaxKind.CallExpression) {
-            const callee = current.expression;
-            if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-                || !HX4_J09_SYNC_BASE_CALLS.has(String(callee.name.text))) {
-                ok = false;
-                return;
-            }
-            const declaration: any = checker.getResolvedSignature(current)?.declaration?.resolve();
-            if (declaration === undefined
-                || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')) {
+            const signature: any = checker.getResolvedSignature(current);
+            const declaration: any = signature?.declaration?.resolve();
+            if (declaration === undefined || !isPropertyAccessExpression(current.expression)
+                || !JAVA_SYNC_CALL_FILE.test(declaration.getSourceFile?.()?.fileName ?? '')
+                || this.hasAsyncModifier(declaration)
+                || this.isPromiseType(checker.getReturnTypeOfSignature(signature))) {
                 ok = false;
                 return;
             }
