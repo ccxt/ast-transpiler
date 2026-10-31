@@ -789,6 +789,10 @@ export declare class GoTranspiler extends BaseTranspiler {
      */
     goIndexableTypeOf(node: any, printed: string): string | undefined;
     goElementAccessChain(containerStr: string, keyStrs: string[]): string;
+    goIsUrlsField(node: any): boolean;
+    goUrlsApiIsDict(apiAccess: any): boolean;
+    goUrlsViewRead(node: any, baseExpr: any, keys: any, keyStrs: string[]): string | undefined;
+    goIsUrlsWrite(statement: any): boolean;
     goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
     goKeyIsString(node: any, printed: string): any;
     goIsDerefStringKeyExpression(node: any): boolean;

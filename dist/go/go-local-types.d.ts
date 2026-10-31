@@ -785,4 +785,8 @@ export declare function ccxtGoTernaryLiftJoin(goTranspiler: any, declaration: an
     whenFalseCall: any;
 };
 export declare function installCcxtGoLimitLocals(goTranspiler: any): void;
+declare function ccxtGoTupleResultCall(node: any): boolean;
+declare function ccxtGoTupleResultFirst(call: any): any;
+declare function ccxtGoTupleResultUnwrap(text: any): any;
 declare function ccxtGoTupleResultJoin(printed: any, count: any, declare: any, untypedOk?: boolean, first?: string): string;
+export { ccxtGoTupleResultCall, ccxtGoTupleResultFirst, ccxtGoTupleResultUnwrap };
