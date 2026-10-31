@@ -16,6 +16,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamDeclarations: WeakSet<Node>;
     csharpPromiseAllSites: WeakMap<Node, any>;
     csharpPromiseAllTaskDeclarations: WeakSet<Node>;
+    csharpPromiseAllTypedAwaits: Map<string, string>;
+    csharpPromiseAllTypedLists: Map<string, string>;
+    csharpPromiseAllTypedLocals: Map<string, string>;
+    csharpPromiseAllTypedPlanned: Set<string>;
     csharpHandlerMessageTypes: WeakMap<Node, string>;
     csharpHandlerCalled: WeakMap<Node, boolean>;
     csharpListRouteClasses: WeakMap<Node, boolean>;
@@ -284,6 +288,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printParameter(node: any, defaultValue?: boolean): string;
     csharpCallSiteFunctionType(node: any): string;
     printArrayLiteralExpression(node: any): string;
+    csharpPromiseAllPrintList(node: any): string;
     csharpBooleanReturnType(node: any): string | undefined;
     csharpStringReturnType(node: any): string | undefined;
     isOverrideMethod(node: any): boolean;
@@ -324,6 +329,20 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpPromiseAllIsIndexOnlyObject(type: any): boolean;
     csharpPromiseAllIndexType(type: any): any;
     csharpPromiseAllNativeStatement(plan: any, identation: any): string;
+    csharpPromiseAllKey(node: any): string;
+    csharpPromiseAllTypedListRead(receiver: any): string | undefined;
+    printAwaitExpression(node: any, identation: any): string;
+    csharpPromiseAllTypedPlanFunction(fn: any): void;
+    csharpPromiseAllTypedPlanAwait(fn: any, awaited: any): void;
+    csharpPromiseAllLocalDeclaration(fn: any, identifier: any): any;
+    csharpPromiseAllListUsesAreProvable(fn: any, list: any, awaitedArgument: any, elements: any): boolean;
+    csharpPromiseAllTypedElement(fn: any, element: any): {
+        type: string;
+        declaration?: any;
+    } | undefined;
+    csharpPromiseAllMentions(fn: any, declaration: any): number;
+    csharpImplicitApiTaskType(call: any): string | undefined;
+    csharpImplicitApiBodyType(type: any): string | undefined;
     printMathFloorCall(node: any, identation: any, parsedArg?: any): string;
     printMathRoundCall(node: any, identation: any, parsedArg?: any): string;
     printMathCeilCall(node: any, identation: any, parsedArg?: any): string;

@@ -255,6 +255,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMethodDeclarationOfCallee(callee: any): any;
     goMethodDeclarationByName(callee: any): any;
     goMarketLocalInitializerIsMap(identifier: any, knownDeclaration?: any): boolean;
+    goNonceReturnCache: WeakMap<object, string>;
+    goNonceReturnType(node: any): string | undefined;
+    goIsBaseNonceMethod(fn: any): boolean;
+    goNonceReturnIsInt64(expression: any): boolean;
+    goInt64SumOperands(call: any): any[] | undefined;
+    goNonceSumText(node: any): string | undefined;
     goMarketProducerReturnType(node: any): string | undefined;
     goMarketLocalUnboxCache: Map<any, string>;
     goMarketLocalUnbox(declaration: any): string | undefined;
