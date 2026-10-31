@@ -18,6 +18,7 @@ const PRELUDE =
     '    parseBalance (response: Dict): Dict { return {}; }\n' +
     '    parseWsTrade (trade: Dict, market: Market = undefined): Dict { return {}; }\n' +
     '    parseTicker (ticker: Dict): Dict { return {}; }\n' +
+    '    parseOther (ticker: Dict): Dict { return {}; }\n' +
     '    describe (): Dict { return {}; }\n' +
     '    getMarketFromSymbols (symbols: string[]): Market { return undefined; }\n' +
     '    markets: Dict = undefined;\n' +
@@ -112,10 +113,10 @@ describe ('hx11 RFM-X2 base map-returning callee locals', () => {
     test ('a callee outside the family keeps the box', () => {
         const out = go (
             '    run (m: Dict): any {\n' +
-            '        const t = this.parseTicker (m);\n' +
+            '        const t = this.parseOther (m);\n' +
             '        return t;\n' +
             '    }\n');
-        expect (out).not.toContain ('var t map[string]any = this.ParseTicker(');
+        expect (out).not.toContain ('var t map[string]any = this.ParseOther(');
     });
 
     test ('a local rebound to another type keeps the box', () => {
