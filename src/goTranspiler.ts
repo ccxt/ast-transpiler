@@ -890,6 +890,7 @@ export class GoTranspiler extends BaseTranspiler {
         // whose writer declares its own imports, and the comment markers of the spans a writer cuts out
         this.goBaseFileStdlibImportSeamPaths = config['baseFileStdlibImportSeamPaths'] !== undefined ? new RegExp(config['baseFileStdlibImportSeamPaths']) : undefined;
         this.goExcisedSpanMarkers = config['excisedSpanMarkers'];
+        this.nativeStoreFields = config['nativeStoreFields'];  // RF-go-6-B
     }
 
     initConfig() {
@@ -7235,6 +7236,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `*string` key on a map the printer proved: the helper's map branch skips a nil key and
     // derefs a pointer value, so both shapes keep their guard and refuse a pointer value
     printNativeMapWriteOnProvenLocal(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode?, identation = 0): string | undefined {
+        const rfStore = this.rfGo6bStoreAssignment(containerNode, containerStr, keyNode, keyStr, valueStr, valueNode, identation);  // RF-go-6-B
+        if (rfStore !== undefined) {
+            return rfStore;
+        }
         if (valueStr.includes('\n')) {
             return undefined;
         }
@@ -7262,6 +7267,162 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         return this.goIsNonPointerValue(valueNode);
     }
+
+    // ===== RF-go-6-B =====
+    // Element write on a hand-written BaseExchange map field (`this.balance[k] = v`): the field's Go type
+    // is `map[string]any` (table passed by the embedder through parser.nativeStoreFields, keyed by the TS
+    // property name), so the store is the native `this.Balance[k] = v` when
+    //   (1) every write of the field in the source file leaves a fresh non-nil map (object literal, a
+    //       tabled fresh-map producer, or the field handed back through a tabled self-returning call),
+    //   (2) the writing method runs on the exchange's message loop: a sync method that is not a tabled
+    //       user-path method and neither spawns/delays nor calls an async method without waiting,
+    //   (3) the key is a Go string (literal / `string` local) or a `*string` local (nil-guarded: `[*k]`;
+    //       otherwise behind a born-expanded `if k != nil {` guard, the helper's nil-key no-op),
+    //   (4) the value is not a pointer or `any` box: the helper stores derefScalar(value).
+    // Anything else keeps AddElementToObject.
+    nativeStoreFields: { [tsName: string]: any } | undefined = undefined;
+    rfGo6bNeverNilCache = new Map<any, Map<string, boolean>>();
+
+    rfGo6bStoreField(containerNode): any {
+        if ((containerNode?.kind !== SyntaxKind.PropertyAccessExpression) || (containerNode.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        const table = this.nativeStoreFields;
+        const name = containerNode.name?.text;
+        if ((table === undefined) || (typeof name !== 'string') || !Object.prototype.hasOwnProperty.call(table, name)) {
+            return undefined;
+        }
+        return (table[name]?.type === 'map[string]any') ? table[name] : undefined;
+    }
+
+    rfGo6bThisCallName(call): string | undefined {
+        const callee = this.goUnwrapParenthesizedNode(call)?.expression;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        return callee.name?.text;
+    }
+
+    rfGo6bFieldNeverNil(sourceFile, name: string, field): boolean {
+        let perFile = this.rfGo6bNeverNilCache.get(sourceFile);
+        if (perFile === undefined) {
+            perFile = new Map<string, boolean>();
+            this.rfGo6bNeverNilCache.set(sourceFile, perFile);
+        }
+        if (perFile.has(name)) {
+            return perFile.get(name) as boolean;
+        }
+        let ok = true;
+        const visit = (n) => {
+            if (!ok) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+                && (n.left?.kind === SyntaxKind.PropertyAccessExpression) && (n.left.expression?.kind === SyntaxKind.ThisKeyword) && (n.left.name?.text === name)) {
+                const right = this.goUnwrapParenthesizedNode(n.right);
+                const callName = this.rfGo6bThisCallName(right);
+                const selfWrite = (callName !== undefined) && (field.selfCalls ?? []).includes(callName) && (right.arguments.length === 1)
+                    && (right.arguments[0]?.kind === SyntaxKind.PropertyAccessExpression) && (right.arguments[0].expression?.kind === SyntaxKind.ThisKeyword)
+                    && (right.arguments[0].name?.text === name);
+                ok = (right?.kind === SyntaxKind.ObjectLiteralExpression) || ((callName !== undefined) && (field.freshMapCalls ?? []).includes(callName)) || selfWrite;
+            }
+            n.forEachChild(visit);
+        };
+        visit(sourceFile);
+        perFile.set(name, ok);
+        return ok;
+    }
+
+    rfGo6bRunsOnMessageLoop(containerNode, field): boolean {
+        const fn = this.goEnclosingFunction(containerNode);
+        if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.body === undefined) || this.isAsyncFunction(fn)) {
+            return false;
+        }
+        if (new RegExp(field.userPathMethods ?? '(?!)').test(`${fn.name?.text ?? ''}`)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        let free = checker !== undefined;
+        const visit = (n) => {
+            if (!free) {
+                return;
+            }
+            if (n.kind === SyntaxKind.CallExpression) {
+                if (['spawn', 'delay'].includes(this.rfGo6bThisCallName(n) ?? '')) {
+                    free = false;
+                    return;
+                }
+                const declaration = checker.getResolvedSignature(n)?.declaration?.resolve?.();
+                if ((declaration !== undefined) && this.hasAsyncModifier(declaration)) {
+                    free = false;
+                    return;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        visit(fn.body);
+        return free;
+    }
+
+    rfGo6bValueIsPlain(valueNode, field): boolean {
+        if (this.goMapWriteValueIsNotPointer(valueNode)) {
+            return true;
+        }
+        const inner = this.goUnwrapParenthesizedNode(valueNode);
+        if (inner?.kind === SyntaxKind.Identifier) {
+            // a never-rebound local read from an empty-default container accessor (the decoded container or
+            // that default, never a pointer); any other local needs a printed non-pointer Go type (above)
+            const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(inner)?.valueDeclaration?.resolve();
+            const initializer = this.goUnwrapParenthesizedNode(declaration?.initializer);
+            return (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+                && (initializer?.kind === SyntaxKind.CallExpression) && this.rfGo6bEmptyDefaultCall(initializer, field)
+                && !this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name);
+        }
+        const callName = this.rfGo6bThisCallName(inner);
+        if (callName === undefined) {
+            return false;
+        }
+        if ((field.plainCalls ?? []).includes(callName)) {
+            return true;
+        }
+        return this.rfGo6bEmptyDefaultCall(inner, field);
+    }
+
+    // `this.safeDict (x, k, {})` / `this.safeList (x, k, [])`: the decoded container or its literal empty default
+    rfGo6bEmptyDefaultCall(call, field): boolean {
+        const callName = this.rfGo6bThisCallName(call);
+        const last = call.arguments[call.arguments.length - 1];
+        const emptyLiteral = ((last?.kind === SyntaxKind.ObjectLiteralExpression) && (last.properties.length === 0))
+            || ((last?.kind === SyntaxKind.ArrayLiteralExpression) && (last.elements.length === 0));
+        return (callName !== undefined) && (field.emptyDefaultCalls ?? []).includes(callName) && (call.arguments.length >= 3) && emptyLiteral;
+    }
+
+    rfGo6bStoreAssignment(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode, identation = 0): string | undefined {
+        const field = this.rfGo6bStoreField(containerNode);
+        if ((field === undefined) || (valueNode === undefined) || valueStr.includes('\n')) {
+            return undefined;
+        }
+        if (!this.rfGo6bFieldNeverNil(containerNode.getSourceFile(), containerNode.name.text, field)
+            || !this.rfGo6bRunsOnMessageLoop(containerNode, field) || !this.rfGo6bValueIsPlain(valueNode, field)) {
+            return undefined;
+        }
+        if (this.goIsStringKeyExpression(keyNode)) {
+            return `${containerStr}[${keyStr}] = ${valueStr}`;
+        }
+        if ((keyNode?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(keyNode) !== '*string')) {
+            return undefined;
+        }
+        const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode)?.valueDeclaration?.resolve();
+        if ((declaration === undefined) || this.goLocalIsRebound(this.goEnclosingFunction(declaration), keyNode)) {
+            return undefined;
+        }
+        if (this.goHasEnclosingNilGuard(keyNode)) {
+            return `${containerStr}[*${keyStr}] = ${valueStr}`;
+        }
+        const iden = this.getIden(identation);
+        return `if ${keyStr} != nil {\n${iden}\t${containerStr}[*${keyStr}] = ${valueStr}\n${iden}}`;
+    }
+    // ===== end RF-go-6-B =====
 
     // a `*string` local the enclosing control flow proves non-nil: the helper's deref
     // yields the same string key (a nil key would have made it a no-op)
