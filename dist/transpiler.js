@@ -7432,7 +7432,9 @@ var CSharpTranspiler = class extends BaseTranspiler {
   // argument the printer does not hold as a list is converted at the call, as `x.push` does
   printArgsForCallExpression(node, identation) {
     const callee = node.expression;
-    if (node.kind !== SyntaxKind4.CallExpression || !isPropertyAccessExpression(callee) || !isIdentifier(callee.name) || node.arguments.length === 0) {
+    const fileName = String(node.getSourceFile?.()?.fileName ?? "").replace(/\\/g, "/");
+    const exchangeSource = fileName.includes("ts/src/") && !/\/test\//.test(fileName) && !fileName.includes("examples/");
+    if (!exchangeSource || node.kind !== SyntaxKind4.CallExpression || !isPropertyAccessExpression(callee) || !isIdentifier(callee.name) || node.arguments.length === 0) {
       return super.printArgsForCallExpression(node, identation);
     }
     const census = this.csharpListParamCensus();
