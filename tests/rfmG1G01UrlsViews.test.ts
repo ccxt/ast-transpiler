@@ -41,6 +41,11 @@ describe('RFM-G1 G01 urls views', () => {
         expect(boxed).toContain('GetValue(this.Urls["api"], section)');
         expect(boxed).not.toContain('UrlsApi[');
     });
+    test('an `as Dict` assertion prints as its operand; a bare parenthesis keeps the helper', () => {
+        expect(run("return (this.urls['api'] as Dict)['ws']['privateV2'];")).toContain('this.UrlsApiSections["ws"]["privateV2"]');
+        const bare = run("return (this.urls['api'])['ws']['public'];");
+        expect(bare).not.toContain('UrlsApi');
+    });
     test('a non-literal top key is not a view', () => {
         const out = run("const urlKey: string = 'api'; return this.urls[urlKey]['ws'];");
         expect(out).not.toContain('UrlsApi');

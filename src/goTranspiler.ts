@@ -12287,25 +12287,47 @@ ${tryBodyBlock}
 
     // `this.urls['api'][k]` reads the view BaseExchange.UrlsApi (urls["api"] as stored), and
     // `this.urls['api'][k][j]` the view UrlsApiSections (its dictionary entries); RefreshUrlsViews
-    // re-derives both after every write of urls, so each read is the map's own index. A key the printer
-    // cannot prove a Go string keeps its helper step, as does every step below the second.
+    // re-derives both after every write of urls, so each read is the map's own index. The access path may
+    // pass through `(… as Dict)` assertions, which print as their operand. A key the printer cannot prove a
+    // Go string keeps its helper step, as does every step below the second.
     goUrlsViewRead(node, baseExpr, keys, keyStrs: string[]): string | undefined {
-        if ((keys.length < 2) || !this.goIsUrlsField(baseExpr) || this.isGoElementAccessAssignmentTarget(node)) {
+        if (this.isGoElementAccessAssignmentTarget(node)) {
             return undefined;
         }
-        if ((keys[0]?.kind !== SyntaxKind.StringLiteral) || (keys[0].text !== 'api') || !this.goKeyIsString(keys[1], keyStrs[1])) {
+        const path = keys.slice();
+        const printed = keyStrs.slice();
+        let receiver = baseExpr;
+        let apiAccess: any = undefined;
+        for (;;) {
+            // `(x as Dict)` prints as `x`; a bare `(x)` keeps its parens in the printed text, so it stays a helper receiver
+            while ((receiver?.kind === SyntaxKind.AsExpression)
+                || ((receiver?.kind === SyntaxKind.ParenthesizedExpression) && (receiver.expression?.kind === SyntaxKind.AsExpression))) {
+                receiver = receiver.expression;
+            }
+            if (receiver?.kind !== SyntaxKind.ElementAccessExpression) {
+                break;
+            }
+            path.unshift(receiver.argumentExpression);
+            printed.unshift(this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(receiver.argumentExpression, 0)));
+            apiAccess = receiver;
+            receiver = receiver.expression;
+        }
+        if ((path.length < 2) || !this.goIsUrlsField(receiver)) {
             return undefined;
         }
-        let apiAccess = node;
-        for (let i = keys.length - 1; i > 0; i--) {
-            apiAccess = apiAccess.expression;
+        if (apiAccess === undefined) {
+            apiAccess = node;
+            for (let i = path.length - 1; i > 0; i--) {
+                apiAccess = apiAccess.expression;
+            }
         }
-        if (!this.goUrlsApiIsDict(apiAccess)) {
+        if ((path[0]?.kind !== SyntaxKind.StringLiteral) || (path[0].text !== 'api') || !this.goKeyIsString(path[1], printed[1])
+            || !this.goUrlsApiIsDict(apiAccess)) {
             return undefined;
         }
-        const section = (keys.length > 2) && this.goKeyIsString(keys[2], keyStrs[2]);
-        const view = section ? `this.UrlsApiSections[${keyStrs[1]}][${keyStrs[2]}]` : `this.UrlsApi[${keyStrs[1]}]`;
-        return this.goElementAccessChain(view, keyStrs.slice(section ? 2 : 1));
+        const section = (path.length > 2) && this.goKeyIsString(path[2], printed[2]);
+        const view = section ? `this.UrlsApiSections[${printed[1]}][${printed[2]}]` : `this.UrlsApi[${printed[1]}]`;
+        return this.goElementAccessChain(view, printed.slice(section ? 2 : 1));
     }
 
     // a statement assigning `this.urls` or one of its entries: the views have to be re-derived after it
