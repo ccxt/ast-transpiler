@@ -5172,7 +5172,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (incrStr !== '') {
             const flag = `__for_first_${this.forLoopCounter++}`;
             let step = `${incrStr};`;
-            if (counter !== undefined) step = `if let Value::Int(n) = &mut ${counter.name} { *n ${counter.sign}= 1; }`;
+            if (counter !== undefined) {
+                // `n` unless the function already uses that name: an early text pass reads `*n` as a use of that local.
+                const bind = (this.rustScopeNameNodes(this.rustEnclosingFunction(node), 'n') as any[]).length > 0 ? '__n' : 'n';
+                step = `if let Value::Int(${bind}) = &mut ${counter.name} { *${bind} ${counter.sign}= 1; }`;
+            }
             if (typed && counter !== undefined && bound !== undefined) {
                 initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
                 condStr = `${counter.name} < (${bound}.len() as i64)`;

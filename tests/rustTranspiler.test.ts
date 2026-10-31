@@ -5405,26 +5405,26 @@ describe('RF-rust-1 type-keyed closure-free native forms', () => {
 });
 
 describe('FM-RS1 L2 integer for-loop counters', () => {
-    const body = (stmts: string, params = 'n: number, v: any') =>
+    const body = (stmts: string, params = 'lim: number, v: any') =>
         transpiler.transpileRust(`class A {\n    run(${params}) {\n${stmts}\n    }\n    bar(x) {}\n}`).content;
     const step = (v: string, sign = '+') => new RegExp(`if !__for_first_\\d+ \\{ if let Value::Int\\(n\\) = &mut ${v} \\{ \\*n \\${sign}= 1; \\} \\}`);
     const matchStep = (v: string, k = 1) => `${v} = (match (&(${v}), &(Value::Int(${k})))`;
 
     test('i++ / i-- on an int-literal counter bumps the Int payload in place', () => {
-        const o = body("        for (let i = 0; i < n; i++) { this.bar (n); }\n        for (let j = 5; j > 0; j--) { this.bar (n); }");
+        const o = body("        for (let i = 0; i < lim; i++) { this.bar (lim); }\n        for (let j = 5; j > 0; j--) { this.bar (lim); }");
         expect(o).toMatch(step('i'));
         expect(o).toMatch(step('j', '-'));
         expect(o).not.toContain(matchStep('i'));
     });
 
     test('a counter written in the body keeps the printNativeNumeric step', () => {
-        const o = body("        for (let i = 0; i < n; i++) { i += 2; }\n        for (let j = 0; j < n; j++) { j = n; }");
+        const o = body("        for (let i = 0; i < lim; i++) { i += 2; }\n        for (let j = 0; j < lim; j++) { j = n; }");
         expect(o).toContain(matchStep('i'));
         expect(o).toContain(matchStep('j'));
     });
 
     test('a non-literal start, a float start or a +=2 step keeps the match', () => {
-        const o = body("        for (let a = n; a < 9; a++) { }\n        for (let b = 0.5; b < 9; b++) { }\n        for (let c = 0; c < 9; c += 2) { }");
+        const o = body("        for (let a = lim; a < 9; a++) { }\n        for (let b = 0.5; b < 9; b++) { }\n        for (let c = 0; c < 9; c += 2) { }");
         expect(o).toContain(matchStep('a'));
         expect(o).toContain(matchStep('b'));
         expect(o).toContain(matchStep('c', 2));
@@ -5438,6 +5438,11 @@ describe('FM-RS1 L2 integer for-loop counters', () => {
         expect(o).toContain('i < (xs.len() as i64)');
         expect(o).toContain('xs.get(i as usize).cloned().unwrap_or(Value::Null)');
         expect(o).toContain('self.bar(Value::Int(i))');
+    });
+
+    test('the step binds __n when the function already uses the name n', () => {
+        const o = body("        for (let i = 0; i < n; i++) { this.bar (n); }", 'n: number');
+        expect(o).toContain('if let Value::Int(__n) = &mut i { *__n += 1; }');
     });
 
     test('a counter with any other use stays a Value counter', () => {
