@@ -6829,6 +6829,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         const fn = this.csharpEnclosingFunction(statement);
+        // one plain implicit-API T across every slot is the typed List<Task<T>> plan's shape
+        const typedElements = elements.map((element) => this.csharpPromiseAllTypedElement(fn, element));
+        if (typedElements.every((typed) => typed !== undefined) && (new Set(typedElements.map((typed) => typed!.type)).size === 1)) {
+            return undefined;
+        }
         const slots = [];
         const locals = [];
         for (let i = 0; i < elements.length; i++) {
