@@ -825,6 +825,11 @@ export class GoTranspiler extends BaseTranspiler {
     // hx11 RF-go-7: exchange-local methods (by name pattern) whose sibling-file call sites may pass a unified-string
     // parameter of their enclosing method straight through
     siblingStringPassthroughPattern: RegExp | undefined = undefined;
+    // hx11 rfm-X4 OG03: a base-class field whose owner is another goroutine (the ws client registry:
+    // the dispatch loop). User-path code reads it through `snapshot` and drops entries through
+    // `remove`; owner-side methods (`ownerSideMethods`, TS method-name patterns) keep the field.
+    // Absent config = no rewrite. JSON-serializable: the config crosses the worker boundary.
+    goOwnedField: { field: string; declaredIn: string; snapshot: string; remove: string; ownerSide: RegExp[] } | undefined;
     // array literals the current print opens as a Go slice (set by the call-argument rule)
     goSliceLiteralTypes: Map<any, string> = new Map<any, string>();
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
@@ -892,6 +897,11 @@ export class GoTranspiler extends BaseTranspiler {
         this.goExcisedSpanMarkers = config['excisedSpanMarkers'];
         this.nativeStoreFields = config['nativeStoreFields'];  // RF-go-6-B
         this.goOrderBook = config['orderBook'];  // RF-go-6-D
+        const owned = config['ownedField'];
+        this.goOwnedField = (owned === undefined) ? undefined : {
+            field: owned['field'], declaredIn: owned['declaredIn'], snapshot: owned['snapshot'], remove: owned['remove'],
+            ownerSide: (owned['ownerSideMethods'] ?? []).map((p: string) => new RegExp(p)),
+        };
     }
 
     initConfig() {
@@ -11441,7 +11451,66 @@ ${this.getIden(identation)}${returnStatement}`;
         return `Ternary(${condition}, ${whenTrue}, ${whenFalse})`;
     }
 
+    // ---- hx11 rfm-X4 OG03: reads of an owner-goroutine base field ------------------------
+    // `this.<field>` whose symbol is the `declaredIn` class's own property declaration (the
+    // checker, not the spelling: a local or another class's field of that name is not it)
+    goOwnedFieldAccess(node): boolean {
+        const owned = this.goOwnedField;
+        if ((owned === undefined) || (node?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (node.expression?.kind !== SyntaxKind.ThisKeyword) || (node.name?.text !== owned.field)) {
+            return false;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+        return (declaration?.kind === SyntaxKind.PropertyDeclaration) && (declaration.parent?.name?.text === owned.declaredIn);
+    }
+
+    // user-path code runs off the owner goroutine: the nearest enclosing method (an arrow or
+    // catch closure belongs to it) is not one of the owner-side patterns. No enclosing method
+    // (constructor, initializer) keeps the field.
+    goOwnedFieldUserPath(node): boolean {
+        for (let current = node?.parent; current; current = current.parent) {
+            if ((current.kind === SyntaxKind.MethodDeclaration) || (current.kind === SyntaxKind.FunctionDeclaration)) {
+                const name = current.name?.text;
+                return (typeof name === 'string') && !this.goOwnedField.ownerSide.some((pattern) => pattern.test(name));
+            }
+        }
+        return false;
+    }
+
+    // `this.<field> = v`, `this.<field>[k] = v` and `delete this.<field>[k]` happen on the owner
+    goOwnedFieldIsWrite(node): boolean {
+        const isAssignment = (parent, child) => (parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === child)
+            && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (parent.operatorToken.kind <= SyntaxKind.LastAssignment);
+        const parent = node.parent;
+        if (isAssignment(parent, node)) {
+            return true;
+        }
+        return (parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node)
+            && (isAssignment(parent.parent, parent) || (parent.parent?.kind === SyntaxKind.DeleteExpression));
+    }
+
+    printPropertyAccessExpression(node, identation) {
+        if (this.goOwnedFieldAccess(node) && !this.goOwnedFieldIsWrite(node) && this.goOwnedFieldUserPath(node)) {
+            return `${this.printNode(node.expression, 0)}.${this.goOwnedField.snapshot}()`;
+        }
+        return super.printPropertyAccessExpression(node, identation);
+    }
+
+    // `delete this.<field>[k]` on the user path is the owner's delete op
+    goOwnedFieldRemove(node): string | undefined {
+        const access: any = node.expression;
+        if ((access?.kind !== SyntaxKind.ElementAccessExpression) || !this.goOwnedFieldAccess(access.expression)
+            || !this.goOwnedFieldUserPath(node)) {
+            return undefined;
+        }
+        return `${this.printNode(access.expression.expression, 0)}.${this.goOwnedField.remove}(${this.printNode(access.argumentExpression, 0).trim()})`;
+    }
+
     printDeleteExpression(node, identation) {
+        const owned = this.goOwnedFieldRemove(node);
+        if (owned !== undefined) {
+            return owned;
+        }
         const native = this.goNativeDelete(node);
         if (native !== undefined) {
             return native;

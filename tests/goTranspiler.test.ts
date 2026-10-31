@@ -7788,3 +7788,53 @@ describe('hx10 G10: `x := y` aliases carry the source local printed type', () =>
         expect(out).toContain('GetValue(GetValue(a, \"x\"), \"y\")');
     });
 });
+
+describe('hx11 rfm-X4 OG03: owner-goroutine base field reads (ws client registry)', () => {
+    const owned = { 'field': 'clients', 'declaredIn': 'BaseExchange', 'snapshot': 'WsClientsSnapshot', 'remove': 'WsClientRemove',
+        'ownerSideMethods': [ '^handle', '^isOrderBookDeltaInSequence$' ] };
+    const source = (body: string, base = 'clients: Dictionary<any> = {};') =>
+        'type Dictionary<T> = { [key: string]: T };\n' +
+        'class BaseExchange { ' + base + ' safeValue (d: any, k: any): any { return d[k]; } }\n' +
+        'class Ex extends BaseExchange {\n' + body + '}\n';
+    const run = (body: string, config: any = owned, base?: string) => new Transpiler({ 'verbose': false, 'go': { ...((config === null) ? {} : { 'ownedField': config }), 'parser': { 'NUM_LINES_END_FILE': 0 } } })
+        .transpileGo(source(body, base)).content;
+    test('a user-path read asks the owner for a copy', () => {
+        const out = run("    watch (url: string): any {\n        const all = Object.values (this.clients);\n        const one = this.safeValue (this.clients, url);\n        return [ all, one ];\n    }\n");
+        expect(out).toContain('ObjectValues(this.WsClientsSnapshot())');
+        expect(out).toContain('this.SafeValue(this.WsClientsSnapshot(), url)');
+        expect(out).not.toContain('this.Clients');
+    });
+    test('a user-path drop is the owner delete op', () => {
+        const out = run("    drop (client: any): any {\n        delete this.clients[client.url];\n        return true;\n    }\n");
+        expect(out).toContain('this.WsClientRemove(');
+        expect(out).not.toContain('Remove(this.Clients');
+    });
+    test('handlers and the handler-called helper keep the field', () => {
+        const out = run("    handleMessage (client: any, url: string): any {\n        delete this.clients[url];\n        return Object.values (this.clients);\n    }\n" +
+            "    isOrderBookDeltaInSequence (client: any, url: string): any {\n        delete this.clients[url];\n        return this.safeValue (this.clients, url);\n    }\n");
+        expect(out).toContain('Remove(this.Clients, url)');
+        expect(out).toContain('ObjectValues(this.Clients)');
+        expect(out).toContain('this.SafeValue(this.Clients, url)');
+        expect(out).not.toContain('WsClients');
+    });
+    test('field writes keep the field', () => {
+        const out = run("    reset (url: string): any {\n        this.clients = {};\n        this.clients[url] = 1;\n        return true;\n    }\n");
+        expect(out).toContain('this.Clients = ');
+        expect(out).not.toContain('WsClientsSnapshot');
+    });
+    test('the closure of a user-path method is user path', () => {
+        const out = run("    watch (url: string): any {\n        const f = () => this.safeValue (this.clients, url);\n        return f ();\n    }\n");
+        expect(out).toContain('this.SafeValue(this.WsClientsSnapshot(), url)');
+    });
+    test('a same-named field of another class is not the registry', () => {
+        const out = new Transpiler({ 'verbose': false, 'go': { 'ownedField': owned, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo(
+            'class Other { clients: any = {}; }\nclass Ex extends Other {\n    watch (url: string): any {\n        return Object.values (this.clients);\n    }\n}\n').content;
+        expect(out).toContain('ObjectValues(this.Clients)');
+        expect(out).not.toContain('WsClientsSnapshot');
+    });
+    test('no ownedField config = no rewrite', () => {
+        const out = run("    watch (url: string): any {\n        delete this.clients[url];\n        return Object.values (this.clients);\n    }\n", null);
+        expect(out).toContain('ObjectValues(this.Clients)');
+        expect(out).not.toContain('WsClient');
+    });
+});
