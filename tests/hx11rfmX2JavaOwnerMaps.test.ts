@@ -96,9 +96,10 @@ describe('java owner-store maps', () => {
         expect(w1).not.toContain('addElementToObject(this.options, "sandbox"');
     });
 
-    test('a computed key, a nullish literal and another field keep the helper', () => {
+    test('a nullish literal on the owner store prints remove; a computed key and another field keep the helper', () => {
         const w1 = method(out, 'w1');
         expect(w1).toContain('Helpers.addElementToObject(this.options, k, v)');
+        expect(w1).toContain('this.options.remove("gone");');
         expect(w1).not.toContain('this.options.put("gone"');
         expect(w1).toContain('Helpers.addElementToObject(this.markets, "sandbox", v)');
     });

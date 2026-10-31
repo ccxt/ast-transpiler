@@ -4729,11 +4729,13 @@ export class JavaTranspiler extends BaseTranspiler {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
             // `this.<owner store>[lit] = v`: the store's `put(key, null)` removes the key like the
-            // helper's null write does, so any value but a bare null/undefined literal (which the
-            // base tier turns into `remove`) is the same write
+            // helper's null write does, so any value is the same write
             if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr)
-                && isStringLiteralLikeNode(keys[0]) && !this.isNullishLiteral(this.unwrapPrintTransparentExpression(right))) {
-                return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+                && isStringLiteralLikeNode(keys[0])) {
+                // the store's `put(key, null)` removes the key, so a null literal prints the removal
+                return this.isNullishLiteral(this.unwrapPrintTransparentExpression(right))
+                    ? `${prefixes}${acc}.remove(${lastKey})`
+                    : `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
             if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
                 return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
