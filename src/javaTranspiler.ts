@@ -2434,10 +2434,28 @@ export class JavaTranspiler extends BaseTranspiler {
         if (checker === undefined || value === undefined) {
             return true;
         }
+        if (this.javaFreshMapLocalValue(value)) {
+            return false;
+        }
         const type = checker.getTypeAtLocation(value);
         const parts: any[] = (type.flags & TypeFlags.Union) ? (type.getTypes?.() ?? []) : [type];
         const nullable = TypeFlags.Any | TypeFlags.Unknown | JAVA_NULLISH_TYPE_FLAGS | TypeFlags.TypeParameter;
         return parts.length === 0 || parts.some((t) => (t.flags & nullable) !== 0);
+    }
+
+    // an identifier bound once to a fresh map (object literal, two-argument extend, this.account()) and
+    // never reassigned: it holds that map on every path, so the written value is never null
+    javaFreshMapLocalValue(value): boolean {
+        const node = this.unwrapPrintTransparentExpression(value);
+        if (node === undefined || !isIdentifier(node)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration || !declaration.initializer
+            || !this.javaElementWriteMapSource(declaration.initializer)) {
+            return false;
+        }
+        return !this.javaLocalIsReassigned(node, (rhs) => this.javaElementWriteMapSource(rhs));
     }
 
     // a key proven by the checker to be a string prints as a java String: the read is
