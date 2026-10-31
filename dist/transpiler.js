@@ -18648,6 +18648,9 @@ ${indent}}`);
       return decl?.kind === SyntaxKind5.Parameter && this.goGetArgParameterType(decl) === "map[string]any" ? "map[string]any" : void 0;
     }
     const text = this.goUnwrapPrintedParens(dictText ?? "");
+    if (this.goOwnedField !== void 0 && text === `this.${this.goOwnedField.snapshot}()` && this.goOwnedFieldAccess(dictNode)) {
+      return "map[string]any";
+    }
     const field = /^this\.([A-Za-z_]\w*)$/.exec(text);
     if (field !== null && dictNode?.kind === SyntaxKind5.PropertyAccessExpression && dictNode.expression?.kind === SyntaxKind5.ThisKeyword) {
       const name = field[1];

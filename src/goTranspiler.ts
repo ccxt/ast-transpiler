@@ -9854,6 +9854,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'map[string]any')) ? 'map[string]any' : undefined;
         }
         const text = this.goUnwrapPrintedParens(dictText ?? '');
+        // FM-A9F L3: the owner-snapshot read of the ws client registry (`this.clients` printed `this.WsClientsSnapshot()`)
+        // is the `map[string]any` the snapshot method returns
+        if ((this.goOwnedField !== undefined) && (text === `this.${this.goOwnedField.snapshot}()`) && this.goOwnedFieldAccess(dictNode)) {
+            return 'map[string]any';
+        }
         const field = /^this\.([A-Za-z_]\w*)$/.exec(text);
         if ((field !== null) && (dictNode?.kind === SyntaxKind.PropertyAccessExpression) && (dictNode.expression?.kind === SyntaxKind.ThisKeyword)) {
             const name = field[1];

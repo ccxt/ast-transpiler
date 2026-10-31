@@ -18647,6 +18647,9 @@ ${indent}}`);
       return _optionalChain([decl, 'optionalAccess', _2463 => _2463.kind]) === _ast.SyntaxKind.Parameter && this.goGetArgParameterType(decl) === "map[string]any" ? "map[string]any" : void 0;
     }
     const text = this.goUnwrapPrintedParens(_nullishCoalesce(dictText, () => ( "")));
+    if (this.goOwnedField !== void 0 && text === `this.${this.goOwnedField.snapshot}()` && this.goOwnedFieldAccess(dictNode)) {
+      return "map[string]any";
+    }
     const field = /^this\.([A-Za-z_]\w*)$/.exec(text);
     if (field !== null && _optionalChain([dictNode, 'optionalAccess', _2464 => _2464.kind]) === _ast.SyntaxKind.PropertyAccessExpression && _optionalChain([dictNode, 'access', _2465 => _2465.expression, 'optionalAccess', _2466 => _2466.kind]) === _ast.SyntaxKind.ThisKeyword) {
       const name = field[1];

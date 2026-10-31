@@ -8160,6 +8160,12 @@ describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book
         expect(output).toContain('if _, ok := this.Ohlcvs[symbol][*timeframe]; ok {');
         expect(output).not.toContain('this.Ohlcvs[*symbol]');
     });
+    test('an exit-guarded *string key into the owner snapshot of the client registry is a comma-ok read (queue r5)', () => {
+        const owned = { 'field': 'clients', 'declaredIn': 'T', 'snapshot': 'WsClientsSnapshot', 'remove': 'WsClientRemove', 'ownerSideMethods': [ '^handle' ] };
+        const output = new Transpiler({ verbose: false, go: { ownedField: owned } } as any).transpileGo(head + "    authenticate (params: any) {\n        const url = this.safeString (params, 'url');\n        if (url === undefined) {\n            return undefined;\n        }\n        if ((this.clients !== undefined) && (url in this.clients)) {\n            return undefined;\n        }\n        return url;\n    }\n}\n").content;
+        expect(output).toContain('this.WsClientsSnapshot()[*url]');
+        expect(output).not.toContain('InOp(this.WsClientsSnapshot()');
+    });
     test('a ws client registry lookup is a comma-ok read', () => {
         const output = go("    n (o: any) {\n        const url = this.safeString (o, 'url');\n        if (url === undefined) {\n            return;\n        }\n        if ((this.clients !== undefined) && (url in this.clients)) {\n            return;\n        }\n    }\n");
         expect(output).toContain('if _, ok := this.Clients[*url]; ok {');
