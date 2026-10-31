@@ -114,6 +114,13 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaElementWriteMapLocalType(declaration: any): string | undefined;
     javaBaseMapFieldLocalType(declaration: any): string | undefined;
     javaObjectValuesLocalType(declaration: any): string | undefined;
+    javaJsonBoxType(type: any): boolean;
+    javaBoxUseVerdict(node: any): 'element' | 'neutral' | 'value' | 'other';
+    javaBoxLocalUsedOnlyAsElements(nameNode: any): boolean;
+    javaCheckedBoxLocalType(declaration: any): string | undefined;
+    javaCheckedBoxLocalTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED>;
+    javaCheckedBoxLocalTypeCached(declaration: any): string | undefined;
+    unwrapParenthesesOnly(node: any): any;
     javaLocalUsesKeepContainerType(node: any): boolean;
     javaContainerNeutralIdentifierUse(node: any): boolean;
     javaLocalHasWriteAtAll(node: any): boolean;
@@ -230,6 +237,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaStringElementsReceiver(node: any): boolean;
     isLeftSideOfAssignment(node: any): boolean;
     javaDeclaredLocalTypeResolver: ((declaration: Node) => string | undefined) | undefined;
+    javaBindingElementTypeResolver: ((declaration: Node) => string | undefined) | undefined;
     javaDeclarationOfIdentifier(expression: any): any;
     javaDeclaredMapReceiver(expression: any): boolean;
     javaMapWriteFieldReceiver(expression: any): boolean;
@@ -310,6 +318,12 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeSplitIndexRead(node: any, index: number): string | undefined;
     javaPrintOperandAsLong(node: any, text: any): any;
     javaProvableCounterInt(node: any): boolean;
+    javaDeclaredBoxOperandKind(node: any, text: string): string | undefined;
+    javaLocalIsLengthDerived(declaration: any): boolean;
+    javaNumberOrNullishType(node: any): boolean;
+    javaStripPrintedParens(text: string): string;
+    javaArithmeticResultIsBoxSensitive(node: any): boolean;
+    printDeclaredBoxArithmetic(node: any, left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     javaPrintArithmeticOperand(kind: any, node: any, text: any): any;
     javaNativeMathMinMaxOperandKind(node: any): "double" | "integral";
@@ -388,7 +402,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printObjectKeysCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeObjectKeysCall(node: any): string;
     printNativeBaseMapFieldKeys(access: any): string;
-    printObjectValuesCall(_node: any, _identation: any, parsedArg?: any): string;
+    printObjectValuesCall(node: any, _identation: any, parsedArg?: any): string;
+    printNativeObjectValuesCall(node: any): string;
     printJsonParseCall(_node: any, _identation: any, parsedArg?: any): string;
     printJsonStringifyCall(_node: any, _identation: any, parsedArg?: any): string;
     printNativePromiseAllCall(node: any): string;
@@ -464,6 +479,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBooleanWritesAreBoxed(symbol: any, decl: any, node: any, seen: Set<any>): boolean;
     javaWritesAreBoxed(symbol: any, decl: any, next: Set<any>, accepts: (value: any) => boolean, tuples: boolean): boolean;
     javaDeclaredBooleanKind(node: any): 'boolean' | 'Boolean' | undefined;
+    javaBooleanParameterBox(node: any): string | undefined;
     javaNullableBooleanDeclaration(declaration: any): boolean;
     javaPrintsBooleanBoxValue(node: any, seen: Set<any>): boolean;
     javaBooleanBoxTupleElement(node: any, index: number): boolean;

@@ -23677,6 +23677,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.javaHandlerCalls = /* @__PURE__ */ new Map();
     this.javaHandlerReads = /* @__PURE__ */ new Set();
     this.javaHandlerScannedFile = void 0;
+    this.javaCheckedBoxLocalTypeCache = /* @__PURE__ */ new WeakMap();
     this.javaHandBackVisiting = /* @__PURE__ */ new Set();
     this.javaVenueCalleeInProgress = /* @__PURE__ */ new Set();
     this.javaVenueCalleeDeclarations = /* @__PURE__ */ new WeakMap();
@@ -25346,6 +25347,168 @@ ${this.getIden(identation)}}}`;
     }
     return "List<Object>";
   }
+  // a json object box: the generic `Dictionary<T>` of ts/src/base/types.ts (so `Dict` and
+  // `Dictionary<Dictionary<..>>`): an object type with a string index signature and no numeric one.
+  // Arrays, tuples, DTOs, primitives, unions and the named typed views that extend it (Balances,
+  // Tickers, ..., which own a typed print) all decline.
+  javaJsonBoxType(type) {
+    if (type === void 0 || type === null || !(type.flags & TypeFlags5.Object)) {
+      return false;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return false;
+    }
+    try {
+      if (checker.isArrayType(type) || checker.isTupleType(type)) {
+        return false;
+      }
+      const symbol = type.getSymbol?.();
+      const declaration = symbol?.declarations?.[0]?.resolve();
+      if (symbol?.escapedName !== "Dictionary" || !/(^|[\\/])ts[\\/]src[\\/]base[\\/]types\.ts$/.test(declaration?.getSourceFile?.()?.fileName ?? "")) {
+        return false;
+      }
+      return checker.getIndexTypeOfType(type, IndexKind3.String) !== void 0 && checker.getIndexTypeOfType(type, IndexKind3.Number) === void 0;
+    } catch (e) {
+      return false;
+    }
+  }
+  // How the identifier at `node` is used. 'element' = the printed Java is a native get/put on the
+  // local; 'neutral' = a property NAME, not a read of the local; 'value' = a position that takes the
+  // box as an Object (return, copy, the value of an element write); 'other' = any use that would see
+  // the local's new static type (argument, receiver, comparison, delete, spread, call of an element)
+  javaBoxUseVerdict(node) {
+    const parent = node.parent;
+    if (parent === void 0 || parent === null) {
+      return "other";
+    }
+    if (isPropertyAccessExpression2(parent) && parent.name === node) {
+      return "neutral";
+    }
+    if (parent.kind === SyntaxKind6.ReturnStatement && parent.expression === node || parent.kind === SyntaxKind6.VariableDeclaration && parent.initializer === node || parent.kind === SyntaxKind6.BinaryExpression && parent.right === node && parent.operatorToken?.kind === SyntaxKind6.EqualsToken) {
+      return "value";
+    }
+    if (isElementAccessExpression3(parent) && parent.expression === node) {
+      const grand = parent.parent;
+      if (grand?.kind === SyntaxKind6.DeleteExpression || isSpreadElement2(grand) || isSpreadAssignment2(grand) || isCallExpression5(grand) && grand.expression === parent) {
+        return "other";
+      }
+      const key = parent.argumentExpression;
+      return key !== void 0 && (isStringLiteralLikeNode3(key) || isIdentifier2(key)) ? "element" : "other";
+    }
+    return "other";
+  }
+  // every use of the local in its function is an element access (at least one), so declaring it a
+  // Map cannot rebind any call in the file through the new static type
+  javaBoxLocalUsedOnlyAsElements(nameNode) {
+    const checker = this.checkerOrUndefined();
+    const symbol = checker?.getSymbolAtLocation(nameNode);
+    if (symbol === void 0) {
+      return false;
+    }
+    let scope = nameNode.parent;
+    while (scope && !isFunctionLike(scope)) {
+      scope = scope.parent;
+    }
+    if (!scope) {
+      return false;
+    }
+    let uses = 0;
+    let ok = true;
+    const walk = (current) => {
+      if (!ok || current === void 0) {
+        return;
+      }
+      if (current !== nameNode && isIdentifier2(current) && current.text === nameNode.text && checker.getSymbolAtLocation(current) === symbol) {
+        const verdict = this.javaBoxUseVerdict(current);
+        if (verdict === "element") {
+          uses++;
+        } else if (verdict === "other") {
+          ok = false;
+          return;
+        }
+      }
+      current.forEachChild(walk);
+    };
+    scope.forEachChild(walk);
+    return ok && uses > 0;
+  }
+  // `const x = await this.m(..)` / `[a, b] = this.m(..)` slot: the awaited / tuple-element TS type is
+  // a json object box and the local is only element-accessed. The erased `.join()` / list `get` needs
+  // the checkcast the declaration carries.
+  javaCheckedBoxLocalType(declaration) {
+    if (declaration === void 0) {
+      return void 0;
+    }
+    const checker = this.checkerOrUndefined();
+    if (checker === void 0) {
+      return void 0;
+    }
+    if (isVariableDeclaration2(declaration) && isIdentifier2(declaration.name) && declaration.initializer?.kind === SyntaxKind6.AwaitExpression) {
+      const call = this.unwrapParenthesesOnly(declaration.initializer.expression);
+      if (!isCallExpression5(call) || !isPropertyAccessExpression2(call.expression) || call.expression.expression.kind !== SyntaxKind6.ThisKeyword && call.expression.expression.kind !== SyntaxKind6.SuperKeyword) {
+        return void 0;
+      }
+      let type;
+      try {
+        type = checker.getTypeAtLocation(declaration.initializer);
+      } catch (e) {
+        return void 0;
+      }
+      return this.javaJsonBoxType(type) && this.javaBoxLocalUsedOnlyAsElements(declaration.name) ? JAVA_ELEMENT_WRITE_MAP_TYPE : void 0;
+    }
+    if (declaration.kind === SyntaxKind6.BindingElement && isIdentifier2(declaration.name) && declaration.dotDotDotToken === void 0 && declaration.initializer === void 0) {
+      const pattern = declaration.parent;
+      const owner = pattern?.parent;
+      if (pattern?.kind !== SyntaxKind6.ArrayBindingPattern || owner === void 0 || !isVariableDeclaration2(owner) || owner.name !== pattern || owner.initializer === void 0) {
+        return void 0;
+      }
+      const call = this.unwrapParenthesesOnly(owner.initializer);
+      if (!isCallExpression5(call)) {
+        return void 0;
+      }
+      let element;
+      try {
+        const type = checker.getTypeAtLocation(call);
+        if (!checker.isTupleType(type)) {
+          return void 0;
+        }
+        const arguments_ = checker.getTypeArguments(type);
+        if (arguments_ === void 0 || arguments_.length !== pattern.elements.length) {
+          return void 0;
+        }
+        element = arguments_[pattern.elements.indexOf(declaration)];
+      } catch (e) {
+        return void 0;
+      }
+      return this.javaJsonBoxType(element) && this.javaBoxLocalUsedOnlyAsElements(declaration.name) ? JAVA_ELEMENT_WRITE_MAP_TYPE : void 0;
+    }
+    return void 0;
+  }
+  javaCheckedBoxLocalTypeCached(declaration) {
+    if (declaration === void 0) {
+      return void 0;
+    }
+    const cached = this.javaCheckedBoxLocalTypeCache.get(declaration);
+    if (cached !== void 0) {
+      return cached === JAVA_MEMO_UNDEFINED ? void 0 : cached;
+    }
+    let type;
+    try {
+      type = this.javaCheckedBoxLocalType(declaration);
+    } catch (e) {
+      type = void 0;
+    }
+    this.javaCheckedBoxLocalTypeCache.set(declaration, type ?? JAVA_MEMO_UNDEFINED);
+    return type;
+  }
+  unwrapParenthesesOnly(node) {
+    let current = node;
+    while (current !== void 0 && isParenthesizedExpression2(current)) {
+      current = current.expression;
+    }
+    return current;
+  }
   // every other mention of the local must be a read a `Map<String, Object>` declaration leaves
   // unchanged: an element-access receiver, a call argument, a return value, an assignment's
   // right-hand side, a comparison or a container element. A cast, a method call, a spread or a
@@ -26077,6 +26240,10 @@ ${this.getIden(identation)}}}`;
     const baseField = this.javaBaseMapFieldLocalType(declaration);
     if (baseField !== void 0) {
       return baseField;
+    }
+    const checkedBox = this.javaCheckedBoxLocalTypeCached(declaration);
+    if (checkedBox !== void 0) {
+      return checkedBox;
     }
     if (isParameterDeclaration2(declaration)) {
       const fixed = this.javaNativeParameterType(declaration);
@@ -27422,6 +27589,10 @@ ${this.getIden(identation)}}}`;
       if (inlined !== void 0) {
         return inlined;
       }
+      const declaredBox = this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op);
+      if (declaredBox !== void 0) {
+        return declaredBox;
+      }
       if (op === SyntaxKind6.PlusEqualsToken) {
         return `${leftText} = Helpers.add(${leftText}, ${rightText})`;
       }
@@ -27993,7 +28164,7 @@ ${this.getIden(identation)}}}`;
       return void 0;
     }
     const index = this.printNode(key, 0);
-    if (index.includes("Helpers.") || index.includes("()")) {
+    if (index.includes("Helpers.") || index.includes("()") || index.includes(" ? ")) {
       return void 0;
     }
     if (/^[A-Za-z_$][\w$]*$/.test(index)) {
@@ -28984,6 +29155,166 @@ ${this.getIden(identation)}}}`;
     }
     return safe;
   }
+  // ---- declared-box arithmetic (hx11 RFM-J2 leaf C) ----
+  // `Helpers.add/subtract/multiply/divide` on operands whose DECLARED Java type (the embedding layer's
+  // javaDeclaredLocalTypeResolver, or a Long core parameter) is Long/long/Integer/int/Double/double, or an
+  // integer literal. Every helper answers `null` for a null operand, so a boxed operand's null arm is
+  // the explicit ternary; integral operands print widened (`((long) i)`, `1L`) because the helpers
+  // normalize Integer to Long; a double operand promotes natively. `multiply` stays integral-only
+  // (it re-boxes an integral double product as Long), `+ - *` on a double keep `double` boxes.
+  // 'longbox' | 'longprim' | 'intbox' | 'intprim' | 'doublebox' | 'doubleprim' | 'intlit' | 'longlit'
+  javaDeclaredBoxOperandKind(node, text) {
+    let inner = node;
+    while (inner !== void 0 && (isParenthesizedExpression2(inner) || isAsExpression2(inner) || inner.kind === SyntaxKind6.NonNullExpression)) {
+      inner = inner.expression;
+    }
+    if (inner === void 0) {
+      return void 0;
+    }
+    if (isNumericLiteral3(inner)) {
+      const kind2 = this.javaIntegerLiteralKind(inner);
+      return kind2 === void 0 ? void 0 : kind2 === "long" ? "longlit" : "intlit";
+    }
+    if (!isIdentifier2(inner) || this.javaStripPrintedParens(text) !== String(inner.text) || !this.javaIdentifierPrintsDeclaredName(inner)) {
+      return void 0;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(inner);
+    if (declaration !== void 0 && !this.javaIdentifierKeepsDeclaredName(inner)) {
+      return void 0;
+    }
+    let declared;
+    if (declaration !== void 0) {
+      try {
+        declared = this.javaDeclaredTypeOfDeclaration(declaration);
+      } catch (e) {
+        declared = void 0;
+      }
+      if (declared === void 0 && this.javaLongParameterRead(inner)) {
+        declared = "Long";
+      }
+    } else if (typeof this.javaBindingElementTypeResolver === "function") {
+      const element = this.getChecker().getSymbolAtLocation(inner)?.valueDeclaration?.resolve();
+      if (element?.kind === SyntaxKind6.BindingElement && element.name?.text === inner.text) {
+        try {
+          declared = this.javaBindingElementTypeResolver(element);
+        } catch (e) {
+          declared = void 0;
+        }
+      }
+    }
+    const kinds = {
+      Long: "longbox",
+      long: "longprim",
+      Integer: "intbox",
+      int: "intprim",
+      Double: "doublebox",
+      double: "doubleprim"
+    };
+    const kind = declared === void 0 ? void 0 : kinds[declared.replace(/^final\s+/, "").trim()];
+    if (kind !== void 0 && kind.endsWith("box") && declaration !== void 0 && (this.javaNullGuardAdmitsRead(inner) || this.javaLocalIsLengthDerived(declaration))) {
+      return void 0;
+    }
+    return kind !== void 0 && this.javaNumberOrNullishType(inner) ? kind : void 0;
+  }
+  // `const n = x.length` (a Java int read, never null)
+  javaLocalIsLengthDerived(declaration) {
+    const init = declaration?.kind === SyntaxKind6.VariableDeclaration ? this.unwrapPrintTransparentExpression(declaration.initializer) : void 0;
+    return init !== void 0 && isPropertyAccessExpression2(init) && init.name.text === "length";
+  }
+  // number, number-literal, or a union of those with undefined / null / void
+  javaNumberOrNullishType(node) {
+    let type;
+    try {
+      type = this.checkerOrUndefined()?.getTypeAtLocation(node);
+    } catch (e) {
+      return false;
+    }
+    if (type === void 0) {
+      return false;
+    }
+    const isNumber = (t) => ((t?.flags ?? 0) & (TypeFlags5.Number | TypeFlags5.NumberLiteral)) !== 0;
+    if (isNumber(type)) {
+      return true;
+    }
+    const members = (((type.flags ?? 0) & TypeFlags5.Union) !== 0 ? type.getTypes?.() : void 0) ?? [];
+    return members.some(isNumber) && members.every((m) => isNumber(m) || ((m?.flags ?? 0) & (TypeFlags5.Undefined | TypeFlags5.Null | TypeFlags5.Void)) !== 0);
+  }
+  javaStripPrintedParens(text) {
+    let value = text.trim();
+    while (value.startsWith("(") && value.endsWith(")")) {
+      let depth = 0;
+      let closesAtEnd = true;
+      for (let i = 0; i < value.length; i++) {
+        if (value[i] === "(") {
+          depth++;
+        } else if (value[i] === ")") {
+          depth--;
+          if (depth === 0 && i < value.length - 1) {
+            closesAtEnd = false;
+            break;
+          }
+        }
+      }
+      if (!closesAtEnd) {
+        break;
+      }
+      value = value.slice(1, -1).trim();
+    }
+    return value;
+  }
+  // the value is read as itself: a ternary arm (`c ? (a + b) : 1.5` would binary-promote the boxed
+  // arm and unbox a null) or a member-access receiver keeps the helper's Object box
+  javaArithmeticResultIsBoxSensitive(node) {
+    let child = node;
+    let parent = node?.parent;
+    while (parent !== void 0 && isParenthesizedExpression2(parent)) {
+      child = parent;
+      parent = parent.parent;
+    }
+    if (parent === void 0) {
+      return false;
+    }
+    if (parent.kind === SyntaxKind6.ConditionalExpression) {
+      return parent.condition !== child;
+    }
+    return (isPropertyAccessExpression2(parent) || isElementAccessExpression3(parent)) && parent.expression === child;
+  }
+  printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op) {
+    const operator = op === SyntaxKind6.PlusToken ? "+" : op === SyntaxKind6.MinusToken ? "-" : op === SyntaxKind6.AsteriskToken ? "*" : void 0;
+    if (operator === void 0 || this.javaArithmeticResultIsBoxSensitive(node)) {
+      return void 0;
+    }
+    const leftKind = this.javaDeclaredBoxOperandKind(left, leftText);
+    const rightKind = this.javaDeclaredBoxOperandKind(right, rightText);
+    if (leftKind === void 0 || rightKind === void 0) {
+      return void 0;
+    }
+    const isLiteral = (kind) => kind === "intlit" || kind === "longlit";
+    if (isLiteral(leftKind) && isLiteral(rightKind)) {
+      return void 0;
+    }
+    const isDouble = (kind) => kind === "doublebox" || kind === "doubleprim";
+    const hasDouble = isDouble(leftKind) || isDouble(rightKind);
+    if (hasDouble && operator === "*") {
+      return void 0;
+    }
+    if (hasDouble && (operator === "+" || operator === "-") && (leftKind.endsWith("box") || rightKind.endsWith("box"))) {
+      return void 0;
+    }
+    const texts = [this.javaStripPrintedParens(leftText), this.javaStripPrintedParens(rightText)];
+    const kinds = [leftKind, rightKind];
+    const asLong = (i) => {
+      if (kinds[i] === "longbox" || kinds[i] === "longprim" || kinds[i] === "longlit") {
+        return texts[i];
+      }
+      return kinds[i] === "intlit" ? `${texts[i]}L` : `((long) ${texts[i]})`;
+    };
+    const asDouble = (i) => isDouble(kinds[i]) ? texts[i] : `((double) ${texts[i]})`;
+    const wide = (i) => hasDouble ? asDouble(i) : asLong(i);
+    const expression = `(${wide(0)} ${operator} ${wide(1)})`;
+    const boxes = kinds.map((kind, i) => kind.endsWith("box") ? texts[i] : void 0).filter((text, i, all) => text !== void 0 && all.indexOf(text) === i);
+    return boxes.length === 0 ? expression : `((${boxes.map((box) => `${box} == null`).join(" || ")}) ? null : ${expression})`;
+  }
   printInlineHelperArithmetic(left, right, leftText, rightText, op) {
     const isPlus = op === SyntaxKind6.PlusToken || op === SyntaxKind6.PlusEqualsToken;
     const isMinus = op === SyntaxKind6.MinusToken || op === SyntaxKind6.MinusEqualsToken;
@@ -29688,9 +30019,13 @@ ${this.getIden(identation)}}}`;
         0
       )};
 `;
-      return arrayBindingStatement + parsedArrayBindingElements.map(
-        (e, index) => this.getIden(identation) + `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`
-      ).join(";\n");
+      return arrayBindingStatement + parsedArrayBindingElements.map((e, index) => {
+        const boxType = this.javaCheckedBoxLocalTypeCached(arrayBindingPatternElements[index]);
+        if (boxType !== void 0) {
+          return this.getIden(identation) + `${boxType} ${e} = (${boxType}) ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+        }
+        return this.getIden(identation) + `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
+      }).join(";\n");
     }
     const isNew = declaration?.initializer && declaration.initializer.kind === SyntaxKind6.NewExpression;
     let varToken = isNew ? "var " : this.VAR_TOKEN + " ";
@@ -29736,6 +30071,10 @@ ${this.getIden(identation)}}}`;
         }
       }
       return this.getIden(identation) + specificVarToken + " " + this.printNode(declaration.name) + " = " + parsedValue;
+    }
+    const awaitedBox = !isNew && declaration.initializer.kind === SyntaxKind6.AwaitExpression ? this.javaCheckedBoxLocalTypeCached(declaration) : void 0;
+    if (awaitedBox !== void 0) {
+      return this.getIden(identation) + awaitedBox + " " + this.printNode(declaration.name) + " = (" + awaitedBox + ") " + parsedValue;
     }
     return this.getIden(identation) + varToken + this.printNode(declaration.name) + " = " + parsedValue;
   }
@@ -30296,8 +30635,22 @@ ${this.getIden(identation)}}}`;
     const receiver = this.printNode(access, 0);
     return `(${receiver} == null ? new java.util.ArrayList<Object>() : new java.util.ArrayList<Object>(${receiver}.keySet()))`;
   }
-  printObjectValuesCall(_node, _identation, parsedArg = void 0) {
-    return `Helpers.objectValues(${parsedArg})`;
+  printObjectValuesCall(node, _identation, parsedArg = void 0) {
+    return this.printNativeObjectValuesCall(node) ?? `Helpers.objectValues(${parsedArg})`;
+  }
+  // `Object.values(m)` where m is a local the printer declares `Map<String, Object>` and nothing
+  // else writes: the helper's only surviving branch is the `Map.values()` copy (a declared map is
+  // never the null / non-map fallback), so the copy binds on the declaration's own type
+  printNativeObjectValuesCall(node) {
+    const argument = node?.arguments?.[0];
+    if (argument === void 0 || node.arguments.length !== 1 || !isIdentifier2(argument)) {
+      return void 0;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(argument);
+    if (declaration === void 0 || !isVariableDeclaration2(declaration) || !declaration.initializer || !this.javaDeclaredMapReceiver(argument) || this.javaLocalHasWriteAtAll(declaration.name)) {
+      return void 0;
+    }
+    return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.values())`;
   }
   printJsonParseCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.parseJson(${parsedArg})`;
@@ -31198,6 +31551,36 @@ ${this.getIden(identation)}}}`;
     }
     return declared === "boolean" || declared === "Boolean" ? declared : void 0;
   }
+  // a `boolean` / `Bool` (`boolean | undefined`) METHOD parameter the body never writes: its callers
+  // are typed, so the Java slot holds a Boolean or null and `Helpers.isTrue (p)` is exactly
+  // `Boolean.TRUE.equals (p)`. Returns the operand as the printer prints it (the bare name or its
+  // literal-default read), undefined to keep the helper. A lambda parameter is typed by its
+  // functional interface, not by a TS caller contract; a parameter the body writes is filled by
+  // the body; every member of the checker type must be boolean or nullish.
+  javaBooleanParameterBox(node) {
+    const declaration = this.javaDeclarationOfIdentifier(node);
+    if (declaration === void 0 || !isParameterDeclaration2(declaration) || node.text !== declaration.name?.text || declaration.parent?.kind !== SyntaxKind6.MethodDeclaration || this.javaParameterIsWritten(declaration)) {
+      return void 0;
+    }
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+      return void 0;
+    }
+    if (type === void 0) {
+      return void 0;
+    }
+    const booleanish = (t) => ((t?.flags ?? 0) & (TypeFlags5.Boolean | TypeFlags5.BooleanLiteral)) !== 0;
+    if (!booleanish(type)) {
+      const members = (((type.flags ?? 0) & TypeFlags5.Union) !== 0 ? type.getTypes?.() : void 0) ?? [];
+      if (!members.some(booleanish) || !members.every((m) => booleanish(m) || ((m?.flags ?? 0) & (TypeFlags5.Undefined | TypeFlags5.Null | TypeFlags5.Void)) !== 0)) {
+        return void 0;
+      }
+    }
+    const printed = this.printNode(node, 0);
+    return printed === node.text || printed === this.javaDefaultedLocalName(node) ? printed : void 0;
+  }
   // the DECLARED type of the local is a nullable boolean: `Bool` (`boolean | undefined`) or an
   // equivalent union. Every member must be boolean or nullish - an `Int`/`Str`/`any` member can
   // hold a box the isTrue helper tests with its runtime truthiness, so the helper must stay.
@@ -31371,6 +31754,10 @@ ${this.getIden(identation)}}}`;
       }
       if (declared === "Boolean") {
         return `Boolean.TRUE.equals(${this.printNode(node, 0)})`;
+      }
+      const parameterBox = this.javaBooleanParameterBox(node);
+      if (parameterBox !== void 0) {
+        return `Boolean.TRUE.equals(${parameterBox})`;
       }
     }
     const box = this.javaBooleanBoxIdentifier(node, /* @__PURE__ */ new Set()) ?? this.javaNullableBooleanBoxIdentifier(node) ?? this.javaBooleanTupleBindingIdentifier(node);
@@ -31877,17 +32264,7 @@ var JAVA_BASE_MAP_READ_FIELDS = {
   "currencies": { declared: true, anyKey: false },
   "requiredCredentials": { declared: false, anyKey: true }
 };
-var HX4_J09_SYNC_BASE_CALLS = /* @__PURE__ */ new Set([
-  "safeString",
-  "safeString2",
-  "safeStringN",
-  "safeValue",
-  "safeDict",
-  "safeInteger",
-  "json",
-  "throwExactlyMatchedException",
-  "throwBroadlyMatchedException"
-]);
+var JAVA_SYNC_CALL_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/](functions[\\/][^\\/]+|Exchange(\.nooverloads\.\d+)?)\.ts$|(^|[\\/])lib\.[^\\/]*\.d\.ts$/;
 JavaTranspiler.prototype.hx4J09CcxtErrorClass = function(node) {
   const checker = this.checkerOrUndefined();
   let symbol;
@@ -32041,13 +32418,9 @@ JavaTranspiler.prototype.hx4J09CatchCannotWrap = function(node) {
       return;
     }
     if (current.kind === SyntaxKind6.CallExpression) {
-      const callee = current.expression;
-      if (!isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind6.ThisKeyword || !HX4_J09_SYNC_BASE_CALLS.has(String(callee.name.text))) {
-        ok = false;
-        return;
-      }
-      const declaration = checker.getResolvedSignature(current)?.declaration?.resolve();
-      if (declaration === void 0 || !JAVA_THIS_RETURN_TYPES_BASE_FILE.test(declaration.getSourceFile?.()?.fileName ?? "")) {
+      const signature = checker.getResolvedSignature(current);
+      const declaration = signature?.declaration?.resolve();
+      if (declaration === void 0 || !isPropertyAccessExpression2(current.expression) || !JAVA_SYNC_CALL_FILE.test(declaration.getSourceFile?.()?.fileName ?? "") || this.hasAsyncModifier(declaration) || this.isPromiseType(checker.getReturnTypeOfSignature(signature))) {
         ok = false;
         return;
       }
