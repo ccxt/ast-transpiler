@@ -8165,7 +8165,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     while (_optionalChain([init, 'optionalAccess', _741 => _741.kind]) === _ast.SyntaxKind.ParenthesizedExpression) {
       init = init.expression;
     }
-    if (_is.isIdentifier.call(void 0, init) && (this.csharpTypeIsStringType(_nullishCoalesce(this.csharpHx4DeclaredKeyType(init), () => ( ""))) || _optionalChain([this, 'access', _742 => _742.csharpReceiverBinding, 'call', _743 => _743(init), 'optionalAccess', _744 => _744.kind]) === _ast.SyntaxKind.BindingElement)) {
+    if (_is.isIdentifier.call(void 0, init) && _optionalChain([this, 'access', _742 => _742.csharpReceiverBinding, 'call', _743 => _743(init), 'optionalAccess', _744 => _744.kind]) === _ast.SyntaxKind.BindingElement) {
       return false;
     }
     const scope = this.csharpEnclosingFunction(declaration);

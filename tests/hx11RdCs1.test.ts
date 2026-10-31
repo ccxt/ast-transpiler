@@ -71,11 +71,6 @@ describe('RD-CS-1: declared member views and string-typed object concatenation',
         expect(out).toContain('auth = ((object)(auth == null ? null : auth + "?"))');
     });
 
-    test('a copy of a string-typed local keeps the helper', () => {
-        const ts = BASE + '    f (a: any) { const s = this.safeString (a, "s"); let m = s; m = m + "x"; return m; }\n}';
-        expect(printed(ts, false)).not.toContain('m == null');
-    });
-
     test('a copy of a destructured string slot keeps the helper', () => {
         const ts = BASE + '    f (a: any) { const [ s, p ] = this.pair (a); let m = s; m = m + "x"; return [ m, p ]; }\n    pair (a: any): [ string | undefined, any ] { return [ undefined, a ]; }\n}';
         expect(printed(ts, false)).not.toContain('m == null');

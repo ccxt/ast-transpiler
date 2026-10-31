@@ -6455,14 +6455,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             || this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(identifier) ?? '')) {
             return false;
         }
-        // a copy of a string-typed local is declared with its source's type by the build layer's own retype, which a
-        // native write of this rule would end
         let init = declaration.initializer;
         while (init?.kind === SyntaxKind.ParenthesizedExpression) {
             init = init.expression;
         }
-        if (isIdentifier(init) && (this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(init) ?? '')
-            || this.csharpReceiverBinding(init)?.kind === SyntaxKind.BindingElement)) {
+        if (isIdentifier(init) && this.csharpReceiverBinding(init)?.kind === SyntaxKind.BindingElement) {
             return false; // a destructured slot is declared string? by the build layer's retype after printing
         }
         const scope = this.csharpEnclosingFunction(declaration);

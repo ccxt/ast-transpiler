@@ -8166,7 +8166,7 @@ var CSharpTranspiler = class extends BaseTranspiler {
     while (init?.kind === SyntaxKind4.ParenthesizedExpression) {
       init = init.expression;
     }
-    if (isIdentifier(init) && (this.csharpTypeIsStringType(this.csharpHx4DeclaredKeyType(init) ?? "") || this.csharpReceiverBinding(init)?.kind === SyntaxKind4.BindingElement)) {
+    if (isIdentifier(init) && this.csharpReceiverBinding(init)?.kind === SyntaxKind4.BindingElement) {
       return false;
     }
     const scope = this.csharpEnclosingFunction(declaration);
