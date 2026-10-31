@@ -9614,6 +9614,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((this.goDeclaredTypeOfIdentifier(key) !== '*string') || !this.goL3MapReceiver(dict)) {
             return undefined;
         }
+        // a key the source already proves non-nil never needs the flag: a literal-default SafeString is a plain
+        // string at the read, and an exit guard / enclosing guard lets the lookup read through the deref
+        if (this.goDefaultedSafeStringLocal(key) || this.goInOpPointerKeyProvenNonNil(node, key)) {
+            return undefined;
+        }
         // the shapes an existing rule prints stay with it: the if-init comma-ok and the inline closure
         if (this.goInOpIfInitClause(node.expression) !== undefined) {
             return undefined;

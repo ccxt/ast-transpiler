@@ -8130,6 +8130,12 @@ describe('FM-A9F L3: negated lookups hoisted out of an || chain, indexed ws book
         expect(taken).toContain('InOp(this.Markets_by_id, k)');
         expect(taken).not.toContain('_, kKnown =');
     });
+    test('a key the source proves non-nil (literal default, exit guard) needs no flag', () => {
+        const dflt = go("    f (rows: any) {\n        for (let i = 0; i < rows.length; i++) {\n            const id = this.safeString (rows[i], 'symbol', '');\n            if ((this.markets_by_id === undefined) || !(id in this.markets_by_id)) {\n                continue;\n            }\n        }\n    }\n");
+        expect(dflt).not.toContain('idKnown');
+        const exit = go("    f (rows: any) {\n        for (let i = 0; i < rows.length; i++) {\n            const id = this.safeString (rows[i], 'symbol');\n            if (id === undefined) {\n                continue;\n            }\n            if ((this.markets_by_id === undefined) || !(id in this.markets_by_id)) {\n                continue;\n            }\n        }\n    }\n");
+        expect(exit).not.toContain('idKnown');
+    });
     test('a safeDict local with a literal default over this.options backs the hoist and is a typed map', () => {
         const output = go("    h (o: any, fetch: boolean) {\n        const key = this.safeString (o, 'k');\n        const loaded = this.safeDict (this.options, 'loaded', {});\n        if (fetch && !(key in loaded)) {\n            loaded[key] = true;\n        }\n    }\n");
         expect(output).toContain('var loaded map[string]any = this.SafeDictMap(this.Options, "loaded", map[string]any{})');
