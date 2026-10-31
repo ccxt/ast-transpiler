@@ -7409,6 +7409,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
       }
       for (const parameter of rows) {
         const followsBase = baseTier && !csharpListParamFileIsPrintedAlone(parameter) && this.csharpListParamBodyReadsAsList(parameter);
+        if (baseTier && !followsBase && !csharpSyntacticArrayType(parameter.type)) {
+          admitted = false;
+          break;
+        }
         if (!followsBase && this.csharpListParamSpelling(parameter, baseTier) !== "IList<object>") {
           admitted = false;
           break;

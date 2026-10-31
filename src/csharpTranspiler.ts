@@ -5604,6 +5604,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             for (const parameter of rows) {
                 // an override of a base-tier member follows the base spelling whatever it annotates (D8)
                 const followsBase = baseTier && !csharpListParamFileIsPrintedAlone(parameter) && this.csharpListParamBodyReadsAsList(parameter);
+                // the signature printer only types an array annotation: the census must say the same
+                if (baseTier && !followsBase && !csharpSyntacticArrayType(parameter.type)) {
+                    admitted = false;
+                    break;
+                }
                 if (!followsBase && this.csharpListParamSpelling(parameter, baseTier) !== 'IList<object>') {
                     admitted = false;
                     break;
