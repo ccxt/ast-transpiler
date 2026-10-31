@@ -409,6 +409,9 @@ const GO_FIELD_CONTAINER_TYPES_NATIVE: { [name: string]: string } = Object.fromE
 // GetValue answered. Other map fields mix writers and keep the helper read.
 const GO_PLAIN_VALUED_MAP_FIELDS = [ 'Options' ];
 
+// BaseExchange option dicts: `map[string]any` fields built non-nil by exchange_options.go
+const GO_OPTION_DICT_FIELDS = [ 'Options', 'Has', 'Features', 'Fees', 'Limits' ];
+
 // operator kinds the arithmetic helpers are emitted for
 const GO_ARITHMETIC_KINDS = [
     SyntaxKind.PlusToken,
@@ -5577,7 +5580,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 : rhs;
             const native = (keyStrs.length === 1)
                 ? (this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
-                    ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation))
+                    ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
+                    ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation))
                 : undefined;
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
@@ -8592,6 +8596,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return `if ${keyStr} != nil {\n${iden}\t${containerStr}[*${keyStr}] = ${valueStr}\n${iden}}`;
     }
 
+    // `this.<option dict>[k] = v` with a string-typed or nil-guarded *string key: the helper's map store
+    // behind the nil checks it applies; a pointer value is stored dereferenced, any other `any` keeps it
+    printOptionDictFieldWrite(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
+        const name = (containerNode?.kind === SyntaxKind.PropertyAccessExpression) && (containerNode.expression?.kind === SyntaxKind.ThisKeyword)
+            ? this.transformPropertyAccessExpressionName(containerNode.name.text, containerNode.name) : undefined;
+        if ((name === undefined) || !GO_OPTION_DICT_FIELDS.includes(name) || (valueNode === undefined)) {
+            return undefined;
+        }
+        let keyType = this.goDeclaredTypeOfIdentifier(keyNode);
+        if ((keyType === undefined) && (keyNode?.kind === SyntaxKind.Identifier)) {
+            const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode)?.valueDeclaration?.resolve();
+            keyType = this.goGetArgParameterType(declaration);
+        }
+        if ((keyType !== 'string') && (keyType !== '*string')) {
+            return undefined;
+        }
+        const inner = this.goUnwrapParenthesizedNode(valueNode);
+        let storeValue: (text: string) => string;
+        if (this.goMapWriteValueIsNotPointer(valueNode)) {
+            storeValue = (text) => text;
+        } else if ((inner?.kind === SyntaxKind.Identifier) && this.goWritePrintsPointerBox(inner)) {
+            storeValue = (text) => `DerefScalar(${text})`;
+        } else {
+            return undefined;
+        }
+        const value = storeValue(this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart());
+        const pointerKey = keyType === '*string';
+        const guard = pointerKey ? `${containerStr} != nil && ${keyStr} != nil` : `${containerStr} != nil`;
+        const iden = this.getIden(identation);
+        return `if ${guard} {\n${iden}\t${containerStr}[${pointerKey ? '*' : ''}${keyStr}] = ${value}\n${iden}}`;
+    }
+
     // the helper stores derefScalar(value): a numeric literal is already the value it stores
     goMapWriteValueIsNotPointer(valueNode): boolean {
         const inner = this.goUnwrapParenthesizedNode(valueNode);
@@ -9304,8 +9340,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // Orderbooks is absent on purpose: the go book-local pass proves a stored book from the
     // `!InOp(this.Orderbooks, key)` guard, so that guard must reach it as the helper call.
     GO_NATIVE_MAP_FIELDS: { [name: string]: string } = {
+        'Options': 'map[string]any',
         'Has': 'map[string]any',
         'Features': 'map[string]any',
+        'Fees': 'map[string]any',
+        'Limits': 'map[string]any',
         'Trades': 'map[string]any',
         'Ohlcvs': 'map[string]map[string]any',
         // hx10w8-GP03: declared `map[string]any` in go/v4/exchange.go
