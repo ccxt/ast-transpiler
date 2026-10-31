@@ -14,7 +14,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-MEKZ6QY3.js";
+} from "./chunk-AWK6QGCM.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -12349,7 +12349,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
   // or `printAsyncTrampolineBlock`) contributes the single space before `{`.
   printGoSignature(node, identation, receiver) {
     const name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(node.name.text));
-    const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.printFunctionType(node)).trim();
+    const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.printFunctionType(node)).trim();
     const parsedArgs = this.printMethodParameters(node);
     const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
     const returnSignature = returnType ? " " + returnType : "";
@@ -12443,7 +12443,16 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (this.goIsNativeSliceCall(initializer)) {
       return "string";
     }
+    if ((initializer?.kind === SyntaxKind5.ElementAccessExpression || initializer?.kind === SyntaxKind5.CallExpression) && this.goWsTradesRead(initializer)) {
+      return GO_WS_CACHE_TYPE;
+    }
     switch (initializer?.kind) {
+      case SyntaxKind5.NewExpression:
+      case SyntaxKind5.PropertyAccessExpression:
+        if (this.goWsCacheTypeOfNode(initializer) !== void 0) {
+          return GO_WS_CACHE_TYPE;
+        }
+        break;
       case SyntaxKind5.StringLiteral:
       case SyntaxKind5.NoSubstitutionTemplateLiteral:
         return "string";
@@ -12459,6 +12468,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
       case SyntaxKind5.ParenthesizedExpression:
         return this.goTypeOfInitializer(initializer.expression, printedValue);
       case SyntaxKind5.AsExpression: {
+        if (this.goWsCacheTypeOfNode(this.goUnwrapParenthesizedNode(initializer.expression)) !== void 0) {
+          return GO_WS_CACHE_TYPE;
+        }
         const inner = this.goTypeOfInitializer(initializer.expression, printedValue);
         if (typeof inner === "string" && inner.startsWith("[]")) {
           return inner;
@@ -12498,7 +12510,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const value = this.goUnwrapPrintedParens(printedValue);
     const open = value.indexOf("(");
     const literalType = goFuncLiteralReturnType(value);
-    if (literalType !== void 0 && GO_TYPE_NAMES.indexOf(literalType) >= 0) {
+    if (literalType !== void 0 && (GO_TYPE_NAMES.indexOf(literalType) >= 0 || literalType === GO_WS_CACHE_TYPE)) {
       return literalType;
     }
     if (value.startsWith("func() int {") && value.endsWith("}()")) {
@@ -13357,7 +13369,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
             if (stringWriteProven && goType === "string") {
               return false;
             }
-            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === SyntaxKind5.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0)) {
+            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === SyntaxKind5.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0) && !(goType === GO_WS_CACHE_TYPE && this.goWsCacheTypeOfNode(parent.right) !== void 0)) {
               return true;
             }
           } else if (op === SyntaxKind5.PlusEqualsToken && goType === "string" && (this.goOperandStaticType(parent.right, this.printNode(parent.right, 0)) === "string" || stringWriteProven)) {
@@ -13417,7 +13429,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     while (right?.kind === SyntaxKind5.ParenthesizedExpression) {
       right = right.expression;
     }
-    if (!["*string", "*int64", "*float64"].includes(goType) || right === void 0) {
+    if (!["*string", "*int64", "*float64", GO_WS_CACHE_TYPE].includes(goType) || right === void 0) {
       return void 0;
     }
     if (right.kind === SyntaxKind5.NullKeyword || right.kind === SyntaxKind5.UndefinedKeyword || right.kind === SyntaxKind5.Identifier && right.text === "undefined") {
@@ -14873,7 +14885,7 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
     this.goNilInitLocalTypeInProgress.add(declaration);
     let result;
     try {
-      result = this.goNilInitLocalTypeScan(declaration) ?? this.goTuplePointerSlotNilInitType(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration);
+      result = this.goNilInitLocalTypeScan(declaration) ?? this.goTuplePointerSlotNilInitType(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration) ?? this.goNilInitCacheLocalType(declaration);
     } finally {
       this.goNilInitLocalTypeInProgress.delete(declaration);
     }
@@ -15607,6 +15619,9 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
       if (nilInitType === "string") {
         return this.getIden(identation) + "var " + this.printNode(declaration.name) + " string";
       }
+      if (nilInitType === GO_WS_CACHE_TYPE) {
+        return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + GO_WS_CACHE_TYPE;
+      }
       if (nilInitType !== void 0) {
         return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + nilInitType + " = " + parsedValue;
       }
@@ -15943,6 +15958,220 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   transformPropertyAccessExpressionName(name, nameNode = void 0) {
     return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
   }
+  // ---- FM-CACHE: ws list caches (WsArrayCache) -------------------------------------------------
+  // the checker type is one of the ws cache classes (a `| undefined` arm does not matter)
+  goWsCacheClassType(type) {
+    if (type === void 0) {
+      return false;
+    }
+    const parts = typeof type.isUnionType === "function" && type.isUnionType() ? type.getTypes() : [type];
+    const live = parts.filter((p) => !(p.flags & (TypeFlags4.Undefined | TypeFlags4.Null)));
+    return live.length === 1 && GO_WS_CACHE_CLASSES.includes(live[0].getSymbol?.()?.name);
+  }
+  // `this.<f>` for a BaseExchange field declared `ArrayCache`: the Go field is a WsArrayCache
+  goWsCacheField(node) {
+    if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
+      return false;
+    }
+    try {
+      const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
+      return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind5.PropertyDeclaration && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(d.getSourceFile().fileName) && GO_WS_CACHE_FIELD_DECLARED.test((d.type?.getText?.() ?? "").trim()));
+    } catch (e) {
+      return false;
+    }
+  }
+  // a node whose Go value is a ws cache: a constructor call of one of the classes, or a base cache field read
+  goWsCacheTypeOfNode(node) {
+    if (node?.kind === SyntaxKind5.NewExpression) {
+      const name = node.expression?.kind === SyntaxKind5.Identifier ? node.expression.text : void 0;
+      return GO_WS_CACHE_CLASSES.includes(name) ? GO_WS_CACHE_TYPE : void 0;
+    }
+    return this.goWsCacheField(node) ? GO_WS_CACHE_TYPE : void 0;
+  }
+  // an operand the printer proves is a ws cache interface/pointer at the Go level (a nil test is `== nil`)
+  goWsCacheOperand(node) {
+    const inner = this.goUnwrapParenthesizedNode(node);
+    if (inner?.kind === SyntaxKind5.Identifier) {
+      return this.goDeclaredTypeOfIdentifier(inner) === GO_WS_CACHE_TYPE;
+    }
+    return this.goWsCacheField(inner) || this.goWsTradesField(inner) || this.goWsTradesRead(inner);
+  }
+  // `this.trades`: the BaseExchange field declared `Dictionary<ArrayCache>`, the Go TradesCache map of WsArrayCache
+  goWsTradesField(node) {
+    if (node?.kind !== SyntaxKind5.PropertyAccessExpression || node.expression?.kind !== SyntaxKind5.ThisKeyword) {
+      return false;
+    }
+    try {
+      const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
+      return declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind5.PropertyDeclaration && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(d.getSourceFile().fileName) && (d.type?.getText?.() ?? "").trim() === "Dictionary<ArrayCache>");
+    } catch (e) {
+      return false;
+    }
+  }
+  // a read of one TradesCache entry: `this.trades[k]` (not a write/delete target) or the base `this.safeValue (this.trades, k)`
+  goWsTradesRead(node) {
+    const inner = this.goUnwrapParenthesizedNode(node);
+    if (inner?.kind === SyntaxKind5.ElementAccessExpression) {
+      const parent = inner.parent;
+      return this.goWsTradesField(inner.expression) && !this.isGoElementAccessAssignmentTarget(inner) && parent?.kind !== SyntaxKind5.DeleteExpression && parent?.kind !== SyntaxKind5.PostfixUnaryExpression && parent?.kind !== SyntaxKind5.PrefixUnaryExpression;
+    }
+    if (inner?.kind !== SyntaxKind5.CallExpression) {
+      return false;
+    }
+    const callee = inner.expression;
+    if (callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || callee.name?.text !== "safeValue" || (inner.arguments?.length ?? 0) !== 2 || !this.goWsTradesField(inner.arguments[0])) {
+      return false;
+    }
+    try {
+      const declarations = this.getChecker().getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve()) ?? [];
+      return declarations.length > 0 && declarations.every((d) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile()?.fileName ?? "").replace(/\\/g, "/")));
+    } catch (e) {
+      return false;
+    }
+  }
+  // `this.trades[k]` / `this.safeValue (this.trades, k)` print the cache's own Get; `k in this.trades` its Has
+  goWsTradesReadText(node) {
+    if (!this.goWsTradesRead(node)) {
+      return void 0;
+    }
+    const inner = this.goUnwrapParenthesizedNode(node);
+    const key = inner.kind === SyntaxKind5.ElementAccessExpression ? inner.argumentExpression : inner.arguments[1];
+    return `${this.printNode(inner.kind === SyntaxKind5.ElementAccessExpression ? inner.expression : inner.arguments[0], 0)}.Get(${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(key, 0))})`;
+  }
+  // a nil-declared local (`let c; if (..) { c = this.trades[k]; }`) whose every write is a ws cache or nil
+  goNilInitCacheLocalType(declaration) {
+    const name = declaration.name.text;
+    const scope = this.goEnclosingFunction(declaration);
+    if (scope === void 0) {
+      return void 0;
+    }
+    const writes = [];
+    let bail = false;
+    const visit = (n) => {
+      if (bail) {
+        return;
+      }
+      if (n.kind === SyntaxKind5.Identifier && n.text === name && n !== declaration.name) {
+        const parent = n.parent;
+        if (parent?.kind === SyntaxKind5.BinaryExpression && parent.left === n && parent.operatorToken?.kind === SyntaxKind5.EqualsToken) {
+          writes.push(parent.right);
+        } else if (this.goAssignmentWritesName(parent, name) || parent?.kind === SyntaxKind5.BinaryExpression && parent.left === n) {
+          bail = true;
+        }
+        return;
+      }
+      n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    if (bail || writes.length === 0) {
+      return void 0;
+    }
+    let cacheWrites = 0;
+    for (const right of writes) {
+      const value = this.goUnwrapParenthesizedNode(right);
+      if (value?.kind === SyntaxKind5.NullKeyword || value?.kind === SyntaxKind5.Identifier && value.text === "undefined") {
+        continue;
+      }
+      if (this.goTypeOfInitializer(right, this.printNode(right, 0)) !== GO_WS_CACHE_TYPE) {
+        return void 0;
+      }
+      cacheWrites++;
+    }
+    if (cacheWrites === 0 || !this.goLocalIsSafeToType(scope, declaration, name, GO_WS_CACHE_TYPE)) {
+      return void 0;
+    }
+    return GO_WS_CACHE_TYPE;
+  }
+  // `x.append(v)` where Go can call Append on x directly: a cache field, a local the printer typed WsArrayCache,
+  // or a local that is a constructor result (`x := NewArrayCache(..)`)
+  goWsCacheReceiverIsCallable(receiver, type) {
+    const inner = this.goUnwrapParenthesizedNode(receiver);
+    if (inner?.kind === SyntaxKind5.Identifier && this.goDeclaredTypeOfIdentifier(inner) === GO_WS_CACHE_TYPE) {
+      return true;
+    }
+    if (!this.goWsCacheClassType(type)) {
+      return false;
+    }
+    if (this.goWsCacheField(inner) || this.goWsTradesRead(inner)) {
+      return true;
+    }
+    if (inner?.kind !== SyntaxKind5.Identifier) {
+      return false;
+    }
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(inner)?.valueDeclaration?.resolve();
+    return declaration?.kind === SyntaxKind5.VariableDeclaration && declaration.initializer?.kind === SyntaxKind5.NewExpression && declaration.parent?.parent?.kind === SyntaxKind5.FirstStatement && this.goWsCacheTypeOfNode(declaration.initializer) !== void 0;
+  }
+  // the Append of a ws list cache: plain `x.Append(v)` when Go can call it on x (undefined: the generic call print),
+  // else the Appender assertion. The assertion only exists in the ws/prediction trees.
+  goWsAppendCall(node, identation) {
+    const callee = node.expression;
+    if (callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.name?.text !== "append" || (node.arguments?.length ?? 0) !== 1) {
+      return void 0;
+    }
+    let fileName = "";
+    try {
+      fileName = String(node.getSourceFile?.()?.fileName ?? "");
+    } catch (e) {
+      return void 0;
+    }
+    if (!/(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/]/.test(fileName) || /[\\/]test[\\/]/.test(fileName)) {
+      return void 0;
+    }
+    const receiver = callee.expression;
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(receiver);
+    } catch (e) {
+      type = void 0;
+    }
+    if (this.goWsCacheReceiverIsCallable(receiver, type)) {
+      return void 0;
+    }
+    return `${this.printNode(receiver, 0)}.(Appender).Append(${this.printArgsForCallExpression(node, identation)})`;
+  }
+  // a method declared `: ArrayCache` whose every return is provably a WsArrayCache value returns that interface
+  goWsCacheReturnType(node) {
+    if (node?.kind !== SyntaxKind5.MethodDeclaration || node.body === void 0 || this.isAsyncFunction(node) || this.goMethodKeepsBaseSignature(node)) {
+      return void 0;
+    }
+    let type;
+    try {
+      type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
+    } catch (e) {
+      return void 0;
+    }
+    if (!this.goWsCacheClassType(type)) {
+      return void 0;
+    }
+    let ok = true;
+    let returns = 0;
+    const visit = (n) => {
+      if (!ok || isFunctionLike(n)) {
+        return;
+      }
+      if (n.kind === SyntaxKind5.ReturnStatement) {
+        returns++;
+        ok = n.expression !== void 0 && (this.goWsCacheTypeOfNode(n.expression) !== void 0 || this.goWsCacheOperand(n.expression));
+        return;
+      }
+      n.forEachChild(visit);
+    };
+    node.body.forEachChild(visit);
+    return ok && returns > 0 ? GO_WS_CACHE_TYPE : void 0;
+  }
+  // a required parameter declared as one of the ws cache classes, handed a ws cache by every caller
+  goWsCacheParameterType(fn, param, index) {
+    let type;
+    try {
+      type = this.getChecker().getTypeAtLocation(param);
+    } catch (e) {
+      return void 0;
+    }
+    if (!this.goWsCacheClassType(type) || !this.goHasTreeCallSite(fn)) {
+      return void 0;
+    }
+    return this.goParameterCallSitesPassType(fn, index, GO_WS_CACHE_TYPE) && this.goLocalIsSafeToType(fn.body, param, param.name.text, GO_WS_CACHE_TYPE) ? GO_WS_CACHE_TYPE : void 0;
+  }
   printOutOfOrderCallExpressionIfAny(node, identation) {
     const ownedCache = this.goOwnedCacheRead(node);
     if (ownedCache !== void 0) {
@@ -15951,6 +16180,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     const nonceSum = this.goNonceSumText(node);
     if (nonceSum !== void 0) {
       return nonceSum;
+    }
+    const wsAppend = this.goWsAppendCall(node, identation);
+    if (wsAppend !== void 0) {
+      return wsAppend;
+    }
+    const tradesRead = this.goWsTradesReadText(node);
+    if (tradesRead !== void 0) {
+      return tradesRead;
     }
     if (node.expression.kind === SyntaxKind5.PropertyAccessExpression) {
       const args = node.arguments;
@@ -16058,6 +16295,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       const rhs = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
       const nativeRhs = slotStore ?? (right.kind === SyntaxKind5.BinaryExpression ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart() : rhs);
       const native = (keyStrs.length === 1 ? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right) ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation) ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation) : void 0) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);
+      if (keyStrs.length === 1 && this.goWsTradesField(baseExpr)) {
+        return `${containerStr}.Store(${lastKey}, ${rhs})`;
+      }
       return native !== void 0 ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
     if (left.kind === SyntaxKind5.TypeOfExpression) {
@@ -16081,7 +16321,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       if (inlined !== void 0) {
         return inlined;
       }
-      return `InOp(${dictText}, ${keyText2})`;
+      return this.goWsTradesField(this.goUnwrapParenthesizedNode(right)) ? `${dictText}.Has(${keyText2})` : `InOp(${dictText}, ${keyText2})`;
     }
     if (op === SyntaxKind5.PlusEqualsToken || op === SyntaxKind5.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
       const operandDepth = this.goExprDepth + 1;
@@ -16899,6 +17139,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
       return void 0;
     }
     const index = fn.parameters.indexOf(param);
+    const cacheParameter = this.goWsCacheParameterType(fn, param, index);
+    if (cacheParameter !== void 0) {
+      return cacheParameter;
+    }
     if (!parseParam && !handlerParam) {
       const goType = this.goRequiredStringParameterType(param);
       if (goType !== void 0 && this.goHasTreeCallSite(fn) && this.goParameterCallSitesPassType(fn, index, goType) && this.goLocalIsSafeToType(fn.body, param, param.name.text, goType) && this.goParameterKeepsNilCompareNative(fn.body, param, goType)) {
@@ -18277,7 +18521,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
   }
   // `this.f === undefined|null` / `!==`: the field's nil test is the map header (a nil map is the absent cache)
   goG09CacheNilCompare(left, right, leftText, rightText, isEq, lFam, rFam) {
-    const field = rFam === "nil" && this.goG09CacheField(left) && !leftText.includes("\n") ? leftText : lFam === "nil" && this.goG09CacheField(right) && !rightText.includes("\n") ? rightText : void 0;
+    const field = rFam === "nil" && (this.goG09CacheField(left) || this.goWsCacheOperand(left)) && !leftText.includes("\n") ? leftText : lFam === "nil" && (this.goG09CacheField(right) || this.goWsCacheOperand(right)) && !rightText.includes("\n") ? rightText : void 0;
     if (field === void 0) {
       return void 0;
     }
@@ -19119,6 +19363,17 @@ ${this.getIden(level)}}()`;
         return /^[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?$/.test(inner.text) || /^[0-9]+[eE][+-]?[0-9]+$/.test(inner.text) ? "float64" : void 0;
       case SyntaxKind5.Identifier:
         return this.goLocalStaticType(inner);
+      case SyntaxKind5.PropertyAccessExpression:
+        if (this.goWsCacheTypeOfNode(inner) !== void 0) {
+          return GO_WS_CACHE_TYPE;
+        }
+        break;
+      case SyntaxKind5.ElementAccessExpression:
+      case SyntaxKind5.CallExpression:
+        if (this.goWsTradesRead(inner)) {
+          return GO_WS_CACHE_TYPE;
+        }
+        break;
     }
     const literalType = goFuncLiteralReturnType(text);
     if (literalType !== void 0) {
@@ -19135,8 +19390,15 @@ ${this.getIden(level)}}()`;
   // box: only GO_TYPE_NAMES are nameable, and a pointer/`any` arm (or two different
   // types) is not a type the literal could return
   goTernaryResultType(whenTrueNode, whenTrue, whenFalseNode, whenFalse) {
+    const isNilArm = (n) => {
+      const u = this.goUnwrapParenthesizedNode(n);
+      return u?.kind === SyntaxKind5.NullKeyword || u?.kind === SyntaxKind5.Identifier && u.text === "undefined";
+    };
+    if (isNilArm(whenTrueNode) && this.goTernaryArmType(whenFalseNode, whenFalse) === GO_WS_CACHE_TYPE || isNilArm(whenFalseNode) && this.goTernaryArmType(whenTrueNode, whenTrue) === GO_WS_CACHE_TYPE) {
+      return GO_WS_CACHE_TYPE;
+    }
     const whenTrueType = this.goTernaryArmType(whenTrueNode, whenTrue);
-    if (typeof whenTrueType !== "string" || whenTrueType === "any" || GO_TYPE_NAMES.indexOf(whenTrueType) < 0) {
+    if (typeof whenTrueType !== "string" || whenTrueType === "any" || GO_TYPE_NAMES.indexOf(whenTrueType) < 0 && whenTrueType !== GO_WS_CACHE_TYPE) {
       return void 0;
     }
     return this.goTernaryArmType(whenFalseNode, whenFalse) === whenTrueType ? whenTrueType : void 0;
@@ -20069,7 +20331,7 @@ ${indent}}`);
     }
     const inNode = node?.kind === SyntaxKind5.ParenthesizedExpression ? node.expression : node;
     if (inNode?.kind === SyntaxKind5.BinaryExpression && inNode.operatorToken.kind === SyntaxKind5.InKeyword) {
-      const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0));
+      const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0)) ?? (this.goWsTradesField(this.goUnwrapParenthesizedNode(inNode.right)) ? `${this.printNode(inNode.right, 0)}.Has(${this.printNode(inNode.left, 0)})` : void 0);
       if (inlined !== void 0) {
         const text = inNode === node ? inlined : `(${inlined})`;
         return `${this.getIden(identation)}${this.goControlClauseParens(node, text)}`;
@@ -23253,6 +23515,9 @@ ${this.getIden(identation)}return nil`;
       if (a9fL1Init !== void 0) {
         return a9fL1Init;
       }
+      if (this.goWsTradesField(left) && right?.kind === SyntaxKind5.ObjectLiteralExpression && (right.properties?.length ?? 0) === 0) {
+        return `${this.printNode(left, 0)} = TradesCache{}`;
+      }
       const pointerWrite = this.goPointerWriteText(node, identation);
       if (pointerWrite !== void 0) {
         return pointerWrite;
@@ -23267,6 +23532,9 @@ ${this.getIden(identation)}return nil`;
         const leftSide = this.printNode(elementAccess.expression, 0);
         const propName = this.printNode(elementAccess.argumentExpression, 0);
         const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
+        if (this.goWsTradesField(elementAccess.expression)) {
+          return `${leftSide}.Store(${propName}, ${value})`;
+        }
         const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, false, right) ?? this.printNativeMapWriteOnProvenLocal(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, right);
         if (native !== void 0) {
           return native;
@@ -24024,6 +24292,10 @@ ${this.getIden(level)}}()`;
     if (ownedCache !== void 0) {
       return ownedCache;
     }
+    const tradesRead = this.goWsTradesReadText(node);
+    if (tradesRead !== void 0) {
+      return tradesRead;
+    }
     const bookSide = this.goOrderBookSideRead(node);
     if (bookSide !== void 0) {
       return bookSide;
@@ -24434,6 +24706,9 @@ ${this.getIden(level)}}()`;
   }
 };
 var GO_G02_SAFE_VALUE_KEYS = { "safeValue": 2, "safeValue2": 3, "safeValueN": 2 };
+var GO_WS_CACHE_TYPE = "WsArrayCache";
+var GO_WS_CACHE_CLASSES = ["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide", "ArrayCacheByOutcomeById"];
+var GO_WS_CACHE_FIELD_DECLARED = /^ArrayCache(?:\s*\|\s*undefined)?$/;
 var GO_G02_CACHE_CLASSES = ["ArrayCache", "ArrayCacheByTimestamp", "ArrayCacheBySymbolById", "ArrayCacheBySymbolBySide"];
 GoTranspiler.prototype.goNativeIntWideningArithmetic = function(node, leftType, rightType, leftText, rightText) {
   const op = node.operatorToken.kind;
@@ -24710,7 +24985,7 @@ GoTranspiler.prototype.goA9fL1CacheInitText = function(node) {
   if (args.length > 1 || args.length === 1 && args[0].kind !== SyntaxKind5.TrueKeyword) {
     return void 0;
   }
-  return `${this.printNode(node.left, 0)} = map[string]any{}`;
+  return `${this.printNode(node.left, 0)} = ${this.goWsTradesField(node.left) ? "TradesCache" : "map[string]any"}{}`;
 };
 
 // src/javaTranspiler.ts

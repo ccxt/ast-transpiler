@@ -420,6 +420,18 @@ export declare class GoTranspiler extends BaseTranspiler {
     transformMethodNameIfNeeded(name: string): string;
     transformCallExpressionName(name: string, nameNode?: any): string;
     transformPropertyAccessExpressionName(name: string, nameNode?: any): string;
+    goWsCacheClassType(type: any): boolean;
+    goWsCacheField(node: any): boolean;
+    goWsCacheTypeOfNode(node: any): string | undefined;
+    goWsCacheOperand(node: any): boolean;
+    goWsTradesField(node: any): boolean;
+    goWsTradesRead(node: any): boolean;
+    goWsTradesReadText(node: any): string | undefined;
+    goNilInitCacheLocalType(declaration: any): string | undefined;
+    goWsCacheReceiverIsCallable(receiver: any, type: any): boolean;
+    goWsAppendCall(node: any, identation: any): string | undefined;
+    goWsCacheReturnType(node: any): string | undefined;
+    goWsCacheParameterType(fn: any, param: any, index: number): string | undefined;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     goTypeOfHelpers: Map<string, string>;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;

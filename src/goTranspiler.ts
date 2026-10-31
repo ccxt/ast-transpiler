@@ -1440,7 +1440,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     printGoSignature(node, identation, receiver: string): string {
         const name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(node.name.text));
         // G03: a market producer whose every path answers a dictionary prints that map
-        const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.printFunctionType(node)).trim();
+        const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.printFunctionType(node)).trim();
         const parsedArgs = this.printMethodParameters(node);
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
         const returnSignature = returnType ? " " + returnType : "";
@@ -1537,7 +1537,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goIsNativeSliceCall(initializer)) {
             return 'string';
         }
+        if (((initializer?.kind === SyntaxKind.ElementAccessExpression) || (initializer?.kind === SyntaxKind.CallExpression))
+            && this.goWsTradesRead(initializer)) {
+            return GO_WS_CACHE_TYPE; // FM-CACHE: a TradesCache entry read
+        }
         switch (initializer?.kind) {
+        case SyntaxKind.NewExpression: // FM-CACHE: a ws list cache constructor answers the WsArrayCache interface
+        case SyntaxKind.PropertyAccessExpression: // FM-CACHE: so does a base list-cache field read
+            if (this.goWsCacheTypeOfNode(initializer) !== undefined) {
+                return GO_WS_CACHE_TYPE;
+            }
+            break;
         case SyntaxKind.StringLiteral:
         case SyntaxKind.NoSubstitutionTemplateLiteral:
             return 'string';
@@ -1554,6 +1564,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case SyntaxKind.ParenthesizedExpression:
             return this.goTypeOfInitializer(initializer.expression, printedValue);
         case SyntaxKind.AsExpression: { // RF-go-6-C: `x as T[]` prints as its operand, so a slice operand keeps its slice type
+            // FM-CACHE: `this.orders as Dict` prints as the field, which is still the cache value
+            if (this.goWsCacheTypeOfNode(this.goUnwrapParenthesizedNode(initializer.expression)) !== undefined) {
+                return GO_WS_CACHE_TYPE;
+            }
             const inner = this.goTypeOfInitializer(initializer.expression, printedValue);
             if ((typeof inner === 'string') && inner.startsWith('[]')) {
                 return inner;
@@ -1614,7 +1628,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         // `key in obj` returns a Go bool (no EvalTruthy round-trip), and a ternary whose
         // arms print as one scalar returns that scalar — both name the value natively
         const literalType = goFuncLiteralReturnType(value);
-        if ((literalType !== undefined) && (GO_TYPE_NAMES.indexOf(literalType) >= 0)) {
+        if ((literalType !== undefined) && ((GO_TYPE_NAMES.indexOf(literalType) >= 0) || (literalType === GO_WS_CACHE_TYPE))) {
             return literalType;
         }
         // the nil-guarded `indexOf` literal holds the same Go int GetIndexOf returned
@@ -2559,7 +2573,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                             return false;
                         }
                         if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
-                            && !((declaration.kind === SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)) {
+                            && !((declaration.kind === SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)
+                            && !((goType === GO_WS_CACHE_TYPE) && (this.goWsCacheTypeOfNode(parent.right) !== undefined))) {
                             return true;
                         }
                     } else if ((op === SyntaxKind.PlusEqualsToken) && (goType === 'string')
@@ -2625,7 +2640,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         while (right?.kind === SyntaxKind.ParenthesizedExpression) {
             right = right.expression;
         }
-        if (!['*string', '*int64', '*float64'].includes(goType) || right === undefined) {
+        if (!['*string', '*int64', '*float64', GO_WS_CACHE_TYPE].includes(goType) || right === undefined) {
             return undefined;
         }
         if ((right.kind === SyntaxKind.NullKeyword) || (right.kind === SyntaxKind.UndefinedKeyword)
@@ -4344,7 +4359,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         this.goNilInitLocalTypeInProgress.add(declaration);
         let result;
         try {
-            result = this.goNilInitLocalTypeScan(declaration) ?? this.goTuplePointerSlotNilInitType(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration);
+            result = this.goNilInitLocalTypeScan(declaration) ?? this.goTuplePointerSlotNilInitType(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration)
+                ?? this.goNilInitCacheLocalType(declaration);
         } finally {
             this.goNilInitLocalTypeInProgress.delete(declaration);
         }
@@ -5187,6 +5203,10 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 // a string has no nil: the accumulator's zero value is the empty string
                 return this.getIden(identation) + "var " + this.printNode(declaration.name) + " string";
             }
+            if (nilInitType === GO_WS_CACHE_TYPE) {
+                // an interface local starts nil
+                return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + GO_WS_CACHE_TYPE;
+            }
             if (nilInitType !== undefined) {
                 return this.getIden(identation) + "var " + this.printNode(declaration.name) + " " + nilInitType + " = " + parsedValue;
             }
@@ -5587,6 +5607,245 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.applyAsyncSuffixToCallee(nameNode, this.capitalize(name));
     }
 
+    // ---- FM-CACHE: ws list caches (WsArrayCache) -------------------------------------------------
+    // the checker type is one of the ws cache classes (a `| undefined` arm does not matter)
+    goWsCacheClassType(type): boolean {
+        if (type === undefined) {
+            return false;
+        }
+        const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [ type ];
+        const live = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
+        return (live.length === 1) && GO_WS_CACHE_CLASSES.includes(live[0].getSymbol?.()?.name);
+    }
+
+    // `this.<f>` for a BaseExchange field declared `ArrayCache`: the Go field is a WsArrayCache
+    goWsCacheField(node): boolean {
+        if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        try {
+            const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
+            return (declarations.length > 0) && declarations.every((d) => (d.kind === SyntaxKind.PropertyDeclaration)
+                && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(d.getSourceFile().fileName)
+                && GO_WS_CACHE_FIELD_DECLARED.test(((d as any).type?.getText?.() ?? "").trim()));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // a node whose Go value is a ws cache: a constructor call of one of the classes, or a base cache field read
+    goWsCacheTypeOfNode(node): string | undefined {
+        if (node?.kind === SyntaxKind.NewExpression) {
+            const name = (node.expression?.kind === SyntaxKind.Identifier) ? node.expression.text : undefined;
+            return GO_WS_CACHE_CLASSES.includes(name) ? GO_WS_CACHE_TYPE : undefined;
+        }
+        return this.goWsCacheField(node) ? GO_WS_CACHE_TYPE : undefined;
+    }
+
+    // an operand the printer proves is a ws cache interface/pointer at the Go level (a nil test is `== nil`)
+    goWsCacheOperand(node): boolean {
+        const inner = this.goUnwrapParenthesizedNode(node);
+        if (inner?.kind === SyntaxKind.Identifier) {
+            return this.goDeclaredTypeOfIdentifier(inner) === GO_WS_CACHE_TYPE;
+        }
+        return this.goWsCacheField(inner) || this.goWsTradesField(inner) || this.goWsTradesRead(inner);
+    }
+
+    // `this.trades`: the BaseExchange field declared `Dictionary<ArrayCache>`, the Go TradesCache map of WsArrayCache
+    goWsTradesField(node): boolean {
+        if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        try {
+            const declarations = this.getChecker().getSymbolAtLocation(node.name)?.declarations?.map((d) => d.resolve()) ?? [];
+            return (declarations.length > 0) && declarations.every((d) => (d.kind === SyntaxKind.PropertyDeclaration)
+                && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(d.getSourceFile().fileName)
+                && (((d as any).type?.getText?.() ?? "").trim() === "Dictionary<ArrayCache>"));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // a read of one TradesCache entry: `this.trades[k]` (not a write/delete target) or the base `this.safeValue (this.trades, k)`
+    goWsTradesRead(node): boolean {
+        const inner = this.goUnwrapParenthesizedNode(node);
+        if (inner?.kind === SyntaxKind.ElementAccessExpression) {
+            const parent: any = inner.parent;
+            return this.goWsTradesField(inner.expression) && !this.isGoElementAccessAssignmentTarget(inner)
+                && (parent?.kind !== SyntaxKind.DeleteExpression) && (parent?.kind !== SyntaxKind.PostfixUnaryExpression)
+                && (parent?.kind !== SyntaxKind.PrefixUnaryExpression);
+        }
+        if (inner?.kind !== SyntaxKind.CallExpression) {
+            return false;
+        }
+        const callee = inner.expression;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (callee.name?.text !== 'safeValue') || ((inner.arguments?.length ?? 0) !== 2) || !this.goWsTradesField(inner.arguments[0])) {
+            return false;
+        }
+        try {
+            const declarations = this.getChecker().getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve()) ?? [];
+            return (declarations.length > 0)
+                && declarations.every((d) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.[\w.-]+)?\.ts$/.test(String(d.getSourceFile()?.fileName ?? '').replace(/\\/g, '/')));
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // `this.trades[k]` / `this.safeValue (this.trades, k)` print the cache's own Get; `k in this.trades` its Has
+    goWsTradesReadText(node): string | undefined {
+        if (!this.goWsTradesRead(node)) {
+            return undefined;
+        }
+        const inner = this.goUnwrapParenthesizedNode(node);
+        const key = (inner.kind === SyntaxKind.ElementAccessExpression) ? inner.argumentExpression : inner.arguments[1];
+        return `${this.printNode(inner.kind === SyntaxKind.ElementAccessExpression ? inner.expression : inner.arguments[0], 0)}.Get(${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(key, 0))})`;
+    }
+
+    // a nil-declared local (`let c; if (..) { c = this.trades[k]; }`) whose every write is a ws cache or nil
+    goNilInitCacheLocalType(declaration): string | undefined {
+        const name = declaration.name.text;
+        const scope = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return undefined;
+        }
+        const writes: any[] = [];
+        let bail = false;
+        const visit = (n) => {
+            if (bail) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
+                const parent = n.parent;
+                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+                    writes.push(parent.right);
+                } else if (this.goAssignmentWritesName(parent, name) || (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n)) {
+                    bail = true;
+                }
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        if (bail || (writes.length === 0)) {
+            return undefined;
+        }
+        let cacheWrites = 0;
+        for (const right of writes) {
+            const value = this.goUnwrapParenthesizedNode(right);
+            if ((value?.kind === SyntaxKind.NullKeyword) || ((value?.kind === SyntaxKind.Identifier) && (value.text === 'undefined'))) {
+                continue;
+            }
+            if (this.goTypeOfInitializer(right, this.printNode(right, 0)) !== GO_WS_CACHE_TYPE) {
+                return undefined;
+            }
+            cacheWrites++;
+        }
+        if ((cacheWrites === 0) || !this.goLocalIsSafeToType(scope, declaration, name, GO_WS_CACHE_TYPE)) {
+            return undefined;
+        }
+        return GO_WS_CACHE_TYPE;
+    }
+
+    // `x.append(v)` where Go can call Append on x directly: a cache field, a local the printer typed WsArrayCache,
+    // or a local that is a constructor result (`x := NewArrayCache(..)`)
+    goWsCacheReceiverIsCallable(receiver, type): boolean {
+        const inner = this.goUnwrapParenthesizedNode(receiver);
+        // a local the printer declared WsArrayCache is the interface whatever its TS type says (`let c; c = this.trades[k]`)
+        if ((inner?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(inner) === GO_WS_CACHE_TYPE)) {
+            return true;
+        }
+        if (!this.goWsCacheClassType(type)) {
+            return false;
+        }
+        if (this.goWsCacheField(inner) || this.goWsTradesRead(inner)) {
+            return true;
+        }
+        if (inner?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(inner)?.valueDeclaration?.resolve();
+        return (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer?.kind === SyntaxKind.NewExpression)
+            && (declaration.parent?.parent?.kind === SyntaxKind.FirstStatement) && (this.goWsCacheTypeOfNode(declaration.initializer) !== undefined);
+    }
+
+    // the Append of a ws list cache: plain `x.Append(v)` when Go can call it on x (undefined: the generic call print),
+    // else the Appender assertion. The assertion only exists in the ws/prediction trees.
+    goWsAppendCall(node, identation): string | undefined {
+        const callee = node.expression;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.name?.text !== 'append') || ((node.arguments?.length ?? 0) !== 1)) {
+            return undefined;
+        }
+        let fileName = '';
+        try {
+            fileName = String(node.getSourceFile?.()?.fileName ?? '');
+        } catch (e) {
+            return undefined;
+        }
+        if (!/(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/]/.test(fileName) || /[\\/]test[\\/]/.test(fileName)) {
+            return undefined;
+        }
+        const receiver = callee.expression;
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(receiver);
+        } catch (e) {
+            type = undefined;
+        }
+        if (this.goWsCacheReceiverIsCallable(receiver, type)) {
+            return undefined;
+        }
+        return `${this.printNode(receiver, 0)}.(Appender).Append(${this.printArgsForCallExpression(node, identation)})`;
+    }
+
+    // a method declared `: ArrayCache` whose every return is provably a WsArrayCache value returns that interface
+    goWsCacheReturnType(node): string | undefined {
+        if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined) || this.isAsyncFunction(node)
+            || this.goMethodKeepsBaseSignature(node)) {
+            return undefined;
+        }
+        let type;
+        try {
+            type = this.getChecker().getReturnTypeOfSignature(this.getChecker().getSignatureFromDeclaration(node));
+        } catch (e) {
+            return undefined;
+        }
+        if (!this.goWsCacheClassType(type)) {
+            return undefined;
+        }
+        let ok = true;
+        let returns = 0;
+        const visit = (n) => {
+            if (!ok || isFunctionLike(n)) {
+                return;
+            }
+            if (n.kind === SyntaxKind.ReturnStatement) {
+                returns++;
+                ok = (n.expression !== undefined) && (this.goWsCacheTypeOfNode(n.expression) !== undefined
+                    || this.goWsCacheOperand(n.expression));
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        node.body.forEachChild(visit);
+        return (ok && (returns > 0)) ? GO_WS_CACHE_TYPE : undefined;
+    }
+
+    // a required parameter declared as one of the ws cache classes, handed a ws cache by every caller
+    goWsCacheParameterType(fn, param, index: number): string | undefined {
+        let type;
+        try {
+            type = this.getChecker().getTypeAtLocation(param);
+        } catch (e) {
+            return undefined;
+        }
+        if (!this.goWsCacheClassType(type) || !this.goHasTreeCallSite(fn)) {
+            return undefined;
+        }
+        return (this.goParameterCallSitesPassType(fn, index, GO_WS_CACHE_TYPE)
+            && this.goLocalIsSafeToType(fn.body, param, param.name.text, GO_WS_CACHE_TYPE)) ? GO_WS_CACHE_TYPE : undefined;
+    }
+
     printOutOfOrderCallExpressionIfAny(node, identation) {
         const ownedCache = this.goOwnedCacheRead(node);  // hx10w4-OG03
         if (ownedCache !== undefined) {
@@ -5595,6 +5854,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const nonceSum = this.goNonceSumText(node);
         if (nonceSum !== undefined) {
             return nonceSum;
+        }
+        const wsAppend = this.goWsAppendCall(node, identation);
+        if (wsAppend !== undefined) {
+            return wsAppend;
+        }
+        const tradesRead = this.goWsTradesReadText(node);
+        if (tradesRead !== undefined) {
+            return tradesRead;
         }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const args = node.arguments;
@@ -5788,6 +6055,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation))
                 : undefined) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);  // FOLD-1F hx10w6-G01
+            if ((keyStrs.length === 1) && this.goWsTradesField(baseExpr)) {
+                return `${containerStr}.Store(${lastKey}, ${rhs})`;  // FM-CACHE
+            }
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
 
@@ -5814,7 +6084,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (inlined !== undefined) {
                 return inlined;
             }
-            return `InOp(${dictText}, ${keyText})`;
+            // FM-CACHE: the trades cache answers membership itself where the printer has no native form
+            return this.goWsTradesField(this.goUnwrapParenthesizedNode(right)) ? `${dictText}.Has(${keyText})` : `InOp(${dictText}, ${keyText})`;
         }
 
         // only print the operands when this op is actually handled here; otherwise
@@ -6806,6 +7077,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined; // inherited/base methods are pinned by the base class and IDerivedExchange
         }
         const index = fn.parameters.indexOf(param);
+        const cacheParameter = this.goWsCacheParameterType(fn, param, index); // FM-CACHE
+        if (cacheParameter !== undefined) {
+            return cacheParameter;
+        }
         if (!parseParam && !handlerParam) {
             // any other exchange-local method: only a non-nullable TS `string` becomes a Go `string`
             // at least one proven caller: an uncalled method's signature is outside API only by accident
@@ -8346,8 +8621,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // `this.f === undefined|null` / `!==`: the field's nil test is the map header (a nil map is the absent cache)
     goG09CacheNilCompare(left, right, leftText: string, rightText: string, isEq: boolean, lFam, rFam): string | undefined {
-        const field = ((rFam === 'nil') && this.goG09CacheField(left) && !leftText.includes('\n')) ? leftText
-            : (((lFam === 'nil') && this.goG09CacheField(right) && !rightText.includes('\n')) ? rightText : undefined);
+        const field = ((rFam === 'nil') && (this.goG09CacheField(left) || this.goWsCacheOperand(left)) && !leftText.includes('\n')) ? leftText
+            : (((lFam === 'nil') && (this.goG09CacheField(right) || this.goWsCacheOperand(right)) && !rightText.includes('\n')) ? rightText : undefined);
         if (field === undefined) {
             return undefined;
         }
@@ -9306,6 +9581,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return (/^[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?$/.test(inner.text) || /^[0-9]+[eE][+-]?[0-9]+$/.test(inner.text)) ? 'float64' : undefined;
         case SyntaxKind.Identifier:
             return this.goLocalStaticType(inner); // declared `var x T = …` (never `:=`)
+        case SyntaxKind.PropertyAccessExpression: // FM-CACHE: `c ? this.triggerOrders : this.orders`
+            if (this.goWsCacheTypeOfNode(inner) !== undefined) {
+                return GO_WS_CACHE_TYPE;
+            }
+            break;
+        case SyntaxKind.ElementAccessExpression:
+        case SyntaxKind.CallExpression:
+            if (this.goWsTradesRead(inner)) {
+                return GO_WS_CACHE_TYPE;
+            }
+            break;
         }
         // a nested ternary prints the printer's own typed literal, whose return type is
         // the arm's type as well
@@ -9325,8 +9611,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // box: only GO_TYPE_NAMES are nameable, and a pointer/`any` arm (or two different
     // types) is not a type the literal could return
     goTernaryResultType(whenTrueNode, whenTrue: string, whenFalseNode, whenFalse: string): string | undefined {
+        // FM-CACHE: `c ? undefined : <ws cache>` — an interface result holds nil for the absent arm
+        const isNilArm = (n) => { const u = this.goUnwrapParenthesizedNode(n); return (u?.kind === SyntaxKind.NullKeyword) || ((u?.kind === SyntaxKind.Identifier) && (u.text === 'undefined')); };
+        if ((isNilArm(whenTrueNode) && (this.goTernaryArmType(whenFalseNode, whenFalse) === GO_WS_CACHE_TYPE))
+            || (isNilArm(whenFalseNode) && (this.goTernaryArmType(whenTrueNode, whenTrue) === GO_WS_CACHE_TYPE))) {
+            return GO_WS_CACHE_TYPE;
+        }
         const whenTrueType = this.goTernaryArmType(whenTrueNode, whenTrue);
-        if ((typeof whenTrueType !== 'string') || (whenTrueType === 'any') || (GO_TYPE_NAMES.indexOf(whenTrueType) < 0)) {
+        if ((typeof whenTrueType !== 'string') || (whenTrueType === 'any') || ((GO_TYPE_NAMES.indexOf(whenTrueType) < 0) && (whenTrueType !== GO_WS_CACHE_TYPE))) {
             return undefined;
         }
         return (this.goTernaryArmType(whenFalseNode, whenFalse) === whenTrueType) ? whenTrueType : undefined;
@@ -10417,7 +10709,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // above cannot name; it is a Go bool all the same
         const inNode = (node?.kind === SyntaxKind.ParenthesizedExpression) ? node.expression : node;
         if (inNode?.kind === SyntaxKind.BinaryExpression && inNode.operatorToken.kind === SyntaxKind.InKeyword) {
-            const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0));
+            const inlined = this.printInlineInOp(inNode.right, inNode.left, this.printNode(inNode.right, 0), this.printNode(inNode.left, 0))
+                // FM-CACHE: the trades cache's own Has is a Go bool where the printer has no native form
+                ?? (this.goWsTradesField(this.goUnwrapParenthesizedNode(inNode.right))
+                    ? `${this.printNode(inNode.right, 0)}.Has(${this.printNode(inNode.left, 0)})` : undefined);
             if (inlined !== undefined) {
                 const text = (inNode === node) ? inlined : `(${inlined})`;
                 return `${this.getIden(identation)}${this.goControlClauseParens(node, text)}`;
@@ -14103,6 +14398,9 @@ ${this.getIden(identation)}${returnStatement}`;
             if (a9fL1Init !== undefined) {
                 return a9fL1Init;
             }
+            if (this.goWsTradesField(left) && (right?.kind === SyntaxKind.ObjectLiteralExpression) && (right.properties?.length ?? 0) === 0) {
+                return `${this.printNode(left, 0)} = TradesCache{}`;  // FM-CACHE
+            }
             const pointerWrite = this.goPointerWriteText(node, identation);
             if (pointerWrite !== undefined) {
                 return pointerWrite;
@@ -14118,6 +14416,9 @@ ${this.getIden(identation)}${returnStatement}`;
                 const leftSide = this.printNode(elementAccess.expression, 0);
                 const propName = this.printNode(elementAccess.argumentExpression, 0);
                 const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trimStart();
+                if (this.goWsTradesField(elementAccess.expression)) {
+                    return `${leftSide}.Store(${propName}, ${value})`;  // FM-CACHE
+                }
                 const native = this.printNativeElementAssignment(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(elementAccess.expression, leftSide, elementAccess.argumentExpression, propName, value, right);
                 if (native !== undefined) {
@@ -15031,6 +15332,10 @@ ${tryBodyBlock}
         if (ownedCache !== undefined) {
             return ownedCache;
         }
+        const tradesRead = this.goWsTradesReadText(node);  // FM-CACHE
+        if (tradesRead !== undefined) {
+            return tradesRead;
+        }
         const bookSide = this.goOrderBookSideRead(node);  // RF-go-6-D
         if (bookSide !== undefined) {
             return bookSide;
@@ -15544,6 +15849,11 @@ ${tryBodyBlock}
 
 // hx4 G02: key-argument count of the base safeValue family; ws cache classes (Go constructors return a non-nil *T)
 const GO_G02_SAFE_VALUE_KEYS: { [name: string]: number } = { 'safeValue': 2, 'safeValue2': 3, 'safeValueN': 2 };
+// FM-CACHE: the ws list caches. Every class below satisfies go/v4's WsArrayCache interface (Append, ToArray, GetLimit);
+// BaseExchange fields declared `ArrayCache` are the Go fields of that interface type (go/v4/exchange.go).
+const GO_WS_CACHE_TYPE = 'WsArrayCache';
+const GO_WS_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide', 'ArrayCacheByOutcomeById' ];
+const GO_WS_CACHE_FIELD_DECLARED = /^ArrayCache(?:\s*\|\s*undefined)?$/;
 const GO_G02_CACHE_CLASSES = [ 'ArrayCache', 'ArrayCacheByTimestamp', 'ArrayCacheBySymbolById', 'ArrayCacheBySymbolBySide' ];
 
 // hx4 G04
@@ -15920,5 +16230,5 @@ GoTranspiler.prototype.goA9fL1CacheInitText = function (node) {
     if ((args.length > 1) || ((args.length === 1) && (args[0].kind !== SyntaxKind.TrueKeyword))) {
         return undefined;
     }
-    return `${this.printNode(node.left, 0)} = map[string]any{}`;
+    return `${this.printNode(node.left, 0)} = ${this.goWsTradesField(node.left) ? 'TradesCache' : 'map[string]any'}{}`;
 };
