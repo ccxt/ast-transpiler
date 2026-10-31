@@ -854,6 +854,8 @@ export class GoTranspiler extends BaseTranspiler {
     // hx11 1F hx10w4-OG03: ws caches of BaseExchange owned by the dispatch loop (see goOwnedCache*)
     goOwnedCaches: { declaredIn: string; maps: { [field: string]: string }; objects: { [field: string]: string }; mapLiteral: string;
         asyncUserPath: RegExp; syncUserPath: RegExp; ops: { [op: string]: string } } | undefined;
+    // FOLD-1F hx10w6-G01: the owner-goroutine map field BaseExchange.balance (see goOwnedBalanceField)
+    goOwnedBalance: { field: string; declaredIn: string; entryRead: string; entryWrite: string; replace: string; asyncUserPath: RegExp; userPath: RegExp; boxedKeys: string[] } | undefined;
     // array literals the current print opens as a Go slice (set by the call-argument rule)
     goSliceLiteralTypes: Map<any, string> = new Map<any, string>();
     // installed by the ccxt build: GetArg alias -> Go types, and the audited consumer table
@@ -934,6 +936,12 @@ export class GoTranspiler extends BaseTranspiler {
         this.goOwnedCaches = (caches === undefined) ? undefined : {
             declaredIn: caches['declaredIn'], maps: caches['maps'] ?? {}, objects: caches['objects'] ?? {}, mapLiteral: caches['mapLiteral'],
             asyncUserPath: new RegExp(caches['asyncUserPath']), syncUserPath: new RegExp(caches['syncUserPath']), ops: caches['ops'],
+        };
+        const balance = config['ownedBalance'];  // FOLD-1F hx10w6-G01
+        this.goOwnedBalance = (balance === undefined) ? undefined : {
+            field: balance['field'], declaredIn: balance['declaredIn'], entryRead: balance['entryRead'],
+            entryWrite: balance['entryWrite'], replace: balance['replace'], asyncUserPath: new RegExp(balance['asyncUserPath']),
+            userPath: new RegExp(balance['userPath']), boxedKeys: balance['boxedKeys'],
         };
     }
 
@@ -5747,11 +5755,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const nativeRhs = (right.kind === SyntaxKind.BinaryExpression)
                 ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart()
                 : rhs;
-            const native = (keyStrs.length === 1)
+            const native = ((keyStrs.length === 1)
                 ? (this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation))
-                : undefined;
+                : undefined) ?? this.goOwnedBalanceWrite(node, baseExpr, keys, nativeRhs, right);  // FOLD-1F hx10w6-G01
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
 
@@ -13180,6 +13188,164 @@ ${this.getIden(identation)}${returnStatement}`;
             && (isAssignment(parent.parent, parent) || (parent.parent?.kind === SyntaxKind.DeleteExpression));
     }
 
+    // ===== FOLD-1F hx10w6-G01 =====
+    // BaseExchange.balance is the Go map[string]any field BaseExchange.Balance, owned by the ws dispatch
+    // loop. Code on that loop (every method but the tabled user-path ones) reads and writes it as a plain
+    // map and reaches an account entry through the owner's views; user-path code keeps the helper calls.
+    // A Go value is stored natively only when it is a dictionary or list (the helper would not unbox it).
+    goOwnedBalanceField(node): boolean {
+        const owned = this.goOwnedBalance;
+        if ((owned === undefined) || (node?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (node.expression?.kind !== SyntaxKind.ThisKeyword) || (node.name?.text !== owned.field)) {
+            return false;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+        return (declaration?.kind === SyntaxKind.PropertyDeclaration) && (declaration.parent?.name?.text === owned.declaredIn);
+    }
+
+    goOwnedBalanceOwnerSide(node): boolean {
+        for (let current = node?.parent; current; current = current.parent) {
+            if (current.kind === SyntaxKind.MethodDeclaration) {
+                const name = `${current.name?.text ?? ''}`;
+                return !this.goOwnedBalance.userPath.test(name) && !(this.isAsyncFunction(current) && this.goOwnedBalance.asyncUserPath.test(name));
+            }
+            if (current.kind === SyntaxKind.FunctionDeclaration) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    // the printed key of an access: a string literal (bookkeeping slots only when `boxedOk`), a `string`
+    // local, or a `*string` local a nil guard or the checker proves non-nil (printed dereferenced)
+    goOwnedBalanceKey(node, boxedOk = false): string | undefined {
+        node = this.goUnwrapPrintedAssertions(node);
+        if ((node?.kind === SyntaxKind.StringLiteral) || (node?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return (boxedOk || !this.goOwnedBalance.boxedKeys.includes(node.text)) ? this.printNode(node, 0) : undefined;
+        }
+        if (node?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const declared = this.goDeclaredTypeOfIdentifier(node);
+        if (declared === 'string') {
+            return this.printNode(node, 0);
+        }
+        return ((declared === '*string') && (this.goHasEnclosingNilGuard(node) || (this.goDerefableStringOperand(node) && !this.goInitializedByAssertion(node)))) ? ('*' + this.printNode(node, 0)) : undefined;
+    }
+
+    // a local whose initializer is a `x as T` / `x!` assertion: the cast says nothing about the Go nil
+    goInitializedByAssertion(node): boolean {
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        const initializer: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+        return (initializer?.kind === SyntaxKind.AsExpression) || (initializer?.kind === SyntaxKind.NonNullExpression);
+    }
+
+    // the stored value is never a boxed scalar pointer, so the helper's derefScalar leaves it alone and the
+    // native store keeps the same value: a literal, or a local or call the checker types as an object
+    // (Dict, Balances). An element read is excluded: its declared type is the index signature, which can
+    // hold a boxed scalar at run time.
+    goOwnedBalancePlainValue(valueNode): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const value: any = this.goUnwrapPrintedAssertions(valueNode);
+        if ((checker === undefined) || (value === undefined)) {
+            return false;
+        }
+        if ((value.kind === SyntaxKind.ObjectLiteralExpression) || (value.kind === SyntaxKind.ArrayLiteralExpression)) {
+            return true;
+        }
+        if ((value.kind !== SyntaxKind.Identifier) && (value.kind !== SyntaxKind.CallExpression)) {
+            return false;
+        }
+        const type: any = checker.getTypeAtLocation(value);
+        const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
+        const present = parts.filter((t) => (t.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
+        return (present.length > 0) && present.every((t) => (t.flags & TypeFlags.Object) !== 0);
+    }
+
+    // `this.balance = v` on the loop moves v's entries into the one map handlers hold
+    goOwnedBalanceReplace(node, identation): string | undefined {
+        if ((this.goOwnedBalance === undefined) || (node.parent?.kind !== SyntaxKind.ExpressionStatement)
+            || !this.goOwnedBalanceField(node.left) || !this.goOwnedBalanceOwnerSide(node)
+            || (this.goUnwrapParenthesizedNode(node.right)?.kind === SyntaxKind.ObjectLiteralExpression)) {
+            return undefined;
+        }
+        const value = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(node.right, identation)).trim();
+        return (value.includes('\n') || value.startsWith('map[string]any{')) ? undefined : `this.${this.goOwnedBalance.replace}(${value})`;
+    }
+
+    // `this.balance[k]` is the map's own index, `this.balance[k1][k2]` the owner view's entry index
+    goOwnedBalanceRead(node, baseExpr, keys: any[], keyStrs: string[]): string | undefined {
+        if ((this.goOwnedBalance === undefined) || !this.goOwnedBalanceField(baseExpr) || !this.goOwnedBalanceOwnerSide(node)
+            || this.isGoElementAccessAssignmentTarget(node) || (node.parent?.kind === SyntaxKind.DeleteExpression)) {
+            return undefined;
+        }
+        const first = this.goOwnedBalanceKey(keys[0]);
+        if (first === undefined) {
+            return undefined;
+        }
+        const second = (keys.length > 1) ? this.goOwnedBalanceKey(keys[1]) : undefined;
+        if (second !== undefined) {
+            return this.goElementAccessChain(`this.${this.goOwnedBalance.entryRead}(${first})[${second}]`, keyStrs.slice(1));
+        }
+        return this.goElementAccessChain(`${this.printNode(baseExpr, 0)}[${first}]`, keyStrs);
+    }
+
+    // `this.balance[k] = v` and `this.balance[k1][k2] = v` as a statement on the loop
+    goOwnedBalanceWrite(node, baseExpr, keys: any[], rhs: string, valueNode): string | undefined {
+        if ((this.goOwnedBalance === undefined) || (keys.length > 2) || (node.parent?.kind !== SyntaxKind.ExpressionStatement)
+            || rhs.includes('\n') || !this.goOwnedBalanceField(baseExpr) || !this.goOwnedBalanceOwnerSide(node)) {
+            return undefined;
+        }
+        const owned = this.goOwnedBalance;
+        const first = this.goOwnedBalanceKey(keys[0]);
+        if (first === undefined) {
+            return undefined;
+        }
+        if (keys.length === 1) {
+            return this.goOwnedBalancePlainValue(valueNode) ? `${this.printNode(baseExpr, 0)}[${first}] = ${rhs}` : undefined;
+        }
+        const second = this.goOwnedBalanceKey(keys[1], true);
+        return ((second !== undefined) && this.goOwnedBalancePlainValue(valueNode)) ? `this.${owned.entryWrite}(${first})[${second}] = ${rhs}` : undefined;
+    }
+
+    // `delete this.balance[k]` and `delete this.balance[k1][k2]` as a statement on the loop
+    goOwnedBalanceDelete(node): string | undefined {
+        const access: any = node.expression;
+        if ((this.goOwnedBalance === undefined) || (node.parent?.kind !== SyntaxKind.ExpressionStatement)
+            || (access?.kind !== SyntaxKind.ElementAccessExpression) || !this.goOwnedBalanceOwnerSide(node)) {
+            return undefined;
+        }
+        if (this.goOwnedBalanceField(access.expression)) {
+            const key = this.goOwnedBalanceKey(access.argumentExpression);
+            return (key === undefined) ? undefined : `delete(${this.printNode(access.expression, 0)}, ${key})`;
+        }
+        const entry: any = access.expression;
+        if ((entry?.kind !== SyntaxKind.ElementAccessExpression) || !this.goOwnedBalanceField(entry.expression)) {
+            return undefined;
+        }
+        const first = this.goOwnedBalanceKey(entry.argumentExpression);
+        const second = this.goOwnedBalanceKey(access.argumentExpression, true);
+        return ((first === undefined) || (second === undefined)) ? undefined : `delete(this.${this.goOwnedBalance.entryRead}(${first}), ${second})`;
+    }
+    // the container of a nested `this.balance[k1][k2] = v` / `this.balance[k1][k2][k3] = v` write: the map's
+    // own index, or the owner view's entry index, for keys the printer proves
+    goOwnedBalanceWriteContainer(baseExpr, containerStr: string, keyNodes): string | undefined {
+        if ((this.goOwnedBalance === undefined) || (keyNodes.length < 2) || (keyNodes.length > 3)
+            || !this.goOwnedBalanceField(baseExpr) || !this.goOwnedBalanceOwnerSide(baseExpr)) {
+            return undefined;
+        }
+        const first = this.goOwnedBalanceKey(keyNodes[0]);
+        if (first === undefined) {
+            return undefined;
+        }
+        if (keyNodes.length === 2) {
+            return `${containerStr}[${first}]`;
+        }
+        const second = this.goOwnedBalanceKey(keyNodes[1]);
+        return (second === undefined) ? undefined : `this.${this.goOwnedBalance.entryRead}(${first})[${second}]`;
+    }
+    // ===== end FOLD-1F hx10w6-G01 =====
+
     printPropertyAccessExpression(node, identation) {
         const ownedCache = this.goOwnedCacheValue(node);
         if (ownedCache !== undefined) {
@@ -13364,6 +13530,10 @@ ${this.getIden(identation)}${returnStatement}`;
         const owned = this.goOwnedFieldRemove(node);
         if (owned !== undefined) {
             return owned;
+        }
+        const ownedBalance = this.goOwnedBalanceDelete(node);  // FOLD-1F hx10w6-G01
+        if (ownedBalance !== undefined) {
+            return ownedBalance;
         }
         const native = this.goNativeDelete(node);
         if (native !== undefined) {
@@ -13604,6 +13774,10 @@ ${this.getIden(identation)}${returnStatement}`;
             const pointerWrite = this.goPointerWriteText(node, identation);
             if (pointerWrite !== undefined) {
                 return pointerWrite;
+            }
+            const balanceReplace = this.goOwnedBalanceReplace(node, identation);  // FOLD-1F hx10w6-G01
+            if (balanceReplace !== undefined) {
+                return balanceReplace;
             }
             // handle test['a'] = 1;
             const elementAccess = left;
@@ -14007,6 +14181,10 @@ ${tryBodyBlock}
     // plain read, so a receiver typed as a map indexes natively and only `any` steps keep the helper.
     // A missing key or nil map reads nil in both forms; a non-map container is a no-op either way.
     goElementWriteChain(baseExpr, containerStr: string, keyNodes, keyStrs: string[]): string {
+        const balanceContainer = this.goOwnedBalanceWriteContainer(baseExpr, containerStr, keyNodes);  // FOLD-1F hx10w6-G01
+        if (balanceContainer !== undefined) {
+            return balanceContainer;
+        }
         let acc = containerStr;
         let first = 0;
         if ((keyStrs.length > 1) && (this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any')
@@ -14589,6 +14767,11 @@ ${tryBodyBlock}
                 && !this.isGoElementAccessAssignmentTarget(node)) {
                 return this.goElementAccessChain(this.printNilGuardedMapIndex(containerStr, keyStrs[0]), keyStrs);
             }
+        }
+
+        const ownedBalance = this.goOwnedBalanceRead(node, baseExpr, keys, keyStrs);  // FOLD-1F hx10w6-G01
+        if (ownedBalance !== undefined) {
+            return ownedBalance;
         }
 
         if (this.rf6aNativeMapRead(node, baseExpr, keys[0], keyStrs[0])) {
