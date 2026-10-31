@@ -701,6 +701,26 @@ export declare class RustTranspiler extends BaseTranspiler {
     staticKeyLookup(node: any, container: any): string | undefined;
     printElementAccessExpression(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
+    rustIntCounter(node: any, initStr: string, incrStr: string): {
+        name: string;
+        sign: '+' | '-';
+        literal: string;
+        symbol: any;
+    } | undefined;
+    /** True when the identifier is (part of) an assignment target, a `++`/`--` operand or a `for-in/of` head. */
+    rustIdentifierIsWritten(id: any): boolean;
+    private rustI64Counters;
+    /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
+    rustI64CounterPlan(node: any, counter: {
+        name: string;
+        symbol: any;
+    }, condStr: string): string | undefined;
+    /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
+    rustI64BoxedUse(id: any): boolean;
+    /** The registered counter's symbol when `node` is a use of it, else undefined. */
+    rustI64CounterOf(node: any): any;
+    /** True when every use of `name` in the printed body is a `.get(name as usize)` read or a `Value::Int(name)` box. */
+    rustI64BodyIsClosed(text: string, name: string): boolean;
     private static readonly COMPARISON_OPS;
     private static readonly NATIVE_COMPARISON_OPERATORS;
     isEqualityOp(op: any): boolean;

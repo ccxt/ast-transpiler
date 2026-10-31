@@ -32168,6 +32168,12 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
      *  `-> Option<String>`; undefined otherwise (no proof → keep the box). */
     // call node -> resolved signature's declaration (null: none); a handle resolve per call is JS-heavy
     this.rustCallDeclarations = /* @__PURE__ */ new WeakMap();
+    // ── `i64` loop counters ───────────────────────────────────────────────────
+    // A proven `Value::Int` counter bounded by `i < <place>.length` whose every other use is a list
+    // index read or a boxed argument/initializer is a plain `i64`: reads become `.get(i as usize)`,
+    // boxed uses `Value::Int(i)`. The body is printed with the counter registered; if any use printed
+    // another way the body is printed again as a `Value` counter.
+    this.rustI64Counters = /* @__PURE__ */ new Map();
     // hx4 R04 — `const x = []` locals declared `Vec<Value>` when every use is a statement
     // `x.push(v)` (native push), `x.length`, `return x` or an argument inside a `return`
     // (boxed once as `Value::from(x)`). Anything else keeps the `Value` box and `append_to_array`.
@@ -35568,6 +35574,9 @@ ${classMethods}
     const keyText = this.printNode(keyNode, 0).trim();
     if (!keyText || keyText.startsWith("&"))
       return void 0;
+    if (this.rustI64CounterOf(this.rustSkipWrappers(keyNode)) !== void 0) {
+      return `${receiverText}.as_array().map(Vec::as_slice).unwrap_or_default().get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
+    }
     return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
   }
   /** True when this read initialises a local that the very next statement in
@@ -36523,16 +36532,50 @@ ${ind}let ${view}: &${map} = &${arc};
   printForStatement(node, identation) {
     const idn = this.getIden(identation);
     const idn1 = this.getIden(identation + 1);
-    const initStr = node.initializer ? this.printNode(node.initializer, identation + 1) + ";\n" : "";
-    const condStr = node.condition ? this.printComparisonInBooleanContext(node.condition, 0).trim() : "true";
+    let initStr = node.initializer ? this.printNode(node.initializer, identation + 1) + ";\n" : "";
+    let condStr = node.condition ? this.printComparisonInBooleanContext(node.condition, 0).trim() : "true";
     const incrStr = node.incrementor ? this.printNode(node.incrementor, 0) : "";
-    const statements = node.statement.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
+    const counter = incrStr !== "" ? this.rustIntCounter(node, initStr, incrStr) : void 0;
+    const bound = counter?.sign === "+" ? this.rustI64CounterPlan(node, counter, condStr) : void 0;
+    const printBody = () => node.statement.statements.map((s) => this.printNode(s, identation + 1)).join("\n");
+    let statements;
+    let typed = false;
+    if (bound !== void 0 && counter !== void 0) {
+      const before = this.forLoopCounter;
+      const previous = this.rustI64Counters.get(counter.name);
+      this.rustI64Counters.set(counter.name, counter.symbol);
+      try {
+        statements = printBody();
+      } finally {
+        if (previous === void 0)
+          this.rustI64Counters.delete(counter.name);
+        else
+          this.rustI64Counters.set(counter.name, previous);
+      }
+      typed = this.rustI64BodyIsClosed(statements, counter.name);
+      if (!typed) {
+        this.forLoopCounter = before;
+        statements = printBody();
+      }
+    } else {
+      statements = printBody();
+    }
     const body = `{
 ${statements}
 ${idn}}`;
     if (incrStr !== "") {
       const flag = `__for_first_${this.forLoopCounter++}`;
-      const cond = `{ if !${flag} { ${incrStr}; } ${flag} = false; ${condStr} }`;
+      let step = `${incrStr};`;
+      if (counter !== void 0) {
+        const bind = this.rustScopeNameNodes(this.rustEnclosingFunction(node), "n").length > 0 ? "__n" : "n";
+        step = `if let Value::Int(${bind}) = &mut ${counter.name} { *${bind} ${counter.sign}= 1; }`;
+      }
+      if (typed && counter !== void 0 && bound !== void 0) {
+        initStr = initStr.replace(`let mut ${counter.name}: Value = Value::Int(${counter.literal});`, `let mut ${counter.name}: i64 = ${counter.literal};`);
+        condStr = `${counter.name} < (${bound}.len() as i64)`;
+        step = `${counter.name} += 1;`;
+      }
+      const cond = `{ if !${flag} { ${step} } ${flag} = false; ${condStr} }`;
       return `${idn}{
 ${idn1}${initStr}${idn1}let mut ${flag}: bool = true;
 ${idn1}while ${cond} ${body}
@@ -36541,6 +36584,90 @@ ${idn}}`;
     return `${idn}{
 ${idn1}${initStr}${idn1}while ${condStr} ${body}
 ${idn}}`;
+  }
+  // `for (let i = <int>; …; i++)` over a `Value` counter: when the incrementor is the only write
+  // to `i` the payload is always `Value::Int`, so the step bumps it in place (no 5-arm match).
+  rustIntCounter(node, initStr, incrStr) {
+    const init = node.initializer;
+    const incr = node.incrementor;
+    if (init?.kind !== SyntaxKind7.VariableDeclarationList || init.declarations.length !== 1 || !(init.flags & NodeFlags4.BlockScoped))
+      return void 0;
+    const declaration = init.declarations[0];
+    if (!isIdentifier3(declaration.name) || /\/test\//.test(String(node.getSourceFile?.().fileName ?? "")))
+      return void 0;
+    const name = String(declaration.name.text);
+    const printed = new RegExp(`^let mut ${name}: Value = Value::Int\\((-?\\d+)\\);$`).exec(initStr.trim());
+    if (printed === null)
+      return void 0;
+    const sign = ["+", "-"].find((s) => incrStr.trim() === `${name} = ${this.printNativeNumeric(s === "+" ? SyntaxKind7.PlusToken : SyntaxKind7.MinusToken, name, "Value::Int(1)")}`);
+    if (sign === void 0)
+      return void 0;
+    const symbol = this.rustSymbolOf(declaration.name);
+    if (symbol === void 0)
+      return void 0;
+    for (const n of this.rustScopeNameNodes(node, name)) {
+      if (n === declaration || n === declaration.name || this.isNodeInsideNode(n, incr))
+        continue;
+      if (n.kind === SyntaxKind7.VariableDeclaration && this.rustBindsName(n, name))
+        return void 0;
+      if (n.kind === SyntaxKind7.Identifier && this.rustSymbolOf(n) === symbol && this.rustIdentifierIsWritten(n))
+        return void 0;
+    }
+    return { name, sign, literal: printed[1], symbol };
+  }
+  /** True when the identifier is (part of) an assignment target, a `++`/`--` operand or a `for-in/of` head. */
+  rustIdentifierIsWritten(id) {
+    let current = id;
+    while (current.parent !== void 0 && (isParenthesizedExpression3(current.parent) || isArrayLiteralExpression4(current.parent) || isObjectLiteralExpression4(current.parent) || isShorthandPropertyAssignment2(current.parent) || current.parent.kind === SyntaxKind7.PropertyAssignment || current.parent.kind === SyntaxKind7.SpreadElement || current.parent.kind === SyntaxKind7.SpreadAssignment || isAsExpression3(current.parent) || isNonNullExpression2(current.parent))) {
+      current = current.parent;
+    }
+    const up = current.parent;
+    if (up === void 0)
+      return false;
+    if (isBinaryExpression5(up))
+      return up.left === current && rustIsAssignmentOperator(up.operatorToken.kind);
+    if (up.kind === SyntaxKind7.PostfixUnaryExpression || up.kind === SyntaxKind7.PrefixUnaryExpression) {
+      return up.operator === SyntaxKind7.PlusPlusToken || up.operator === SyntaxKind7.MinusMinusToken;
+    }
+    return (isForInStatement2(up) || isForOfStatement2(up)) && up.initializer === current;
+  }
+  /** The place `X` of a `i < X.length` condition over this counter, when its uses are all admissible. */
+  rustI64CounterPlan(node, counter, condStr) {
+    const printed = new RegExp(`^${counter.name}\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\) < Value::Int\\((self\\.\\w+|\\w+)\\.len\\(\\) as i64\\)\\.as_f64\\(\\)\\.unwrap_or\\(f64::NAN\\)$`).exec(condStr);
+    if (printed === null)
+      return void 0;
+    for (const id of this.rustScopeNameNodes(node.statement, counter.name)) {
+      if (id.kind !== SyntaxKind7.Identifier || this.rustIdentifierIsPropertyName(id) || this.rustSymbolOf(id) !== counter.symbol)
+        continue;
+      const up = id.parent;
+      const admissible = isElementAccessExpression4(up) && up.argumentExpression === id || this.rustI64BoxedUse(id) || isVariableDeclaration3(up) && up.initializer === id;
+      if (!admissible)
+        return void 0;
+    }
+    return printed[1];
+  }
+  /** A bare counter use that is an argument of a `this.m(..)` call or the value of an `x[k] = i` write. */
+  rustI64BoxedUse(id) {
+    const up = id.parent;
+    if (isCallExpression6(up)) {
+      const callee = up.expression;
+      return callee.kind === SyntaxKind7.PropertyAccessExpression && callee.expression.kind === SyntaxKind7.ThisKeyword && up.arguments.some((a) => a === id);
+    }
+    return isBinaryExpression5(up) && up.operatorToken.kind === SyntaxKind7.EqualsToken && up.right === id && (isElementAccessExpression4(up.left) || isPropertyAccessExpression3(up.left));
+  }
+  /** The registered counter's symbol when `node` is a use of it, else undefined. */
+  rustI64CounterOf(node) {
+    const symbol = this.rustI64Counters.size === 0 || !isIdentifier3(node) ? void 0 : this.rustI64Counters.get(String(node.text));
+    return symbol !== void 0 && this.rustSymbolOf(node) === symbol ? symbol : void 0;
+  }
+  /** True when every use of `name` in the printed body is a `.get(name as usize)` read or a `Value::Int(name)` box. */
+  rustI64BodyIsClosed(text, name) {
+    const masked = text.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/\/\/[^\n]*/g, "");
+    const count = (re) => (masked.match(re) ?? []).length;
+    const word = `(?<![\\w.])${name}(?![\\w])`;
+    const uses = count(new RegExp(word, "g"));
+    const closed = count(new RegExp(`\\.get\\(${name} as usize\\)`, "g")) + count(new RegExp(`Value::Int\\(${name}\\)`, "g"));
+    return uses > 0 && uses === closed;
   }
   isEqualityOp(op) {
     return op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken || op === SyntaxKind7.ExclamationEqualsToken || op === SyntaxKind7.ExclamationEqualsEqualsToken;
@@ -37403,6 +37530,8 @@ ${iden}}`;
   transformIdentifier(node, identifier) {
     const text = super.transformIdentifier(node, identifier);
     const parent = node?.parent;
+    if (this.rustI64Counters.size > 0 && this.rustI64CounterOf(node) !== void 0 && (this.rustI64BoxedUse(node) || isVariableDeclaration3(parent) && parent.initializer === node))
+      return `Value::Int(${text})`;
     if (parent !== void 0 && isCallExpression6(parent) && parent.arguments.some((a) => a === node)) {
       const at = Array.from(parent.arguments).indexOf(node);
       if (this.rustNativeMapArgumentSlot(this.rustCalleeParams(parent), at) !== void 0 && (this.rustDictBearerDeclaration(node) !== void 0 || this.rustMapParamDeclaration(node) !== void 0)) {
@@ -38160,6 +38289,8 @@ ${iden}}`;
     const keyText = this.printNode(keyNode, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
       return void 0;
+    if (this.rustI64CounterOf(key) !== void 0)
+      return `${receiverText}.get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
     return `${receiverText}.get(${keyText}.as_i64().unwrap_or(-1) as usize).cloned().unwrap_or(Value::Null)`;
   }
   /** Container kind a printed `Value` expression provably yields on every path. */
