@@ -4728,6 +4728,12 @@ export class JavaTranspiler extends BaseTranspiler {
                 && !this.elementWriteValueMayBeNull(right)) {
                 return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
             }
+            // `this.<cache>[k] = v` on a plain HashMap cache of the base header: the helper's Map branch
+            // stores a null value too, so a String key makes it the native put
+            if (keys.length === 1 && this.javaPlainCacheFieldReceiver(baseExpr)
+                && this.javaStringProvenKey(keys[0])) {
+                return `${prefixes}${acc}.put(${lastKey}, ${rhs})`;
+            }
             // `this.<owner store>[lit] = v`: the store's `put(key, null)` removes the key like the
             // helper's null write does, so any value is the same write
             if (keys.length === 1 && this.javaOwnerStoreFieldReceiver(baseExpr)
@@ -5002,6 +5008,56 @@ export class JavaTranspiler extends BaseTranspiler {
     // of a store entry (loadMarketsHelper sets it, the same chain clears it). Value = [accessor with a
     // null default, accessor with an empty-map default]; filled by the build layer from the header.
     javaOwnerStoreHandoffs: { [key: string]: [string, string] } = {};
+
+    // BaseExchange.java fields declared `Map<String, Object> f = new HashMap<>()` that the header only
+    // ever reassigns to a fresh HashMap: `m.put(k, v)` stores a null value like the helper does.
+    // Named by the build layer from the header; empty = every site keeps the helper.
+    javaPlainCacheFields: ReadonlySet<string> = new Set<string>();
+
+    // `this.<cache>` whose TS declaration types the values (an `any`-valued bag is reassigned freely)
+    javaPlainCacheFieldReceiver(expression): boolean {
+        if (expression === undefined || !isPropertyAccessExpression(expression)
+            || expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !this.javaPlainCacheFields.has(expression.name.text)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) {
+            return false;
+        }
+        const value = checker.getIndexTypeOfType(checker.getTypeAtLocation(expression), IndexKind.String);
+        return value !== undefined && (value.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0;
+    }
+
+    // a key Java proves String: a literal, an `x as string` (prints `((String)x)`) or a String-declared name
+    javaStringProvenKey(key): boolean {
+        if (isStringLiteralLikeNode(key)) {
+            return true;
+        }
+        let node = key;
+        while (isParenthesizedExpression(node)) {
+            node = node.expression;
+        }
+        return (isAsExpression(node) && node.type?.kind === SyntaxKind.StringKeyword) || this.javaDeclaredStringType(node);
+    }
+
+    // `this.<cache>[k]` with a non-literal String key: GetValue answers null for a null receiver or
+    // key and the plain map get is its Map branch. The key prints twice, so it must be repeatable.
+    javaPlainCacheReadText(receiver, key): string | undefined {
+        if (isStringLiteralLikeNode(key) || !this.javaPlainCacheFieldReceiver(receiver) || !this.javaStringProvenKey(key)) {
+            return undefined;
+        }
+        let operand = key;
+        while (isParenthesizedExpression(operand) || isAsExpression(operand)) {
+            operand = operand.expression;
+        }
+        if (!isIdentifier(operand)) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const keyText = this.printNode(operand, 0);
+        return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+    }
 
     // `this.<field>` for a BaseExchange.java field declared over a single-owner store
     javaOwnerStoreFieldReceiver(expression): boolean {
@@ -5514,7 +5570,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return this.javaJ02FieldMapReadText(receiver, key);
+            return this.javaJ02FieldMapReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
