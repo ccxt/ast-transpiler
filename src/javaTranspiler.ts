@@ -7777,6 +7777,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const insideWrappers = isMethodDeclaration(node) ? '\n' : this.printInsideMethodVariableWrappersIfAny(node, identation + 1) + "\n";
             const body = (firstStatement + remainingString).split("\n").map(line => this.getIden(identation) + line).join("\n");
             // Check if last statement is a return — if not, add return null for supplyAsync lambda
+            const failedFuture = bodyStatements.length === 1 && insideWrappers.trim() === '' ? this.javaFailedFutureOfThrow(bodyStatements[0], identation + 1) : undefined;
+            if (failedFuture !== undefined) {
+                return blockOpen + finalWrapperVars + failedFuture + blockClose;
+            }
             const lastStatement = bodyStatements.length > 1 ? bodyStatements[bodyStatements.length - 1] : (bodyStatements.length > 0 ? bodyStatements[0] : undefined);
             const lastStmtIsReturn = lastStatement && (isReturnStatement(lastStatement) || this.allBranchesTerminate(lastStatement));
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
@@ -7791,6 +7795,25 @@ export class JavaTranspiler extends BaseTranspiler {
 
         }
         return blockOpen + firstStatement + remainingString + blockClose;
+    }
+
+    // An async body that is only `throw new X(..)` can complete its future exceptionally and
+    // nothing else, so the native completion API stands in for the supplier lambda.
+    javaFailedFutureOfThrow(statement: Node, identation: number): string | undefined {
+        if (!isThrowStatement(statement) || statement.expression.kind !== SyntaxKind.NewExpression) {
+            return undefined;
+        }
+        const thrown = (statement.expression as any).expression;
+        if (thrown === undefined || !isIdentifier(thrown)) {
+            return undefined;
+        }
+        const printed = this.printNode(statement, 0).trim();
+        const head = `${this.THROW_TOKEN} ${this.NEW_TOKEN} `;
+        if (!printed.startsWith(head)) {
+            return undefined;
+        }
+        const value = printed.slice(this.THROW_TOKEN.length + 1).replace(/;\s*$/, "").trim();
+        return this.getIden(identation) + `return java.util.concurrent.CompletableFuture.failedFuture(${value});\n`;
     }
 
     printBlock(node, identation, chainBlock = false) {
