@@ -7555,6 +7555,12 @@ function ccxtGoTupleStringReadIsSafe (goTranspiler, node) {
         const printed = (goTranspiler.printNode (parent.parent?.kind === ts.SyntaxKind.BinaryExpression && parent.parent.left === parent ? parent.parent : parent, 0) ?? '').trim ();
         return printed.startsWith ('GetValue(') || printed.startsWith ('AddElementToObject(');
     }
+    // `x.toUpperCase ()` / `x.toLowerCase ()` print ToUpper(x) / ToLower(x), which deref the pointer (FM-GO5 GP08)
+    if ((parent.kind === ts.SyntaxKind.PropertyAccessExpression) && (parent.expression === current)
+        && [ 'toUpperCase', 'toLowerCase' ].includes (parent.name?.text)
+        && (parent.parent?.kind === ts.SyntaxKind.CallExpression) && (parent.parent.expression === parent)) {
+        return true;
+    }
     if ((parent.kind === ts.SyntaxKind.CallExpression) && (parent.expression !== current)) {
         const callee = printedCalleeOfCall (goTranspiler, parent);
         const slots = CCXT_GO_TUPLE_STRING_SAFE_ARGS[(callee ?? '').replace (/^ccxt\./, '')];
@@ -10992,3 +10998,6 @@ function installHx5X32StringPtrParams (goTranspiler) {
         }).join (', ');
     };
 }
+
+// the tuple-result family helpers, for src/go/hx11fmgo5-GP08.ts
+export { ccxtGoTupleResultCall, ccxtGoTupleResultFirst, ccxtGoTupleResultUnwrap };
