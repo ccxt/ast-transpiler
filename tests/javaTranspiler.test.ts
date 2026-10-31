@@ -7049,6 +7049,76 @@ describe('hx4 J02: more hand-written base map fields read natively', () => {
     });
 });
 
+describe('java base map fields and `as string` keys read natively (hx11 1F J02)', () => {
+    const fields =
+        "class T {\n" +
+        "    has: any = {};\n" +
+        "    features: any = {};\n" +
+        "    currencies: any = {};\n" +
+        "    requiredCredentials: any = {};\n";
+    const java = (body: string) => transpiler.transpileJava(fields + body + "\n}").content;
+
+    test('has / features / requiredCredentials reads print the guarded accessor', () => {
+        const output = java(
+            "    test(k: any, s: string): void {\n" +
+            "        const a = this.has[k];\n" +
+            "        const b = this.features[s];\n" +
+            "        const c = this.requiredCredentials[k];\n" +
+            "        const d = this.has['x'];\n" +
+            "        this.sink(a, b, c, d);\n" +
+            "    }\n" +
+            "    sink(...args: any[]): void {}");
+        expect(output).toContain("(this.has == null || k == null ? null : this.has.get(k))");
+        expect(output).toContain("(this.features == null || s == null ? null : this.features.get(s))");
+        expect(output).toContain("(this.requiredCredentials == null || k == null ? null : ((java.util.Map<?, ?>)this.requiredCredentials).get(k))");
+        expect(output).toContain("(this.has == null ? null : this.has.get(\"x\"))");
+        expect(output).not.toContain("Helpers.GetValue(this.");
+    });
+
+    test('currencies keeps the helper for a key that is not provably a String', () => {
+        const output = java(
+            "    test(k: any, s: string): void {\n" +
+            "        const a = this.currencies[k];\n" +
+            "        const b = this.currencies[s];\n" +
+            "        this.sink(a, b);\n" +
+            "    }\n" +
+            "    sink(...args: any[]): void {}");
+        expect(output).toContain("Helpers.GetValue(this.currencies, k)");
+        expect(output).toContain("(this.currencies == null || s == null ? null : this.currencies.get(s))");
+    });
+
+    test('a write target and an unlisted field keep the helper', () => {
+        const output = java(
+            "    other: any = {};\n" +
+            "    test(k: any, v: any): void {\n" +
+            "        this.has[k] = v;\n" +
+            "        const a = this.other[k];\n" +
+            "        this.sink(a);\n" +
+            "    }\n" +
+            "    sink(...args: any[]): void {}");
+        expect(output).toContain("Helpers.addElementToObject(this.has, k, v)");
+        expect(output).toContain("Helpers.GetValue(this.other, k)");
+    });
+
+    test('`k as string` on a declared Map local keeps the cast key and tests the bare name', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = () => 'java.util.Map<String, Object>';
+        try {
+            const output = transpiler.transpileJava(
+                "class T {\n" +
+                "    test(m: any, k: string | undefined): any {\n" +
+                "        const a = m[k as string];\n" +
+                "        return a;\n" +
+                "    }\n" +
+                "}").content;
+            expect(output).toContain("(m == null || k == null ? null : m.get(((String)k)))");
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+});
+
 describe('hx4 J05: integral mod compared with an int literal', () => {
     const java = (src: string) => transpiler.transpileJava(src).content;
     test('`(s.length % 2) !== 0` goes native', () => {

@@ -5364,14 +5364,17 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const key = node.argumentExpression;
-        if (!isIdentifier(key) || !this.javaRepeatableOperand(key)) {
+        // `k as string` only narrows the static type: the Java key is the name cast `((String)k)`,
+        // and the null test reads the bare name
+        const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
+        if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
             return undefined; // the guard prints the key twice
         }
-        const declared = this.javaDeclaredTypeOf(key);
+        const declared = this.javaDeclaredTypeOf(operand);
         if (declared !== undefined && JAVA_PRIMITIVE_DECLARED_TYPES.has(declared.trim())) {
             return undefined; // a java primitive cannot take the `instanceof` test
         }
-        if (declared === undefined && this.javaOperandPrintsPrimitiveNumber(key)) {
+        if (declared === undefined && this.javaOperandPrintsPrimitiveNumber(operand)) {
             return undefined;
         }
         let keyType;
@@ -5389,7 +5392,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (keyType.getAliasSymbol?.() === undefined && keyType.flags === TypeFlags.String) {
             // a plain `string` key prints a java String; the null test keeps a receiver that
             // aliases a ConcurrentHashMap from throwing on a null the alias admits
-            return `(${target} == null || ${keyText} == null ? null : ${target}.get(${keyText}))`;
+            return `(${target} == null || ${this.printNode(operand, 0)} == null ? null : ${target}.get(${keyText}))`;
         }
         return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
     }
@@ -9725,6 +9728,9 @@ export class JavaTranspiler extends BaseTranspiler {
     // be null too. Key and receiver print twice, so both must be side-effect free.
     javaJ02FieldMapReadText(receiver, key): string | undefined {
         const name = receiver?.name?.text;
+        if (typeof name === 'string' && Object.prototype.hasOwnProperty.call(JAVA_BASE_MAP_READ_FIELDS, name)) {
+            return this.javaBaseMapFieldReadText(receiver, key, JAVA_BASE_MAP_READ_FIELDS[name]);
+        }
         if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
             return undefined;
         }
@@ -9736,6 +9742,24 @@ export class JavaTranspiler extends BaseTranspiler {
         const keyText = this.printNode(key, 0);
         const keyGuard = literal ? '' : `${keyText} == null || `;
         return `(${keyGuard}${target} == null ? null : ((java.util.Map<?, ?>)${target}).get(${keyText}))`;
+    }
+
+    javaBaseMapFieldReadText(receiver, key, field: { declared: boolean, anyKey: boolean }): string | undefined {
+        const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
+        const literal = isStringLiteralLikeNode(key);
+        if (!literal) {
+            if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
+                return undefined;
+            }
+            if (!field.anyKey && !this.isJavaStringType(this.getChecker().getTypeAtLocation(key))
+                && !this.javaDeclaredStringType(operand)) {
+                return undefined;
+            }
+        }
+        const target = this.printNode(receiver, 0);
+        const read = field.declared ? target : `((java.util.Map<?, ?>)${target})`;
+        const guard = literal ? `${target} == null` : `${target} == null || ${this.printNode(operand, 0)} == null`;
+        return `(${guard} ? null : ${read}.get(${this.printNode(key, 0)}))`;
     }
 
     // hx4 J05
@@ -9841,6 +9865,16 @@ const JAVA_J02_MAP_FIELDS: { [name: string]: true } = {
     'fees': true,
     'urls': true,
     'markets_by_id': true,
+};
+
+// BaseExchange.java fields read by `this.<field>[k]` with the helper's null answers kept: `declared` =
+// the field prints a Map (the read needs no cast; else every write is a Map cast, so the cast holds),
+// `anyKey` = a hash-backed map answers null for any key, otherwise only a String key is read.
+const JAVA_BASE_MAP_READ_FIELDS: { [name: string]: { declared: boolean, anyKey: boolean } } = {
+    'has': { declared: true, anyKey: true },
+    'features': { declared: true, anyKey: true },
+    'currencies': { declared: true, anyKey: false },
+    'requiredCredentials': { declared: false, anyKey: true },
 };
 
 // hx4 J09: isTrue / isInstance / toLongOrNull / toStringArg go native on proven operands
