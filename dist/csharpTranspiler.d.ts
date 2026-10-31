@@ -12,12 +12,16 @@ export interface CsharpDeclaredMember {
             sections?: string;
         };
     };
+    dictView?: string;
 }
 export declare class CSharpTranspiler extends BaseTranspiler {
     binaryExpressionsWrappers: any;
     csharpBooleanReturnTypes: WeakMap<Node, string>;
     csharpStringReturnTypes: WeakMap<Node, string>;
     csharpPrintedReturnTypes: WeakMap<Node, string>;
+    csharpUniqueMethods: Set<string> | undefined;
+    csharpCollectionReturnTypes: Map<string, string>;
+    csharpCollectionReturnProofs: Set<string>;
     csharpLocalTypes: WeakMap<Node, string>;
     csharpGuardIndex: WeakMap<Node, Map<string, any[]>>;
     csharpExpressionTypeResolver?: (node: any) => string | undefined;
@@ -30,6 +34,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListParamDeclarations: WeakSet<Node>;
     csharpMemberWriteCache: WeakMap<object, Map<string, boolean>>;
     csharpMemberKeyCounters: WeakMap<object, number>;
+    csharpBaseListParamDeclarations: WeakSet<Node>;
     csharpPromiseAllSites: WeakMap<Node, any>;
     csharpPromiseAllTaskDeclarations: WeakSet<Node>;
     csharpPromiseAllTypedAwaits: Map<string, string>;
@@ -43,6 +48,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpParamTypes: WeakMap<Node, string>;
     stringReceiverTypes: WeakMap<Node, string>;
     conditionOperandTypes: WeakMap<Node, string>;
+    boolSlotBindings: WeakMap<Node, boolean>;
     csharpDeclaredLocalTypes: WeakMap<Node, string>;
     constructor(config?: {});
     initConfig(): void;
@@ -167,7 +173,21 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
+    csharpNativeSameKindMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpMinMaxResultIsPlainValue(node: any): boolean;
+    csharpIntegralOperand(node: any): {
+        kind: string;
+        node: any;
+        literal: boolean;
+        zero: boolean;
+        small: boolean;
+        literalKind?: string;
+    } | undefined;
+    csharpNativeIntegralMod(node: any, leftText: string, rightText: string): string | undefined;
+    csharpNativeIntegralMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
+    csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
+    csharpIntegralTestedInExpression(call: any, symbol: any): boolean;
+    csharpIntegralBindingIsRewritten(symbol: any): boolean;
     csharpDeclaredDictMemberReads: WeakSet<Node>;
     csharpDeclaredDictMember(node: any): {
         getter?: string;
@@ -207,6 +227,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
     csharpNativeNegatedLocal(operand: any, leftSide: any): string;
+    csharpMemberViewRead(node: any): string | undefined;
     csharpMemberSectionRead(expression: any, argumentExpression: any): string | undefined;
     csharpUnwrapAssertion(node: any): any;
     csharpMemberRefreshStatement(node: any, identation: any): string | undefined;
@@ -268,6 +289,13 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNonNullStringLeafType(value: any, self?: any, guardedConcat?: boolean): string | undefined;
     csharpBoolCallTyped(node: any): boolean;
     csharpClassIsOrExtends(cls: any, owner: any): boolean;
+    csharpCollectionReturnType(node: any): string | undefined;
+    csharpProveCollectionReturn(node: any): string | undefined;
+    csharpCollectionBoxOfType(checker: any, type: any): string | undefined;
+    csharpReturnValueProvesBox(expression: any, box: string): boolean;
+    csharpIsInferredCollectionCall(value: any): boolean;
+    csharpLocalHoldsInferredCollection(declaration: any): boolean;
+    csharpInferredCallReturnType(call: any): string | undefined;
     csharpEnclosingFunction(node: any): any;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
     csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
@@ -280,6 +308,11 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsDeleteKey(node: any): boolean;
     csharpIsLeftPlusOperand(node: any): boolean;
     csharpGuardedStringConcatRead(node: any): boolean;
+    csharpBoolOptionSlotCall(call: any, target?: any): boolean;
+    csharpBoolOptionDefault(node: any, target: any): boolean;
+    csharpBoolOptionSlotTarget(pattern: any): any;
+    csharpBoolOptionSlotWriteIsTyped(pattern: any): boolean;
+    csharpBoolSlotBinding(element: any): boolean;
     csharpWriteKeepsLocalType(right: any, csharpType: string): boolean;
     csharpSourceLocalType(node: any): string | undefined;
     csharpReceiverBinding(receiver: any): import("typescript/unstable/ast").DeclarationBase;
@@ -293,6 +326,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpConditionPositionAllowsNative(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
     csharpOmitMemberLocalType(declaration: any): string | undefined;
+    csharpMemberAliasLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;
     csharpBindingNames(name: any): string[];
@@ -303,9 +337,12 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printInstanceOfExpression(node: any, identation: any): string;
     printAsExpression(node: any, identation: any): string;
     csharpArrayListParamType(node: any): string | undefined;
-    csharpListParamSpelling(node: any): string | undefined;
-    csharpListSpellingOfType(type: any, unionArms?: number): string | undefined;
+    csharpListParamSpelling(node: any, anyCell?: boolean): string | undefined;
+    csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean> | undefined;
+    csharpListParamBodyReadsAsList(parameter: any): boolean;
+    csharpArgumentMayBeList(type: any): boolean;
+    printArgsForCallExpression(node: any, identation: any): any;
     csharpListParamIsWritten(parameter: any): boolean;
     csharpListBindingIsWritten(declaration: any): boolean;
     csharpListParamArgumentPrintsList(argument: any, decide?: (key: string) => boolean): boolean;
@@ -336,6 +373,15 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpPrintedReturnType(declaration: any): string | undefined;
     csharpPrinterStringConcat(left: any, right: any, leftText: any, rightText: any): string | undefined;
     csharpConcatOperandPrintsString(node: any, depth?: number, allowLocal?: boolean): boolean;
+    csharpPlusSpine(node: any): {
+        base: any;
+        rights: any[];
+    } | undefined;
+    csharpObjectStringConcat(base: any, rights: any[]): string | undefined;
+    csharpObjectStringLocal(identifier: any, depth?: number): boolean;
+    csharpIsStringValued(node: any, depth?: number): boolean;
+    csharpCheckedStringOrNull(node: any): boolean;
+    csharpEvaluationHasEffects(node: any): boolean;
     printFunctionType(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     csharpReturnValuePrintsType(expression: any, declared: string): boolean;
@@ -344,6 +390,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
+    csharpCallReturnsString(node: any): boolean;
     printJsonParseCall(node: any, identation: any, parsedArg?: any): string;
     printJsonStringifyCall(node: any, identation: any, parsedArg?: any): string;
     printPromiseAllCall(node: any, identation: any, parsedArg?: any): string;
