@@ -23489,6 +23489,9 @@ function javaVenueCalleeNativeType(printed) {
 }
 var JAVA_LIST_RETURN_BASE_METHODS = /* @__PURE__ */ new Set(["toArray"]);
 var JAVA_OBJECT_LIST_CALL_NAMES = /* @__PURE__ */ new Set(["keys", "values"]);
+var JAVA_LIST_ARGUMENT_BASE_METHODS = /* @__PURE__ */ new Set(["toArray", "aggregate", "sortBy", "sortBy2", "filterBy"]);
+var JAVA_BASE_LIST_PARAMETER_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads[^/]*)?\.ts$/;
+var JAVA_LIST_ARGUMENT_BASE_FILES = /(^|[\\/])ts[\\/]src[\\/]base[\\/](?:functions[\\/]generic\.ts|Exchange(\.nooverloads[^/]*)?\.ts)$/;
 var JAVA_STRING_RETURN_BASE_METHODS = /* @__PURE__ */ new Set([
   "safeString",
   "safeString2",
@@ -23639,6 +23642,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     // BaseTranspiler.getMethodOverride answered from a per-class ancestor chain of
     // name -> last method maps (the furthest ancestor declaring the name wins, as there)
     this.overrideChainCache = /* @__PURE__ */ new WeakMap();
+    this.javaFieldAssignmentKindsCache = /* @__PURE__ */ new WeakMap();
     this._baseExchangeMethodsByName = /* @__PURE__ */ new WeakMap();
     this.varListFromObjectLiterals = {};
     // binary operators whose printed Java is a primitive boolean: Helpers.isEqual (and the
@@ -23691,6 +23695,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     // the build layer answers a printed local's type from what THIS worker has printed so far, so
     // an unproven answer may only be provisional: caching it freezes the first worker's view
     this.javaReturnTypeUsedDeclaredLocals = false;
+    // every `this.<name> (..)` call expression of a source file, collected once per file
+    this.javaThisCallIndex = /* @__PURE__ */ new WeakMap();
     // hand-written BaseExchange.java fields declared `Map<String, Object>` over a single-owner store
     // (`options = new SynchronizedOptions ()`): the map lives on the state-owner thread and its
     // `put(key, null)` removes the key, which is exactly the contract of the helper's element write.
@@ -24219,6 +24225,9 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (declaration !== void 0 && isParameterDeclaration2(declaration) && this.javaNativeParameterType(declaration) === type) {
         return true;
       }
+    }
+    if (type === JAVA_NATIVE_RETURN_LIST_TYPE && this.javaPrintsListArgument(arg)) {
+      return true;
     }
     if (type !== "String") {
       return false;
@@ -25215,10 +25224,26 @@ ${this.getIden(identation)}}}`;
     if (checker === void 0 || value === void 0) {
       return true;
     }
+    if (this.javaFreshMapLocalValue(value)) {
+      return false;
+    }
     const type = checker.getTypeAtLocation(value);
     const parts = type.flags & TypeFlags5.Union ? type.getTypes?.() ?? [] : [type];
     const nullable = TypeFlags5.Any | TypeFlags5.Unknown | JAVA_NULLISH_TYPE_FLAGS | TypeFlags5.TypeParameter;
     return parts.length === 0 || parts.some((t) => (t.flags & nullable) !== 0);
+  }
+  // an identifier bound once to a fresh map (object literal, two-argument extend, this.account()) and
+  // never reassigned: it holds that map on every path, so the written value is never null
+  javaFreshMapLocalValue(value) {
+    const node = this.unwrapPrintTransparentExpression(value);
+    if (node === void 0 || !isIdentifier2(node)) {
+      return false;
+    }
+    const declaration = this.javaDeclarationOfIdentifier(node);
+    if (declaration === void 0 || declaration.kind !== SyntaxKind6.VariableDeclaration || !declaration.initializer || !this.javaElementWriteMapSource(declaration.initializer)) {
+      return false;
+    }
+    return !this.javaLocalIsReassigned(node, (rhs) => this.javaElementWriteMapSource(rhs));
   }
   // a key proven by the checker to be a string prints as a java String: the read is
   // the same expression, only the key needs the (String) cast the typed put demands
@@ -25301,12 +25326,19 @@ ${this.getIden(identation)}}}`;
     return JAVA_ELEMENT_WRITE_MAP_TYPE;
   }
   // RF-java-2: `const x = Object.values(..)` with no other write prints the helper's exact return type
+  // `const x = Object.keys(this.<BaseExchange Map field>)` prints the null-guarded key copy
+  // (printNativeBaseMapFieldKeys), a fresh ArrayList, so the same List<Object> local applies.
   javaObjectValuesLocalType(declaration) {
     if (!isVariableDeclaration2(declaration) || !isIdentifier2(declaration.name) || !declaration.initializer) {
       return void 0;
     }
     const init = this.unwrapPrintTransparentExpression(declaration.initializer);
-    if (init === void 0 || !isCallExpression5(init) || !isPropertyAccessExpression2(init.expression) || !isIdentifier2(init.expression.expression) || init.expression.expression.text !== "Object" || init.expression.name.text !== "values" || init.arguments.length !== 1) {
+    if (init === void 0 || !isCallExpression5(init) || !isPropertyAccessExpression2(init.expression) || !isIdentifier2(init.expression.expression) || init.expression.expression.text !== "Object" || init.arguments.length !== 1) {
+      return void 0;
+    }
+    const method = init.expression.name.text;
+    const arg = init.arguments[0];
+    if (method === "keys" ? !(isPropertyAccessExpression2(arg) && this.printNativeBaseMapFieldKeys(arg) !== void 0) : method !== "values") {
       return void 0;
     }
     if (this.javaLocalHasWriteAtAll(declaration.name)) {
@@ -27048,6 +27080,10 @@ ${this.getIden(identation)}}}`;
     if (excluded !== void 0 && excluded.includes(method.parameters.indexOf(node))) {
       return void 0;
     }
+    const baseList = testTier ? void 0 : this.javaBaseListParameterTypeOf(node, method, type, checker);
+    if (baseList !== void 0) {
+      return baseList;
+    }
     const symbol = this.javaParameterAliasSymbol(node, type, checker);
     const name = symbol?.name;
     if (testTier && (name === "Strings" || this.javaIsStringArrayType(checker, type))) {
@@ -27067,6 +27103,101 @@ ${this.getIden(identation)}}}`;
     const declaration = symbol?.declarations?.[0]?.resolve();
     const fileName = declaration?.getSourceFile?.()?.fileName;
     return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? "") ? aliasType : this.javaPlainParameterTypeOf(node, type, checker);
+  }
+  // A fixed `any[]` / `number[]` parameter of a method the printer emits from the base tier prints
+  // `java.util.List<Object>` when (a) the checker types it a plain array (not a tuple, not `string[]`),
+  // (b) the body never writes it and no ancestor declares the method, (c) the name is declared once in the
+  // repo, never referenced other than as `this.name (..)` and never mentioned by hand-written Java, and
+  // (d) there is a caller and every caller hands a value that prints as a bare List (array literal, base list
+  // producer, a local the build layer declared `List<Object>`), so no call gains a checkcast and none can throw.
+  // A caller whose local is not published yet answers undefined; the embedding layer's re-print asks again.
+  javaBaseListParameterTypeOf(node, method, type, checker) {
+    if (typeof this.javaRepoMethodUses !== "function" || !JAVA_BASE_LIST_PARAMETER_FILES.test(node.getSourceFile().fileName) || !isIdentifier2(method.name) || !this.javaIsPrintedMethod(method) || !checker.isArrayType(type) || checker.isTupleType(type)) {
+      return void 0;
+    }
+    const element = checker.getTypeArguments(type)?.[0];
+    if (element === void 0 || (element.flags & (TypeFlags5.Any | TypeFlags5.Number)) === 0) {
+      return void 0;
+    }
+    if (this.getMethodOverride(method) !== void 0 || this.javaParameterIsWritten(node)) {
+      return void 0;
+    }
+    const position = method.parameters.indexOf(node);
+    const name = String(method.name.text);
+    const ownFile = node.getSourceFile().fileName;
+    const uses = this.javaRepoMethodUses(name, ownFile);
+    if (uses === void 0 || uses.declared !== 1 || uses.mentions > 0 || uses.handWritten) {
+      return void 0;
+    }
+    const internal = this.javaThisCallsInFile(node.getSourceFile(), name);
+    if (internal.length + uses.calls.length === 0) {
+      return void 0;
+    }
+    const producerDeclared = (producer) => this.javaRepoMethodUses?.(producer, ownFile)?.declared === 1;
+    const listOutside = uses.calls.every((args) => args.length > position && !isSpreadElement2(args[position]) && this.javaSyntacticListArgument(args[position], producerDeclared));
+    const listInside = internal.every((call) => {
+      const arg = call.arguments?.[position];
+      return arg !== void 0 && !isSpreadElement2(arg) && this.javaPrintsListArgument(arg);
+    });
+    return listOutside && listInside ? JAVA_NATIVE_RETURN_LIST_TYPE : void 0;
+  }
+  javaThisCallsInFile(file, name) {
+    let index = this.javaThisCallIndex.get(file);
+    if (index === void 0) {
+      index = /* @__PURE__ */ new Map();
+      const collect = (n) => {
+        if (isCallExpression5(n) && isPropertyAccessExpression2(n.expression) && n.expression.expression.kind === SyntaxKind6.ThisKeyword) {
+          const key = String(n.expression.name.text);
+          index.set(key, (index.get(key) ?? []).concat([n]));
+        }
+        n.forEachChild(collect);
+      };
+      collect(file);
+      this.javaThisCallIndex.set(file, index);
+    }
+    return index.get(name) ?? [];
+  }
+  // an argument node that needs no program to show it prints a bare List: an array literal without spread
+  // or hole, or a `this.<producer> (..)` call of a hand-written list producer the repo declares once
+  javaSyntacticListArgument(arg, producerDeclared) {
+    let node = arg;
+    while (node !== void 0 && isParenthesizedExpression2(node)) {
+      node = node.expression;
+    }
+    if (isArrayLiteralExpression3(node)) {
+      return !node.elements.some((e) => isSpreadElement2(e) || e.kind === SyntaxKind6.OmittedExpression);
+    }
+    return isCallExpression5(node) && isPropertyAccessExpression2(node.expression) && node.expression.expression.kind === SyntaxKind6.ThisKeyword && JAVA_LIST_ARGUMENT_BASE_METHODS.has(String(node.expression.name.text)) && producerDeclared(String(node.expression.name.text));
+  }
+  // an argument whose printed Java is already a `java.util.List<Object>`-compatible value: an array literal
+  // without spread (always `new ArrayList<Object>(Arrays.asList(..))`), a base `this.toArray/aggregate/sortBy/
+  // sortBy2/filterBy (..)` call (hand-written, resolved by signature), or a local the build layer declared
+  // `List<Object>`. Such an argument needs no checkcast into a List slot.
+  javaPrintsListArgument(arg) {
+    let node = arg;
+    while (node !== void 0 && isParenthesizedExpression2(node)) {
+      node = node.expression;
+    }
+    if (isArrayLiteralExpression3(node)) {
+      return !node.elements.some((e) => isSpreadElement2(e) || e.kind === SyntaxKind6.OmittedExpression);
+    }
+    if (isCallExpression5(node)) {
+      const callee = node.expression;
+      if (!isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind6.ThisKeyword || !JAVA_LIST_ARGUMENT_BASE_METHODS.has(String(callee.name.text))) {
+        return false;
+      }
+      try {
+        const fileName = this.getChecker().getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+        return fileName !== void 0 && JAVA_LIST_ARGUMENT_BASE_FILES.test(fileName.replace(/\\/g, "/"));
+      } catch (e) {
+        return false;
+      }
+    }
+    if (isIdentifier2(node) && this.printNode(node, 0) === node.text) {
+      const declared = this.javaDeclaredTypeOf(node);
+      return declared !== void 0 && declared.replace(/^final\s+/, "").replace(/\s+/g, "").replace(/^java\.util\./, "") === "List<Object>";
+    }
+    return false;
   }
   // the Java class a class-typed annotation names: only a name in
   // JAVA_NATIVE_PARAMETER_CLASS_TYPES whose symbol resolves to a CLASS declaration in the
@@ -27237,6 +27368,9 @@ ${this.getIden(identation)}}}`;
       }
       if (this.javaHx4MapPutIsNative(baseExpr, keys)) {
         return `${prefixes}${acc}.put(${keyArg}, ${rhs})`;
+      }
+      if (keys.length === 1 && isPropertyAccessExpression2(baseExpr) && this.javaFileBuiltMapField(baseExpr, baseExpr.name.text, true)) {
+        return `${prefixes}((java.util.Map<Object, Object>) (java.util.Map<?, ?>) ${acc}).put(${lastKey}, ${rhs})`;
       }
       return `${prefixes}Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
@@ -28684,6 +28818,21 @@ ${this.getIden(identation)}}}`;
     const rightOperand = this.javaPrintWidenedOperand(rightKind, resultKind, right, rightText);
     return `(${leftOperand} + ${rightOperand})`;
   }
+  // `x + <int literal>` where the embedding layer reports x printed as the nullable box `Long x`:
+  // Helpers.add's Long arm is the long sum and its null arm answers null, so the null test
+  // keeps both. Only a plain name (read twice) qualifies.
+  printBoxedLongLiteralAdd(left, right, leftText, rightText) {
+    if (this.javaBoxedLongResolver === void 0 || !isIdentifier2(left) || !isNumericLiteral3(right) || this.javaIntegerLiteralKind(right) === void 0 || !/^\d{1,15}$/.test(rightText) || leftText !== left.text) {
+      return void 0;
+    }
+    let boxed2 = false;
+    try {
+      boxed2 = this.javaBoxedLongResolver(left) === true;
+    } catch (e) {
+      boxed2 = false;
+    }
+    return boxed2 ? `(${leftText} == null ? null : (Object) (${leftText} + ${rightText}L))` : void 0;
+  }
   // an int operand is widened to long explicitly: `i + 1` would box an Integer where
   // Helpers.add hands back a Long, and an all-int sum wraps where the helper's long
   // does not. Integer literals print long; a Double result needs no widening.
@@ -28860,10 +29009,10 @@ ${this.getIden(identation)}}}`;
       }
     }
     if (leftFamily !== "number" || rightFamily !== "number") {
-      return void 0;
+      return op === SyntaxKind6.PlusToken ? this.printBoxedLongLiteralAdd(left, right, leftText, rightText) : void 0;
     }
     if (op === SyntaxKind6.PlusToken) {
-      return this.printWidenedNativeAdd(left, right, leftText, rightText);
+      return this.printWidenedNativeAdd(left, right, leftText, rightText) ?? this.printBoxedLongLiteralAdd(left, right, leftText, rightText);
     }
     if (isMod) {
       if (!this.javaProvableNumericDoubleOperand(left) || !this.javaProvableNumericDoubleOperand(right)) {
@@ -30104,8 +30253,11 @@ ${this.getIden(identation)}}}`;
   }
   printNativeObjectKeysCall(node) {
     const argument = node?.arguments?.[0];
-    if (argument === void 0 || isPropertyAccessExpression2(argument)) {
+    if (argument === void 0) {
       return void 0;
+    }
+    if (isPropertyAccessExpression2(argument)) {
+      return this.printNativeBaseMapFieldKeys(argument);
     }
     if (this.javaDeclaredMapReceiver(argument)) {
       return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.keySet())`;
@@ -30119,6 +30271,30 @@ ${this.getIden(identation)}}}`;
       return void 0;
     }
     return `new java.util.ArrayList<Object>(((java.util.Map<String, Object>)${this.printNode(argument, 0)}).keySet())`;
+  }
+  // `Object.keys(this.<f>)` where f is a BaseExchange field the hand-written Java declares
+  // Map<String, Object>: the key copy of that Map, an empty list for the null the field may hold
+  // (the helper's non-Map branch). Owner stores and every other receiver keep the helper.
+  printNativeBaseMapFieldKeys(access) {
+    if (access.expression.kind !== SyntaxKind6.ThisKeyword) {
+      return void 0;
+    }
+    const name = String(access.name.text);
+    if (!JAVA_DECLARED_MAP_FIELD_NAMES.has(name) || this.javaOwnerStoreFields.has(name)) {
+      return void 0;
+    }
+    let file = "";
+    try {
+      const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(access.name);
+      file = symbol?.valueDeclaration?.resolve()?.getSourceFile?.()?.fileName ?? "";
+    } catch (e) {
+      return void 0;
+    }
+    if (!/(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(file)) {
+      return void 0;
+    }
+    const receiver = this.printNode(access, 0);
+    return `(${receiver} == null ? new java.util.ArrayList<Object>() : new java.util.ArrayList<Object>(${receiver}.keySet()))`;
   }
   printObjectValuesCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.objectValues(${parsedArg})`;
@@ -31502,6 +31678,64 @@ ${this.getIden(identation)}}}`;
     walk(value);
     return !shared;
   }
+  // `this.<field>` of a base field declared Object/Map whose Java type a file cannot change: the
+  // field is a plain map in this class exactly when every `this.<field> =` in the source file builds
+  // one (an object literal, a zero-arg base createSafeDictionary, a local holding a literal) or
+  // nulls it. A read needs no assignment to be any other kind; a put also needs one plain build,
+  // because the helper removes a null value from a ConcurrentHashMap.
+  javaFileBuiltMapField(receiver, name, forWrite) {
+    if (!JAVA_FILE_BUILT_MAP_FIELDS.has(name) || receiver?.expression?.kind !== SyntaxKind6.ThisKeyword) {
+      return false;
+    }
+    const file = receiver.getSourceFile?.();
+    if (file === void 0) {
+      return false;
+    }
+    let byField = this.javaFieldAssignmentKindsCache.get(file);
+    if (byField === void 0) {
+      const found = /* @__PURE__ */ new Map();
+      const visit = (n) => {
+        if (isBinaryExpression4(n) && n.operatorToken.kind >= SyntaxKind6.FirstAssignment && n.operatorToken.kind <= SyntaxKind6.LastAssignment && isPropertyAccessExpression2(n.left) && n.left.expression.kind === SyntaxKind6.ThisKeyword) {
+          const field = n.left.name.text;
+          const kind = n.operatorToken.kind === SyntaxKind6.EqualsToken ? this.javaAssignedMapKind(n.right, 0) : "other";
+          found.set(field, [...found.get(field) ?? [], kind]);
+        }
+        n.forEachChild(visit);
+      };
+      file.forEachChild(visit);
+      byField = found;
+      this.javaFieldAssignmentKindsCache.set(file, byField);
+    }
+    const kinds = byField.get(name) ?? [];
+    if (kinds.some((k) => k === "other")) {
+      return false;
+    }
+    return forWrite ? kinds.some((k) => k === "plain") : kinds.length > 0;
+  }
+  // 'plain': a java.util.HashMap the code builds; 'null': a null reset; 'other': anything else
+  javaAssignedMapKind(value, depth) {
+    const node = this.unwrapPrintTransparentExpression(value);
+    if (node === void 0) {
+      return "other";
+    }
+    if (node.kind === SyntaxKind6.NullKeyword || node.kind === SyntaxKind6.UndefinedKeyword || isIdentifier2(node) && node.text === "undefined") {
+      return "null";
+    }
+    if (isObjectLiteralExpression3(node)) {
+      return "plain";
+    }
+    if (isCallExpression5(node) && node.arguments.length === 0 && isPropertyAccessExpression2(node.expression) && node.expression.expression.kind === SyntaxKind6.ThisKeyword && node.expression.name.text === "createSafeDictionary") {
+      const fileName = this.checkerOrUndefined()?.getResolvedSignature(node)?.declaration?.resolve()?.getSourceFile?.()?.fileName;
+      return typeof fileName === "string" && JAVA_THIS_RETURN_TYPES_BASE_FILE.test(fileName) ? "plain" : "other";
+    }
+    if (isIdentifier2(node) && depth < 2) {
+      const declaration = this.javaDeclarationOfIdentifier(node);
+      if (declaration !== void 0 && isVariableDeclaration2(declaration) && declaration.initializer && this.javaAssignedMapKind(declaration.initializer, depth + 1) === "plain" && !this.javaLocalIsReassigned(node, (rhs) => this.javaAssignedMapKind(rhs, depth + 1) === "plain")) {
+        return "plain";
+      }
+    }
+    return "other";
+  }
   // hx4 J02: `this.<field>[k]` on the J02 base map fields. ConcurrentHashMap.get(null) throws
   // where the helper answers null, so a non-literal key is always null-tested; the receiver can
   // be null too. Key and receiver print twice, so both must be side-effect free.
@@ -31510,7 +31744,7 @@ ${this.getIden(identation)}}}`;
     if (typeof name === "string" && Object.prototype.hasOwnProperty.call(JAVA_BASE_MAP_READ_FIELDS, name)) {
       return this.javaBaseMapFieldReadText(receiver, key, JAVA_BASE_MAP_READ_FIELDS[name]);
     }
-    if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name)) {
+    if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(JAVA_J02_MAP_FIELDS, name) && !this.javaFileBuiltMapField(receiver, name, false)) {
       return void 0;
     }
     const literal = isStringLiteralLikeNode3(key);
@@ -31628,6 +31862,7 @@ ${this.getIden(identation)}}}`;
     return void 0;
   }
 };
+var JAVA_FILE_BUILT_MAP_FIELDS = /* @__PURE__ */ new Set(["markets", "positions"]);
 var JAVA_J02_MAP_FIELDS = {
   "tickers": true,
   "bidsasks": true,
