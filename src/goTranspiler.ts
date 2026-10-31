@@ -14785,6 +14785,12 @@ ${tryBodyBlock}
         if ((listType !== GO_STRING_LIST_LOCAL_TYPE) && !((listType === GO_SAFE_LIST_LOCAL_TYPE) && this.goListElementsAreObjects(baseExpr))) {
             return undefined;
         }
+        return this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr);
+    }
+
+    // `xs[i]` inside `for (let i = 0; i < xs.length; i++)` with neither `i` nor `xs` written in the body
+    // and no function boundary between loop and read: the slice index `xs[i]`
+    goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr: string, keyStr: string): string | undefined {
         const mutators = [ 'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin' ];
         let child: any = node;
         for (let current: any = node.parent; (current !== undefined) && !isFunctionLike(current); child = current, current = current.parent) {
@@ -14829,6 +14835,157 @@ ${tryBodyBlock}
         const real = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
         return (real.length > 0) && real.every((p) => ((p.flags & TypeFlags.Object) !== 0) && ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0));
     }
+
+    // ===== JSON-origin list reads =====
+    // A `[]any` unboxed from `this.safeList(R, k)` where R is a decoded JSON document holds JSON values only
+    // (maps, slices, strings, float64), never a *string/*int64/*float64/*bool, so derefScalar answers the
+    // element unchanged and a counting-loop read is the slice index itself. R is JSON when it is
+    //   - the await of an implicit endpoint (the `<-chan any` wrapper over callEndpointAsync), or
+    //   - `this.safeDict(R2, 'literal')` of such an R2 the printer unboxes to a map,
+    // is bound once and never written, and is read only as the container of an unboxed safeList/safeDict
+    // local or in a nil test (anything else may store a pointer into it or hand it out).
+    goJsonOriginUseIsReadOnly(node, name: string): boolean {
+        const parent: any = node.parent;
+        if (this.goWritesOrRebindsName(node, name, [])) {
+            return false;
+        }
+        if (parent?.kind === SyntaxKind.CallExpression) {
+            const callee: any = parent.expression;
+            // `this.safeList (R, k, []) as List`: the wrapper prints as the call itself
+            let wrapped: any = parent;
+            while (((wrapped.parent?.kind === SyntaxKind.AsExpression) || (wrapped.parent?.kind === SyntaxKind.NonNullExpression)
+                || (wrapped.parent?.kind === SyntaxKind.ParenthesizedExpression)) && (wrapped.parent.expression === wrapped)) {
+                wrapped = wrapped.parent;
+            }
+            const local: any = wrapped.parent;
+            if ((parent.arguments[0] !== node) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+                || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+                || (local?.kind !== SyntaxKind.VariableDeclaration) || (local.initializer !== wrapped)
+                || (local.name?.kind !== SyntaxKind.Identifier)) {
+                return false;
+            }
+            // the printer's own unbox, or the type the host's declared-type table names for the local
+            const isType = (unboxed: string | undefined, type: string): boolean => (unboxed === type)
+                || ((wrapped !== parent) && (this.goResolvedLocalGoType(local.name) === type));
+            return (callee.name?.text === 'safeList') ? isType(this.goSafeListLocalUnbox(local), GO_SAFE_LIST_LOCAL_TYPE)
+                : ((callee.name?.text === 'safeDict') && isType(this.goSafeDictLocalUnbox(local), GO_SAFE_DICT_LOCAL_TYPE));
+        }
+        return this.goIsNilComparisonOperand(node, parent);
+    }
+
+    goJsonOriginBindingIsReadOnly(declaration, readOnlyUse: (n: any, name: string) => boolean): boolean {
+        const name: string = declaration.name.text;
+        const scope: any = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        return !this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter)
+                && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+                return true;
+            }
+            return (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && !readOnlyUse(n, name);
+        });
+    }
+
+    // the awaited `this.<name>(..)` resolves only to methods whose whole body is `return this.request(..)`:
+    // the generated endpoint stubs of an abstract exchange class, implemented by the target's callEndpointAsync
+    goAwaitedCallIsRequestStub(expression): boolean {
+        const call: any = this.goUnwrapParenthesizedNode(expression);
+        const callee: any = call?.expression;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        const symbol: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name);
+        const declarations: any[] | undefined = symbol?.declarations?.map((d) => d.resolve());
+        if (!declarations || declarations.length === 0) {
+            return false;
+        }
+        return declarations.every((d) => {
+            const statements: any = (d.kind === SyntaxKind.MethodDeclaration) ? d.body?.statements : undefined;
+            const only: any = (statements?.length === 1) ? statements[0] : undefined;
+            const sent: any = (only?.kind === SyntaxKind.ReturnStatement) ? only.expression : undefined;
+            return (sent?.kind === SyntaxKind.CallExpression) && (sent.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (sent.expression.expression?.kind === SyntaxKind.ThisKeyword) && (sent.expression.name?.text === 'request');
+        });
+    }
+
+    goJsonOriginContainer(node, depth = 0): boolean {
+        if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        const declaration: any = this.goAnyBoxLocalDeclaration(node);
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return false;
+        }
+        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+        let fromJson = false;
+        if (init?.kind === SyntaxKind.AwaitExpression) {
+            fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
+        } else {
+            const args: any = this.goSafeDictLocalArgs(init);
+            fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
+                && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
+                && this.goJsonOriginContainer(args.container, depth + 1);
+        }
+        return fromJson && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
+    }
+
+    // one use of a JSON list local: its length, or a read of one element that nothing writes through
+    goJsonOriginListUseIsReadOnly(node, name: string): boolean {
+        if (this.goWritesOrRebindsName(node, name, [])) {
+            return false;
+        }
+        // `(x as List).length` / `x!`: the wrapper prints as x itself
+        let use: any = node;
+        while (((use.parent?.kind === SyntaxKind.AsExpression) || (use.parent?.kind === SyntaxKind.NonNullExpression)
+            || (use.parent?.kind === SyntaxKind.ParenthesizedExpression)) && (use.parent.expression === use)) {
+            use = use.parent;
+        }
+        const parent: any = use.parent;
+        if (parent?.kind === SyntaxKind.PropertyAccessExpression) {
+            return (parent.expression === use) && (parent.name?.text === 'length');
+        }
+        if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== use)) {
+            return false;
+        }
+        let read: any = parent;
+        while ((read.parent?.kind === SyntaxKind.ElementAccessExpression) && (read.parent.expression === read)) {
+            read = read.parent;
+        }
+        return !this.isGoElementAccessAssignmentTarget(read);
+    }
+
+    goJsonOriginList(baseExpr): boolean {
+        // the caller proved the local is declared `[]any` (the printer's own safeList unbox, or the host's
+        // declared-type table for `safeList (..) as List`); the initializer is the accessor either way
+        const declaration: any = this.goAnyBoxLocalDeclaration(baseExpr);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
+            return false;
+        }
+        let initializer: any = declaration.initializer;
+        while ((initializer?.kind === SyntaxKind.AsExpression) || (initializer?.kind === SyntaxKind.NonNullExpression)
+            || (initializer?.kind === SyntaxKind.ParenthesizedExpression)) {
+            initializer = initializer.expression;
+        }
+        const args: any = this.goSafeListLocalArgs(initializer);
+        return (args !== undefined) && this.goJsonOriginContainer(args.container)
+            && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name));
+    }
+
+    goJsonOriginLoopRead(node, baseExpr, keyNode, containerStr: string, keyStr: string): string | undefined {
+        if ((baseExpr?.kind !== SyntaxKind.Identifier) || (keyNode?.kind !== SyntaxKind.Identifier) || (baseExpr.text === keyNode.text)
+            || this.isGoElementAccessAssignmentTarget(node) || containerStr.includes('\n') || keyStr.includes('\n')) {
+            return undefined;
+        }
+        if (!this.goDeclaredListIdentifier(baseExpr) || (this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr) === undefined)) {
+            return undefined;
+        }
+        return this.goJsonOriginList(baseExpr) ? `${containerStr}[${keyStr}]` : undefined;
+    }
+    // ===== end JSON-origin list reads =====
 
     // a same-named identifier that the checker binds to ANOTHER declaration (a sibling block's
     // `let quote`) is not a write of this loop-bounded element local
@@ -15107,6 +15264,10 @@ ${tryBodyBlock}
         const boundedRead = (keys.length === 1) ? this.goLoopBoundedSliceRead(node, baseExpr, keys[0], containerStr, keyStrs[0]) : undefined;
         if (boundedRead !== undefined) {
             return boundedRead;
+        }
+        const jsonRead = (keys.length === 1) ? this.goJsonOriginLoopRead(node, baseExpr, keys[0], containerStr, keyStrs[0]) : undefined;
+        if (jsonRead !== undefined) {
+            return jsonRead;
         }
 
         const urlsView = this.goUrlsViewRead(node, baseExpr, keys, keyStrs);
